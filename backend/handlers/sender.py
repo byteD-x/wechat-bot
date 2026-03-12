@@ -24,8 +24,9 @@ __all__ = [
 def parse_send_result(result: Any) -> Tuple[bool, Optional[str]]:
     """解析微信发送接口的返回结果。"""
     if hasattr(result, "is_success"):
+        success = getattr(result, "is_success")
         message = getattr(result, "message", None) or getattr(result, "error", None)
-        return bool(result), message
+        return bool(success), message
     if isinstance(result, dict):
         if "status" in result:
             status = str(result.get("status") or "")

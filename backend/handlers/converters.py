@@ -34,7 +34,7 @@ def normalize_new_messages(raw: Any, self_name: str) -> List[MessageEvent]:
     if not raw:
         return events
 
-    # 微信自动化库返回格式：{"会话名": "...", "会话类型": "...", "消息": [...]}
+    # 微信自动化库当前返回格式：{"chat_name": "...", "chat_type": "...", "msg": [...]}
     if isinstance(raw, dict) and "chat_name" in raw and "msg" in raw:
         chat_name = str(raw.get("chat_name", "")).strip()
         chat_type = str(raw.get("chat_type", "")).strip()
