@@ -36,7 +36,7 @@ CONFIG = {
         # ┌─── 默认接口设置 ───────────────────────────────────────────────────┐
         "base_url": 'https://api.openai.com/v1',      # 默认接口地址
         "api_key": "YOUR_API_KEY",                    # 默认 API 密钥
-        "model": 'gpt-4o-mini',                       # 默认模型名称
+        "model": 'gpt-5-mini',                        # 默认模型名称
         "embedding_model": 'text-embedding-3-small',
         "alias": '小欧',                              # 模型别名（用于日志和回复后缀）
 
@@ -54,10 +54,11 @@ CONFIG = {
         "presets": [                                  # 多服务预设列表（按探测顺序）
             {
                 "name": 'OpenAI',  # 预设名称
+                "provider_id": "openai",
                 "alias": '小欧', # 模型别名
                 "base_url": 'https://api.openai.com/v1',  # 接口地址
                 "api_key": "YOUR_OPENAI_KEY",  # 接口密钥
-                "model": 'gpt-4o-mini',  # 模型名称
+                "model": 'gpt-5-mini',  # 模型名称
                 "timeout_sec": 10,  # 超时时间（秒）
                 "max_retries": 2,  # 失败重试次数
                 "temperature": 0.6,  # 温度
@@ -66,6 +67,7 @@ CONFIG = {
             },
             {
                 "name": 'Doubao',  # 预设名称
+                "provider_id": "doubao",
                 "alias": '小豆', # 模型别名
                 "base_url": 'https://ark.cn-beijing.volces.com/api/v3',  # 接口地址
                 "api_key": "YOUR_DOUBAO_KEY",  # 接口密钥
@@ -81,6 +83,7 @@ CONFIG = {
             },
             {
                 "name": 'DeepSeek',  # 预设名称
+                "provider_id": "deepseek",
                 "alias": '小深', # 模型别名
                 "base_url": 'https://api.deepseek.com/v1',  # 接口地址
                 "api_key": "YOUR_DEEPSEEK_KEY",  # 接口密钥
@@ -92,11 +95,38 @@ CONFIG = {
                 "allow_empty_key": False,  # 允许空密钥
             },
             {
+                "name": 'Qwen',  # 预设名称
+                "provider_id": "qwen",
+                "alias": '小千', # 模型别名
+                "base_url": 'https://dashscope.aliyuncs.com/compatible-mode/v1',  # 接口地址
+                "api_key": "YOUR_QWEN_KEY",  # 接口密钥
+                "model": 'qwen3.5-plus',  # 模型名称
+                "timeout_sec": 10,  # 超时时间（秒）
+                "max_retries": 2,  # 失败重试次数
+                "temperature": 0.6,  # 温度
+                "max_tokens": 512,  # 最大生成长度
+                "allow_empty_key": False,  # 允许空密钥
+            },
+            {
+                "name": 'Ollama',  # 预设名称
+                "provider_id": "ollama",
+                "alias": '本地', # 模型别名
+                "base_url": 'http://127.0.0.1:11434/v1',  # 本地 Ollama OpenAI 兼容地址
+                "api_key": "",  # Ollama 默认无需密钥
+                "model": 'qwen3',  # 默认模型名称
+                "timeout_sec": 20,  # 本地首轮加载可能更慢
+                "max_retries": 1,  # 本地模型不需要太多重试
+                "temperature": 0.6,  # 温度
+                "max_tokens": 512,  # 最大生成长度
+                "allow_empty_key": True,  # 允许空密钥
+            },
+            {
                 "name": 'Groq',  # 预设名称
+                "provider_id": "groq",
                 "alias": '小咕', # 模型别名
                 "base_url": 'https://api.groq.com/openai/v1',  # 接口地址
                 "api_key": "YOUR_GROQ_KEY",  # 接口密钥
-                "model": 'llama3-70b-8192',  # 模型名称
+                "model": 'qwen/qwen3-32b',  # 模型名称
                 "timeout_sec": 10,  # 超时时间（秒）
                 "max_retries": 2,  # 失败重试次数
                 "temperature": 0.6,  # 温度
@@ -105,6 +135,7 @@ CONFIG = {
             },
             {
                 "name": 'SiliconFlow',  # 预设名称
+                "provider_id": "siliconflow",
                 "alias": '小硅', # 模型别名
                 "base_url": 'https://api.siliconflow.cn/v1',  # 接口地址
                 "api_key": "YOUR_SILICONFLOW_KEY",  # 接口密钥
@@ -117,10 +148,11 @@ CONFIG = {
             },
             {
                 "name": 'OpenRouter',  # 预设名称
+                "provider_id": "openrouter",
                 "alias": '小路', # 模型别名
                 "base_url": 'https://openrouter.ai/api/v1',  # 接口地址
                 "api_key": "YOUR_OPENROUTER_KEY",  # 接口密钥
-                "model": 'openai/gpt-4o-mini',  # 模型名称
+                "model": 'openai/gpt-5-mini',  # 模型名称
                 "timeout_sec": 10,  # 超时时间（秒）
                 "max_retries": 2,  # 失败重试次数
                 "temperature": 0.6,  # 温度
@@ -129,10 +161,11 @@ CONFIG = {
             },
             {
                 "name": 'Together',  # 预设名称
+                "provider_id": "together",
                 "alias": '小合', # 模型别名
                 "base_url": 'https://api.together.xyz/v1',  # 接口地址
                 "api_key": "YOUR_TOGETHER_KEY",  # 接口密钥
-                "model": 'meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo',  # 模型名称
+                "model": 'Qwen/Qwen3-32B',  # 模型名称
                 "timeout_sec": 10,  # 超时时间（秒）
                 "max_retries": 2,  # 失败重试次数
                 "temperature": 0.6,  # 温度
@@ -141,10 +174,11 @@ CONFIG = {
             },
             {
                 "name": 'Fireworks',  # 预设名称
+                "provider_id": "fireworks",
                 "alias": '小焰', # 模型别名
                 "base_url": 'https://api.fireworks.ai/inference/v1',  # 接口地址
                 "api_key": "YOUR_FIREWORKS_KEY",  # 接口密钥
-                "model": 'accounts/fireworks/models/llama-v3p1-70b-instruct',  # 模型名称
+                "model": 'accounts/fireworks/models/qwen3-30b-a3b',  # 模型名称
                 "timeout_sec": 10,  # 超时时间（秒）
                 "max_retries": 2,  # 失败重试次数
                 "temperature": 0.6,  # 温度
@@ -153,10 +187,11 @@ CONFIG = {
             },
             {
                 "name": 'Mistral',  # 预设名称
+                "provider_id": "mistral",
                 "alias": '小风', # 模型别名
                 "base_url": 'https://api.mistral.ai/v1',  # 接口地址
                 "api_key": "YOUR_MISTRAL_KEY",  # 接口密钥
-                "model": 'mistral-large-latest',  # 模型名称
+                "model": 'mistral-medium-latest',  # 模型名称
                 "timeout_sec": 10,  # 超时时间（秒）
                 "max_retries": 2,  # 失败重试次数
                 "temperature": 0.6,  # 温度
@@ -165,10 +200,11 @@ CONFIG = {
             },
             {
                 "name": 'Moonshot',  # 预设名称
+                "provider_id": "moonshot",
                 "alias": '小月', # 模型别名
                 "base_url": 'https://api.moonshot.cn/v1',  # 接口地址
                 "api_key": "YOUR_MOONSHOT_KEY",  # 接口密钥
-                "model": 'moonshot-v1-8k',  # 模型名称
+                "model": 'kimi-k2-turbo-preview',  # 模型名称
                 "timeout_sec": 10,  # 超时时间（秒）
                 "max_retries": 2,  # 失败重试次数
                 "temperature": 0.6,  # 温度
@@ -177,10 +213,11 @@ CONFIG = {
             },
             {
                 "name": 'Perplexity',  # 预设名称
+                "provider_id": "perplexity",
                 "alias": '小悟', # 模型别名
                 "base_url": 'https://api.perplexity.ai',  # 接口地址
                 "api_key": "YOUR_PERPLEXITY_KEY",  # 接口密钥
-                "model": 'llama-3.1-sonar-large-128k-online',  # 模型名称
+                "model": 'sonar-pro',  # 模型名称
                 "timeout_sec": 10,  # 超时时间（秒）
                 "max_retries": 2,  # 失败重试次数
                 "temperature": 0.6,  # 温度
@@ -189,6 +226,7 @@ CONFIG = {
             },
             {
                 "name": 'Zhipu',  # 预设名称
+                "provider_id": "zhipu",
                 "alias": '小G', # 模型别名
                 "base_url": 'https://open.bigmodel.cn/api/paas/v4',  # 接口地址
                 "api_key": "YOUR_ZHIPU_KEY",  # 接口密钥
@@ -518,10 +556,52 @@ def _apply_config_overrides(config_dict: dict):
 
         with open(override_file, "r", encoding="utf-8") as f:
             overrides = json.load(f)
-        
+
+        def _merge_preset_lists(default_presets, override_presets):
+            if not isinstance(default_presets, list):
+                return override_presets
+            if not isinstance(override_presets, list):
+                return default_presets
+
+            merged = []
+            default_map = {}
+            for preset in default_presets:
+                if isinstance(preset, dict) and preset.get("name"):
+                    default_map[str(preset["name"])] = preset
+
+            used_names = set()
+            for preset in override_presets:
+                if not isinstance(preset, dict):
+                    continue
+                name = str(preset.get("name") or "").strip()
+                if not name:
+                    merged.append(preset)
+                    continue
+
+                base = dict(default_map.get(name, {}))
+                base.update(preset)
+                merged.append(base)
+                used_names.add(name)
+
+            for preset in default_presets:
+                if not isinstance(preset, dict):
+                    continue
+                name = str(preset.get("name") or "").strip()
+                if not name or name in used_names:
+                    continue
+                merged.append(dict(preset))
+
+            return merged
+
         # 递归更新配置 (目前仅支持一层字典合并，如需深层合并可扩展)
         for section, settings in overrides.items():
             if section in config_dict and isinstance(config_dict[section], dict) and isinstance(settings, dict):
+                if section == "api" and "presets" in settings:
+                    settings = dict(settings)
+                    settings["presets"] = _merge_preset_lists(
+                        config_dict[section].get("presets"),
+                        settings.get("presets"),
+                    )
                 config_dict[section].update(settings)
             else:
                 config_dict[section] = settings

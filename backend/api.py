@@ -11,9 +11,13 @@ import logging
 import os
 import json
 import asyncio
+from urllib.parse import urlsplit, urlunsplit
+
+import httpx
 
 from .bot_manager import get_bot_manager
 from backend.config import CONFIG
+from backend.model_catalog import get_model_catalog, infer_provider_id, merge_provider_defaults
 from backend.utils.logging import setup_logging, get_logging_settings
 
 # 配置日志
@@ -28,6 +32,88 @@ app = cors(app, allow_origin="*")
 
 # 获取 BotManager 实例
 manager = get_bot_manager()
+
+
+def _mask_preset(preset: dict) -> dict:
+    masked = merge_provider_defaults(preset)
+    masked["provider_id"] = infer_provider_id(
+        provider_id=masked.get("provider_id"),
+        preset_name=masked.get("name"),
+        base_url=masked.get("base_url"),
+        model=masked.get("model"),
+    )
+
+    key = masked.get("api_key", "")
+    if key and not key.startswith("YOUR_"):
+        masked["api_key_configured"] = True
+        masked["api_key_masked"] = key[:8] + "****" + key[-4:] if len(key) > 12 else "****"
+    else:
+        masked["api_key_configured"] = False
+        masked["api_key_masked"] = ""
+    masked["api_key_required"] = not bool(masked.get("allow_empty_key", False))
+
+    masked.pop("api_key", None)
+    return masked
+
+
+def _build_config_payload() -> dict:
+    from backend.config import CONFIG
+
+    api_cfg = CONFIG.get('api', {})
+    presets = []
+    for preset in api_cfg.get('presets', []):
+        presets.append(_mask_preset(preset))
+
+    api_cfg_safe = api_cfg.copy()
+    api_cfg_safe['presets'] = presets
+    return {
+        'api': api_cfg_safe,
+        'bot': CONFIG.get('bot', {}),
+        'logging': CONFIG.get('logging', {})
+    }
+
+
+def _resolve_request_api_key(target_preset: dict, api_cfg: dict) -> str:
+    allow_empty_key = target_preset.get('allow_empty_key')
+    if allow_empty_key is None:
+        allow_empty_key = api_cfg.get('allow_empty_key', False)
+    if allow_empty_key:
+        value = target_preset.get('api_key')
+        return "" if value is None else str(value).strip()
+
+    return str(target_preset.get('api_key') or api_cfg.get('api_key') or "").strip()
+
+
+def _normalize_ollama_tags_url(base_url: str) -> str:
+    raw = str(base_url or "http://127.0.0.1:11434/v1").strip()
+    if not raw:
+        raw = "http://127.0.0.1:11434/v1"
+
+    parsed = urlsplit(raw)
+    scheme = parsed.scheme or "http"
+    netloc = parsed.netloc or parsed.path
+    path = parsed.path if parsed.netloc else ""
+    path = path.rstrip("/")
+    if path.endswith("/v1"):
+        path = path[:-3]
+    path = f"{path}/api/tags" if path else "/api/tags"
+    return urlunsplit((scheme, netloc, path, "", ""))
+
+
+def _fetch_ollama_models_sync(base_url: str) -> list[str]:
+    tags_url = _normalize_ollama_tags_url(base_url)
+    resp = httpx.get(tags_url, timeout=3.0)
+    resp.raise_for_status()
+    data = resp.json()
+    models = data.get("models") or []
+    names: list[str] = []
+    for model in models:
+        if not isinstance(model, dict):
+            continue
+        name = str(model.get("model") or model.get("name") or "").strip()
+        if name and name not in names:
+            names.append(name)
+    return names
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -133,44 +219,33 @@ async def get_usage():
          return jsonify({'success': False, 'message': str(e)})
 
 
+@app.route('/api/model_catalog', methods=['GET'])
+async def get_model_catalog_api():
+    """获取前端使用的模型目录"""
+    try:
+        return jsonify({'success': True, **get_model_catalog()})
+    except Exception as e:
+        logger.error(f"获取模型目录失败: {e}")
+        return jsonify({'success': False, 'message': f'获取模型目录失败: {str(e)}'})
+
+
+@app.route('/api/ollama/models', methods=['GET'])
+async def get_ollama_models():
+    """获取本地 Ollama 已安装模型列表"""
+    try:
+        base_url = request.args.get('base_url', 'http://127.0.0.1:11434/v1', type=str)
+        models = await asyncio.to_thread(_fetch_ollama_models_sync, base_url)
+        return jsonify({'success': True, 'models': models, 'base_url': base_url})
+    except Exception as e:
+        logger.warning(f"获取 Ollama 模型列表失败: {e}")
+        return jsonify({'success': False, 'message': f'获取 Ollama 模型列表失败: {str(e)}', 'models': []})
+
+
 @app.route('/api/config', methods=['GET'])
 async def get_config():
     """获取配置"""
     try:
-        from backend.config import CONFIG
-        
-        # 提取 API 配置（隐藏敏感信息）
-        api_cfg = CONFIG.get('api', {})
-        
-        # 处理预设列表 - 隐藏 API Key
-        presets = []
-        for preset in api_cfg.get('presets', []):
-            p = preset.copy()
-            key = p.get('api_key', '')
-            # 检查是否配置了有效的 API Key
-            if key and not key.startswith('YOUR_'):
-                p['api_key_configured'] = True
-                p['api_key_masked'] = key[:8] + '****' + key[-4:] if len(key) > 12 else '****'
-            else:
-                p['api_key_configured'] = False
-                p['api_key_masked'] = ''
-            
-            # 删除实际 Key
-            if 'api_key' in p:
-                del p['api_key']
-            presets.append(p)
-            
-        # 结果中替换处理后的 presets
-        api_cfg_safe = api_cfg.copy()
-        api_cfg_safe['presets'] = presets
-        
-        # 构造完整返回结构
-        response = {
-            'success': True,
-            'api': api_cfg_safe,
-            'bot': CONFIG.get('bot', {}),
-            'logging': CONFIG.get('logging', {})
-        }
+        response = {'success': True, **_build_config_payload()}
         return jsonify(response)
     except Exception as e:
         logger.error(f"获取配置失败: {e}")
@@ -186,7 +261,16 @@ async def save_config():
     try:
         data = await request.get_json()
         override_file = os.path.join('data', 'config_override.json')
-        
+        requested_active = None
+        force_ai_reload = False
+        strict_active_preset = False
+        if isinstance(data, dict):
+            api_updates = data.get('api')
+            if isinstance(api_updates, dict):
+                force_ai_reload = True
+                requested_active = str(api_updates.get('active_preset') or "").strip() or None
+                strict_active_preset = True
+
         # 确保目录存在
         os.makedirs(os.path.dirname(override_file), exist_ok=True)
         
@@ -219,28 +303,34 @@ async def save_config():
                     existing_presets = existing_api.get('presets', [])
 
                     for new_p in new_presets:
+                        p_name = new_p.get('name')
+                        mem_p = next((p for p in current_presets if p.get('name') == p_name), None)
+                        file_p = next((p for p in existing_presets if p.get('name') == p_name), None)
+
+                        if not new_p.get('provider_id'):
+                            new_p['provider_id'] = (
+                                (mem_p or {}).get('provider_id')
+                                or (file_p or {}).get('provider_id')
+                            )
+
+                        merged_preset = merge_provider_defaults(new_p)
+                        new_p.clear()
+                        new_p.update(merged_preset)
+
                         key = new_p.get('api_key')
-                        
+
                         # 判断是否需要恢复 Key：
                         # 1. 带有 _keep_key 标记 (前端明确表示没改)
                         # 2. Key 为空 (前端没传)
                         # 3. Key 是掩码 (前端传回了掩码)
                         should_restore = new_p.get('_keep_key') or not key or '****' in key
-                        
+
                         if should_restore:
-                            p_name = new_p.get('name')
-                            # logger.info(f"尝试恢复预设 {p_name} 的 API Key") 
-                            # 在线程中打日志可能没问题，但尽量少做
-                            
-                            # 查找内存中的真实 Key
-                            mem_p = next((p for p in current_presets if p.get('name') == p_name), None)
-                            
                             if mem_p and mem_p.get('api_key') and not mem_p.get('api_key').startswith('****'):
                                 # 内存里有明文 Key，直接用
                                 new_p['api_key'] = mem_p['api_key']
                             else:
                                 # 尝试从 existing file 里找
-                                file_p = next((p for p in existing_presets if p.get('name') == p_name), None)
                                 if file_p and file_p.get('api_key'):
                                     new_p['api_key'] = file_p['api_key']
                                 else:
@@ -287,12 +377,21 @@ async def save_config():
              logger.info(f"📦 模型: {model_name} | 👤 别名: {alias}")
              logger.info("═"*50 + "\n")
 
-        # 构造完整返回结构 (复用 get_config 的逻辑)
-        # 必须返回完整配置，否则前端状态会丢失
-        response_data = await get_config() 
-        # get_config 返回的是 Response 对象 (jsonify)
-        # 我们需要从 Response 对象中获取数据，或者直接返回它
-        return response_data
+        runtime_apply = None
+        if manager.is_running and manager.bot:
+            runtime_apply = await manager.reload_runtime_config(
+                new_config=CONFIG,
+                force_ai_reload=force_ai_reload,
+                strict_active_preset=strict_active_preset,
+            )
+            if requested_active and runtime_apply.get('success'):
+                runtime_apply['requested_preset'] = requested_active
+
+        return jsonify({
+            'success': True,
+            'config': _build_config_payload(),
+            'runtime_apply': runtime_apply,
+        })
         
     except Exception as e:
         logger.error(f"保存配置失败: {e}")
@@ -329,7 +428,7 @@ async def test_connection():
         # 注意：AIClient 需要完整的参数，这里做一些回退处理
         client = AIClient(
             base_url=target_preset.get('base_url') or api_cfg.get('base_url'),
-            api_key=target_preset.get('api_key') or api_cfg.get('api_key'),
+            api_key=_resolve_request_api_key(target_preset, api_cfg),
             model=target_preset.get('model') or api_cfg.get('model'),
             timeout_sec=(
                 target_preset.get('timeout_sec')

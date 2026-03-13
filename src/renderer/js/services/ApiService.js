@@ -250,13 +250,30 @@ class ApiService {
     }
 
     /**
+     * 获取模型目录
+     */
+    async getModelCatalog() {
+        return this.request('/api/model_catalog');
+    }
+
+    /**
+     * 获取本地 Ollama 已安装模型列表
+     * @param {string} baseUrl - Ollama OpenAI 兼容 base_url
+     */
+    async getOllamaModels(baseUrl = 'http://127.0.0.1:11434/v1') {
+        const query = new URLSearchParams({ base_url: baseUrl }).toString();
+        return this.request(`/api/ollama/models?${query}`);
+    }
+
+    /**
      * 保存配置
      * @param {Object} config - 配置对象
      */
     async saveConfig(config) {
         return this.request('/api/config', {
             method: 'POST',
-            body: config
+            body: config,
+            timeoutMs: 20000
         });
     }
 

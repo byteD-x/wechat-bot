@@ -17,6 +17,7 @@ from ..utils.config import normalize_system_prompt, build_api_candidates, get_se
 __all__ = [
     "build_ai_client",
     "select_ai_client",
+    "select_specific_ai_client",
     "get_reconnect_policy",
     "reconnect_wechat",
     "apply_ai_runtime_settings",
@@ -134,6 +135,56 @@ async def select_ai_client(
         logging.warning("预设 %s 不可用，尝试下一个...", name)
 
     logging.error("没有可用的预设，请检查 API 配置。")
+    return None, None
+
+
+async def select_specific_ai_client(
+    api_cfg: Dict[str, Any], bot_cfg: Dict[str, Any], preset_name: str
+) -> Tuple[Optional[AIClient], Optional[str]]:
+    """
+    严格选择指定预设，不做自动回退。
+    """
+    wanted = str(preset_name or "").strip()
+    presets = api_cfg.get("presets", [])
+    if not wanted or not isinstance(presets, list):
+        logging.error("未找到指定预设：%s", wanted or "<empty>")
+        return None, None
+
+    settings = next((p for p in presets if isinstance(p, dict) and p.get("name") == wanted), None)
+    if not isinstance(settings, dict):
+        logging.error("指定预设不存在：%s", wanted)
+        return None, None
+
+    base_url = str(settings.get("base_url") or "").strip()
+    model = str(settings.get("model") or "").strip()
+    api_key = settings.get("api_key")
+    if api_key is None:
+        api_key = ""
+    else:
+        api_key = str(api_key).strip()
+    allow_empty_key = bool(settings.get("allow_empty_key", False))
+
+    if not base_url or not model:
+        logging.error("指定预设 %s 缺少 base_url 或 model", wanted)
+        return None, None
+    if is_placeholder_key(api_key) and not allow_empty_key:
+        logging.error("指定预设 %s 的 api_key 未配置或为占位符", wanted)
+        return None, None
+
+    settings = dict(settings)
+    settings["base_url"] = base_url
+    settings["model"] = model
+    settings["api_key"] = api_key
+    if "embedding_model" not in settings:
+        settings["embedding_model"] = str(api_cfg.get("embedding_model") or "")
+
+    client = build_ai_client(settings, bot_cfg)
+    logging.info("正在严格探测指定预设：%s", wanted)
+    if await client.probe():
+        logging.info("已选择指定预设：%s", wanted)
+        return client, wanted
+
+    logging.error("指定预设不可用：%s", wanted)
     return None, None
 
 

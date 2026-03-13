@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field, validator
 
 class PresetConfig(BaseModel):
     name: str
+    provider_id: Optional[str] = None
     alias: str
     base_url: str
     api_key: str
@@ -19,7 +20,7 @@ class PresetConfig(BaseModel):
 class ApiConfig(BaseModel):
     base_url: str = 'https://api.openai.com/v1'
     api_key: str = "YOUR_API_KEY"
-    model: str = 'gpt-4o-mini'
+    model: str = 'gpt-5-mini'
     embedding_model: Optional[str] = None  # 新增
     alias: str = '小欧'
     timeout_sec: int = 8

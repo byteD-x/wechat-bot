@@ -24,6 +24,7 @@ from .core.bot_control import (
 )
 from .core.factory import (
     select_ai_client,
+    select_specific_ai_client,
     get_reconnect_policy,
     reconnect_wechat,
     apply_ai_runtime_settings,
@@ -87,6 +88,7 @@ class WeChatBot:
         self.config_mtime: Optional[float] = None
         self.ai_module_mtime: Optional[float] = None
         self.api_signature: str = ""
+        self.runtime_preset_name: str = ""
         
         # 日志标志
         self.log_message_content: bool = True
@@ -126,6 +128,7 @@ class WeChatBot:
         self.ai_client, preset_name = await select_ai_client(self.api_cfg, self.bot_cfg)
         if self.ai_client:
             self.api_signature = compute_api_signature(self.api_cfg)
+            self.runtime_preset_name = preset_name or ""
             logging.info("AI 客户端初始化成功，使用预设: %s", preset_name)
         else:
             logging.warning("AI 客户端初始化失败，未能选择有效预设")
@@ -330,7 +333,70 @@ class WeChatBot:
                             await self.ai_client.close()
                         self.ai_client = new_client
                         self.api_signature = new_signature
+                        self.runtime_preset_name = new_preset or ""
                         logging.info("配置更新，已重新加载 AI 客户端: %s", new_preset)
+
+    async def reload_runtime_config(
+        self,
+        *,
+        new_config: Optional[Dict[str, Any]] = None,
+        force_ai_reload: bool = False,
+        strict_active_preset: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        立即重载运行时配置，并在需要时立刻切换 AI 客户端。
+        """
+        try:
+            self.config = new_config if new_config is not None else load_config(self.config_path)
+        except Exception as exc:
+            logging.warning("立即重载配置失败: %s", exc)
+            return {"success": False, "message": f"配置加载失败: {exc}", "runtime_preset": self.runtime_preset_name}
+
+        self._apply_config()
+        new_signature = compute_api_signature(self.api_cfg)
+        need_reload_client = force_ai_reload or new_signature != self.api_signature
+
+        if not need_reload_client:
+            return {
+                "success": True,
+                "message": "配置已立即应用",
+                "runtime_preset": self.runtime_preset_name,
+            }
+
+        if not self.bot_cfg.get("reload_ai_client_on_change", True) and not force_ai_reload:
+            return {
+                "success": True,
+                "message": "配置已应用，AI 客户端保持不变",
+                "runtime_preset": self.runtime_preset_name,
+            }
+
+        active_preset = str(self.api_cfg.get("active_preset") or "").strip()
+        if strict_active_preset and active_preset:
+            new_client, new_preset = await select_specific_ai_client(
+                self.api_cfg, self.bot_cfg, active_preset
+            )
+        else:
+            new_client, new_preset = await select_ai_client(self.api_cfg, self.bot_cfg)
+
+        if not new_client:
+            return {
+                "success": False,
+                "message": "AI 客户端重载失败，请检查当前激活预设的连接配置",
+                "runtime_preset": self.runtime_preset_name,
+            }
+
+        if self.ai_client and hasattr(self.ai_client, "close"):
+            await self.ai_client.close()
+
+        self.ai_client = new_client
+        self.api_signature = new_signature
+        self.runtime_preset_name = new_preset or active_preset
+        logging.info("已立即切换运行中 AI 客户端: %s", self.runtime_preset_name)
+        return {
+            "success": True,
+            "message": f"运行中的 AI 已立即切换到 {self.runtime_preset_name}",
+            "runtime_preset": self.runtime_preset_name,
+        }
 
     async def schedule_merged_reply(self, wx: "WeChat", event: MessageEvent) -> None:
         if is_voice_message(event.msg_type):

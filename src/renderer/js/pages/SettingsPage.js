@@ -10,6 +10,7 @@ export class SettingsPage extends PageController {
     constructor() {
         super('SettingsPage', 'page-settings');
         this.currentConfig = null;
+        this.modelCatalog = { providers: [] };
     }
 
     async onInit() {
@@ -54,7 +55,13 @@ export class SettingsPage extends PageController {
             }
         });
         
-        // 模态框内模型选择变化
+        // 模态框内服务商与模型变化
+        this.bindEvent('#edit-preset-provider', 'change', () => {
+            this._renderProviderModels();
+            this._updateApiKeyHelp(this._getSelectedProviderId());
+            void this._syncOllamaModels();
+        });
+
         this.bindEvent('#edit-preset-model-select', 'change', (e) => {
             const customInput = this.$('#edit-preset-model-custom');
             if (e.target.value === 'custom') {
@@ -62,7 +69,7 @@ export class SettingsPage extends PageController {
             } else {
                 customInput.style.display = 'none';
             }
-            this._updateApiKeyHelp(this._getProviderNameForHelp());
+            this._updateApiKeyHelp(this._getSelectedProviderId());
         });
 
         // 防止标题栏拖拽事件冒泡导致错误
@@ -81,7 +88,7 @@ export class SettingsPage extends PageController {
         });
 
         this.bindEvent('#edit-preset-name', 'input', () => {
-            this._updateApiKeyHelp(this._getProviderNameForHelp());
+            this._updateApiKeyHelp(this._getSelectedProviderId());
         });
     }
 
@@ -89,23 +96,204 @@ export class SettingsPage extends PageController {
     //                           辅助数据
     // ═══════════════════════════════════════════════════════════════════════
 
-    _getProviderModels() {
+    _getFallbackModelCatalog() {
         return {
-            'OpenAI': ['gpt-3.5-turbo', 'gpt-4', 'gpt-4-turbo', 'gpt-4o', 'gpt-4o-mini'],
-            'Doubao (豆包)': ['doubao-seed-1-8-251228', 'doubao-pro-4k', 'doubao-pro-32k', 'doubao-lite-4k', 'doubao-lite-32k'],
-            'DeepSeek': ['deepseek-chat', 'deepseek-coder'],
-            'SiliconFlow': ['deepseek-ai/DeepSeek-V3', 'deepseek-ai/DeepSeek-R1', 'deepseek-ai/DeepSeek-V2.5'],
-            'Moonshot (Kimi)': ['moonshot-v1-8k', 'moonshot-v1-32k', 'moonshot-v1-128k'],
-            'Zhipu (智谱)': ['glm-4v', 'glm-4v-plus', 'glm-4', 'glm-4-air', 'glm-4-flash', 'glm-3-turbo'],
-            'Qwen (通义千问)': ['qwen-turbo', 'qwen-plus', 'qwen-max'],
-            'Groq': ['llama3-70b-8192', 'mixtral-8x7b-32768'],
-            'Ollama': ['llama3', 'mistral', 'qwen'],
-            'Other': []
+            providers: [
+                {
+                    id: 'openai',
+                    label: 'OpenAI',
+                    base_url: 'https://api.openai.com/v1',
+                    api_key_url: 'https://platform.openai.com/api-keys',
+                    aliases: ['openai', 'gpt'],
+                    default_model: 'gpt-5-mini',
+                    models: ['gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini']
+                },
+                {
+                    id: 'doubao',
+                    label: 'Doubao (豆包)',
+                    base_url: 'https://ark.cn-beijing.volces.com/api/v3',
+                    api_key_url: 'https://console.volcengine.com/ark',
+                    aliases: ['doubao', '豆包', 'ark', 'volc'],
+                    default_model: 'doubao-seed-1-8-251228',
+                    models: ['doubao-seed-1-8-251228', 'doubao-seed-1-6-250615', 'doubao-seed-1-6-thinking-250615', 'doubao-seed-1-6-flash-250715']
+                },
+                {
+                    id: 'deepseek',
+                    label: 'DeepSeek',
+                    base_url: 'https://api.deepseek.com/v1',
+                    api_key_url: 'https://platform.deepseek.com/api_keys',
+                    aliases: ['deepseek'],
+                    default_model: 'deepseek-chat',
+                    models: ['deepseek-chat', 'deepseek-reasoner']
+                },
+                {
+                    id: 'qwen',
+                    label: 'Qwen (通义千问)',
+                    base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+                    api_key_url: 'https://dashscope.console.aliyun.com/apiKey',
+                    aliases: ['qwen', '通义', '千问', 'dashscope', '百炼'],
+                    default_model: 'qwen3.5-plus',
+                    models: ['qwen-max-latest', 'qwen-plus-latest', 'qwen-flash-latest', 'qwen3-max', 'qwen3.5-plus', 'qwen3.5-flash', 'qwen3-coder-plus', 'qwen3-coder-flash']
+                },
+                {
+                    id: 'zhipu',
+                    label: 'Zhipu (智谱)',
+                    base_url: 'https://open.bigmodel.cn/api/paas/v4',
+                    api_key_url: 'https://open.bigmodel.cn/usercenter/apikeys',
+                    aliases: ['zhipu', 'glm', '智谱'],
+                    default_model: 'glm-4.5-air',
+                    models: ['glm-5-plus', 'glm-5-air', 'glm-5-flash', 'glm-4.6', 'glm-4.5-air', 'glm-4.5-flash']
+                },
+                {
+                    id: 'moonshot',
+                    label: 'Moonshot (Kimi)',
+                    base_url: 'https://api.moonshot.cn/v1',
+                    api_key_url: 'https://platform.moonshot.cn/console/api-keys',
+                    aliases: ['moonshot', 'kimi'],
+                    default_model: 'kimi-k2-turbo-preview',
+                    models: ['kimi-k2-turbo-preview', 'kimi-k2-0711-preview', 'kimi-thinking-preview', 'moonshot-v1-8k', 'moonshot-v1-32k', 'moonshot-v1-128k']
+                },
+                {
+                    id: 'groq',
+                    label: 'Groq',
+                    base_url: 'https://api.groq.com/openai/v1',
+                    api_key_url: 'https://console.groq.com/keys',
+                    aliases: ['groq'],
+                    default_model: 'qwen/qwen3-32b',
+                    models: ['qwen/qwen3-32b', 'openai/gpt-oss-120b', 'meta-llama/llama-4-maverick-17b-128e-instruct', 'meta-llama/llama-4-scout-17b-16e-instruct']
+                },
+                {
+                    id: 'ollama',
+                    label: 'Ollama',
+                    base_url: 'http://127.0.0.1:11434/v1',
+                    api_key_url: 'https://ollama.com/',
+                    aliases: ['ollama'],
+                    allow_empty_key: true,
+                    default_model: 'qwen3',
+                    models: ['qwen3', 'llama3.1', 'gemma3', 'mistral']
+                }
+            ]
         };
     }
 
+    _getCatalogProviders() {
+        const providers = this.modelCatalog?.providers;
+        if (Array.isArray(providers) && providers.length > 0) {
+            return providers;
+        }
+        return this._getFallbackModelCatalog().providers;
+    }
+
+    _getProviderById(providerId) {
+        const normalized = String(providerId || '').trim().toLowerCase();
+        if (!normalized) return null;
+        return this._getCatalogProviders().find(provider => provider.id === normalized) || null;
+    }
+
+    _guessProviderId(value) {
+        const preset = typeof value === 'object' && value !== null ? value : {};
+        const raw = typeof value === 'string' ? value : preset.name || '';
+        const lowerName = String(raw || '').toLowerCase();
+        const lowerBaseUrl = String(preset.base_url || '').toLowerCase();
+        const lowerModel = String(preset.model || '').toLowerCase();
+
+        for (const provider of this._getCatalogProviders()) {
+            if (lowerBaseUrl && String(provider.base_url || '').toLowerCase() === lowerBaseUrl) {
+                return provider.id;
+            }
+            if ((provider.models || []).some(model => String(model).toLowerCase() === lowerModel)) {
+                return provider.id;
+            }
+            if ((provider.aliases || []).some(alias => lowerName.includes(String(alias).toLowerCase()) || lowerModel.includes(String(alias).toLowerCase()))) {
+                return provider.id;
+            }
+            if (lowerName && lowerName.includes(provider.id)) {
+                return provider.id;
+            }
+        }
+        return '';
+    }
+
+    _getSelectedProviderId() {
+        return this.$('#edit-preset-provider')?.value || '';
+    }
+
+    _populateProviderSelect(selectedProviderId = '') {
+        const select = this.$('#edit-preset-provider');
+        if (!select) return;
+
+        const options = this._getCatalogProviders()
+            .map(provider => `<option value="${provider.id}">${provider.label}</option>`)
+            .join('');
+
+        select.innerHTML = `<option value="">-- 选择服务商 --</option>${options}`;
+        select.value = selectedProviderId || this._getCatalogProviders()[0]?.id || '';
+    }
+
+    _renderProviderModels(currentModel = '') {
+        const select = this.$('#edit-preset-model-select');
+        const customInput = this.$('#edit-preset-model-custom');
+        if (!select || !customInput) return;
+
+        const provider = this._getProviderById(this._getSelectedProviderId());
+        const models = Array.isArray(provider?.models) ? provider.models : [];
+
+        const options = models
+            .map(model => `<option value="${model}">${model}</option>`)
+            .join('');
+
+        select.innerHTML = `${options}<option value="custom">自定义模型...</option>`;
+
+        if (currentModel && models.includes(currentModel)) {
+            select.value = currentModel;
+            customInput.style.display = 'none';
+            customInput.value = '';
+            return;
+        }
+
+        if (currentModel) {
+            select.value = 'custom';
+            customInput.style.display = 'block';
+            customInput.value = currentModel;
+            return;
+        }
+
+        select.value = provider?.default_model || models[0] || 'custom';
+        customInput.style.display = 'none';
+        customInput.value = '';
+    }
+
+    _setProviderModels(providerId, models = []) {
+        const provider = this._getProviderById(providerId);
+        if (!provider || !Array.isArray(models) || models.length === 0) return;
+        provider.models = [...models];
+        if (!provider.default_model || !models.includes(provider.default_model)) {
+            provider.default_model = models[0];
+        }
+    }
+
+    async _syncOllamaModels(currentModel = '') {
+        if (this._getSelectedProviderId() !== 'ollama') return;
+
+        const provider = this._getProviderById('ollama');
+        const baseUrl = provider?.base_url || 'http://127.0.0.1:11434/v1';
+
+        try {
+            const result = await apiService.getOllamaModels(baseUrl);
+            if (!result?.success || !Array.isArray(result.models) || result.models.length === 0) {
+                return;
+            }
+            this._setProviderModels('ollama', result.models);
+            if (this._getSelectedProviderId() === 'ollama') {
+                this._renderProviderModels(currentModel || result.models[0]);
+            }
+        } catch (error) {
+            console.warn('加载 Ollama 模型失败:', error);
+        }
+    }
+
     _getProviderIcon(name) {
-        const lower = name.toLowerCase();
+        const lower = String(name || '').toLowerCase();
         if (lower.includes('openai') || lower.includes('gpt')) return '🟢';
         if (lower.includes('doubao') || lower.includes('豆包')) return '📦';
         if (lower.includes('deepseek')) return '🦈';
@@ -114,57 +302,26 @@ export class SettingsPage extends PageController {
         if (lower.includes('qwen') || lower.includes('通义')) return '😺';
         if (lower.includes('silicon')) return '🌊';
         if (lower.includes('groq')) return '⚡';
+        if (lower.includes('ollama')) return '🦙';
         return '🤖';
     }
 
-    _getProviderNameForHelp() {
-        const select = this.$('#edit-preset-model-select');
-        const nameInput = this.$('#edit-preset-name');
-        const option = select?.options?.[select.selectedIndex];
-        const optgroup = option?.closest('optgroup');
-        if (optgroup?.label) return optgroup.label;
-        if (nameInput?.value) return nameInput.value;
-        if (option?.value) return option.value;
-        return 'Other';
-    }
-
-    _getProviderKeyInfo(name) {
-        const lower = (name || '').toLowerCase();
-        if (lower.includes('openai') || lower.includes('gpt')) {
-            return { text: '获取 OpenAI API Key →', url: 'https://platform.openai.com/api-keys' };
-        }
-        if (lower.includes('doubao') || lower.includes('豆包') || lower.includes('volc') || lower.includes('ark')) {
-            return { text: '获取 豆包 API Key →', url: 'https://console.volcengine.com/ark' };
-        }
-        if (lower.includes('deepseek')) {
-            return { text: '获取 DeepSeek API Key →', url: 'https://platform.deepseek.com/api_keys' };
-        }
-        if (lower.includes('silicon')) {
-            return { text: '获取 SiliconFlow API Key →', url: 'https://cloud.siliconflow.cn/account/ak' };
-        }
-        if (lower.includes('moonshot') || lower.includes('kimi')) {
-            return { text: '获取 Moonshot API Key →', url: 'https://platform.moonshot.cn/console/api-keys' };
-        }
-        if (lower.includes('zhipu') || lower.includes('glm') || lower.includes('智谱')) {
-            return { text: '获取 智谱 API Key →', url: 'https://open.bigmodel.cn/usercenter/apikeys' };
-        }
-        if (lower.includes('qwen') || lower.includes('通义')) {
-            return { text: '获取 通义千问 API Key →', url: 'https://dashscope.console.aliyun.com/apiKey' };
-        }
-        if (lower.includes('groq')) {
-            return { text: '获取 Groq API Key →', url: 'https://console.groq.com/keys' };
-        }
-        if (lower.includes('ollama')) {
-            return { text: 'Ollama 无需 API Key，查看文档 →', url: 'https://ollama.com/' };
+    _getProviderKeyInfo(providerId) {
+        const provider = this._getProviderById(providerId);
+        if (provider?.api_key_url) {
+            const text = provider.id === 'ollama'
+                ? 'Ollama 无需 API Key，查看文档 →'
+                : `获取 ${provider.label} API Key →`;
+            return { text, url: provider.api_key_url };
         }
         return { text: '获取 API Key →', url: 'https://www.google.com/search?q=API+Key+%E8%8E%B7%E5%8F%96' };
     }
 
-    _updateApiKeyHelp(name) {
+    _updateApiKeyHelp(providerId) {
         const help = this.$('#api-key-help');
         const link = this.$('#api-key-help-link');
         if (!help || !link) return;
-        const info = this._getProviderKeyInfo(name);
+        const info = this._getProviderKeyInfo(providerId);
         link.textContent = info.text;
         link.href = info.url;
         help.style.display = 'block';
@@ -176,22 +333,69 @@ export class SettingsPage extends PageController {
 
     async _loadConfig() {
         try {
-            const result = await apiService.getConfig();
-            if (result.success) {
+            const [configResult, catalogResult] = await Promise.all([
+                apiService.getConfig(),
+                apiService.getModelCatalog()
+            ]);
+
+            if (catalogResult?.success) {
+                this.modelCatalog = {
+                    updated_at: catalogResult.updated_at || '',
+                    providers: Array.isArray(catalogResult.providers) ? catalogResult.providers : []
+                };
+            } else {
+                this.modelCatalog = this._getFallbackModelCatalog();
+            }
+
+            if (configResult.success) {
                 // 后端返回的是扁平结构，剔除 success 字段后即为配置
-                const { success, ...config } = result;
+                const { success, ...config } = configResult;
                 this.currentConfig = config;
                 this._renderConfig(this.currentConfig);
                 toast.success('配置已加载');
             } else {
-                this.$('#preset-list').innerHTML = `<div class="empty-state error">加载失败: ${result.message}</div>`;
-                toast.error('加载配置失败: ' + result.message);
+                this.$('#preset-list').innerHTML = `<div class="empty-state error">加载失败: ${configResult.message}</div>`;
+                toast.error('加载配置失败: ' + configResult.message);
             }
         } catch (error) {
             console.error('加载配置异常:', error);
             this.$('#preset-list').innerHTML = '<div class="empty-state error">加载异常，请检查服务</div>';
             toast.error(toast.getErrorMessage(error, '加载配置异常'));
         }
+    }
+
+    _extractConfigPayload(result) {
+        if (!result?.success) return null;
+        if (result.config) return result.config;
+        const { success, message, ...config } = result;
+        return config;
+    }
+
+    _setButtonLoading(button, isLoading, pendingHtml = '') {
+        if (!button) return;
+
+        if (isLoading) {
+            if (!button.dataset.originalHtml) {
+                button.dataset.originalHtml = button.innerHTML;
+            }
+            button.disabled = true;
+            if (pendingHtml) {
+                button.innerHTML = pendingHtml;
+            }
+            return;
+        }
+
+        button.disabled = false;
+        if (button.dataset.originalHtml) {
+            button.innerHTML = button.dataset.originalHtml;
+            delete button.dataset.originalHtml;
+        }
+    }
+
+    _getRuntimeSwitchMessage(isRunning) {
+        return isRunning
+            ? '运行中的机器人会在配置热重载后切换到新模型。'
+            : '机器人当前未运行，下次启动后会使用该预设。';
     }
 
     _renderConfig(config) {
@@ -209,8 +413,10 @@ export class SettingsPage extends PageController {
         const activeModel = currentPreset.model || api.model || '--';
         const activeAlias = currentPreset.alias || api.alias || '--';
         const hasKey = currentPreset.api_key_configured;
+        const keyRequired = currentPreset.api_key_required !== false;
+        const keyStatus = keyRequired ? (hasKey ? '已配置' : '未配置') : '无需 Key';
 
-        const icon = this._getProviderIcon(activePresetName);
+        const icon = this._getProviderIcon(currentPreset.provider_id || activePresetName);
 
         // 更新顶部英雄卡片
         const heroContainer = this.$('#current-config-hero');
@@ -236,7 +442,7 @@ export class SettingsPage extends PageController {
                             </div>
                              <div class="detail-item">
                                 <span class="detail-label">API Key</span>
-                                <span class="detail-value mono">${hasKey ? '已配置' : '未配置'}</span>
+                                <span class="detail-value mono">${keyStatus}</span>
                             </div>
                         </div>
                     </div>
@@ -695,9 +901,21 @@ export class SettingsPage extends PageController {
     }
 
     async _saveConfig() {
-        if (!this.currentConfig) return;
+        if (!this.currentConfig) {
+            toast.warning('配置尚未加载完成，请稍后再试');
+            return;
+        }
+
+        const saveButton = this.$('#btn-save-settings');
+        this._setButtonLoading(
+            saveButton,
+            true,
+            '<span class="spinner-sm" style="width:14px;height:14px;border-width:2px;"></span><span> 保存中...</span>'
+        );
 
         try {
+            toast.info('正在保存配置...');
+
             // 收集表单数据
             const parseNumber = (value) => {
                 if (value === '' || value == null) return undefined;
@@ -879,15 +1097,27 @@ export class SettingsPage extends PageController {
 
             const result = await apiService.saveConfig(newConfig);
             if (result.success) {
-                this.currentConfig = result.config; // 更新本地配置
-                this._renderConfig(this.currentConfig);
-                toast.success('配置已保存');
+                const savedConfig = this._extractConfigPayload(result);
+                if (savedConfig) {
+                    this.currentConfig = savedConfig;
+                    this._renderConfig(this.currentConfig);
+                }
+                const runtimeApply = result.runtime_apply;
+                if (runtimeApply?.success) {
+                    toast.success(runtimeApply.message || '配置已保存并立即应用');
+                } else if (runtimeApply && runtimeApply.success === false) {
+                    toast.warning(`配置已保存，但运行中机器人未完全应用：${runtimeApply.message}`);
+                } else {
+                    toast.success('配置已保存');
+                }
             } else {
                 toast.error('保存失败: ' + result.message);
             }
         } catch (error) {
             console.error('保存配置异常:', error);
             toast.error(toast.getErrorMessage(error, '保存配置异常'));
+        } finally {
+            this._setButtonLoading(saveButton, false);
         }
     }
 
@@ -910,7 +1140,13 @@ export class SettingsPage extends PageController {
         presetList.forEach(preset => {
             const name = preset.name;
             const isActive = name === this.currentConfig.api?.active_preset;
-            const icon = this._getProviderIcon(name);
+            const provider = this._getProviderById(preset.provider_id || this._guessProviderId(preset));
+            const icon = this._getProviderIcon(provider?.label || preset.provider_id || name);
+            const keyTag = preset.api_key_required === false
+                ? '<span class="tag" style="background: rgba(59, 130, 246, 0.2); color: #60a5fa; margin-left: 6px; font-size: 0.75em; padding: 2px 6px;">无需 Key</span>'
+                : (preset.api_key_configured
+                    ? '<span class="tag" style="background: rgba(16, 185, 129, 0.2); color: #10b981; margin-left: 6px; font-size: 0.75em; padding: 2px 6px;">已配 Key</span>'
+                    : '<span class="tag" style="background: rgba(245, 158, 11, 0.2); color: #f59e0b; margin-left: 6px; font-size: 0.75em; padding: 2px 6px;">无 Key</span>');
 
             const item = document.createElement('div');
             // 使用 CSS 类控制样式
@@ -923,9 +1159,7 @@ export class SettingsPage extends PageController {
                         <div class="preset-name">
                             ${name}
                             ${isActive ? '<span class="tag tag-active">当前使用</span>' : ''}
-                            ${preset.api_key_configured ? 
-                                '<span class="tag" style="background: rgba(16, 185, 129, 0.2); color: #10b981; margin-left: 6px; font-size: 0.75em; padding: 2px 6px;">已配 Key</span>' : 
-                                '<span class="tag" style="background: rgba(245, 158, 11, 0.2); color: #f59e0b; margin-left: 6px; font-size: 0.75em; padding: 2px 6px;">无 Key</span>'}
+                            ${keyTag}
                         </div>
                         <div class="preset-meta">
                             <span class="meta-item model-name" title="${preset.model}">${preset.model}</span>
@@ -942,28 +1176,11 @@ export class SettingsPage extends PageController {
 
             // 绑定列表项按钮事件
             item.querySelector('.btn-edit').onclick = () => this._openPresetModal(name, preset);
-            item.querySelector('.btn-delete').onclick = () => this._deletePreset(name);
+            item.querySelector('.btn-delete').onclick = () => this._deletePreset(name, item.querySelector('.btn-delete'));
             if (!isActive) {
                 const btnActivate = item.querySelector('.btn-activate');
                 if (btnActivate) {
-                    btnActivate.onclick = async () => {
-                        // 防止重复点击
-                        if (btnActivate.disabled) return;
-                        
-                        const originalHtml = btnActivate.innerHTML;
-                        try {
-                            btnActivate.disabled = true;
-                            // 显示简易 Loading
-                            btnActivate.innerHTML = '<span class="spinner-sm" style="width:14px;height:14px;border-width:2px;"></span>';
-                            await this._activatePreset(name);
-                        } catch (e) {
-                            console.error('激活预设失败:', e);
-                            toast.error(toast.getErrorMessage(e, '激活预设异常'));
-                            // 恢复按钮状态
-                            btnActivate.disabled = false;
-                            btnActivate.innerHTML = originalHtml;
-                        }
-                    };
+                    btnActivate.onclick = async () => this._activatePreset(name, btnActivate);
                 }
             }
 
@@ -974,88 +1191,27 @@ export class SettingsPage extends PageController {
     _openPresetModal(name = null, preset = null) {
         const modal = this.$('#preset-modal');
         const isEdit = !!name;
-        
+        const providerId = preset?.provider_id || this._guessProviderId(preset || name) || 'openai';
+
         this.$('.modal-title').textContent = isEdit ? '编辑预设' : '新增预设';
         this.$('#edit-preset-original-name').value = name || '';
         this.$('#edit-preset-name').value = name || '';
         this.$('#edit-preset-name').disabled = isEdit; // 编辑时不允许改名(ID)
-
-        // 填充模型下拉 - 智能联动
-        const select = this.$('#edit-preset-model-select');
-        const modelsMap = this._getProviderModels();
-        let optionsHtml = '';
-        
-        // 确定要显示的模型组
-        let targetProviderKey = null;
-        if (name) {
-            // 尝试模糊匹配 name 到 provider key
-            const lowerName = name.toLowerCase();
-            targetProviderKey = Object.keys(modelsMap).find(key => {
-                const lowerKey = key.toLowerCase();
-                // 处理 "Doubao (豆包)" 这种情况
-                const cleanKey = lowerKey.split(' ')[0]; 
-                return lowerName.includes(cleanKey) || cleanKey.includes(lowerName);
-            });
-        }
-
-        // 如果找到了对应的 Provider，只显示该组
-        if (targetProviderKey && modelsMap[targetProviderKey]) {
-            const models = modelsMap[targetProviderKey];
-            optionsHtml += `<optgroup label="${targetProviderKey}">`;
-            models.forEach(m => {
-                optionsHtml += `<option value="${m}">${m}</option>`;
-            });
-            optionsHtml += `</optgroup>`;
-        } else {
-            // 如果没找到（或者是新增模式且未输入），显示所有分组
-            // 或者我们可以根据用户输入的 name 动态过滤？目前简化为显示所有
-            for (const [provider, models] of Object.entries(modelsMap)) {
-                if (models.length > 0) {
-                    optionsHtml += `<optgroup label="${provider}">`;
-                    models.forEach(m => {
-                        optionsHtml += `<option value="${m}">${m}</option>`;
-                    });
-                    optionsHtml += `</optgroup>`;
-                }
-            }
-        }
-
-        // 始终添加自定义选项
-        optionsHtml += `<option value="custom">自定义模型...</option>`;
-        select.innerHTML = optionsHtml;
+        this._populateProviderSelect(providerId);
 
         if (preset) {
             this.$('#edit-preset-alias').value = preset.alias || '';
             this.$('#edit-preset-key').value = ''; // 不回显 Key
-            
-            const currentModel = preset.model;
-            // 检查模型是否存在于列表中
-            let found = false;
-            for (const models of Object.values(modelsMap)) {
-                if (models.includes(currentModel)) {
-                    found = true;
-                    break;
-                }
-            }
-            
-            if (found) {
-                select.value = currentModel;
-                this.$('#edit-preset-model-custom').style.display = 'none';
-            } else {
-                select.value = 'custom';
-                this.$('#edit-preset-model-custom').style.display = 'block';
-                this.$('#edit-preset-model-custom').value = currentModel;
-            }
+            this._renderProviderModels(preset.model || '');
         } else {
             this.$('#edit-preset-alias').value = '';
             this.$('#edit-preset-key').value = '';
-            // 默认选中第一个
-            select.value = modelsMap['OpenAI'][0] || 'custom';
-            this.$('#edit-preset-model-custom').style.display = 'none';
+            this._renderProviderModels();
         }
 
-        this._updateApiKeyHelp(this._getProviderNameForHelp());
+        this._updateApiKeyHelp(this._getSelectedProviderId());
         modal.classList.add('active');
+        void this._syncOllamaModels(preset?.model || '');
     }
 
     _closePresetModal() {
@@ -1063,98 +1219,64 @@ export class SettingsPage extends PageController {
     }
 
     async _savePreset() {
+        if (!this.currentConfig?.api) {
+            toast.warning('配置尚未加载完成，请稍后再试');
+            return;
+        }
+
         const originalName = this.$('#edit-preset-original-name').value;
         const name = this.$('#edit-preset-name').value.trim();
+        const providerId = this._getSelectedProviderId();
         const alias = this.$('#edit-preset-alias').value.trim();
         const key = this.$('#edit-preset-key').value.trim();
-        
+        const saveButton = this.$('#btn-save-modal');
+
         const select = this.$('#edit-preset-model-select');
         let model = select.value;
         if (model === 'custom') {
             model = this.$('#edit-preset-model-custom').value.trim();
         }
 
-        if (!name || !model) {
-            toast.error('名称和模型不能为空');
+        if (!name || !providerId || !model) {
+            toast.error('名称、服务商和模型不能为空');
             return;
         }
 
-        // 构建新的预设对象
-        const newPreset = {
-            name,
-            model,
-            alias,
-            // 如果提供了 key 则更新，否则保留(后端处理逻辑需支持)
-            ...(key ? { api_key: key } : {}) 
-        };
-        
-        // 获取当前预设列表
         let presets = [...(this.currentConfig.api.presets || [])];
         if (!Array.isArray(presets)) presets = [];
 
-        // 查找原始预设
-        const existingIndex = originalName 
+        const existingIndex = originalName
             ? presets.findIndex(p => p.name === originalName)
             : -1;
 
-        // 如果是编辑且没填key，需要保留原来的key
-        if (existingIndex !== -1 && !key) {
-            const existing = presets[existingIndex];
-            // 注意：这里可能拿到的是 masked key，如果没填 key 且原 key 存在，应该保留原 key
-            // 但如果原 key 是 masked (****)，发回给后端会被当成新 key 吗？
-            // 后端逻辑：如果 key 是 ****，需要后端识别并保留？
-            // 通常后端 config.py 不会存 masked key。后端返回给前端的是 masked。
-            // 如果前端把 masked key 发回去，后端存下来就废了。
-            // 解决办法：如果 key 没变（没填），我们在前端不发 api_key 字段？
-            // 或者：newPreset 不包含 api_key 字段。
-            // 下面的逻辑：...(key ? { api_key: key } : {})
-            // 如果 key 为空，newPreset 没有 api_key 字段。
-            // 那么后端更新时，如果不传 api_key，是会删除 api_key 还是保留？
-            // 看后端 save_config 逻辑：它是直接替换整个 presets 列表。
-            // 如果我们发回去的 preset 没有 api_key，后端存下来的就没有 api_key。
-            // 所以我们必须把原来的 api_key 找回来？
-            // 但前端拿到的 config 里只有 masked key。
-            // 这是一个经典问题。
-            // 通常做法：前端不发 api_key，后端合并时检查：如果新 preset 没有 api_key，则去旧配置里找同名 preset 的 api_key 填回去。
-            // 后端 save_config 目前没有这个合并逻辑，它直接用 settings['presets'] 覆盖。
-            // 这是一个后端 BUG。
-            
-            // 既然不能改后端，那前端能做什么？
-            // 前端没法拿到原始 Key。
-            // 等等，后端 api.py 里：
-            // p['api_key_configured'] = True/False
-            // p['api_key_masked'] = 'sk-****'
-            // 原来的 'api_key' 被删了。
-            
-            // 所以，如果用户不改 Key，前端发回去的 preset 里没有 api_key 字段。
-            // 后端直接保存，导致 Key 丢失。
-            
-            // 必须修后端。如果不修后端，用户只要编辑预设，Key 就丢了。
-            // 除非用户每次都重新输入 Key。
-            
-            // 用户说“代码生成时默认添加注释”，且允许重构。
-            // 我必须修复这个问题。
-            // 方案：修改后端 save_config，在保存前合并旧 Key。
-        }
-        
-        // 暂时先按原逻辑写，然后去修后端。
-        // 原逻辑试图保留 Key：
-        // if (originalName && !key && this.currentConfig.api.presets[originalName]) {
-        //    newPreset.api_key = this.currentConfig.api.presets[originalName].api_key;
-        // }
-        // 但 this.currentConfig...api_key 是 undefined (被后端删了)。
-        // 所以原逻辑也是坏的。
+        const existingPreset = existingIndex !== -1 ? presets[existingIndex] : null;
+        const existingProviderId = existingPreset?.provider_id || this._guessProviderId(existingPreset || originalName);
+        const providerChanged = !!existingPreset && providerId !== existingProviderId;
+        const provider = this._getProviderById(providerId);
 
-        // 既然如此，我先把前端改成 Array 结构，然后去修后端。
-        
-        // 更新列表
+        const providerDefaults = provider ? {
+            provider_id: provider.id,
+            base_url: provider.base_url,
+            allow_empty_key: !!provider.allow_empty_key
+        } : { provider_id: providerId };
+
+        const preservedPreset = existingPreset && !providerChanged ? { ...existingPreset } : {};
+        delete preservedPreset.api_key_configured;
+        delete preservedPreset.api_key_masked;
+
+        const newPreset = {
+            ...providerDefaults,
+            ...preservedPreset,
+            name,
+            model,
+            alias,
+            provider_id: providerId,
+            ...(key ? { api_key: key } : {})
+        };
+
         if (existingIndex !== -1) {
-            // 保留可能的其他字段（如果有）
-            // newPreset = { ...presets[existingIndex], ...newPreset }; // 不，我们想要完全替换，除了 Key
-            
-            // 标记一下，让后端知道“我没改 Key”
             if (!key) {
-                newPreset._keep_key = true; // 这是一个约定，需要后端支持
+                newPreset._keep_key = true;
             }
             presets[existingIndex] = newPreset;
         } else {
@@ -1173,18 +1295,39 @@ export class SettingsPage extends PageController {
             }
         };
 
-        const result = await apiService.saveConfig(newConfig);
-        if (result.success) {
-            this.currentConfig = result.config;
-            this._renderConfig(this.currentConfig);
-            this._closePresetModal();
-            toast.success('预设已保存');
-        } else {
-            toast.error('保存失败: ' + result.message);
+        this._setButtonLoading(
+            saveButton,
+            true,
+            '<span class="spinner-sm" style="width:14px;height:14px;border-width:2px;"></span><span> 保存中...</span>'
+        );
+
+        try {
+            toast.info(`正在保存预设: ${name}...`);
+            const result = await apiService.saveConfig(newConfig);
+            if (result.success) {
+                const savedConfig = this._extractConfigPayload(result);
+                if (savedConfig) {
+                    this.currentConfig = savedConfig;
+                    this._renderConfig(this.currentConfig);
+                }
+                this._closePresetModal();
+                toast.success('预设已保存');
+            } else {
+                toast.error('保存失败: ' + result.message);
+            }
+        } catch (error) {
+            console.error('保存预设异常:', error);
+            toast.error(toast.getErrorMessage(error, '保存预设异常'));
+        } finally {
+            this._setButtonLoading(saveButton, false);
         }
     }
 
-    async _deletePreset(name) {
+    async _deletePreset(name, triggerButton = null) {
+        if (!this.currentConfig?.api) {
+            toast.warning('配置尚未加载完成，请稍后再试');
+            return;
+        }
         if (!confirm(`确定要删除预设 "${name}" 吗？`)) return;
 
         let presets = [...(this.currentConfig.api.presets || [])];
@@ -1200,18 +1343,58 @@ export class SettingsPage extends PageController {
             }
         };
 
-        const result = await apiService.saveConfig(newConfig);
-        if (result.success) {
-            this.currentConfig = result.config;
-            this._renderConfig(this.currentConfig);
-            toast.success('预设已删除');
-        } else {
-            toast.error('删除失败: ' + result.message);
+        this._setButtonLoading(
+            triggerButton,
+            true,
+            '<span class="spinner-sm" style="width:14px;height:14px;border-width:2px;"></span>'
+        );
+
+        try {
+            toast.info(`正在删除预设: ${name}...`);
+            const result = await apiService.saveConfig(newConfig);
+            if (result.success) {
+                const savedConfig = this._extractConfigPayload(result);
+                if (savedConfig) {
+                    this.currentConfig = savedConfig;
+                    this._renderConfig(this.currentConfig);
+                }
+                toast.success('预设已删除');
+            } else {
+                toast.error('删除失败: ' + result.message);
+            }
+        } catch (error) {
+            console.error('删除预设异常:', error);
+            toast.error(toast.getErrorMessage(error, '删除预设异常'));
+        } finally {
+            this._setButtonLoading(triggerButton, false);
         }
     }
 
-    async _activatePreset(name) {
+    async _activatePreset(name, triggerButton = null) {
+        if (!this.currentConfig?.api) {
+            toast.warning('配置尚未加载完成，请稍后再试');
+            return;
+        }
+
         try {
+            const targetPreset = (this.currentConfig.api.presets || []).find(p => p.name === name);
+            if (!targetPreset) {
+                toast.error(`未找到预设: ${name}`);
+                return;
+            }
+
+            if (targetPreset.api_key_required !== false && !targetPreset.api_key_configured) {
+                toast.error(`预设 ${name} 未配置 API Key，无法启用`);
+                return;
+            }
+
+            this._setButtonLoading(
+                triggerButton,
+                true,
+                '<span class="spinner-sm" style="width:14px;height:14px;border-width:2px;"></span>'
+            );
+            toast.info(`正在切换到预设: ${name}...`);
+
             const newConfig = {
                 ...this.currentConfig,
                 api: {
@@ -1222,13 +1405,15 @@ export class SettingsPage extends PageController {
 
             const result = await apiService.saveConfig(newConfig);
             if (result.success) {
-                // 1. 使用后端返回的最新配置更新本地状态
-                this.currentConfig = result.config;
-                
-                // 2. 重新渲染界面
-                this._renderConfig(this.currentConfig);
-                
-                // 3. 触发高亮特效
+                const savedConfig = this._extractConfigPayload(result);
+                if (savedConfig) {
+                    this.currentConfig = savedConfig;
+                    this._renderConfig(this.currentConfig);
+                }
+
+                const status = await apiService.getStatus().catch(() => null);
+
+                // 触发高亮特效
                 const heroCard = this.$('.config-hero-card');
                 if (heroCard) {
                     heroCard.classList.remove('highlight-pulse');
@@ -1242,7 +1427,14 @@ export class SettingsPage extends PageController {
                     }, 1500);
                 }
 
-                toast.success(`已切换到预设: ${name}`);
+                const runtimeApply = result.runtime_apply;
+                if (runtimeApply?.success) {
+                    toast.success(runtimeApply.message || `已切换到预设: ${name}`);
+                } else if (runtimeApply && runtimeApply.success === false) {
+                    toast.warning(`预设已保存为 ${name}，但运行中 AI 未立即切换：${runtimeApply.message}`);
+                } else {
+                    toast.success(`已切换到预设: ${name}。${this._getRuntimeSwitchMessage(!!status?.running)}`);
+                }
             } else {
                 toast.error('切换失败: ' + result.message);
                 throw new Error(result.message); // 抛出异常以便外层捕获恢复按钮状态
@@ -1253,7 +1445,8 @@ export class SettingsPage extends PageController {
             if (!error.message || !error.message.includes('切换失败')) {
                 toast.error(toast.getErrorMessage(error, '切换预设操作发生错误'));
             }
-            throw error; // 继续抛出，让按钮点击事件捕获
+        } finally {
+            this._setButtonLoading(triggerButton, false);
         }
     }
 }

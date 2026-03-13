@@ -239,7 +239,29 @@ class BotManager:
         """重启机器人"""
         await self.stop()
         return await self.start()
-        
+
+    async def reload_runtime_config(
+        self,
+        *,
+        new_config: Optional[Dict[str, Any]] = None,
+        force_ai_reload: bool = False,
+        strict_active_preset: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        立即将最新配置应用到运行中的机器人。
+        """
+        if not self.is_running or not self.bot:
+            return {'success': False, 'message': '机器人未运行，无法立即切换', 'skipped': True}
+
+        if not hasattr(self.bot, 'reload_runtime_config'):
+            return {'success': False, 'message': '当前机器人实例不支持立即重载', 'skipped': True}
+
+        return await self.bot.reload_runtime_config(
+            new_config=new_config,
+            force_ai_reload=force_ai_reload,
+            strict_active_preset=strict_active_preset,
+        )
+
     async def send_message(self, target: str, content: str) -> Dict[str, Any]:
         """
         发送消息
