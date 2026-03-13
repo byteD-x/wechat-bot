@@ -85,7 +85,7 @@
 ### 环境准备
 
 - [x] Windows 10/11
-- [x] 微信 PC 版 3.9.x（已登录并保持运行，推荐 3.9.12：https://weixin.qq.com/updates?platform=windows&version=3.9.12）
+- [x] 微信 PC 版 3.9.x（已登录并保持运行，推荐 3.9.12：https://github.com/tom-snow/wechat-windows-versions/releases/tag/v3.9.12.51）
 - [x] Python 3.9+
 - [x] Node.js 16+ (仅开发客户端需要)
 - [x] 可访问 OpenAI 兼容 API
