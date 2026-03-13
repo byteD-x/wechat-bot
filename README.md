@@ -29,22 +29,23 @@
 
 ---
 
-## 目录
+## 📋 目录
 
 - [功能特性](#功能特性)
-- [快速开始](#快速开始)
+- [快速开始（小白教程）](#快速开始小白教程)
+- [详细安装教程](#详细安装教程)
+- [配置指南](#配置指南)
 - [项目结构](#项目结构)
-- [配置说明](#配置说明)
 - [Web API](#web-api)
 - [聊天记录导出](#聊天记录导出)
 - [个性化 Prompt 生成](#个性化-prompt-生成)
-- [常见问题](#常见问题)
+- [常见问题排查](#常见问题排查)
 - [贡献指南](#贡献指南)
 - [许可证](#许可证)
 
 ---
 
-## 功能特性
+## ✨ 功能特性
 
 ### 核心功能
 
@@ -80,102 +81,223 @@
 
 ---
 
-## 快速开始
+## 🚀 快速开始（小白教程）
 
-### 环境准备
+> **零编程基础也能上手！跟着以下步骤一步步操作即可。**
 
-- [x] Windows 10/11
-- [x] 微信 PC 版 3.9.x（已登录并保持运行，推荐 3.9.12：https://github.com/tom-snow/wechat-windows-versions/releases/tag/v3.9.12.51）
-- [x] Python 3.9+
-- [x] Node.js 16+ (仅开发客户端需要)
-- [x] 可访问 OpenAI 兼容 API
+### 方式一：直接下载安装包（最简单，推荐）
 
-### 安装依赖
+如果你不想折腾代码，直接下载现成的安装包：
 
-```bash
-# 安装 Python 依赖
+1. **下载安装包**：从 [Releases](https://github.com/your-repo/releases) 页面下载最新版的 `微信AI助手 Setup x.x.x.exe`
+2. **安装软件**：双击安装包，按提示完成安装
+3. **准备微信**：确保微信 PC 版 (3.9.x) 已安装并登录
+4. **启动程序**：双击桌面的 **"微信AI助手"** 图标
+5. **配置 API**：在界面中添加你的 AI API 密钥（见下方配置指南）
+6. **开始使用**：点击"启动机器人"按钮，即可自动回复消息
+
+### 方式二：从源码运行（适合想自定义的用户）
+
+#### 第 1 步：环境检查清单
+
+在开始之前，请确认你的电脑满足以下条件：
+
+- [ ] Windows 10 或 Windows 11 系统
+- [ ] 微信 PC 版 3.9.x 已安装并登录（**重要：不支持 4.0+ 版本**）
+- [ ] Python 3.9 或更高版本已安装
+- [ ] 有至少一个 AI 平台的 API 密钥（如 DeepSeek、豆包等）
+
+#### 第 2 步：一键安装依赖
+
+1. 下载本项目代码（点击绿色的 "Code" 按钮 → "Download ZIP"，解压到任意文件夹）
+2. 打开 PowerShell 或命令提示符（在文件夹空白处按住 `Shift` + 右键 → "在此处打开 PowerShell 窗口"）
+3. 依次执行以下命令：
+
+```powershell
+# 安装 Python 依赖（只需要执行一次）
 pip install -r requirements.txt
 
-# 安装客户端依赖 (如果需要运行桌面端源码)
+# 安装客户端依赖（如果需要桌面端，只需要执行一次）
 npm install
 ```
 
-### 配置密钥
+#### 第 3 步：配置 API 密钥
 
-建议创建 `api_keys.py`（已在 `.gitignore` 中）以安全管理密钥：
+1. 在 `data/` 文件夹中创建 `api_keys.py` 文件
+2. 填入你的 API 密钥（如何获取密钥见 [配置指南](#配置指南)）：
 
 ```python
 API_KEYS = {
-    "default": "YOUR_DEFAULT_KEY",
+    "default": "你的API密钥",
     "presets": {
-        "OpenAI": "YOUR_OPENAI_KEY",
-        "Doubao": "YOUR_DOUBAO_KEY",
-        "DeepSeek": "YOUR_DEEPSEEK_KEY",
-        "SiliconFlow": "YOUR_SILICONFLOW_KEY",
+        "DeepSeek": "sk-xxxxxxxxxxxxxxxx",
+        "Doubao": "xxxxxxxxxxxxxxxx",
     },
 }
 ```
 
-### 启动方式
-
-#### 方式一：直接运行安装包（推荐普通用户）
-
-下载并安装最新版的 `.exe` 文件后，直接双击桌面的 **"微信AI助手"** 图标即可启动。
-- 程序会自动启动后端服务和图形化界面。
-- 请确保微信 PC 版 (3.9.x) 已在运行并登录。
-
-#### 方式二：桌面客户端源码运行（推荐开发调试）
+#### 第 4 步：启动程序
 
 ```bash
+# 方式 A：启动桌面客户端（推荐）
 npm run dev
-```
 
-启动后将自动拉起 Python 后端服务，并显示悬浮窗或系统托盘图标。
-
-#### 方式三：仅启动后端（API 模式）
-
-如果你不需要桌面 GUI，或者部署在服务器上：
-
-```bash
-# 启动机器人核心
-python run.py start
-
-# 或者启动 Web API 服务 (默认端口 5000)
+# 方式 B：仅启动后端（无界面，通过 Web 访问）
 python run.py web
 ```
 
-常用命令：
-- `python run.py setup`：运行交互式配置向导
-- `python run.py check`：运行环境自检
+启动成功后，打开浏览器访问 `http://localhost:5000` 即可看到控制面板。
 
 ---
 
-## 构建发行版
+## 📚 详细安装教程
 
-如果你想将项目打包为 `.exe` 可执行文件（方便分发或在无 Python 环境的机器上运行），请执行以下步骤：
+### 1. 安装 Python（如果还没有）
 
-### 1. 准备环境
+**检查是否已安装：**
 
-确保已安装 Python 3.9+ 和 Node.js 16+。
+按 `Win + R`，输入 `cmd` 回车，在弹出的窗口中输入：
 
-### 2. 执行构建脚本
-
-在项目根目录下运行：
-
-```powershell
-.\build.bat
+```bash
+python --version
 ```
 
-该脚本会自动：
-1. 安装/检查 Python 和 Node.js 依赖。
-2. 使用 `PyInstaller` 将 Python 后端打包为独立可执行文件。
-3. 使用 `electron-builder` 将前端和后端打包为最终的 Windows 安装包。
+如果显示类似 `Python 3.9.0` 的版本号，说明已安装，跳过此步骤。
 
-构建完成后，安装包位于 `dist/` 目录下（如 `微信AI助手 Setup 1.0.0.exe`）。
+**如果未安装，按以下步骤操作：**
+
+1. 访问 [Python 官网](https://www.python.org/downloads/)
+2. 下载 Python 3.9 或更高版本的安装包
+3. **重要**：安装时务必勾选 **"Add Python to PATH"**（添加到环境变量）
+4. 点击 "Install Now" 完成安装
+5. 重新打开命令提示符，再次输入 `python --version` 确认安装成功
+
+### 2. 安装微信 PC 版 3.9.x
+
+**检查当前版本：**
+
+打开微信 → 点击左下角三条横线 → 设置 → 关于微信，查看版本号。
+
+**如果版本是 4.0+，需要降级到 3.9.x：**
+
+1. **备份聊天记录**（重要！）：微信 → 设置 → 通用设置 → 聊天记录备份与迁移
+2. 卸载当前微信版本
+3. 下载 3.9.12 版本：[点击下载](https://github.com/tom-snow/wechat-windows-versions/releases/tag/v3.9.12.51)
+4. 安装下载的版本并登录
+
+**⚠️ 注意**：
+- 微信窗口不能被最小化（可以缩小或被其他窗口遮挡）
+- 必须保持登录状态
+- 建议关闭微信的"退出时最小化到托盘"选项
+
+### 3. 获取 AI API 密钥
+
+本项目需要调用 AI 大模型 API 来生成回复。以下是几个推荐的免费/低成本选项：
+
+#### 选项 A：DeepSeek（推荐，价格便宜）
+
+1. 访问 [DeepSeek 开放平台](https://platform.deepseek.com/)
+2. 注册账号并登录
+3. 进入 "API Keys" 页面，点击 "创建 API Key"
+4. 复制生成的密钥（格式如 `sk-xxxxxxxxxxxxxxxx`）
+5. 新用户通常有免费额度
+
+#### 选项 B：豆包（字节跳动，国内访问快）
+
+1. 访问 [火山引擎](https://www.volcengine.com/)
+2. 注册并实名认证
+3. 进入 "大模型推理" 服务
+4. 创建 API Key
+5. 在模型广场选择适合的模型（如 `doubao-lite-4k`）
+
+#### 选项 C：SiliconFlow（免费额度多）
+
+1. 访问 [SiliconFlow](https://siliconflow.cn/)
+2. 注册账号
+3. 进入 "API 密钥" 页面创建密钥
+4. 新用户有 2000 万 Tokens 免费额度
 
 ---
 
-## 项目结构
+## ⚙️ 配置指南
+
+### 配置文件位置
+
+所有配置都在 `backend/config.py` 文件中。你可以用记事本或任何文本编辑器打开修改。
+
+### 最小可运行配置
+
+如果你只想快速跑起来，只需要修改以下几个地方：
+
+#### 1. 配置 API 密钥（必须）
+
+在 `data/` 文件夹中创建 `api_keys.py`：
+
+```python
+API_KEYS = {
+    "default": "sk-your-api-key-here",  # 你的默认 API 密钥
+    "presets": {
+        "DeepSeek": "sk-your-deepseek-key",
+        "Doubao": "your-doubao-key",
+    },
+}
+```
+
+#### 2. 修改 API 配置
+
+打开 `backend/config.py`，找到 `CONFIG["api"]` 部分：
+
+```python
+CONFIG = {
+    "api": {
+        "presets": [
+            {
+                "name": "DeepSeek",
+                "base_url": "https://api.deepseek.com/v1",
+                "api_key": "${API_KEYS[presets][DeepSeek]}",  # 引用 api_keys.py 中的密钥
+                "model": "deepseek-chat",
+                "timeout_sec": 30,
+                "max_retries": 2,
+                "temperature": 0.7,
+                "max_tokens": 2000,
+            },
+        ],
+        "active_preset": "DeepSeek",  # 默认使用哪个预设
+    },
+    # ... 其他配置
+}
+```
+
+#### 3. 配置机器人行为（可选）
+
+```python
+"bot": {
+    # 系统提示词（定义 AI 的人设和回复风格）
+    "system_prompt": "你是一个 helpful 的 AI 助手...",
+    
+    # 回复后缀（会在每条回复后添加）
+    "reply_suffix": "(AI)",
+    
+    # 群聊设置
+    "group_reply_only_when_at": True,  # 只有被 @ 时才回复群消息
+    "self_name": ["AI助手", "机器人"],  # 群里的昵称
+    
+    # 白名单（只回复这些好友/群聊，为空则回复所有人）
+    "whitelist_groups": [],
+    "whitelist_contacts": [],
+    
+    # 黑名单（不回复这些）
+    "ignored_chat_names": ["文件传输助手"],
+}
+```
+
+### 配置热重载
+
+修改 `config.py` 后**不需要重启程序**，配置会自动生效（约 5-10 秒延迟）。
+
+---
+
+## 📁 项目结构
 
 ```
 wechat-chat/
@@ -212,40 +334,7 @@ wechat-chat/
 
 ---
 
-## 配置说明
-
-配置文件位于 `backend/config.py`。支持热重载，修改后无需重启。
-
-### API 配置 (`CONFIG["api"]`)
-
-支持多预设（Presets）自动轮询探测。
-
-| 参数 | 说明 |
-|------|------|
-| `base_url` | 接口地址 |
-| `api_key` | 密钥（支持占位符与空密钥策略） |
-| `model` | 模型名称 |
-| `timeout_sec` | 超时时间 |
-| `max_retries` | 最大重试次数 |
-| `temperature` | 采样温度 |
-| `max_tokens` | 请求最大 tokens |
-| `max_completion_tokens` | 回复最大 tokens（兼容部分平台） |
-| `reasoning_effort` | 推理力度（兼容支持该参数的平台） |
-| `allow_empty_key` | 是否允许空密钥用于探测 |
-| `active_preset` | 当前激活的预设名 |
-| `presets[]` | 预设数组（包含以上字段的子项） |
-
-### 机器人配置 (`CONFIG["bot"]`)
-
-- **system_prompt**: 定义人设、回复规则、上下文注入格式。
-- **system_prompt_overrides**: 针对特定联系人/群聊的 Prompt 覆盖。
-- **reply_suffix**: 回复后缀（如 `(AI)`）。
-- **emoji_policy**: 表情处理策略 (`mixed`/`strip`/`keep`)。
-- **memory_***: 记忆相关配置 (SQLite 路径, TTL, 上下文轮数)。
-
----
-
-## Web API
+## 🌐 Web API
 
 启动 `python run.py web` 后，可通过 HTTP 接口控制机器人：
 
@@ -266,7 +355,7 @@ wechat-chat/
 
 ---
 
-## 聊天记录导出
+## 💬 聊天记录导出
 
 工具位于 `tools/chat_exporter`，支持从解密后的微信数据库直接导出 CSV。采用流式逐行写入技术，支持导出数百万条记录而无内存溢出风险。
 
@@ -282,7 +371,7 @@ python -m tools.chat_exporter.cli --db-dir "E:\wxid_xxx\Msg" --contact "张三"
 
 ---
 
-## 个性化 Prompt 生成
+## 🎨 个性化 Prompt 生成
 
 基于导出的聊天记录，分析用户风格并生成专属 Prompt。智能合并连续消息，提供更精准的上下文风格模仿。
 
@@ -294,7 +383,48 @@ python -m tools.prompt_gen.generator
 
 ---
 
-## 常见问题
+## 🔧 常见问题排查
+
+### 问题排查流程图
+
+```
+程序无法启动
+    │
+    ├─→ 报错 "Python 不是内部或外部命令"
+    │   └─→ 解决：重新安装 Python，勾选 "Add to PATH"
+    │
+    ├─→ 报错 "No module named xxx"
+    │   └─→ 解决：执行 pip install -r requirements.txt
+    │
+    └─→ 报错 "WeChat not running"
+        └─→ 解决：检查微信是否已登录，版本是否为 3.9.x
+
+机器人启动但不回复
+    │
+    ├─→ 检查日志 wxauto_logs/bot.log
+    │   ├─→ 看到 "API error"
+    │   │   └─→ 解决：检查 API 密钥和网络连接
+    │   ├─→ 看到 "Filtered"
+    │   │   └─→ 解决：检查 config.py 的黑白名单设置
+    │   └─→ 看到 "Cooldown"
+    │       └─→ 解决：等待冷却时间或调整 min_reply_interval_sec
+    │
+    └─→ 日志正常但没有新消息
+        └─→ 解决：确保微信窗口没有被最小化
+
+API 连接报错
+    │
+    ├─→ 超时错误
+    │   └─→ 解决：检查网络是否能访问 API 地址
+    │
+    ├─→ 401/403 错误
+    │   └─→ 解决：API 密钥错误或余额不足
+    │
+    └─→ 429 错误
+        └─→ 解决：请求太频繁，稍后再试或更换模型
+```
+
+### 详细 Q&A
 
 <details>
 <summary><b>Q1: 运行报错 "WeChat not running" 或无法获取消息？</b></summary>
@@ -338,7 +468,32 @@ python -m tools.prompt_gen.generator
 
 ---
 
-## 贡献指南
+## 🛠️ 构建发行版
+
+如果你想将项目打包为 `.exe` 可执行文件（方便分发或在无 Python 环境的机器上运行），请执行以下步骤：
+
+### 1. 准备环境
+
+确保已安装 Python 3.9+ 和 Node.js 16+。
+
+### 2. 执行构建脚本
+
+在项目根目录下运行：
+
+```powershell
+.\build.bat
+```
+
+该脚本会自动：
+1. 安装/检查 Python 和 Node.js 依赖。
+2. 使用 `PyInstaller` 将 Python 后端打包为独立可执行文件。
+3. 使用 `electron-builder` 将前端和后端打包为最终的 Windows 安装包。
+
+构建完成后，安装包位于 `dist/` 目录下（如 `微信AI助手 Setup 1.0.0.exe`）。
+
+---
+
+## 🤝 贡献指南
 
 欢迎提交 Pull Request 或 Issue！在提交之前，请确保：
 
@@ -348,6 +503,6 @@ python -m tools.prompt_gen.generator
 
 ---
 
-## 许可证
+## 📄 许可证
 
 本项目基于 [MIT License](LICENSE) 开源。
