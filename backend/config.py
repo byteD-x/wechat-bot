@@ -396,6 +396,16 @@ CONFIG = {
         "remember_facts_enabled": True,               # 启用事实记忆（AI 提取重要信息）
         "max_context_facts": 20,                      # 最多记录的事实数量
         "profile_inject_in_prompt": True,             # 在 prompt 中注入用户画像
+        "rag_enabled": False,                         # 启用运行期对话 RAG（历史运行消息）
+        "export_rag_enabled": True,                   # 启用导出聊天记录 RAG
+        "export_rag_dir": "chat_exports/聊天记录",     # 导出聊天记录目录
+        "export_rag_auto_ingest": True,               # 启动/热更新时自动增量导入
+        "export_rag_max_chunks_per_chat": 500,        # 每个联系人最多保留的风格片段数
+        "export_rag_chunk_messages": 6,               # 连续本人消息合并成一个 chunk 的最大条数
+        "export_rag_top_k": 3,                        # 每次检索注入的风格片段数
+        "export_rag_min_score": 1.0,                  # 最大允许距离，越小越严格
+        "export_rag_max_context_chars": 900,          # 风格上下文注入最大字符数
+        "export_rag_prefer_recent": True,             # 同分时优先较新的历史片段
 
         # ┌─── 控制命令 ───────────────────────────────────────────────────────┐
         "control_commands_enabled": True,             # 启用控制命令（/pause, /resume, /status）

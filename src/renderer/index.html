@@ -839,6 +839,34 @@
                                     <span class="form-checkbox-label">在提示词注入画像</span>
                                 </label>
                             </div>
+                            <div class="form-group">
+                                <label class="form-checkbox" style="display: flex; align-items: center; gap: 12px; cursor: pointer;">
+                                    <input type="checkbox" id="setting-export-rag-enabled">
+                                    <span class="form-checkbox-label">启用导出聊天记录 RAG</span>
+                                </label>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-checkbox" style="display: flex; align-items: center; gap: 12px; cursor: pointer;">
+                                    <input type="checkbox" id="setting-export-rag-auto-ingest">
+                                    <span class="form-checkbox-label">自动扫描并增量导入</span>
+                                </label>
+                            </div>
+                            <div class="form-group full-width">
+                                <label class="form-label">导出目录</label>
+                                <input type="text" id="setting-export-rag-dir" placeholder="chat_exports/聊天记录">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">每次注入片段数</label>
+                                <input type="number" id="setting-export-rag-top-k" min="1" step="1">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">每联系人最大片段数</label>
+                                <input type="number" id="setting-export-rag-max-chunks-per-chat" min="1" step="1">
+                            </div>
+                            <div class="form-group full-width">
+                                <label class="form-label">索引状态</label>
+                                <div id="setting-export-rag-status" class="form-help-text">状态：未加载</div>
+                            </div>
                         </div>
                     </div>
 

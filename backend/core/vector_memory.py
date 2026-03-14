@@ -51,6 +51,22 @@ class VectorMemory:
         except Exception as e:
             logger.error(f"Failed to add text to vector db: {e}")
 
+    def upsert_text(self, text: str, metadata: Dict[str, Any], id: str, embedding: Optional[List[float]] = None) -> None:
+        if not self.collection:
+            return
+
+        try:
+            payload = {
+                "documents": [text],
+                "metadatas": [metadata],
+                "ids": [id],
+            }
+            if embedding:
+                payload["embeddings"] = [embedding]
+            self.collection.upsert(**payload)
+        except Exception as e:
+            logger.error(f"Failed to upsert text to vector db: {e}")
+
     def search(self, query: Optional[str] = None, n_results: int = 5, filter_meta: Optional[Dict] = None, query_embedding: Optional[List[float]] = None) -> List[Dict[str, Any]]:
         if not self.collection:
             return []
@@ -73,6 +89,7 @@ class VectorMemory:
             if results['documents']:
                 for i in range(len(results['documents'][0])):
                     formatted.append({
+                        'id': results['ids'][0][i] if results.get('ids') else "",
                         'text': results['documents'][0][i],
                         'metadata': results['metadatas'][0][i] if results['metadatas'] else {},
                         'distance': results['distances'][0][i] if results['distances'] else 0.0
@@ -91,3 +108,15 @@ class VectorMemory:
             self.collection.delete(where=where)
         except Exception as e:
             logger.error(f"Vector delete failed: {e}")
+
+    def count(self, where: Optional[Dict[str, Any]] = None) -> int:
+        if not self.collection:
+            return 0
+        try:
+            if where:
+                results = self.collection.get(where=where, include=[])
+                return len(results.get("ids") or [])
+            return int(self.collection.count())
+        except Exception as e:
+            logger.error(f"Vector count failed: {e}")
+            return 0

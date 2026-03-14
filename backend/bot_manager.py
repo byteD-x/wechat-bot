@@ -86,7 +86,8 @@ class BotManager:
         if self.memory_manager is None:
             from backend.config import CONFIG
             from backend.core.memory import MemoryManager
-            db_path = CONFIG.get('bot', {}).get('sqlite_db_path', 'data/chat_memory.db')
+            bot_cfg = CONFIG.get('bot', {})
+            db_path = bot_cfg.get('memory_db_path') or bot_cfg.get('sqlite_db_path') or 'data/chat_memory.db'
             self.memory_manager = MemoryManager(db_path)
         return self.memory_manager
 
@@ -337,6 +338,26 @@ class BotManager:
             'today_tokens': stats.get('today_tokens', 0),
             'total_replies': stats.get('total_replies', 0)
         }
+        if self.bot and hasattr(self.bot, 'get_export_rag_status'):
+            try:
+                status['export_rag'] = self.bot.get_export_rag_status()
+            except Exception:
+                status['export_rag'] = None
+        else:
+            try:
+                from backend.config import CONFIG
+                bot_cfg = CONFIG.get('bot', {})
+                status['export_rag'] = {
+                    'enabled': bool(bot_cfg.get('export_rag_enabled', False)),
+                    'base_dir': str(bot_cfg.get('export_rag_dir') or ''),
+                    'auto_ingest': bool(bot_cfg.get('export_rag_auto_ingest', True)),
+                    'indexed_contacts': 0,
+                    'indexed_chunks': 0,
+                    'last_scan_at': None,
+                    'last_scan_summary': {},
+                }
+            except Exception:
+                status['export_rag'] = None
         self._status_cache = status
         self._status_cache_time = now
         return dict(status)

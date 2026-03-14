@@ -6,6 +6,7 @@ import time
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .core.ai_client import AIClient
+from .core.export_rag import ExportChatRAG
 from .core.memory import MemoryManager
 from .core.vector_memory import VectorMemory # 新增
 from .core.emotion import (
@@ -68,6 +69,8 @@ class WeChatBot:
         self.ai_client: Optional[AIClient] = None
         self.memory: Optional[MemoryManager] = memory_manager
         self.vector_memory: Optional[VectorMemory] = None # 向量记忆
+        self.export_rag: Optional[ExportChatRAG] = None
+        self.export_rag_sync_task: Optional[asyncio.Task] = None
         self.wx_lock = asyncio.Lock()
         self.sem: Optional[asyncio.Semaphore] = None
         self.ipc = IPCManager()  # IPC 管理器
@@ -114,15 +117,10 @@ class WeChatBot:
         
         # 初始化记忆模块
         if self.memory is None:
-            self.memory = MemoryManager(self.bot_cfg.get("sqlite_db_path", "data/chat_memory.db"))
-            
-        # 初始化向量记忆
-        if self.bot_cfg.get("rag_enabled", False):
-            try:
-                self.vector_memory = VectorMemory()
-                logging.info("向量记忆模块已启用")
-            except Exception as e:
-                logging.warning(f"向量记忆模块初始化失败: {e}")
+            db_path = self.bot_cfg.get("memory_db_path") or self.bot_cfg.get("sqlite_db_path") or "data/chat_memory.db"
+            self.memory = MemoryManager(db_path)
+
+        self._ensure_vector_memory()
         
         # 初始化 AI 客户端
         self.ai_client, preset_name = await select_ai_client(self.api_cfg, self.bot_cfg)
@@ -130,6 +128,7 @@ class WeChatBot:
             self.api_signature = compute_api_signature(self.api_cfg)
             self.runtime_preset_name = preset_name or ""
             logging.info("AI 客户端初始化成功，使用预设: %s", preset_name)
+            await self._schedule_export_rag_sync(force=False)
         else:
             logging.warning("AI 客户端初始化失败，未能选择有效预设")
 
@@ -167,6 +166,34 @@ class WeChatBot:
             for keyword in iter_items(self.bot_cfg.get("ignore_keywords", []))
             if str(keyword).strip()
         ]
+
+        if self.export_rag:
+            self.export_rag.update_config(self.bot_cfg)
+
+    def _ensure_vector_memory(self) -> None:
+        if not self._vector_memory_requested():
+            if self.export_rag_sync_task and not self.export_rag_sync_task.done():
+                self.export_rag_sync_task.cancel()
+            self.vector_memory = None
+            self.export_rag = None
+            return
+        if self.vector_memory is None:
+            try:
+                self.vector_memory = VectorMemory()
+                logging.info("向量记忆模块已启用")
+            except Exception as exc:
+                logging.warning("向量记忆模块初始化失败: %s", exc)
+                self.vector_memory = None
+        if self.vector_memory is not None:
+            if self.export_rag is None:
+                self.export_rag = ExportChatRAG(self.vector_memory)
+            self.export_rag.update_config(self.bot_cfg)
+
+    def _vector_memory_requested(self) -> bool:
+        return bool(
+            self.bot_cfg.get("rag_enabled", False)
+            or self.bot_cfg.get("export_rag_enabled", False)
+        )
 
     async def run(self) -> None:
         from wxauto import WeChat  # 延迟导入以避免顶层依赖问题
@@ -285,6 +312,10 @@ class WeChatBot:
             for task in self.pending_tasks:
                 task.cancel()
             await asyncio.gather(*self.pending_tasks, return_exceptions=True)
+
+        if self.export_rag_sync_task and not self.export_rag_sync_task.done():
+            self.export_rag_sync_task.cancel()
+            await asyncio.gather(self.export_rag_sync_task, return_exceptions=True)
             
         if self.ai_client and hasattr(self.ai_client, "close"):
             await self.ai_client.close()
@@ -322,6 +353,7 @@ class WeChatBot:
 
             self.config = new_config
             self._apply_config()
+            self._ensure_vector_memory()
             
             # 重新检查 AI 客户端
             if self.bot_cfg.get("reload_ai_client_on_change", True):
@@ -335,6 +367,7 @@ class WeChatBot:
                         self.api_signature = new_signature
                         self.runtime_preset_name = new_preset or ""
                         logging.info("配置更新，已重新加载 AI 客户端: %s", new_preset)
+            await self._schedule_export_rag_sync(force=False)
 
     async def reload_runtime_config(
         self,
@@ -353,10 +386,12 @@ class WeChatBot:
             return {"success": False, "message": f"配置加载失败: {exc}", "runtime_preset": self.runtime_preset_name}
 
         self._apply_config()
+        self._ensure_vector_memory()
         new_signature = compute_api_signature(self.api_cfg)
         need_reload_client = force_ai_reload or new_signature != self.api_signature
 
         if not need_reload_client:
+            await self._schedule_export_rag_sync(force=True)
             return {
                 "success": True,
                 "message": "配置已立即应用",
@@ -392,11 +427,59 @@ class WeChatBot:
         self.api_signature = new_signature
         self.runtime_preset_name = new_preset or active_preset
         logging.info("已立即切换运行中 AI 客户端: %s", self.runtime_preset_name)
+        await self._schedule_export_rag_sync(force=True)
         return {
             "success": True,
             "message": f"运行中的 AI 已立即切换到 {self.runtime_preset_name}",
             "runtime_preset": self.runtime_preset_name,
         }
+
+    async def _schedule_export_rag_sync(self, *, force: bool) -> None:
+        if (
+            not self.export_rag
+            or not self.export_rag.enabled
+            or not self.export_rag.auto_ingest
+            or not self.ai_client
+        ):
+            return
+        if self.export_rag_sync_task and not self.export_rag_sync_task.done():
+            if not force:
+                return
+            self.export_rag_sync_task.cancel()
+            await asyncio.gather(self.export_rag_sync_task, return_exceptions=True)
+        self.export_rag_sync_task = asyncio.create_task(self._run_export_rag_sync(force=force))
+
+    async def _run_export_rag_sync(self, *, force: bool) -> None:
+        if not self.export_rag or not self.ai_client:
+            return
+        try:
+            result = await self.export_rag.sync(self.ai_client, force=force)
+            reason = result.get("reason")
+            if result.get("indexed_chunks"):
+                logging.info(
+                    "导出语料 RAG 已更新: 联系人 %s, 片段 %s",
+                    result.get("indexed_contacts", 0),
+                    result.get("indexed_chunks", 0),
+                )
+            elif reason and reason not in {"disabled", ""}:
+                logging.info("导出语料 RAG 未执行: %s", reason)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logging.warning("导出语料 RAG 同步失败: %s", exc)
+
+    def get_export_rag_status(self) -> Dict[str, Any]:
+        if not self.export_rag:
+            return {
+                "enabled": bool(self.bot_cfg.get("export_rag_enabled", False)),
+                "base_dir": str(self.bot_cfg.get("export_rag_dir") or ""),
+                "auto_ingest": bool(self.bot_cfg.get("export_rag_auto_ingest", True)),
+                "indexed_contacts": 0,
+                "indexed_chunks": 0,
+                "last_scan_at": None,
+                "last_scan_summary": {},
+            }
+        return self.export_rag.get_status()
 
     async def schedule_merged_reply(self, wx: "WeChat", event: MessageEvent) -> None:
         if is_voice_message(event.msg_type):
@@ -610,6 +693,16 @@ class WeChatBot:
             if limit > 0:
                 memory_context = await self.memory.get_recent_context(chat_id, limit)
 
+            if self.export_rag and self.ai_client:
+                export_results = await self.export_rag.search(
+                    self.ai_client,
+                    chat_id,
+                    user_text,
+                )
+                export_message = self.export_rag.build_memory_message(export_results)
+                if export_message:
+                    memory_context.insert(0, export_message)
+
             # RAG 检索
             if self.vector_memory and self.ai_client:
                 # 只有当用户输入较长或看起来像问题时才检索，节省开销
@@ -619,7 +712,7 @@ class WeChatBot:
                         self.vector_memory.search,
                         query=user_text if not embedding else None,
                         n_results=3,
-                        filter_meta={"chat_id": chat_id},
+                        filter_meta={"chat_id": chat_id, "source": "runtime_chat"},
                         query_embedding=embedding
                     )
                     if results:
@@ -720,7 +813,12 @@ class WeChatBot:
             await asyncio.to_thread(
                 self.vector_memory.add_text,
                 user_text,
-                metadata={"chat_id": chat_id, "role": "user", "timestamp": time.time()},
+                metadata={
+                    "chat_id": chat_id,
+                    "role": "user",
+                    "timestamp": time.time(),
+                    "source": "runtime_chat",
+                },
                 id=f"{chat_id}_u_{time.time()}",
                 embedding=user_embedding
             )
@@ -728,7 +826,12 @@ class WeChatBot:
             await asyncio.to_thread(
                 self.vector_memory.add_text,
                 reply_text,
-                metadata={"chat_id": chat_id, "role": "assistant", "timestamp": time.time()},
+                metadata={
+                    "chat_id": chat_id,
+                    "role": "assistant",
+                    "timestamp": time.time(),
+                    "source": "runtime_chat",
+                },
                 id=f"{chat_id}_a_{time.time()}",
                 embedding=reply_embedding
             )

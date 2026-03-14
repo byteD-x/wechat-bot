@@ -11,6 +11,7 @@ export class SettingsPage extends PageController {
         super('SettingsPage', 'page-settings');
         this.currentConfig = null;
         this.modelCatalog = { providers: [] };
+        this.runtimeStatus = null;
         this._updateStateUnwatch = null;
     }
 
@@ -421,9 +422,10 @@ export class SettingsPage extends PageController {
 
     async _loadConfig() {
         try {
-            const [configResult, catalogResult] = await Promise.all([
+            const [configResult, catalogResult, statusResult] = await Promise.all([
                 apiService.getConfig(),
-                apiService.getModelCatalog()
+                apiService.getModelCatalog(),
+                apiService.getStatus().catch(() => null)
             ]);
 
             if (catalogResult?.success) {
@@ -439,6 +441,7 @@ export class SettingsPage extends PageController {
                 // 后端返回的是扁平结构，剔除 success 字段后即为配置
                 const { success, ...config } = configResult;
                 this.currentConfig = config;
+                this.runtimeStatus = statusResult;
                 this._renderConfig(this.currentConfig);
                 toast.success('配置已加载');
             } else {
@@ -866,6 +869,27 @@ export class SettingsPage extends PageController {
         if (profileInject) {
             profileInject.checked = !!bot.profile_inject_in_prompt;
         }
+        const exportRagEnabled = this.$('#setting-export-rag-enabled');
+        if (exportRagEnabled) {
+            exportRagEnabled.checked = !!bot.export_rag_enabled;
+        }
+        const exportRagDir = this.$('#setting-export-rag-dir');
+        if (exportRagDir) {
+            exportRagDir.value = bot.export_rag_dir || 'chat_exports/聊天记录';
+        }
+        const exportRagAutoIngest = this.$('#setting-export-rag-auto-ingest');
+        if (exportRagAutoIngest) {
+            exportRagAutoIngest.checked = bot.export_rag_auto_ingest !== false;
+        }
+        const exportRagTopK = this.$('#setting-export-rag-top-k');
+        if (exportRagTopK) {
+            exportRagTopK.value = bot.export_rag_top_k ?? 3;
+        }
+        const exportRagChunks = this.$('#setting-export-rag-max-chunks-per-chat');
+        if (exportRagChunks) {
+            exportRagChunks.value = bot.export_rag_max_chunks_per_chat ?? 500;
+        }
+        this._renderExportRagStatus(this.runtimeStatus?.export_rag || null);
 
         const controlCommands = this.$('#setting-control-commands-enabled');
         if (controlCommands) {
@@ -1114,6 +1138,11 @@ export class SettingsPage extends PageController {
                 remember_facts_enabled: this.$('#setting-remember-facts-enabled')?.checked,
                 max_context_facts: parseNumber(this.$('#setting-max-context-facts')?.value),
                 profile_inject_in_prompt: this.$('#setting-profile-inject-in-prompt')?.checked,
+                export_rag_enabled: this.$('#setting-export-rag-enabled')?.checked,
+                export_rag_dir: this.$('#setting-export-rag-dir')?.value,
+                export_rag_auto_ingest: this.$('#setting-export-rag-auto-ingest')?.checked,
+                export_rag_top_k: parseNumber(this.$('#setting-export-rag-top-k')?.value),
+                export_rag_max_chunks_per_chat: parseNumber(this.$('#setting-export-rag-max-chunks-per-chat')?.value),
                 control_commands_enabled: this.$('#setting-control-commands-enabled')?.checked,
                 control_command_prefix: this.$('#setting-control-command-prefix')?.value,
                 control_allowed_users: parseLines(this.$('#setting-control-allowed-users')?.value || ''),
@@ -1186,6 +1215,7 @@ export class SettingsPage extends PageController {
             const result = await apiService.saveConfig(newConfig);
             if (result.success) {
                 const savedConfig = this._extractConfigPayload(result);
+                this.runtimeStatus = await apiService.getStatus().catch(() => this.runtimeStatus);
                 if (savedConfig) {
                     this.currentConfig = savedConfig;
                     this._renderConfig(this.currentConfig);
@@ -1207,6 +1237,28 @@ export class SettingsPage extends PageController {
         } finally {
             this._setButtonLoading(saveButton, false);
         }
+    }
+
+    _renderExportRagStatus(status) {
+        const el = this.$('#setting-export-rag-status');
+        if (!el) return;
+        if (!status) {
+            el.textContent = '状态：未加载';
+            return;
+        }
+        const parts = [
+            `状态：${status.enabled ? '已启用' : '未启用'}`,
+            `联系人：${status.indexed_contacts ?? 0}`,
+            `片段：${status.indexed_chunks ?? 0}`
+        ];
+        if (status.last_scan_at) {
+            parts.push(`最近扫描：${new Date(status.last_scan_at * 1000).toLocaleString('zh-CN')}`);
+        }
+        const summary = status.last_scan_summary || {};
+        if (summary.reason) {
+            parts.push(`结果：${summary.reason}`);
+        }
+        el.textContent = parts.join(' | ');
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -1494,6 +1546,7 @@ export class SettingsPage extends PageController {
             const result = await apiService.saveConfig(newConfig);
             if (result.success) {
                 const savedConfig = this._extractConfigPayload(result);
+                this.runtimeStatus = await apiService.getStatus().catch(() => this.runtimeStatus);
                 if (savedConfig) {
                     this.currentConfig = savedConfig;
                     this._renderConfig(this.currentConfig);

@@ -17,7 +17,6 @@
 
 import os
 import sys
-import csv
 import json
 import logging
 import argparse
@@ -34,6 +33,12 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from backend.config import CONFIG, _apply_api_keys
 from backend.core.ai_client import AIClient
 from backend.core.factory import apply_ai_runtime_settings
+from tools.prompt_gen.csv_loader import (
+    EXCLUDED_CONTACTS,
+    NON_TEXT_TYPES,
+    extract_contact_name,
+    load_chat_from_csv,
+)
 
 # Setup logging
 logging.basicConfig(
@@ -46,25 +51,6 @@ logger = logging.getLogger(__name__)
 CHAT_EXPORTS_DIR = "chat_exports"
 CHAT_RECORDS_SUBDIR = "聊天记录"
 CHAT_RECORDS_BASE = os.path.join(CHAT_EXPORTS_DIR, CHAT_RECORDS_SUBDIR)
-
-# 需要排除的系统账号
-EXCLUDED_CONTACTS = frozenset({
-    "微信团队",
-    "文件传输助手",
-    "QQ离线消息",
-    "QQ邮箱提醒",
-    "朋友推荐消息",
-    "语音记事本",
-    "漂流瓶",
-    "招商银行信用卡",
-})
-
-# 非文本类型消息标记
-NON_TEXT_TYPES = frozenset({
-    "语音", "图片", "视频", "文件", "表情包", "位置分享",
-    "个人/公众号名片", "合并转发的聊天记录", "分享链接", "小程序",
-    "系统消息", "未知类型",
-})
 
 META_PROMPT_TEMPLATE = """
 你是一个专业的对话风格分析师。请根据以下与"{contact_name}"的聊天记录进行深度分析，生成一个高度个性化的 system_prompt。
@@ -116,63 +102,6 @@ META_PROMPT_TEMPLATE = """
 ---
 """
 
-
-
-def load_chat_from_csv(csv_path: str) -> List[Dict[str, Any]]:
-    """
-    从 CSV 文件加载聊天记录。
-
-    Args:
-        csv_path: CSV 文件路径
-
-    Returns:
-        聊天记录列表，每条包含 role, content, timestamp, msg_type
-    """
-    records = []
-    encodings = ['utf-8', 'utf-8-sig', 'gbk', 'gb2312']
-    
-    for encoding in encodings:
-        try:
-            with open(csv_path, 'r', encoding=encoding) as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    msg_type = row.get('类型', '')
-                    content = row.get('内容', '')
-                    sender = row.get('发送人', '')
-                    timestamp_str = row.get('时间', '')
-
-                    # 解析时间（支持多种格式）
-                    timestamp = None
-                    for fmt in ['%Y-%m-%d %H:%M:%S', '%Y/%m/%d %H:%M:%S', '%Y-%m-%d %H:%M']:
-                        try:
-                            timestamp = datetime.strptime(timestamp_str, fmt)
-                            break
-                        except ValueError:
-                            continue
-                    if timestamp is None:
-                        timestamp = datetime.now()
-
-                    # 判断角色：知有 = assistant（主人），其他 = user（对方）
-                    role = 'assistant' if sender == '知有' else 'user'
-
-                    records.append({
-                        'role': role,
-                        'content': content,
-                        'timestamp': timestamp,
-                        'msg_type': msg_type,
-                        'sender': sender,
-                    })
-                # 成功读取，跳出编码尝试循环
-                break
-        except UnicodeDecodeError:
-            continue
-        except Exception as e:
-            logger.error(f"Failed to load CSV {csv_path} with {encoding}: {e}")
-            break
-
-    return records
-
-
 def count_messages_per_contact(base_dir: str) -> List[Tuple[str, str, int, int]]:
     """
     遍历所有联系人目录，统计消息数量。
@@ -195,7 +124,7 @@ def count_messages_per_contact(base_dir: str) -> List[Tuple[str, str, int, int]]
             continue
 
         # 提取联系人名（去掉括号里的 wxid）
-        contact_name = contact_dir.split('(')[0].strip()
+        contact_name = extract_contact_name(contact_dir)
 
         # 跳过系统账号
         if contact_name in EXCLUDED_CONTACTS:

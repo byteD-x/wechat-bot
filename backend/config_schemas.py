@@ -139,6 +139,16 @@ class BotConfig(BaseModel):
     remember_facts_enabled: bool = True
     max_context_facts: int = 20
     profile_inject_in_prompt: bool = True
+    rag_enabled: bool = False
+    export_rag_enabled: bool = True
+    export_rag_dir: str = "chat_exports/聊天记录"
+    export_rag_auto_ingest: bool = True
+    export_rag_max_chunks_per_chat: int = 500
+    export_rag_chunk_messages: int = 6
+    export_rag_top_k: int = 3
+    export_rag_min_score: float = 1.0
+    export_rag_max_context_chars: int = 900
+    export_rag_prefer_recent: bool = True
 
     # Control commands
     control_commands_enabled: bool = True
