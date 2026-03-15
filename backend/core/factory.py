@@ -23,6 +23,7 @@ __all__ = [
     "select_ai_client",
     "select_specific_ai_client",
     "get_reconnect_policy",
+    "get_last_transport_error",
     "reconnect_wechat",
     "apply_ai_runtime_settings",
     "compute_api_signature",
@@ -36,6 +37,38 @@ if TYPE_CHECKING:
 # 全局变量用于 reload
 from ..core import ai_client as ai_module_ref
 _ai_module = ai_module_ref
+_last_transport_error = ""
+
+
+def _set_last_transport_error(detail: str) -> None:
+    global _last_transport_error
+    _last_transport_error = str(detail or "").strip()
+
+
+def get_last_transport_error() -> str:
+    return _last_transport_error
+
+
+def _resolve_embedding_model(
+    settings: Dict[str, Any],
+    api_cfg: Dict[str, Any],
+    bot_cfg: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
+    bot_cfg = dict(bot_cfg or {})
+    override_model = str(bot_cfg.get("vector_memory_embedding_model") or "").strip()
+    if override_model and not is_placeholder_key(override_model):
+        return override_model
+
+    if "embedding_model" in settings:
+        return settings.get("embedding_model")
+
+    api_key = str(settings.get("api_key") or "").strip()
+    allow_empty_key = bool(settings.get("allow_empty_key", False))
+    if allow_empty_key and not api_key:
+        # Avoid inheriting a remote embedding config for local no-key presets.
+        return None
+
+    return api_cfg.get("embedding_model")
 
 
 def build_ai_client(settings: Dict[str, Any], bot_cfg: Dict[str, Any]) -> AIClient:
@@ -138,6 +171,7 @@ async def select_ai_client(
         settings["base_url"] = base_url
         settings["model"] = model
         settings["api_key"] = api_key
+        settings["embedding_model"] = _resolve_embedding_model(settings, api_cfg, bot_cfg)
         # 传递 embedding_model
         if "embedding_model" not in settings:
              settings["embedding_model"] = str(api_cfg.get("embedding_model") or "")
@@ -198,6 +232,7 @@ async def select_specific_ai_client(
     settings["base_url"] = base_url
     settings["model"] = model
     settings["api_key"] = api_key
+    settings["embedding_model"] = _resolve_embedding_model(settings, api_cfg, bot_cfg)
     if "embedding_model" not in settings:
         settings["embedding_model"] = str(api_cfg.get("embedding_model") or "")
 
@@ -291,14 +326,17 @@ async def reconnect_wechat(
     if preferred_backend == "hook_wcferry":
         try:
             client = WcferryWeChatClient(bot_cfg, ai_client=ai_client)
+            _set_last_transport_error("")
             logging.info("Hook transport initialized: %s", client.backend_name)
             return client
         except TransportUnavailableError as exc:
+            _set_last_transport_error(str(exc))
             logging.error("Hook transport unavailable: %s", exc)
             if not allow_compat:
                 return None
             logging.warning("Falling back to compat_ui backend")
         except Exception as exc:
+            _set_last_transport_error(str(exc))
             logging.exception("Hook transport failed: %s", exc)
             if not allow_compat:
                 return None
@@ -307,10 +345,13 @@ async def reconnect_wechat(
         try:
             wx = _build_compat_client()
             if wx is None:
+                _set_last_transport_error("compat_ui backend unavailable: wxauto not installed")
                 return None
+            _set_last_transport_error("")
             logging.info("微信重连成功。")
             return wx
         except Exception as exc:
+            _set_last_transport_error(str(exc))
             wait = min(policy.max_delay_sec, policy.base_delay_sec * (1.5**attempt))
             logging.warning(
                 "微信重连失败（第 %s 次）：%s，%s 秒后重试",
@@ -338,13 +379,12 @@ def apply_ai_runtime_settings(
         ai_client.base_url = str(api_cfg.get("base_url") or ai_client.base_url).rstrip("/")
         ai_client.api_key = str(api_cfg.get("api_key") or ai_client.api_key)
         ai_client.model = str(api_cfg.get("model") or ai_client.model)
-        if "embedding_model" in api_cfg:
-            value = api_cfg.get("embedding_model")
-            if value is None:
-                ai_client.embedding_model = None
-            else:
-                v = str(value).strip()
-                ai_client.embedding_model = v if v else None
+        value = _resolve_embedding_model({}, api_cfg, bot_cfg)
+        if value is None:
+            ai_client.embedding_model = None
+        else:
+            v = str(value).strip()
+            ai_client.embedding_model = v if v else None
         if api_cfg.get("alias"):
             ai_client.model_alias = str(api_cfg.get("alias") or ai_client.model_alias)
     ai_client.timeout_sec = min(

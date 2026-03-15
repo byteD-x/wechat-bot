@@ -10,6 +10,7 @@ import os
 import logging
 import chromadb
 from typing import List, Dict, Optional, Any
+from ..utils.runtime_artifacts import chdir_temporarily, CHROMA_DIR, relocate_known_root_artifacts
 
 logger = logging.getLogger(__name__)
 
@@ -19,11 +20,13 @@ class VectorMemory:
         os.makedirs(self.db_path, exist_ok=True)
         
         try:
-            self.client = chromadb.PersistentClient(path=self.db_path)
+            with chdir_temporarily(CHROMA_DIR):
+                self.client = chromadb.PersistentClient(path=self.db_path)
             self.collection = self.client.get_or_create_collection(
                 name="chat_history",
                 metadata={"hnsw:space": "cosine"}
             )
+            relocate_known_root_artifacts()
             logger.info(f"VectorMemory initialized at {self.db_path}")
         except Exception as e:
             logger.error(f"Failed to initialize ChromaDB: {e}")

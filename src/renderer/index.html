@@ -269,7 +269,7 @@
                 </div>
 
                 <!-- 卡片网格 -->
-                <div class="card-grid">
+                <div class="card-grid dashboard-grid">
                     <!-- 机器人状态 -->
                     <div class="card">
                         <div class="card-header">
@@ -410,7 +410,7 @@
                 </div>
 
                 <!-- 最近消息 -->
-                <div class="card full-width">
+                <div class="card full-width" hidden>
                     <div class="card-header">
                         <h2 class="card-title">最近消息</h2>
                         <button class="btn btn-ghost btn-sm" id="btn-view-all-messages">查看全部</button>
@@ -962,6 +962,17 @@
                             </div>
                             <div class="form-group">
                                 <label class="form-checkbox" style="display: flex; align-items: center; gap: 12px; cursor: pointer;">
+                                    <input type="checkbox" id="setting-vector-memory-enabled">
+                                    <span class="form-checkbox-label">启用向量记忆 / RAG 总开关</span>
+                                </label>
+                            </div>
+                            <div class="form-group full-width">
+                                <label class="form-label">单独 embedding 模型</label>
+                                <input type="text" id="setting-vector-memory-embedding-model" placeholder="留空则跟随当前预设；Ollama 可填 nomic-embed-text">
+                                <div class="form-help-text" id="setting-vector-memory-help">关闭总开关后，运行期 RAG 和导出聊天记录 RAG 都不会建立向量索引或执行召回。</div>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-checkbox" style="display: flex; align-items: center; gap: 12px; cursor: pointer;">
                                     <input type="checkbox" id="setting-export-rag-enabled">
                                     <span class="form-checkbox-label">启用导出聊天记录 RAG</span>
                                 </label>
@@ -1279,6 +1290,11 @@
                                     </select>
                                     <input type="text" class="form-input" id="edit-preset-model-custom" placeholder="输入自定义模型名称"
                                         style="display: none; margin-top: 8px;">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">默认 embedding 模型</label>
+                                    <input type="text" class="form-input" id="edit-preset-embedding-model" placeholder="留空则跟随全局；Ollama 可填 nomic-embed-text">
+                                    <span class="form-label" style="font-size: 11px; margin-top: 4px;">这个值只影响向量记忆 / RAG，不会改变聊天模型。</span>
                                 </div>
                                 <div class="form-group">
                                     <label class="form-label">别名 (Alias)</label>

@@ -30,6 +30,7 @@ import logging
 import time
 from collections import OrderedDict, deque
 from functools import lru_cache
+from threading import Lock
 from typing import AsyncIterator, Deque, Dict, Iterable, List, Optional, Tuple
 
 import httpx
@@ -48,10 +49,62 @@ except Exception:  # pragma: no cover - 可选依赖
 DEFAULT_TIMEOUT_SEC = 60.0  # 默认超时时间（秒）；本地模型/推理模型可能需要更长时间
 MAX_RETRIES = 2             # 最大重试次数
 
-# 共享的 HTTP 客户端实例（连接池复用）
-_shared_client: Optional[httpx.AsyncClient] = None
 _tiktoken_encoder = None
 _tiktoken_probe_done = False
+
+
+def _build_client_pool_signature(base_url: str, timeout_sec: float) -> str:
+    """Build a stable pool key for compatible HTTP clients."""
+    payload = {
+        "base_url": str(base_url or "").strip().rstrip("/"),
+        "timeout_sec": _coerce_timeout(timeout_sec),
+    }
+    return json.dumps(payload, sort_keys=True, ensure_ascii=False)
+
+
+class AIClientPool:
+    """Reference-counted shared HTTP client pool."""
+
+    def __init__(self) -> None:
+        self._clients: Dict[str, httpx.AsyncClient] = {}
+        self._ref_count: Dict[str, int] = {}
+        self._lock = Lock()
+
+    def acquire(self, signature: str, *, timeout_sec: float) -> httpx.AsyncClient:
+        timeout = _coerce_timeout(timeout_sec)
+        with self._lock:
+            client = self._clients.get(signature)
+            if client is None or client.is_closed:
+                client = httpx.AsyncClient(
+                    timeout=timeout,
+                    limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+                )
+                self._clients[signature] = client
+                self._ref_count[signature] = 0
+            self._ref_count[signature] = self._ref_count.get(signature, 0) + 1
+            return client
+
+    async def release(self, signature: Optional[str]) -> None:
+        if not signature:
+            return
+
+        client_to_close: Optional[httpx.AsyncClient] = None
+        with self._lock:
+            current = self._ref_count.get(signature, 0)
+            if current <= 1:
+                self._ref_count.pop(signature, None)
+                client_to_close = self._clients.pop(signature, None)
+            else:
+                self._ref_count[signature] = current - 1
+
+        if client_to_close is not None and not client_to_close.is_closed:
+            try:
+                await client_to_close.aclose()
+            except Exception:
+                pass
+
+
+_client_pool = AIClientPool()
 
 
 def _is_cjk_char(code: int) -> bool:
@@ -71,23 +124,6 @@ def _is_cjk_char(code: int) -> bool:
 # ═══════════════════════════════════════════════════════════════════════════════
 #                               辅助函数
 # ═══════════════════════════════════════════════════════════════════════════════
-
-def _get_shared_client() -> httpx.AsyncClient:
-    """获取或创建共享的 HTTP 客户端实例。
-    
-    使用单例模式复用连接池，提高性能。
-    
-    Returns:
-        httpx.AsyncClient: 共享的异步 HTTP 客户端
-    """
-    global _shared_client
-    if _shared_client is None or _shared_client.is_closed:
-        _shared_client = httpx.AsyncClient(
-            timeout=DEFAULT_TIMEOUT_SEC,
-            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
-        )
-    return _shared_client
-
 
 def _coerce_timeout(value: float) -> float:
     """将超时值规范化到有效范围内。
@@ -185,11 +221,9 @@ class AIClient:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
-        if embedding_model is None:
-            self.embedding_model = "text-embedding-3-small"
-        else:
-            value = str(embedding_model).strip()
-            self.embedding_model = value if value else None
+        # Do not enable embeddings implicitly for local presets without keys.
+        value = "" if embedding_model is None else str(embedding_model).strip()
+        self.embedding_model = value if value else None
         self.model_alias = model_alias or ""
         self.timeout_sec = _coerce_timeout(timeout_sec)
         self.max_retries = _coerce_retries(max_retries)
@@ -225,6 +259,37 @@ class AIClient:
             "failed_requests": 0,
             "deduplicated_requests": 0,
         }
+        self._client_pool_signature = _build_client_pool_signature(
+            self.base_url, self.timeout_sec
+        )
+        self._http_client = _client_pool.acquire(
+            self._client_pool_signature,
+            timeout_sec=self.timeout_sec,
+        )
+        self._closed = False
+
+    def _get_http_client(self) -> httpx.AsyncClient:
+        signature = _build_client_pool_signature(self.base_url, self.timeout_sec)
+        client = self._http_client
+        if (
+            client is None
+            or client.is_closed
+            or signature != self._client_pool_signature
+        ):
+            previous_signature = self._client_pool_signature
+            self._http_client = _client_pool.acquire(
+                signature,
+                timeout_sec=self.timeout_sec,
+            )
+            self._client_pool_signature = signature
+            self._closed = False
+            if previous_signature and previous_signature != signature:
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(_client_pool.release(previous_signature))
+                except RuntimeError:
+                    pass
+        return self._http_client
 
     @classmethod
     async def _next_request_id(cls) -> str:
@@ -258,7 +323,7 @@ class AIClient:
         if self.max_completion_tokens is not None:
             payload.pop("max_tokens", None)
             payload["max_completion_tokens"] = 1
-        client = _get_shared_client()
+        client = self._get_http_client()
         try:
             resp = await client.post(
                 url,
@@ -330,7 +395,7 @@ class AIClient:
 
                 url = f"{self.base_url}/chat/completions"
                 headers = self._build_headers()
-                client = _get_shared_client()
+                client = self._get_http_client()
 
                 try:
                     async for attempt in AsyncRetrying(
@@ -399,7 +464,7 @@ class AIClient:
         lock = self._get_chat_lock(chat_id)
         url = f"{self.base_url}/chat/completions"
         headers = self._build_headers()
-        client = _get_shared_client()
+        client = self._get_http_client()
 
         async def _stream() -> AsyncIterator[str]:
             async with lock:
@@ -512,7 +577,7 @@ class AIClient:
                 "input": text
             }
             
-            client = _get_shared_client()
+            client = self._get_http_client()
             resp = await client.post(
                 url, headers=headers, json=payload, timeout=self.timeout_sec
             )
@@ -747,11 +812,8 @@ class AIClient:
         }
 
     async def close(self) -> None:
-        global _shared_client
-        if _shared_client is None:
+        if self._closed:
             return
-        try:
-            await _shared_client.aclose()
-        except Exception:
-            pass
-        _shared_client = None
+        self._closed = True
+        await _client_pool.release(self._client_pool_signature)
+        self._http_client = None

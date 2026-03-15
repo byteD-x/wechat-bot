@@ -13,11 +13,13 @@ export class SettingsPage extends PageController {
         this.modelCatalog = { providers: [] };
         this.runtimeStatus = null;
         this._updateStateUnwatch = null;
+        this._settingsCardsEnhanced = false;
     }
 
     async onInit() {
         await super.onInit();
         this._bindEvents();
+        this._enhanceSettingsCards();
         this.watchState('updater.*', () => this._renderUpdateState());
     }
 
@@ -180,6 +182,233 @@ export class SettingsPage extends PageController {
         this.bindEvent('#edit-preset-name', 'input', () => {
             this._updateApiKeyHelp(this._getSelectedProviderId());
         });
+    }
+
+    _enhanceSettingsCards() {
+        if (this._settingsCardsEnhanced) {
+            return;
+        }
+
+        this.$$('.settings-card').forEach((card) => {
+            if (card.dataset.enhanced === 'true') {
+                return;
+            }
+
+            const title = card.querySelector('.settings-card-title');
+            if (!title) {
+                return;
+            }
+
+            const meta = this._getSettingsCardMeta(card);
+            const header = Array.from(card.children).find(
+                (child) => child.classList?.contains('settings-card-header')
+            ) || document.createElement('div');
+            const existingActions = Array.from(header.children).filter((child) => child !== title);
+
+            if (!header.parentElement) {
+                card.insertBefore(header, card.firstChild);
+            }
+
+            const body = document.createElement('div');
+            body.className = 'settings-card-body';
+
+            Array.from(card.children).forEach((child) => {
+                if (child !== header) {
+                    body.appendChild(child);
+                }
+            });
+
+            const toggle = document.createElement('button');
+            toggle.type = 'button';
+            toggle.className = 'settings-card-toggle';
+
+            const toggleMain = document.createElement('div');
+            toggleMain.className = 'settings-card-toggle-main';
+
+            const titleRow = document.createElement('div');
+            titleRow.className = 'settings-card-toggle-top';
+            titleRow.appendChild(title);
+
+            const badge = document.createElement('span');
+            badge.className = 'settings-card-badge';
+            badge.textContent = meta.badge;
+            titleRow.appendChild(badge);
+
+            const summary = document.createElement('p');
+            summary.className = 'settings-card-summary';
+            summary.textContent = meta.summary;
+
+            toggleMain.appendChild(titleRow);
+            toggleMain.appendChild(summary);
+
+            const chevron = document.createElement('span');
+            chevron.className = 'settings-card-chevron';
+            chevron.setAttribute('aria-hidden', 'true');
+            chevron.textContent = '^';
+            toggle.appendChild(toggleMain);
+            toggle.appendChild(chevron);
+
+            header.classList.add('settings-card-header', 'settings-card-header-collapsible');
+            header.replaceChildren(toggle);
+
+            if (existingActions.length > 0) {
+                const actions = document.createElement('div');
+                actions.className = 'settings-card-header-actions';
+                existingActions.forEach((child) => actions.appendChild(child));
+                header.appendChild(actions);
+            }
+
+            card.classList.add('is-collapsible');
+            card.appendChild(body);
+            card.dataset.enhanced = 'true';
+
+            toggle.addEventListener('click', () => {
+                this._setSettingsCardCollapsed(card, !card.classList.contains('is-collapsed'));
+            });
+
+            this._setSettingsCardCollapsed(card, !meta.defaultExpanded);
+        });
+
+        this._settingsCardsEnhanced = true;
+    }
+
+    _setSettingsCardCollapsed(card, collapsed) {
+        card.classList.toggle('is-collapsed', collapsed);
+        const toggle = card.querySelector('.settings-card-toggle');
+        if (toggle) {
+            toggle.setAttribute('aria-expanded', String(!collapsed));
+        }
+    }
+
+    _getSettingsCardMeta(card) {
+        const definitions = [
+            {
+                selector: '#preset-list',
+                summary: '先在这里选一个可用模型。大多数情况下，只需要保证当前预设能连接成功。',
+                badge: '推荐先看',
+                defaultExpanded: true,
+            },
+            {
+                selector: '#setting-self-name',
+                summary: '这些是机器人最基础的说话方式和触发方式，不懂技术时优先看这里。',
+                badge: '基础',
+                defaultExpanded: true,
+            },
+            {
+                selector: '#setting-reply-quote-mode',
+                summary: '控制回复时是否引用原消息。想让聊天更像人工回复时可以在这里调整。',
+                badge: '常用',
+                defaultExpanded: false,
+            },
+            {
+                selector: '#setting-system-prompt',
+                summary: '决定机器人整体性格和说话原则。修改前建议先保留原文，再做小幅调整。',
+                badge: '重要',
+                defaultExpanded: true,
+            },
+            {
+                selector: '#setting-preview-chat-name',
+                summary: '用示例对话预览最终发给模型的提示词，适合改完系统提示后快速确认效果。',
+                badge: '辅助',
+                defaultExpanded: false,
+            },
+            {
+                selector: '#setting-emoji-policy',
+                summary: '控制表情和语音转文字的处理方式。只有你确实需要这些能力时再展开修改。',
+                badge: '可选',
+                defaultExpanded: false,
+            },
+            {
+                selector: '#setting-memory-db-path',
+                summary: '决定机器人记住多少上下文，以及记忆保存在哪里。想让它更“记事”时看这里。',
+                badge: '进阶',
+                defaultExpanded: true,
+            },
+            {
+                selector: '#setting-poll-interval-sec',
+                summary: '影响轮询速度和回复节奏。没有性能问题时，通常保持默认值即可。',
+                badge: '高级',
+                defaultExpanded: false,
+            },
+            {
+                selector: '#setting-merge-user-messages-sec',
+                summary: '控制多条消息是否合并后再回复。适合优化连续轰炸消息时的回复体验。',
+                badge: '进阶',
+                defaultExpanded: false,
+            },
+            {
+                selector: '#setting-natural-split-enabled',
+                summary: '让长回复自动拆成更自然的几段。担心刷屏时可以关闭或调小。',
+                badge: '进阶',
+                defaultExpanded: false,
+            },
+            {
+                selector: '#setting-stream-buffer-chars',
+                summary: '控制流式回复的显示节奏。只有你已经启用流式回复时，这里才会明显生效。',
+                badge: '高级',
+                defaultExpanded: false,
+            },
+            {
+                selector: '#setting-reconnect-max-retries',
+                summary: '决定配置热更新和断线重连策略。除非你在排查故障，否则建议保持默认。',
+                badge: '高级',
+                defaultExpanded: false,
+            },
+            {
+                selector: '#setting-group-include-sender',
+                summary: '群聊发消息的细节规则在这里设置。只在你经常用群聊场景时需要调整。',
+                badge: '进阶',
+                defaultExpanded: false,
+            },
+            {
+                selector: '#setting-filter-mute',
+                summary: '用于排除不该回复的人和关键词。机器人乱回消息时，优先检查这里。',
+                badge: '重要',
+                defaultExpanded: false,
+            },
+            {
+                selector: '#setting-personalization-enabled',
+                summary: '让机器人记住用户偏好和聊天事实。开启越多，越像“有记忆”的助手。',
+                badge: '进阶',
+                defaultExpanded: false,
+            },
+            {
+                selector: '#setting-agent-enabled',
+                summary: '这是 LangChain、RAG 和检索增强等高级能力区域，不熟悉时建议保持默认。',
+                badge: '高级',
+                defaultExpanded: false,
+            },
+            {
+                selector: '#setting-log-level',
+                summary: '日志越详细，排查越方便，但文件也会更大。日常使用一般不需要频繁改。',
+                badge: '维护',
+                defaultExpanded: false,
+            },
+            {
+                selector: '#btn-check-updates',
+                summary: '查看新版本和下载地址。这里不会影响机器人的日常对话行为。',
+                badge: '应用',
+                defaultExpanded: false,
+            },
+            {
+                selector: '#btn-reset-close-behavior',
+                summary: '控制点关闭按钮后是退出还是最小化到托盘，适合按你的使用习惯设置。',
+                badge: '应用',
+                defaultExpanded: false,
+            },
+            {
+                selector: '#whitelist-table-body',
+                summary: '管理白名单联系人，确保这些对象始终按你的规则工作。',
+                badge: '管理',
+                defaultExpanded: false,
+            },
+        ];
+
+        return definitions.find((item) => card.querySelector(item.selector)) || {
+            summary: '这一组设置用于控制更细的运行行为。不了解含义时，建议先保持默认值。',
+            badge: '高级',
+            defaultExpanded: false,
+        };
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -874,6 +1103,14 @@ export class SettingsPage extends PageController {
         if (exportRagEnabled) {
             exportRagEnabled.checked = !!bot.export_rag_enabled;
         }
+        const vectorMemoryEnabled = this.$('#setting-vector-memory-enabled');
+        if (vectorMemoryEnabled) {
+            vectorMemoryEnabled.checked = bot.vector_memory_enabled !== false;
+        }
+        const vectorMemoryEmbeddingModel = this.$('#setting-vector-memory-embedding-model');
+        if (vectorMemoryEmbeddingModel) {
+            vectorMemoryEmbeddingModel.value = bot.vector_memory_embedding_model || '';
+        }
         const exportRagDir = this.$('#setting-export-rag-dir');
         if (exportRagDir) {
             exportRagDir.value = bot.export_rag_dir || 'chat_exports/聊天记录';
@@ -891,6 +1128,7 @@ export class SettingsPage extends PageController {
             exportRagChunks.value = bot.export_rag_max_chunks_per_chat ?? 500;
         }
         this._renderExportRagStatus(this.runtimeStatus?.export_rag || null);
+        this._renderVectorMemoryHelp(bot, api, currentPreset);
 
         const controlCommands = this.$('#setting-control-commands-enabled');
         if (controlCommands) {
@@ -1251,6 +1489,31 @@ export class SettingsPage extends PageController {
                 if (key) emojiReplacements[key] = value;
             });
 
+            const previousBot = this.currentConfig.bot || {};
+            const previousVectorMemoryEnabled = previousBot.vector_memory_enabled !== false;
+            const previousVectorMemoryRiskAcknowledged = !!previousBot.vector_memory_risk_acknowledged;
+            const vectorMemoryEnabled = this.$('#setting-vector-memory-enabled')?.checked ?? previousVectorMemoryEnabled;
+            const vectorMemoryEmbeddingModel = this.$('#setting-vector-memory-embedding-model')?.value?.trim() || '';
+            const shouldConfirmVectorMemoryRisk =
+                vectorMemoryEnabled && !previousVectorMemoryEnabled && !previousVectorMemoryRiskAcknowledged;
+
+            if (shouldConfirmVectorMemoryRisk) {
+                const confirmed = window.confirm(
+                    [
+                        '首次开启向量记忆 / RAG 前请确认：',
+                        '1. 聊天内容可能会被写入本地索引或向量库，用于后续检索。',
+                        '2. 首次建立或重建索引会占用更多 CPU、内存和磁盘，并拉长处理时间。',
+                        '3. 如果 embedding 使用云端服务，可能产生额外调用成本；如果使用 Ollama，本地资源占用会明显增加。',
+                        '',
+                        '确认后将继续保存配置。'
+                    ].join('\n')
+                );
+                if (!confirmed) {
+                    this._setButtonLoading(saveButton, false);
+                    return;
+                }
+            }
+
             const botSettings = {
                 self_name: this.$('#setting-self-name').value,
                 system_prompt: this.$('#setting-system-prompt')?.value ?? '',
@@ -1314,6 +1577,10 @@ export class SettingsPage extends PageController {
                 remember_facts_enabled: this.$('#setting-remember-facts-enabled')?.checked,
                 max_context_facts: parseNumber(this.$('#setting-max-context-facts')?.value),
                 profile_inject_in_prompt: this.$('#setting-profile-inject-in-prompt')?.checked,
+                vector_memory_enabled: vectorMemoryEnabled,
+                vector_memory_embedding_model: vectorMemoryEmbeddingModel,
+                vector_memory_risk_acknowledged:
+                    previousVectorMemoryRiskAcknowledged || shouldConfirmVectorMemoryRisk,
                 export_rag_enabled: this.$('#setting-export-rag-enabled')?.checked,
                 export_rag_dir: this.$('#setting-export-rag-dir')?.value,
                 export_rag_auto_ingest: this.$('#setting-export-rag-auto-ingest')?.checked,
@@ -1461,6 +1728,40 @@ export class SettingsPage extends PageController {
     //                           预设管理
     // ═══════════════════════════════════════════════════════════════════════
 
+    _renderVectorMemoryHelp(bot = {}, api = {}, currentPreset = {}) {
+        const el = this.$('#setting-vector-memory-help');
+        if (!el) return;
+
+        const vectorMemoryEnabled = bot.vector_memory_enabled !== false;
+        const retrievalEnabled = !!(bot.rag_enabled || bot.export_rag_enabled);
+        const explicitOverride = String(bot.vector_memory_embedding_model || '').trim();
+        const presetEmbedding = String(currentPreset?.embedding_model || '').trim();
+        const globalEmbedding = String(api.embedding_model || '').trim();
+
+        let sourceText = '';
+        if (explicitOverride) {
+            sourceText = `当前使用单独配置的 embedding 模型：${explicitOverride}。`;
+        } else if (presetEmbedding) {
+            sourceText = `当前跟随预设 ${currentPreset?.name || ''} 的 embedding 模型：${presetEmbedding}。`;
+        } else if (globalEmbedding) {
+            sourceText = `当前跟随全局 embedding 配置：${globalEmbedding}。`;
+        } else {
+            sourceText = '当前没有可用的 embedding 模型，向量检索不会生效。';
+        }
+
+        const parts = [
+            vectorMemoryEnabled
+                ? '主开关已开启，允许向量记忆和 RAG 工作。'
+                : '主开关已关闭，机器人不会写入或检索向量记忆。',
+            retrievalEnabled
+                ? '当前已启用至少一种检索能力。'
+                : '当前还没有开启检索能力，只有在启用 RAG 后才会真正使用 embedding。',
+            sourceText,
+            'Ollama 可填写本地 embedding 模型，例如 nomic-embed-text。'
+        ];
+        el.textContent = parts.join(' ');
+    }
+
     _renderPresetList(presets) {
         const list = this.$('#preset-list');
         list.innerHTML = '';
@@ -1537,10 +1838,12 @@ export class SettingsPage extends PageController {
 
         if (preset) {
             this.$('#edit-preset-alias').value = preset.alias || '';
+            this.$('#edit-preset-embedding-model').value = preset.embedding_model || '';
             this.$('#edit-preset-key').value = ''; // 不回显 Key
             this._renderProviderModels(preset.model || '');
         } else {
             this.$('#edit-preset-alias').value = '';
+            this.$('#edit-preset-embedding-model').value = '';
             this.$('#edit-preset-key').value = '';
             this._renderProviderModels();
         }
@@ -1564,6 +1867,7 @@ export class SettingsPage extends PageController {
         const name = this.$('#edit-preset-name').value.trim();
         const providerId = this._getSelectedProviderId();
         const alias = this.$('#edit-preset-alias').value.trim();
+        const embeddingModel = this.$('#edit-preset-embedding-model').value.trim();
         const key = this.$('#edit-preset-key').value.trim();
         const saveButton = this.$('#btn-save-modal');
 
@@ -1606,6 +1910,7 @@ export class SettingsPage extends PageController {
             name,
             model,
             alias,
+            embedding_model: embeddingModel,
             provider_id: providerId,
             ...(key ? { api_key: key } : {})
         };

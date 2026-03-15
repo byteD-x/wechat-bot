@@ -914,6 +914,15 @@ input[type="checkbox"]:checked::after {
     margin-bottom: 32px;
 }
 
+.dashboard-grid {
+    grid-template-columns: minmax(0, 1.25fr) minmax(360px, 0.95fr);
+    align-items: start;
+}
+
+.dashboard-grid > .card:nth-child(3) {
+    grid-column: 1 / -1;
+}
+
 .card {
     background: rgba(30, 30, 40, 0.6);
     backdrop-filter: blur(12px);
@@ -1289,7 +1298,7 @@ input[type="checkbox"]:checked::after {
 /* Quick Actions */
 .quick-grid {
     display: grid;
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 16px;
 }
 
@@ -2027,6 +2036,125 @@ option {
     height: 16px;
     background: var(--color-primary);
     border-radius: 2px;
+}
+
+.settings-card.is-collapsible {
+    padding: 0;
+    overflow: hidden;
+}
+
+.settings-card-header-collapsible {
+    margin-bottom: 0;
+    padding: 20px 24px;
+}
+
+.settings-card-toggle {
+    width: 100%;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 18px;
+    padding: 0;
+    background: transparent;
+    border: 0;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.settings-card-toggle-main {
+    min-width: 0;
+    flex: 1;
+}
+
+.settings-card-toggle-top {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.settings-card-summary {
+    margin-top: 10px;
+    color: var(--text-secondary);
+    font-size: 13px;
+    line-height: 1.6;
+    max-width: 72ch;
+}
+
+.settings-card-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: rgba(59, 130, 246, 0.14);
+    border: 1px solid rgba(96, 165, 250, 0.2);
+    color: #bfdbfe;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+
+.settings-card-chevron {
+    flex-shrink: 0;
+    margin-top: 6px;
+    color: var(--text-muted);
+    font-size: 18px;
+    line-height: 1;
+    transition: transform var(--transition-normal), color var(--transition-normal);
+}
+
+.settings-card.is-collapsed .settings-card-chevron {
+    transform: rotate(-180deg);
+}
+
+.settings-card-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-left: 16px;
+}
+
+.settings-card-body {
+    padding: 0 24px 24px;
+}
+
+.settings-card.is-collapsed .settings-card-body {
+    display: none;
+}
+
+.settings-card.is-collapsed .settings-card-summary {
+    color: var(--text-muted);
+}
+
+@media (max-width: 1200px) {
+    .dashboard-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .dashboard-grid > .card:nth-child(3) {
+        grid-column: auto;
+    }
+
+    .quick-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 768px) {
+    .quick-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .settings-card-header-collapsible {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .settings-card-header-actions {
+        margin-left: 0;
+    }
 }
 
 /* 动画微调 */

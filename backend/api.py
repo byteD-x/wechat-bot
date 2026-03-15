@@ -138,6 +138,15 @@ async def get_status():
     return jsonify(manager.get_status())
 
 
+@app.route('/api/metrics', methods=['GET'])
+async def get_metrics():
+    """Export Prometheus-style runtime metrics."""
+    return app.response_class(
+        manager.export_metrics(),
+        mimetype='text/plain; version=0.0.4; charset=utf-8',
+    )
+
+
 @app.route('/api/events')
 async def sse_events():
     """SSE 事件流"""
@@ -481,8 +490,11 @@ async def test_connection():
             max_retries=0 # 测试时不重试
         )
         
-        # 调用 probe
-        success = await client.probe()
+        # 调用 probe，并在测试结束后释放共享连接引用
+        try:
+            success = await client.probe()
+        finally:
+            await client.close()
         
         if success:
             return jsonify({'success': True, 'message': '连接测试成功'})
@@ -547,7 +559,7 @@ async def get_logs():
     """获取日志"""
     try:
         from backend.config import CONFIG
-        log_file = CONFIG.get('logging', {}).get('file', 'wxauto_logs/bot.log')
+        log_file = CONFIG.get('logging', {}).get('file', 'data/logs/bot.log')
         
         if not os.path.exists(log_file):
             return jsonify({'success': True, 'logs': []})
@@ -586,7 +598,7 @@ async def clear_logs():
         from backend.config import CONFIG
         import asyncio
         
-        log_file = CONFIG.get('logging', {}).get('file', 'wxauto_logs/bot.log')
+        log_file = CONFIG.get('logging', {}).get('file', 'data/logs/bot.log')
         
         def _clear_file():
             # 清空文件内容

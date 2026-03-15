@@ -516,6 +516,11 @@ class App {
     }
 
     _getNextStatusIntervalMs() {
+        const startupActive = !!stateManager.get('bot.status.startup.active');
+        if (startupActive && this._statusFailureCount <= 0) {
+            return 400;
+        }
+
         if (this._statusFailureCount <= 0) {
             return this._statusBaseIntervalMs;
         }

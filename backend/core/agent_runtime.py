@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Dict, Iterable, List, Optional
@@ -71,6 +72,8 @@ class AgentRuntime:
         self.agent_cfg = dict(agent_cfg or {})
         self.base_url = str(settings.get("base_url") or "").strip().rstrip("/")
         self.api_key = str(settings.get("api_key") or "").strip()
+        self.allow_empty_key = bool(settings.get("allow_empty_key", False))
+        self.runtime_api_key = self.api_key or ("ollama" if self.allow_empty_key else None)
         self.model = str(settings.get("model") or "").strip()
         self.model_alias = str(settings.get("alias") or "").strip()
         embedding_model = str(settings.get("embedding_model") or "").strip()
@@ -89,9 +92,21 @@ class AgentRuntime:
             self.agent_cfg.get("embedding_cache_ttl_sec", 300.0), 300.0, min_value=0.0
         )
         self.retriever_top_k = as_int(self.agent_cfg.get("retriever_top_k", 3), 3, min_value=1)
+        self.retriever_fetch_k = max(self.retriever_top_k, self.retriever_top_k * 3)
         self.retriever_score_threshold = as_float(
             self.agent_cfg.get("retriever_score_threshold", 1.0), 1.0, min_value=0.0
         )
+        self.retriever_rerank_mode = str(
+            self.agent_cfg.get("retriever_rerank_mode") or "lightweight"
+        ).strip().lower() or "lightweight"
+        if self.retriever_rerank_mode not in {"auto", "lightweight", "cross_encoder"}:
+            self.retriever_rerank_mode = "lightweight"
+        self.retriever_cross_encoder_model = str(
+            self.agent_cfg.get("retriever_cross_encoder_model") or ""
+        ).strip()
+        self.retriever_cross_encoder_device = str(
+            self.agent_cfg.get("retriever_cross_encoder_device") or ""
+        ).strip()
         self.max_parallel_retrievers = as_int(
             self.agent_cfg.get("max_parallel_retrievers", 3), 3, min_value=1
         )
@@ -114,11 +129,16 @@ class AgentRuntime:
             "embedding_cache_hits": 0,
             "embedding_cache_misses": 0,
             "retriever_hits": 0,
+            "retriever_rerank_fallbacks": 0,
             "last_timings": {},
         }
 
         self._imports = self._load_integrations()
         self._configure_langsmith()
+        self._cross_encoder_reranker = self._build_cross_encoder_reranker()
+        self._rerank_backend = (
+            "cross_encoder" if self._cross_encoder_reranker is not None else "lightweight"
+        )
         self._chat_model = self._build_chat_model(streaming=False)
         self._stream_model = self._build_chat_model(streaming=True)
         self._embedding_client = self._build_embedding_client()
@@ -169,7 +189,7 @@ class AgentRuntime:
     def _build_chat_model(self, *, streaming: bool) -> Any:
         kwargs: Dict[str, Any] = {
             "model": self.model,
-            "api_key": self.api_key or None,
+            "api_key": self.runtime_api_key,
             "base_url": self.base_url or None,
             "timeout": self.timeout_sec,
             "max_retries": self.max_retries,
@@ -187,11 +207,43 @@ class AgentRuntime:
             return None
         return self._imports["OpenAIEmbeddings"](
             model=self.embedding_model,
-            api_key=self.api_key or None,
+            api_key=self.runtime_api_key,
             base_url=self.base_url or None,
             request_timeout=self.timeout_sec,
             max_retries=self.max_retries,
         )
+
+    def _build_cross_encoder_reranker(self) -> Optional[Any]:
+        if self.retriever_rerank_mode not in {"auto", "cross_encoder"}:
+            return None
+
+        model_path = str(self.retriever_cross_encoder_model or "").strip()
+        if not model_path:
+            return None
+
+        resolved_model_path = os.path.abspath(os.path.expanduser(model_path))
+        if not os.path.exists(resolved_model_path):
+            logger.warning(
+                "Cross-Encoder 精排已跳过：本地模型路径不存在 %s",
+                model_path,
+            )
+            return None
+
+        try:
+            from sentence_transformers import CrossEncoder
+        except ImportError:
+            logger.info("Cross-Encoder 精排未启用：缺少 sentence-transformers 依赖")
+            return None
+
+        kwargs: Dict[str, Any] = {}
+        if self.retriever_cross_encoder_device:
+            kwargs["device"] = self.retriever_cross_encoder_device
+
+        try:
+            return CrossEncoder(resolved_model_path, **kwargs)
+        except Exception as exc:
+            logger.warning("Cross-Encoder 精排初始化失败: %s", exc)
+            return None
 
     def _compile_prepare_graph(self) -> Any:
         graph = self._imports["StateGraph"](dict)
@@ -431,8 +483,13 @@ class AgentRuntime:
             "langsmith_project": self.langsmith_project,
             "retriever_stats": {
                 "top_k": self.retriever_top_k,
+                "fetch_k": self.retriever_fetch_k,
                 "score_threshold": self.retriever_score_threshold,
                 "hits": self._stats["retriever_hits"],
+                "rerank_mode": self.retriever_rerank_mode,
+                "rerank_backend": self._rerank_backend,
+                "cross_encoder_configured": bool(self.retriever_cross_encoder_model),
+                "rerank_fallbacks": self._stats["retriever_rerank_fallbacks"],
             },
             "cache_stats": {
                 "embedding_cache_size": len(self._embedding_cache),
@@ -643,15 +700,16 @@ class AgentRuntime:
         results = await asyncio.to_thread(
             vector_memory.search,
             query=user_text if not embedding else None,
-            n_results=self.retriever_top_k,
+            n_results=self.retriever_fetch_k,
             filter_meta={"chat_id": chat_id, "source": "runtime_chat"},
             query_embedding=embedding,
         )
         if not results:
             return None
 
+        ranked_results = await self._rerank_runtime_results(user_text, results)
         lines: List[str] = []
-        for item in results:
+        for item in ranked_results:
             distance = item.get("distance")
             if distance is not None and float(distance) > self.retriever_score_threshold:
                 continue
@@ -659,6 +717,8 @@ class AgentRuntime:
             if not text:
                 continue
             lines.append(text)
+            if len(lines) >= self.retriever_top_k:
+                break
 
         if not lines:
             return None
@@ -669,6 +729,144 @@ class AgentRuntime:
             "content": "Relevant past memories:\n" + "\n".join(lines),
             "hit_count": len(lines),
             "trace_snippets": lines[:5],
+        }
+
+    async def _rerank_runtime_results(
+        self,
+        query_text: str,
+        results: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        if self._cross_encoder_reranker is not None:
+            try:
+                ranked = await asyncio.to_thread(
+                    self._rerank_runtime_results_cross_encoder,
+                    query_text,
+                    results,
+                )
+                self._rerank_backend = "cross_encoder"
+                return ranked
+            except Exception as exc:
+                self._stats["retriever_rerank_fallbacks"] += 1
+                self._rerank_backend = "lightweight"
+                logger.warning("Cross-Encoder 精排失败，已回退轻量重排: %s", exc)
+
+        self._rerank_backend = "lightweight"
+        return self._rerank_runtime_results_lightweight(query_text, results)
+
+    def _rerank_runtime_results_cross_encoder(
+        self,
+        query_text: str,
+        results: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        reranker = self._cross_encoder_reranker
+        if reranker is None:
+            return self._rerank_runtime_results_lightweight(query_text, results)
+
+        pairs: List[List[str]] = []
+        candidates: List[tuple[int, Dict[str, Any]]] = []
+        for index, item in enumerate(results):
+            text = str(item.get("text") or "").strip()
+            if not text:
+                continue
+            pairs.append([query_text, text])
+            candidates.append((index, item))
+
+        if not pairs:
+            return list(results)
+
+        raw_scores = list(reranker.predict(pairs))
+        ranked: List[Dict[str, Any]] = []
+        for (index, item), raw_score in zip(candidates, raw_scores):
+            try:
+                cross_encoder_score = float(raw_score)
+            except (TypeError, ValueError):
+                cross_encoder_score = 0.0
+
+            distance = item.get("distance")
+            try:
+                semantic_score = max(0.0, 1.0 - float(distance))
+            except (TypeError, ValueError):
+                semantic_score = 0.0
+
+            ranked.append({
+                **item,
+                "cross_encoder_score": round(cross_encoder_score, 4),
+                "semantic_score": round(semantic_score, 4),
+                "rerank_score": round(cross_encoder_score, 4),
+                "_original_index": index,
+            })
+
+        ranked.sort(
+            key=lambda item: (
+                item.get("cross_encoder_score", 0.0),
+                item.get("semantic_score", 0.0),
+                -item.get("_original_index", 0),
+            ),
+            reverse=True,
+        )
+        for item in ranked:
+            item.pop("_original_index", None)
+        return ranked
+
+    def _rerank_runtime_results_lightweight(
+        self,
+        query_text: str,
+        results: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        query_tokens = self._tokenize_rerank_text(query_text)
+        if not query_tokens:
+            return list(results)
+
+        ranked: List[Dict[str, Any]] = []
+        for index, item in enumerate(results):
+            text = str(item.get("text") or "").strip()
+            if not text:
+                continue
+
+            candidate_tokens = self._tokenize_rerank_text(text)
+            overlap = len(query_tokens & candidate_tokens) / max(1, len(query_tokens))
+            distance = item.get("distance")
+            try:
+                semantic_score = max(0.0, 1.0 - float(distance))
+            except (TypeError, ValueError):
+                semantic_score = 0.0
+
+            rerank_score = round((semantic_score * 0.7) + (overlap * 0.3), 4)
+            ranked.append({
+                **item,
+                "rerank_score": rerank_score,
+                "_original_index": index,
+            })
+
+        ranked.sort(
+            key=lambda item: (
+                item.get("rerank_score", 0.0),
+                -item.get("_original_index", 0),
+            ),
+            reverse=True,
+        )
+        for item in ranked:
+            item.pop("_original_index", None)
+        return ranked
+
+    @staticmethod
+    def _tokenize_rerank_text(text: str) -> set[str]:
+        normalized = str(text or "").strip().lower()
+        if not normalized:
+            return set()
+
+        word_tokens = {
+            part
+            for part in re.findall(r"[0-9a-zA-Z\u4e00-\u9fff]+", normalized)
+            if part
+        }
+        if len(word_tokens) > 1:
+            return word_tokens
+
+        return {
+            char
+            for char in normalized
+            if char.strip() and re.match(r"[0-9a-zA-Z\u4e00-\u9fff]", char)
         }
 
     async def _analyze_emotion(self, chat_id: str, text: str) -> Optional[EmotionResult]:

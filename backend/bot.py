@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import logging
 import os
 import random
@@ -18,6 +19,7 @@ from .core.factory import (
     select_ai_client,
     select_specific_ai_client,
     get_reconnect_policy,
+    get_last_transport_error,
     reconnect_wechat,
     compute_api_signature,
 )
@@ -34,6 +36,7 @@ from .utils.logging import (
     get_log_behavior,
     format_log_text,
 )
+from .utils.config_watcher import ConfigReloadWatcher
 from .utils.message import (
     is_voice_message,
     is_image_message,
@@ -47,6 +50,7 @@ from .utils.ipc import IPCManager
 
 
 from .bot_manager import get_bot_manager
+from .wechat_versions import OFFICIAL_SUPPORTED_WECHAT_VERSION
 
 class WeChatBot:
     def __init__(self, config_path: str, memory_manager: Optional[MemoryManager] = None):
@@ -80,9 +84,22 @@ class WeChatBot:
 
         # 配置监控
         self.config_mtime: Optional[float] = None
+        self.override_path = os.path.abspath(
+            os.path.join("data", "config_override.json")
+        )
+        self.override_mtime: Optional[float] = None
+        self.config_reload_watcher: Optional[ConfigReloadWatcher] = None
         self.ai_module_mtime: Optional[float] = None
         self.api_signature: str = ""
         self.runtime_preset_name: str = ""
+        self.ai_health: Dict[str, Any] = {
+            "status": "unknown",
+            "detail": "AI not initialized",
+            "checked_at": None,
+            "last_success_at": None,
+            "last_error_at": None,
+            "last_error": "",
+        }
         
         # 日志标志
         self.log_message_content: bool = True
@@ -107,9 +124,11 @@ class WeChatBot:
                 active=True,
             )
             self.config_mtime = get_file_mtime(self.config_path)
+            self.override_mtime = get_file_mtime(self.override_path)
             self.config = load_config(self.config_path)
         except Exception as exc:
             logging.error("无法加载配置文件: %s", exc)
+            self._set_ai_health("error", "No available AI preset", error=True)
             self.bot_manager.set_issue(
                 code="config_load_failed",
                 title="配置加载失败",
@@ -123,6 +142,7 @@ class WeChatBot:
             return None
 
         self._apply_config()
+        self._ensure_config_reload_watcher()
         
         # 初始化记忆模块
         await self.bot_manager.update_startup_state(
@@ -134,6 +154,11 @@ class WeChatBot:
         if self.memory is None:
             db_path = self.bot_cfg.get("memory_db_path") or self.bot_cfg.get("sqlite_db_path") or "data/chat_memory.db"
             self.memory = MemoryManager(db_path)
+        initialize_memory = getattr(self.memory, "initialize", None)
+        if callable(initialize_memory):
+            maybe_result = initialize_memory()
+            if inspect.isawaitable(maybe_result):
+                await maybe_result
 
         self._ensure_vector_memory()
         
@@ -144,6 +169,7 @@ class WeChatBot:
             55,
             active=True,
         )
+        self._set_ai_health("unknown", "Checking AI preset availability")
         self.ai_client, preset_name = await select_ai_client(
             self.api_cfg, self.bot_cfg, self.agent_cfg
         )
@@ -152,6 +178,11 @@ class WeChatBot:
                 {"api": self.api_cfg, "agent": self.agent_cfg}
             )
             self.runtime_preset_name = preset_name or ""
+            self._set_ai_health(
+                "healthy",
+                f"AI preset {self.runtime_preset_name or 'unknown'} passed startup probe",
+                success=True,
+            )
             logging.info("AI 客户端初始化成功，使用预设: %s", preset_name)
             self.bot_manager.clear_issue()
             await self._schedule_export_rag_sync(force=False)
@@ -192,7 +223,7 @@ class WeChatBot:
                 detail="未能连接到微信客户端，请确认微信已启动且版本受支持。",
                 suggestions=[
                     "检查微信 PC 是否已登录。",
-                    "确认当前微信版本为受支持的 3.9.x。",
+                    f"确认当前微信版本为受支持的 {OFFICIAL_SUPPORTED_WECHAT_VERSION}。",
                     "必要时点击“一键恢复”重新连接。",
                 ],
                 recoverable=True,
@@ -257,6 +288,8 @@ class WeChatBot:
             self.export_rag.update_config(self.bot_cfg)
 
     def _vector_memory_requested(self) -> bool:
+        if not bool(self.bot_cfg.get("vector_memory_enabled", True)):
+            return False
         return bool(
             self.bot_cfg.get("rag_enabled", False)
             or self.bot_cfg.get("export_rag_enabled", False)
@@ -287,10 +320,24 @@ class WeChatBot:
                 now = time.time()
                 
                 # 检查配置重载
-                if config_reload_sec > 0 and now - config_check_ts >= config_reload_sec:
+                watcher_triggered = False
+                if self.config_reload_watcher and self.config_reload_watcher.mode == "watchdog":
+                    if self.config_reload_watcher.consume_change():
+                        watcher_triggered = True
+                        await self._check_config_reload(now, force=True)
+                if (
+                    not watcher_triggered
+                    and config_reload_sec > 0
+                    and now - config_check_ts >= config_reload_sec
+                ):
                     config_check_ts = now
                     await self._check_config_reload(now)
                     # 更新本地变量以适应配置变更
+                    poll_interval_min = as_float(self.bot_cfg.get("poll_interval_min_sec", 0.05), 0.05)
+                    poll_interval_max = as_float(self.bot_cfg.get("poll_interval_max_sec", 1.0), 1.0)
+                    poll_backoff = as_float(self.bot_cfg.get("poll_interval_backoff_factor", 1.2), 1.2)
+                    config_reload_sec = as_float(self.bot_cfg.get("config_reload_sec", 2.0), 2.0)
+                elif watcher_triggered:
                     poll_interval_min = as_float(self.bot_cfg.get("poll_interval_min_sec", 0.05), 0.05)
                     poll_interval_max = as_float(self.bot_cfg.get("poll_interval_max_sec", 1.0), 1.0)
                     poll_backoff = as_float(self.bot_cfg.get("poll_interval_backoff_factor", 1.2), 1.2)
@@ -412,29 +459,56 @@ class WeChatBot:
             
         if self.ai_client and hasattr(self.ai_client, "close"):
             await self.ai_client.close()
-        
+
         if self.memory:
             await self.memory.close()
 
-    async def _check_config_reload(self, now: float) -> None:
+        if self.config_reload_watcher:
+            self.config_reload_watcher.stop()
+
+    def _ensure_config_reload_watcher(self) -> None:
+        preferred_mode = str(
+            self.bot_cfg.get("config_reload_mode", "auto") or "auto"
+        ).strip().lower()
+        debounce_ms = as_int(
+            self.bot_cfg.get("config_reload_debounce_ms", 500),
+            500,
+            min_value=0,
+        )
+        watch_paths = [self.config_path, self.override_path]
+        if self.config_reload_watcher is None:
+            self.config_reload_watcher = ConfigReloadWatcher(
+                watch_paths,
+                debounce_ms=debounce_ms,
+                preferred_mode=preferred_mode,
+            )
+            self.config_reload_watcher.start()
+            return
+        self.config_reload_watcher.update(
+            paths=watch_paths,
+            debounce_ms=debounce_ms,
+            preferred_mode=preferred_mode,
+        )
+
+    async def _check_config_reload(self, now: float, force: bool = False) -> None:
         # Check main config file
         new_mtime = get_file_mtime(self.config_path)
+        new_override_mtime = get_file_mtime(self.override_path)
         
-        # Check override file
-        override_path = os.path.join("data", "config_override.json")
-        new_override_mtime = get_file_mtime(override_path)
-        
-        should_reload = False
-        
+        should_reload = force
+
         if new_mtime and new_mtime != self.config_mtime:
             should_reload = True
             self.config_mtime = new_mtime
             
         # Also reload if override file changed (or was created/deleted)
         # Note: get_file_mtime returns None if file doesn't exist
-        last_override_mtime = getattr(self, "override_mtime", None)
-        if new_override_mtime != last_override_mtime:
+        if new_override_mtime != self.override_mtime:
             should_reload = True
+            self.override_mtime = new_override_mtime
+
+        if force:
+            self.config_mtime = new_mtime
             self.override_mtime = new_override_mtime
 
         if should_reload:
@@ -446,6 +520,7 @@ class WeChatBot:
 
             self.config = new_config
             self._apply_config()
+            self._ensure_config_reload_watcher()
             self._ensure_vector_memory()
             
             # 重新检查 AI 客户端
@@ -463,6 +538,11 @@ class WeChatBot:
                         self.ai_client = new_client
                         self.api_signature = new_signature
                         self.runtime_preset_name = new_preset or ""
+                        self._set_ai_health(
+                            "healthy",
+                            f"AI preset {self.runtime_preset_name or 'unknown'} reloaded successfully",
+                            success=True,
+                        )
                         logging.info("配置更新，已重新加载 AI 客户端: %s", new_preset)
             await self._schedule_export_rag_sync(force=False)
 
@@ -515,6 +595,7 @@ class WeChatBot:
             )
 
         if not new_client:
+            self._set_ai_health("error", "AI hot reload failed", error=True)
             return {
                 "success": False,
                 "message": "AI 客户端重载失败，请检查当前激活预设的连接配置",
@@ -527,6 +608,11 @@ class WeChatBot:
         self.ai_client = new_client
         self.api_signature = new_signature
         self.runtime_preset_name = new_preset or active_preset
+        self._set_ai_health(
+            "healthy",
+            f"AI preset {self.runtime_preset_name or 'unknown'} hot-switched successfully",
+            success=True,
+        )
         logging.info("已立即切换运行中 AI 客户端: %s", self.runtime_preset_name)
         await self._schedule_export_rag_sync(force=True)
         return {
@@ -572,9 +658,13 @@ class WeChatBot:
             asyncio.create_task(self.bot_manager.notify_status_change())
 
     def get_export_rag_status(self) -> Dict[str, Any]:
+        vector_memory_enabled = bool(self.bot_cfg.get("vector_memory_enabled", True))
         if not self.export_rag:
             return {
-                "enabled": bool(self.bot_cfg.get("export_rag_enabled", False)),
+                "enabled": bool(
+                    vector_memory_enabled and self.bot_cfg.get("export_rag_enabled", False)
+                ),
+                "vector_memory_enabled": vector_memory_enabled,
                 "base_dir": str(self.bot_cfg.get("export_rag_dir") or ""),
                 "auto_ingest": bool(self.bot_cfg.get("export_rag_auto_ingest", True)),
                 "indexed_contacts": 0,
@@ -582,11 +672,15 @@ class WeChatBot:
                 "last_scan_at": None,
                 "last_scan_summary": {},
             }
-        return self.export_rag.get_status()
+        status = self.export_rag.get_status()
+        status["vector_memory_enabled"] = vector_memory_enabled
+        return status
 
     def get_agent_status(self) -> Dict[str, Any]:
         if self.ai_client and hasattr(self.ai_client, "get_status"):
-            return self.ai_client.get_status()
+            status = dict(self.ai_client.get_status())
+            status["ai_health"] = dict(self.ai_health)
+            return status
         return {
             "engine": "legacy",
             "graph_mode": "disabled",
@@ -594,7 +688,34 @@ class WeChatBot:
             "retriever_stats": {},
             "cache_stats": {},
             "runtime_timings": {},
+            "ai_health": dict(self.ai_health),
         }
+
+    def _set_ai_health(
+        self,
+        status: str,
+        detail: str,
+        *,
+        success: bool = False,
+        error: bool = False,
+    ) -> None:
+        now = time.time()
+        next_state = {
+            "status": str(status or "unknown").strip().lower(),
+            "detail": str(detail or "").strip(),
+            "checked_at": now,
+            "last_success_at": self.ai_health.get("last_success_at"),
+            "last_error_at": self.ai_health.get("last_error_at"),
+            "last_error": self.ai_health.get("last_error", ""),
+        }
+        if success:
+            next_state["last_success_at"] = now
+            next_state["last_error"] = ""
+        if error:
+            next_state["last_error_at"] = now
+            next_state["last_error"] = str(detail or "").strip()
+        self.ai_health = next_state
+        self._notify_runtime_status_changed()
 
     async def schedule_merged_reply(self, wx: "WeChat", event: MessageEvent) -> None:
         if is_voice_message(event.msg_type):
@@ -806,29 +927,49 @@ class WeChatBot:
         if not self.ai_client:
             return
 
-        async with self._get_chat_lock(chat_id):
-            prepared = await self.ai_client.prepare_request(
-                event=event,
-                chat_id=chat_id,
-                user_text=user_text,
-                dependencies=self._runtime_dependencies(),
-                image_path=image_path,
-            )
+        try:
+            async with self._get_chat_lock(chat_id):
+                prepared = await self.ai_client.prepare_request(
+                    event=event,
+                    chat_id=chat_id,
+                    user_text=user_text,
+                    dependencies=self._runtime_dependencies(),
+                    image_path=image_path,
+                )
 
-            reply_text = ""
-            should_stream = bool(self.bot_cfg.get("stream_reply", False)) and bool(
-                self.agent_cfg.get("streaming_enabled", True)
-            )
-            if should_stream:
-                reply_text = await self._stream_smart_reply(wx, event, prepared)
-            else:
-                reply_text = await self.ai_client.invoke(prepared)
-                if reply_text:
-                    await self._send_smart_reply(wx, event, reply_text)
+                reply_text = ""
+                should_stream = bool(self.bot_cfg.get("stream_reply", False)) and bool(
+                    self.agent_cfg.get("streaming_enabled", True)
+                )
+                if should_stream:
+                    reply_text = await self._stream_smart_reply(wx, event, prepared)
+                else:
+                    reply_text = await self.ai_client.invoke(prepared)
+                    if reply_text:
+                        await self._send_smart_reply(wx, event, reply_text)
+        except Exception as exc:
+            self._set_ai_health("error", f"Last AI call failed: {exc}", error=True)
+            raise
 
         try:
             if not reply_text:
                 return
+
+            timings = dict(getattr(prepared, "timings", {}) or {})
+            latency_sec = 0.0
+            for key in ("stream_sec", "invoke_sec", "prepare_total_sec"):
+                value = timings.get(key)
+                if value:
+                    latency_sec = float(value)
+                    break
+            if latency_sec > 0:
+                detail = (
+                    f"Last AI call succeeded on preset {self.runtime_preset_name or 'unknown'} "
+                    f"in {round(latency_sec * 1000)} ms"
+                )
+            else:
+                detail = f"Last AI call succeeded on preset {self.runtime_preset_name or 'unknown'}"
+            self._set_ai_health("healthy", detail, success=True)
 
             response_metadata = self._build_reply_metadata(
                 prepared=prepared,
@@ -1179,6 +1320,16 @@ class WeChatBot:
                     else "当前没有待合并消息"
                 ),
             },
+            "config_reload": (
+                self.config_reload_watcher.get_status()
+                if self.config_reload_watcher
+                else {
+                    "mode": "polling",
+                    "preferred_mode": "auto",
+                    "debounce_ms": 500,
+                    "watch_paths": [],
+                }
+            ),
         }
 
     def _notify_runtime_status_changed(self) -> None:
@@ -1263,15 +1414,28 @@ class WeChatBot:
                 return dict(self.wx.get_transport_status())
             except Exception as exc:
                 logging.debug("获取 transport 状态失败: %s", exc)
+        if self.wx:
+            return {
+                "transport_backend": "compat_ui",
+                "silent_mode": False,
+                "wechat_version": "",
+                "required_wechat_version": "",
+                "compat_mode": True,
+                "supports_native_quote": True,
+                "supports_voice_transcription": True,
+                "transport_status": "connected",
+                "transport_warning": "",
+            }
+        preferred_backend = str(self.bot_cfg.get("transport_backend") or "hook_wcferry").strip().lower()
         return {
-            "transport_backend": "compat_ui",
-            "silent_mode": False,
+            "transport_backend": preferred_backend,
+            "silent_mode": preferred_backend == "hook_wcferry",
             "wechat_version": "",
-            "required_wechat_version": "",
-            "compat_mode": True,
-            "supports_native_quote": True,
+            "required_wechat_version": str(self.bot_cfg.get("required_wechat_version") or "").strip(),
+            "compat_mode": preferred_backend == "compat_ui",
+            "supports_native_quote": preferred_backend != "hook_wcferry",
             "supports_voice_transcription": True,
-            "transport_status": "connected" if self.wx else "disconnected",
-            "transport_warning": "",
+            "transport_status": "disconnected",
+            "transport_warning": get_last_transport_error(),
         }
 

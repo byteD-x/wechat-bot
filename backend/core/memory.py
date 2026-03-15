@@ -111,6 +111,10 @@ class MemoryManager:
             await self._init_tables()
             return self._conn
 
+    async def initialize(self) -> aiosqlite.Connection:
+        """显式初始化数据库连接，避免健康检查误报未连接。"""
+        return await self._get_db()
+
     async def _init_tables(self) -> None:
         """初始化数据库表结构"""
         if not self._conn:
@@ -357,6 +361,65 @@ class MemoryManager:
                 continue
             context.append({"role": row["role"], "content": content})
         return context
+
+    async def get_recent_context_batch(
+        self,
+        wx_ids: Iterable[str],
+        limit: int = 20,
+    ) -> Dict[str, List[dict]]:
+        """Fetch recent contexts for multiple chats in one query."""
+        normalized_ids = []
+        for raw in wx_ids:
+            wx_id = str(raw or "").strip()
+            if wx_id and wx_id not in normalized_ids:
+                normalized_ids.append(wx_id)
+        if not normalized_ids:
+            return {}
+
+        await self._maybe_cleanup()
+        try:
+            limit_val = int(limit)
+        except (TypeError, ValueError):
+            limit_val = 20
+        if limit_val <= 0:
+            return {wx_id: [] for wx_id in normalized_ids}
+
+        placeholders = ", ".join("?" for _ in normalized_ids)
+        sql = f"""
+            SELECT wx_id, role, content
+            FROM (
+                SELECT
+                    wx_id,
+                    role,
+                    content,
+                    id,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY wx_id
+                        ORDER BY id DESC
+                    ) AS row_num
+                FROM chat_history
+                WHERE wx_id IN ({placeholders})
+            ) ranked
+            WHERE row_num <= ?
+            ORDER BY wx_id ASC, id ASC
+        """
+
+        db = await self._get_db()
+        params = [*normalized_ids, limit_val]
+        async with db.execute(sql, tuple(params)) as cursor:
+            rows = await cursor.fetchall()
+
+        context_map: Dict[str, List[dict]] = {
+            wx_id: [] for wx_id in normalized_ids
+        }
+        for row in rows:
+            content = row["content"]
+            if not content:
+                continue
+            context_map.setdefault(row["wx_id"], []).append(
+                {"role": row["role"], "content": content}
+            )
+        return context_map
 
     async def get_global_recent_messages(self, limit: int = 50) -> List[dict]:
         """

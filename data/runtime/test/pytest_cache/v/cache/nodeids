@@ -1,0 +1,15 @@
+[
+  "tests/test_optimization_tasks.py::test_agent_runtime_allow_empty_key_uses_dummy_runtime_key",
+  "tests/test_optimization_tasks.py::test_agent_runtime_reranks_runtime_memory_results",
+  "tests/test_optimization_tasks.py::test_ai_client_pool_reuses_http_clients",
+  "tests/test_optimization_tasks.py::test_ai_client_without_embedding_model_disables_embeddings",
+  "tests/test_optimization_tasks.py::test_bot_schema_defaults_to_official_wechat_version",
+  "tests/test_optimization_tasks.py::test_extract_supported_wechat_versions_from_binary",
+  "tests/test_optimization_tasks.py::test_memory_manager_get_recent_context_batch_returns_grouped_rows",
+  "tests/test_optimization_tasks.py::test_memory_manager_initialize_opens_connection",
+  "tests/test_optimization_tasks.py::test_relocate_known_root_artifacts_moves_files",
+  "tests/test_optimization_tasks.py::test_select_specific_ai_client_ollama_does_not_inherit_root_embedding_model",
+  "tests/test_optimization_tasks.py::test_select_specific_ai_client_prefers_vector_memory_embedding_override",
+  "tests/test_optimization_tasks.py::test_wcferry_transport_implements_base_transport",
+  "tests/test_optimization_tasks.py::test_wcferry_version_gate_blocks_unsupported_runtime_version"
+]

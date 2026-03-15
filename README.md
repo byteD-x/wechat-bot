@@ -6,19 +6,18 @@
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)
 ![Node.js](https://img.shields.io/badge/node-16%2B-green.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)
-![WeChat](https://img.shields.io/badge/WeChat-PC%203.9.x-brightgreen.svg)
+![WeChat](https://img.shields.io/badge/WeChat-PC%203.9.12.51-brightgreen.svg)
 
 基于 `WCFerry + wxauto(兼容模式) + Quart + Electron + LangChain/LangGraph` 的微信 AI 自动回复机器人。  
-支持多 OpenAI-compatible 提供方、短期记忆、向量检索、导出语料 RAG、情绪分析、Prompt 个性化和桌面/Web 控制台。
-
+支持多 OpenAI-compatible 提供方、短期记忆、运行期 RAG、导出语料 RAG、情绪分析、Prompt 个性化和桌面/Web 控制台。
 </div>
 
 ## Quick Manual
 
-第一次使用建议按下面顺序执行。详细说明已拆到独立文档。
+第一次使用建议按下面顺序执行，详细操作见使用手册：
 
 1. [确认环境与限制](docs/USER_GUIDE.md#1-环境要求)
-2. [安装后端依赖](docs/USER_GUIDE.md#2-安装依赖)
+2. [安装 Python 依赖](docs/USER_GUIDE.md#2-安装依赖)
 3. [安装桌面端依赖](docs/USER_GUIDE.md#2-安装依赖)
 4. [配置模型与密钥](docs/USER_GUIDE.md#3-首次配置)
 5. [执行环境自检](docs/USER_GUIDE.md#4-启动前检查)
@@ -29,28 +28,31 @@
 
 ## Documentation
 
-- [项目亮点与 LangChain 链路](docs/HIGHLIGHTS.md)
+- [项目亮点与主链路](docs/HIGHLIGHTS.md)
 - [详细使用手册](docs/USER_GUIDE.md)
-- [配置说明与优先级](docs/USER_GUIDE.md#8-配置说明)
+- [配置说明](docs/USER_GUIDE.md#8-配置说明)
 - [常见问题排查](docs/USER_GUIDE.md#9-常见问题)
 - [开发与测试](docs/USER_GUIDE.md#10-开发与测试)
 
 ## Features
 
-- `Multi-provider`: 支持 OpenAI、DeepSeek、Qwen、Doubao、Ollama、OpenRouter、Groq 等 OpenAI-compatible 接口
-- `LangGraph Runtime`: 用 LangChain/LangGraph 编排上下文加载、RAG、情绪分析、提示词构建、流式回复和后台事实提取
-- `Memory`: SQLite 持久化短期记忆、用户画像、上下文事实和情绪历史
-- `RAG`: 支持运行期对话向量记忆和导出聊天记录风格召回
-- `Desktop + Web`: Electron 桌面客户端与 Quart Web API 并存
-- `Hot Reload`: 支持配置热重载和运行时切换激活模型预设
+- `Multi-provider`: 支持 OpenAI、DeepSeek、Qwen、Doubao、Ollama、OpenRouter、Groq 等 OpenAI-compatible 接口。
+- `LangGraph Runtime`: 用 LangChain/LangGraph 编排上下文加载、RAG、情绪分析、提示词构建、流式回复和后台事实提取。
+- `Memory`: SQLite 持久化短期记忆、用户画像、上下文事实和情绪历史。
+- `RAG`: 支持运行期对话向量记忆、导出聊天记录风格召回，以及可选本地 `Cross-Encoder` 精排；未配置本地模型或缺依赖时自动回退轻量重排。
+- `Transport Abstraction`: 传输层已抽象为 `BaseTransport`，当前内置 `hook_wcferry` 与 `compat_ui` 两种后端。
+- `Desktop + Web`: Electron 桌面客户端与 Quart Web API 并存。
+- `Observability`: `/api/status` 提供启动进度、诊断、健康检查和系统指标，`/api/metrics` 提供 Prometheus 风格导出。
+- `Hot Reload`: 配置热重载优先使用 `watchdog` 事件监听，缺失依赖时自动回退轮询，并带防抖。
 
 ## Architecture
 
 ```mermaid
 flowchart TD
-    A[WeChat PC 3.9.x] --> B[WCFerry Hook Backend]
-    A --> B2[wxauto Compat Backend]
-    B --> C[WeChatBot]
+    A[WeChat PC 3.9.12.51] --> B[BaseTransport]
+    B --> B1[WCFerry Hook Backend]
+    B --> B2[wxauto Compat Backend]
+    B1 --> C[WeChatBot]
     B2 --> C
     C --> D[LangGraph Runtime]
     D --> E[SQLite Memory]
@@ -61,30 +63,35 @@ flowchart TD
     C --> J[Sender / Quote / Chunking]
     C --> K[Quart API]
     K --> L[Electron UI]
+    K --> M[/api/status]
+    K --> N[/api/metrics]
 ```
 
 核心路径：
 
-- `backend/bot.py`: 机器人生命周期、消息入口和发送出口
-- `backend/core/agent_runtime.py`: LangChain/LangGraph 主运行时
-- `backend/core/memory.py`: SQLite 记忆层
-- `backend/core/vector_memory.py`: Chroma 向量层
-- `backend/api.py`: Web API
-- `src/renderer/`: Electron 前端
+- `backend/bot.py`: 机器人生命周期、消息入口和发送出口。
+- `backend/core/agent_runtime.py`: LangChain/LangGraph 主运行时、RAG 召回与精排。
+- `backend/core/memory.py`: SQLite 记忆层。
+- `backend/core/vector_memory.py`: Chroma 向量层。
+- `backend/transports/`: 传输层抽象与具体后端。
+- `backend/api.py`: Web API。
+- `src/renderer/`: Electron 前端。
 
 ## Requirements
 
 - Windows 10 / 11
-- WeChat PC `3.9.x`
+- WeChat PC `3.9.12.51`
 - Python `3.9+`
 - Node.js `16+`
 
-静默模式说明：
-- 默认后端是 `hook_wcferry`，目标是后台收发时不抢焦点、不抢键鼠。
-- 当前默认要求微信版本为 `3.9.12.17`；如果本机不是该版本，静默模式会拒绝启动。
-https://github.com/tom-snow/wechat-windows-versions/releases/tag/v3.9.12.17
-- 如需继续使用旧版 UI 自动化链路，必须显式开启 `bot.compat_ui_enabled=true` 并切换 `bot.transport_backend=compat_ui`。这会重新带来焦点干扰风险。
-- `voice_to_text` 在静默模式下改为走 OpenAI-compatible `/audio/transcriptions` 接口，需配置可用的 `bot.voice_transcription_model`。
+说明：
+
+- 默认后端是 `hook_wcferry`，目标是在后台收发时不抢焦点、不抢键鼠。
+- 当前项目唯一官方支持的微信版本是 `3.9.12.51`。
+- 旧版本微信下载链接：https://github.com/tom-snow/wechat-windows-versions/releases/tag/v3.9.12.51
+- `compat_ui` 仅保留为遗留兼容链路，不再作为官方支持基线；即使启用，也应先以 `3.9.12.51` 为环境基准排障。
+- `watchdog` 已纳入默认依赖，用于配置热重载事件监听。
+- 如需启用本地 `Cross-Encoder` 精排，需要额外安装 `sentence-transformers`，并在配置中提供本地模型目录；项目不会自动联网下载模型。
 
 限制：
 
@@ -111,6 +118,11 @@ npm run dev
 4. 保存配置
 5. 启动机器人
 
+补充说明：
+- 使用 `Ollama` 时可以不填写 `API Key`，聊天模型与 embedding 模型可以分别配置。
+- 向量记忆 / RAG 现在有独立总开关；首次开启时会提示本地存储、资源占用和潜在调用成本。
+- 如需给向量记忆单独指定 embedding，可在“设置”页填写单独模型，或在预设里填写默认 embedding 模型；`Ollama` 可使用如 `nomic-embed-text` 之类的本地 embedding 模型。
+
 完整配置流程见 [详细使用手册](docs/USER_GUIDE.md#3-首次配置)。
 
 ## Run Modes
@@ -129,7 +141,7 @@ npm run dev
 python run.py start
 ```
 
-适合已经完成配置后直接运行机器人主循环。
+适合完成配置后直接运行机器人主循环。
 
 ### Web API
 
@@ -143,12 +155,34 @@ python run.py web
 
 主要配置分区：
 
-- `api`: 模型、Base URL、API Key、模型预设、超时、重试、embedding 模型
-- `bot`: 回复策略、轮询、记忆、RAG、群聊规则、情绪识别
-- `agent`: LangChain / LangGraph 运行时、检索参数、流式与 LangSmith 配置
-- `logging`: 日志级别、文件、轮转和内容开关
+- `api`: 模型、Base URL、API Key、预设、超时、重试、embedding 模型。
+- `bot`: 回复策略、轮询、记忆、RAG、群聊规则、情绪识别、传输后端、配置热重载。
+- `agent`: LangChain / LangGraph 运行时、检索参数、精排策略、流式回复与 LangSmith 配置。
+- `logging`: 日志级别、文件、轮转和内容开关。
+
+当前与本轮功能直接相关的关键配置：
+
+```python
+"bot": {
+    "config_reload_mode": "auto",          # auto / polling / watchdog
+    "config_reload_debounce_ms": 500,
+}
+
+"agent": {
+    "retriever_top_k": 3,
+    "retriever_score_threshold": 1.0,
+    "retriever_rerank_mode": "lightweight",  # lightweight / auto / cross_encoder
+    "retriever_cross_encoder_model": "",     # 本地模型目录
+    "retriever_cross_encoder_device": "",    # cpu / cuda
+}
+```
 
 详细字段说明、覆盖优先级和修改方式见 [配置说明](docs/USER_GUIDE.md#8-配置说明)。
+
+运行时输出目录约定：
+- 应用日志默认写入 `data/logs/`
+- 第三方运行时产物（如注入日志、锁文件）统一收口到 `data/runtime/`
+- 测试缓存与覆盖率产物统一收口到 `data/runtime/test/`
 
 ## Development
 
@@ -157,7 +191,7 @@ python run.py web
 pip install -r requirements.txt
 npm install
 
-# 开发启动
+# 桌面开发模式
 npm run dev
 
 # 启动机器人
@@ -168,16 +202,20 @@ python run.py web
 
 # 环境检查
 python run.py check
-```
 
-测试入口见 [开发与测试](docs/USER_GUIDE.md#10-开发与测试)。
+# 语法检查
+python -m py_compile backend\\core\\agent_runtime.py backend\\bot.py backend\\bot_manager.py backend\\api.py
+
+# 重点测试
+python -m pytest tests\\test_runtime_observability.py -q
+```
 
 ## Security
 
 以下内容默认视为敏感数据：
 
 - `API Key`
-- `data/` 下的密钥与覆写配置
+- `data/` 下的密钥与覆盖配置
 - `data/chat_exports/`
 - `data/logs/`
 - 解密后的微信数据库

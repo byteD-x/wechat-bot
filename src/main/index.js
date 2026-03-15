@@ -112,6 +112,12 @@ const BackendManager = {
             return;
         }
 
+        if (GLOBAL_STATE.pythonProcess) {
+            console.log('[Backend] 鍚庣姝ｅ湪鍚姩');
+            updateSplashStatus('鍚庣鏈嶅姟鍚姩涓?..', 50);
+            return;
+        }
+
         let cmd, args, options;
 
         if (GLOBAL_STATE.isDev) {

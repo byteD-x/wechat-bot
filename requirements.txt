@@ -1,3 +1,4 @@
+# Legacy compat_ui backend only; official project baseline is WeChat PC 3.9.12.51.
 weixin-auto>=3.9.11.17
 wcferry>=39.5.2.0
 comtypes>=1.4.0
@@ -24,3 +25,4 @@ coverage>=7.0.0
 pytest>=7.0.0
 pytest-asyncio>=0.23.0
 pytest-cov>=4.1.0
+watchdog>=6.0.0

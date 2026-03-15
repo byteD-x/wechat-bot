@@ -4,6 +4,18 @@ import asyncio
 from unittest.mock import MagicMock, patch, AsyncMock
 from backend.bot import WeChatBot
 
+
+def _build_mock_bot_manager():
+    manager = MagicMock()
+    manager.update_startup_state = AsyncMock()
+    manager.notify_status_change = AsyncMock()
+    manager.broadcast_event = AsyncMock()
+    manager.apply_pause_state = AsyncMock()
+    manager.set_issue = MagicMock()
+    manager.clear_issue = MagicMock()
+    manager._invalidate_status_cache = MagicMock()
+    return manager
+
 @pytest.mark.asyncio
 async def test_bot_initialization(mock_config):
     # Mock load_config
@@ -63,14 +75,45 @@ async def test_bot_initialization_vector_memory_error(mock_config):
                         # Should continue even if vector memory fails
                         assert bot.vector_memory is None
 
+
+def test_bot_vector_memory_master_switch_disables_rag(mock_config):
+    bot = WeChatBot("config.yaml")
+    bot.config = mock_config
+    bot.bot_cfg = dict(mock_config["bot"])
+    bot.bot_cfg["vector_memory_enabled"] = False
+    bot.bot_cfg["rag_enabled"] = True
+    bot.bot_cfg["export_rag_enabled"] = True
+
+    assert bot._vector_memory_requested() is False
+
+
+def test_bot_transport_status_preserves_preferred_backend_when_disconnected():
+    bot = WeChatBot("config.yaml")
+    bot.bot_cfg = {
+        "transport_backend": "hook_wcferry",
+        "required_wechat_version": "",
+    }
+
+    with patch(
+        "backend.bot.get_last_transport_error",
+        return_value="已安装 wcferry 仅支持微信 3.9.12.51，当前为 3.9.12.17",
+    ):
+        status = bot.get_transport_status()
+
+    assert status["transport_backend"] == "hook_wcferry"
+    assert status["transport_status"] == "disconnected"
+    assert status["compat_mode"] is False
+    assert "3.9.12.51" in status["transport_warning"]
+
 @pytest.mark.asyncio
 async def test_bot_run_loop(mock_config):
+    mock_bot_manager = _build_mock_bot_manager()
     with patch("backend.bot.load_config", return_value=mock_config), \
          patch("backend.bot.get_file_mtime", return_value=123456.0), \
          patch("backend.bot.select_ai_client", return_value=(AsyncMock(), "default")), \
          patch("backend.bot.reconnect_wechat", return_value=MagicMock()), \
          patch("backend.bot.normalize_new_messages", return_value=[]), \
-         patch("backend.bot.get_bot_manager", return_value=MagicMock()):
+         patch("backend.bot.get_bot_manager", return_value=mock_bot_manager):
          
         bot = WeChatBot("config.yaml")
         bot.memory = MagicMock()
@@ -98,12 +141,13 @@ async def test_bot_run_loop(mock_config):
 
 @pytest.mark.asyncio
 async def test_bot_run_loop_wx_exception(mock_config):
+    mock_bot_manager = _build_mock_bot_manager()
     with patch("backend.bot.load_config", return_value=mock_config), \
          patch("backend.bot.get_file_mtime", return_value=123456.0), \
          patch("backend.bot.select_ai_client", return_value=(AsyncMock(), "default")), \
          patch("backend.bot.reconnect_wechat", return_value=None), \
          patch("backend.bot.normalize_new_messages", return_value=[]), \
-         patch("backend.bot.get_bot_manager", return_value=MagicMock()):
+         patch("backend.bot.get_bot_manager", return_value=mock_bot_manager):
          
         bot = WeChatBot("config.yaml")
         bot.memory = MagicMock()

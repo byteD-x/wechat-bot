@@ -1,5 +1,6 @@
 from typing import List, Dict, Optional, Any, Union, Literal
 from pydantic import BaseModel, Field, validator
+from backend.wechat_versions import OFFICIAL_SUPPORTED_WECHAT_VERSION
 
 class PresetConfig(BaseModel):
     name: str
@@ -55,7 +56,7 @@ class BotConfig(BaseModel):
     transport_backend: Literal['hook_wcferry', 'compat_ui'] = 'hook_wcferry'
     compat_ui_enabled: bool = False
     silent_mode_required: bool = False
-    required_wechat_version: str = ""
+    required_wechat_version: str = OFFICIAL_SUPPORTED_WECHAT_VERSION
     capability_strict: bool = True
     
     # Voice
@@ -128,6 +129,8 @@ class BotConfig(BaseModel):
     # Other
     reload_ai_client_on_change: bool = True
     config_reload_sec: float = 2.0
+    config_reload_mode: Literal['auto', 'polling', 'watchdog'] = 'auto'
+    config_reload_debounce_ms: int = 500
     reload_ai_client_module: bool = False
     keepalive_idle_sec: float = 0.0
     reconnect_max_retries: int = 3
@@ -202,6 +205,9 @@ class AgentConfig(BaseModel):
     history_strategy: str = "sqlite_memory"
     retriever_top_k: int = 3
     retriever_score_threshold: float = 1.0
+    retriever_rerank_mode: Literal['auto', 'lightweight', 'cross_encoder'] = 'lightweight'
+    retriever_cross_encoder_model: Optional[str] = None
+    retriever_cross_encoder_device: Optional[str] = None
     embedding_cache_ttl_sec: float = 300.0
     background_fact_extraction_enabled: bool = True
     emotion_fast_path_enabled: bool = True

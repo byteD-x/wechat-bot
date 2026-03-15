@@ -17,11 +17,22 @@
 import sys
 import os
 
+from backend.utils.runtime_artifacts import (
+    configure_runtime_environment,
+    relocate_known_root_artifacts,
+)
+
 # 强制使用 UTF-8 编码（解决 Windows 控制台乱码问题）
 if sys.platform == 'win32':
     os.environ['PYTHONIOENCODING'] = 'utf-8'
+    os.environ.setdefault('PYTHONDONTWRITEBYTECODE', '1')
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
+sys.dont_write_bytecode = True
+
+configure_runtime_environment()
+relocate_known_root_artifacts()
 
 import argparse
 

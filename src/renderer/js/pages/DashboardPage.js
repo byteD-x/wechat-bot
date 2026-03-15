@@ -11,7 +11,6 @@ export class DashboardPage extends PageController {
     constructor() {
         super('DashboardPage', 'page-dashboard');
         this._lastStats = null;
-        this._recentMessages = [];
     }
 
     async onInit() {
@@ -26,7 +25,6 @@ export class DashboardPage extends PageController {
         if (status) {
             this.updateStats(status);
         }
-        await this._loadRecentMessages();
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -76,13 +74,8 @@ export class DashboardPage extends PageController {
             window.electronAPI?.minimizeToTray();
         });
 
-        this.bindEvent('#btn-view-all-messages', 'click', () => {
-            this.emit(Events.PAGE_CHANGE, 'messages');
-        });
-
         // 监听状态变化
         this.watchState('bot.*', () => this._updateBotUI());
-        this.listenEvent(Events.MESSAGE_RECEIVED, (message) => this._appendRecentMessage(message));
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -213,6 +206,7 @@ export class DashboardPage extends PageController {
         }
 
         this._renderStartupState(status.startup);
+        this._syncStartupMeta(status.startup);
         this._renderDiagnostics(status.diagnostics);
     }
 
@@ -366,6 +360,7 @@ export class DashboardPage extends PageController {
         }
 
         this._renderStartupState(nextStats.startup);
+        this._syncStartupMeta(nextStats.startup);
         this._renderDiagnostics(nextStats.diagnostics);
         this._renderHealthMetrics(nextStats.system_metrics, nextStats.health_checks, nextStats.merge_feedback);
 
@@ -388,9 +383,26 @@ export class DashboardPage extends PageController {
         }
 
         const progressValue = Number(startup?.progress || 0);
+        const stageLabel = this._getStartupStageLabel(startup?.stage);
         label.textContent = startup?.message || '正在启动机器人...';
         progress.style.width = `${Math.max(0, Math.min(progressValue, 100))}%`;
-        meta.textContent = `${progressValue}% · 阶段: ${startup?.stage || 'starting'}`;
+        const updatedAt = this._formatStartupUpdatedAt(startup?.updated_at);
+        meta.textContent = updatedAt
+            ? `${progressValue}% · ${stageLabel} · ${updatedAt}`
+            : `${progressValue}% · ${stageLabel}`;
+    }
+
+    _syncStartupMeta(startup) {
+        const meta = this.$('#bot-startup-meta');
+        if (!meta || !startup?.active) {
+            return;
+        }
+        const progressValue = Number(startup?.progress || 0);
+        const stageLabel = this._getStartupStageLabel(startup?.stage);
+        const updatedAt = this._formatStartupUpdatedAt(startup?.updated_at);
+        meta.textContent = updatedAt
+            ? `${progressValue}% · ${stageLabel} · ${updatedAt}`
+            : `${progressValue}% · ${stageLabel}`;
     }
 
     _renderDiagnostics(diagnostics) {
@@ -456,9 +468,35 @@ export class DashboardPage extends PageController {
         const text = item.querySelector('.health-check-text');
         const level = ['healthy', 'warning', 'error'].includes(check?.level) ? check.level : 'warning';
         item.dataset.level = level;
+        item.dataset.status = check?.status || 'unknown';
         if (text) {
             text.textContent = check?.message || '未检测';
         }
+    }
+
+    _getStartupStageLabel(stage) {
+        const stageMap = {
+            loading_config: '读取配置',
+            init_memory: '准备记忆库',
+            init_ai: '检查 AI',
+            connect_wechat: '连接微信',
+            ready: '启动完成',
+            failed: '启动失败',
+            idle: '等待启动'
+        };
+        return stageMap[stage] || `当前阶段: ${stage || 'starting'}`;
+    }
+
+    _formatStartupUpdatedAt(timestamp) {
+        const value = Number(timestamp || 0);
+        if (!Number.isFinite(value) || value <= 0) {
+            return '';
+        }
+        return `更新于 ${new Date(value * 1000).toLocaleTimeString('zh-CN', {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit'
+        })}`;
     }
 
     _formatPercent(value) {

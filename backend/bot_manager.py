@@ -12,8 +12,20 @@ import os
 import sys
 import time
 from typing import Any, Dict, Optional, Set
+from .wechat_versions import OFFICIAL_SUPPORTED_WECHAT_VERSION
 
 logger = logging.getLogger(__name__)
+
+
+def _health_level_from_status(status: str) -> str:
+    normalized = str(status or "").strip().lower()
+    if normalized == "healthy":
+        return "healthy"
+    if normalized in {"degraded", "warning"}:
+        return "warning"
+    if normalized in {"error", "failed", "offline"}:
+        return "error"
+    return "warning"
 
 
 class _MemoryStatusEx(ctypes.Structure):
@@ -593,7 +605,7 @@ class BotManager:
                 "detail": "机器人正在运行，但当前未检测到有效的微信连接。",
                 "suggestions": [
                     "确认微信 PC 客户端已启动且保持登录。",
-                    "确认当前微信版本受项目支持。",
+                    f"确认当前微信版本为 {OFFICIAL_SUPPORTED_WECHAT_VERSION}。",
                     "点击“一键恢复”重新建立连接。",
                 ],
                 "recoverable": True,
@@ -607,7 +619,7 @@ class BotManager:
                 "title": "运行环境存在兼容性提示",
                 "detail": transport_warning,
                 "suggestions": [
-                    "优先检查当前微信版本是否符合要求。",
+                    f"优先检查当前微信版本是否为 {OFFICIAL_SUPPORTED_WECHAT_VERSION}。",
                     "如消息发送或引用异常，可先执行重启恢复。",
                 ],
                 "recoverable": True,
@@ -652,6 +664,83 @@ class BotManager:
         }
 
     def _build_health_checks(self, status: Dict[str, Any]) -> Dict[str, Any]:
+        ai_ready = bool(self.bot and getattr(self.bot, "ai_client", None))
+        ai_health = status.get("ai_health") or {}
+        ai_status = str(ai_health.get("status") or "").strip().lower()
+        ai_detail = str(ai_health.get("detail") or "").strip()
+
+        if ai_status not in {"healthy", "warning", "degraded", "error"}:
+            if ai_ready:
+                ai_status = "healthy"
+            elif self.is_running:
+                ai_status = "degraded"
+            else:
+                ai_status = "unknown"
+
+        if not ai_detail:
+            if ai_ready and status.get("model"):
+                ai_detail = f"AI client ready: {status.get('model')}"
+            elif ai_ready:
+                ai_detail = "AI client initialized, awaiting first runtime check"
+            elif self.is_running:
+                ai_detail = "Bot is running, but AI client is unavailable"
+            else:
+                ai_detail = "Bot not running, AI has not been checked yet"
+
+        transport_status = str(status.get("transport_status") or "").strip().lower()
+        transport_warning = str(status.get("transport_warning") or "").strip()
+        compat_mode = bool(status.get("compat_mode"))
+        if transport_status == "connected":
+            if compat_mode:
+                wechat_status = "warning"
+                wechat_detail = "Compatibility mode is active; connection is initialized but cannot be fully verified"
+            else:
+                wechat_status = "healthy"
+                wechat_detail = "Verified active WeChat connection"
+            if transport_warning:
+                wechat_detail = f"{wechat_detail}; {transport_warning}"
+        elif self.is_running:
+            wechat_status = "error"
+            wechat_detail = transport_warning or "Bot is running, but no active WeChat connection was detected"
+        else:
+            wechat_status = "warning"
+            wechat_detail = transport_warning or "Bot is stopped, so WeChat connection is not active"
+
+        db_status = "warning"
+        db_detail = "Database connection has not been initialized"
+        memory_manager = None
+        if self.bot and hasattr(self.bot, "memory"):
+            memory_manager = getattr(self.bot, "memory", None)
+        elif self.memory_manager is not None:
+            memory_manager = self.memory_manager
+        if memory_manager is not None:
+            db_path = str(getattr(memory_manager, "db_path", "") or "")
+            has_connection = getattr(memory_manager, "_conn", None) is not None
+            if has_connection:
+                db_status = "healthy"
+                db_detail = db_path or "Verified active SQLite connection"
+            elif db_path:
+                db_detail = f"Database path configured, but no active connection: {db_path}"
+
+        checks = {
+            "ai": {
+                "status": ai_status,
+                "detail": ai_detail,
+            },
+            "wechat": {
+                "status": wechat_status,
+                "detail": wechat_detail,
+            },
+            "database": {
+                "status": db_status,
+                "detail": db_detail,
+            },
+        }
+        for item in checks.values():
+            item["level"] = _health_level_from_status(item.get("status", ""))
+            item["message"] = item.get("detail", "")
+        return checks
+
         ai_status = "unknown"
         ai_detail = "未检测到 AI 运行时"
         ai_ready = bool(self.bot and getattr(self.bot, "ai_client", None))
@@ -675,7 +764,7 @@ class BotManager:
             db_ok = bool(db_path)
             db_detail = db_path or "内存中已创建数据库连接"
 
-        return {
+        checks = {
             "ai": {
                 "status": ai_status,
                 "detail": ai_detail,
@@ -689,6 +778,76 @@ class BotManager:
                 "detail": db_detail,
             },
         }
+        for item in checks.values():
+            item["level"] = _health_level_from_status(item.get("status", ""))
+            item["message"] = item.get("detail", "")
+        return checks
+
+    def export_metrics(self) -> str:
+        status = self.get_status()
+        metrics = status.get("system_metrics") or {}
+        health_checks = status.get("health_checks") or {}
+        startup = status.get("startup") or {}
+        config_reload = status.get("config_reload") or {}
+
+        lines = [
+            "# HELP wechat_bot_running Whether the bot is running.",
+            "# TYPE wechat_bot_running gauge",
+            f"wechat_bot_running {1 if status.get('running') else 0}",
+            "# HELP wechat_bot_paused Whether the bot is paused.",
+            "# TYPE wechat_bot_paused gauge",
+            f"wechat_bot_paused {1 if status.get('is_paused') else 0}",
+            "# HELP wechat_bot_today_replies Replies sent today.",
+            "# TYPE wechat_bot_today_replies gauge",
+            f"wechat_bot_today_replies {int(status.get('today_replies', 0) or 0)}",
+            "# HELP wechat_bot_today_tokens Tokens used today.",
+            "# TYPE wechat_bot_today_tokens gauge",
+            f"wechat_bot_today_tokens {int(status.get('today_tokens', 0) or 0)}",
+            "# HELP wechat_bot_total_replies Total replies sent.",
+            "# TYPE wechat_bot_total_replies counter",
+            f"wechat_bot_total_replies {int(status.get('total_replies', 0) or 0)}",
+            "# HELP wechat_bot_total_tokens Total tokens used.",
+            "# TYPE wechat_bot_total_tokens counter",
+            f"wechat_bot_total_tokens {int(status.get('total_tokens', 0) or 0)}",
+            "# HELP wechat_bot_cpu_percent Process CPU usage percent.",
+            "# TYPE wechat_bot_cpu_percent gauge",
+            f"wechat_bot_cpu_percent {float(metrics.get('cpu_percent', 0.0) or 0.0)}",
+            "# HELP wechat_bot_process_memory_mb Process working set memory in MB.",
+            "# TYPE wechat_bot_process_memory_mb gauge",
+            f"wechat_bot_process_memory_mb {float(metrics.get('process_memory_mb', 0.0) or 0.0)}",
+            "# HELP wechat_bot_system_memory_percent System memory usage percent.",
+            "# TYPE wechat_bot_system_memory_percent gauge",
+            f"wechat_bot_system_memory_percent {float(metrics.get('system_memory_percent', 0.0) or 0.0)}",
+            "# HELP wechat_bot_pending_tasks Pending asyncio tasks.",
+            "# TYPE wechat_bot_pending_tasks gauge",
+            f"wechat_bot_pending_tasks {int(metrics.get('pending_tasks', 0) or 0)}",
+            "# HELP wechat_bot_merge_pending_chats Chats waiting for merged replies.",
+            "# TYPE wechat_bot_merge_pending_chats gauge",
+            f"wechat_bot_merge_pending_chats {int(metrics.get('merge_pending_chats', 0) or 0)}",
+            "# HELP wechat_bot_merge_pending_messages Messages waiting for merged replies.",
+            "# TYPE wechat_bot_merge_pending_messages gauge",
+            f"wechat_bot_merge_pending_messages {int(metrics.get('merge_pending_messages', 0) or 0)}",
+            "# HELP wechat_bot_ai_latency_ms Latest AI latency in milliseconds.",
+            "# TYPE wechat_bot_ai_latency_ms gauge",
+            f"wechat_bot_ai_latency_ms {float(metrics.get('ai_latency_ms', 0.0) or 0.0)}",
+            "# HELP wechat_bot_startup_progress Startup progress percent.",
+            "# TYPE wechat_bot_startup_progress gauge",
+            f"wechat_bot_startup_progress {int(startup.get('progress', 0) or 0)}",
+            "# HELP wechat_bot_config_reload_mode Active config reload mode.",
+            "# TYPE wechat_bot_config_reload_mode gauge",
+            f"wechat_bot_config_reload_mode{{mode=\"{config_reload.get('mode', 'unknown')}\"}} 1",
+        ]
+
+        for component, check in health_checks.items():
+            lines.extend([
+                "# HELP wechat_bot_health_check Component health state.",
+                "# TYPE wechat_bot_health_check gauge",
+                (
+                    f"wechat_bot_health_check{{component=\"{component}\","
+                    f"status=\"{str(check.get('status') or 'unknown').lower()}\"}} 1"
+                ),
+            ])
+        return "\n".join(lines) + "\n"
 
     def _sample_process_cpu_percent(self) -> float:
         now_cpu = time.process_time()

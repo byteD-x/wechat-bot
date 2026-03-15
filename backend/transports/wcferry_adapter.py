@@ -4,16 +4,26 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from queue import Empty
 from typing import Any, Dict, List, Optional
 
 from .audio_transcription import transcribe_audio_file
+from .base import BaseTransport
+from ..utils.runtime_artifacts import (
+    WCFERRY_DIR,
+    chdir_temporarily,
+    ensure_runtime_directories,
+    relocate_known_root_artifacts,
+)
 
 logger = logging.getLogger(__name__)
+_VERSION_PATTERN = re.compile(rb"3\.9\.\d{1,2}\.\d{1,2}")
 
 
 class TransportUnavailableError(RuntimeError):
@@ -101,6 +111,44 @@ def _matches_version_rule(version: str, rule: str) -> bool:
     return False
 
 
+def _version_sort_key(version: str) -> tuple[int, ...]:
+    parts = []
+    for part in str(version or "").split("."):
+        try:
+            parts.append(int(part))
+        except ValueError:
+            parts.append(0)
+    return tuple(parts)
+
+
+def _extract_supported_wechat_versions(binary_path: Path) -> List[str]:
+    if not binary_path.exists():
+        return []
+
+    raw = binary_path.read_bytes()
+    matches = {
+        match.group().decode("ascii", errors="ignore")
+        for match in _VERSION_PATTERN.finditer(raw)
+    }
+    if not matches:
+        decoded = raw.decode("utf-16le", errors="ignore")
+        matches = set(re.findall(r"3\.9\.\d{1,2}\.\d{1,2}", decoded))
+    return sorted(matches, key=_version_sort_key)
+
+
+@lru_cache(maxsize=1)
+def detect_wcferry_supported_versions() -> List[str]:
+    try:
+        import wcferry
+    except ImportError:
+        return []
+
+    package_root = Path(getattr(wcferry, "__file__", "")).resolve().parent
+    if not package_root.exists():
+        return []
+    return _extract_supported_wechat_versions(package_root / "spy.dll")
+
+
 class WcfMessageItem:
     """Minimal message wrapper compatible with current bot helpers."""
 
@@ -155,7 +203,7 @@ class WcfMessageItem:
         return False
 
 
-class WcferryWeChatClient:
+class WcferryWeChatClient(BaseTransport):
     """Silent WeChat backend that mimics the wxauto methods used by the bot."""
 
     backend_name = "hook_wcferry"
@@ -163,9 +211,13 @@ class WcferryWeChatClient:
     def __init__(self, bot_cfg: Dict[str, Any], ai_client: Optional[Any] = None) -> None:
         self.bot_cfg = dict(bot_cfg or {})
         self.ai_client = ai_client
-        self.required_version = str(
-            self.bot_cfg.get("required_wechat_version") or "3.9.12.17"
+        self.configured_required_version = str(
+            self.bot_cfg.get("required_wechat_version") or ""
         ).strip()
+        self.supported_wechat_versions = detect_wcferry_supported_versions()
+        self.required_version = self.configured_required_version or ",".join(
+            self.supported_wechat_versions
+        )
         self.wechat_path = detect_wechat_path()
         self.wechat_version = detect_wechat_version(self.wechat_path)
         self.compat_mode = False
@@ -185,7 +237,10 @@ class WcferryWeChatClient:
             raise TransportUnavailableError("wcferry not installed") from exc
 
         try:
-            self._wcf = Wcf(debug=False)
+            ensure_runtime_directories()
+            with chdir_temporarily(WCFERRY_DIR):
+                self._wcf = Wcf(debug=False)
+            relocate_known_root_artifacts()
         except Exception as exc:
             raise TransportUnavailableError(str(exc)) from exc
 
@@ -203,18 +258,26 @@ class WcferryWeChatClient:
 
     def _validate_version_gate(self) -> None:
         strict = bool(self.bot_cfg.get("silent_mode_required", True))
-        if not self.required_version or not self.wechat_version:
-            return
-        if _matches_version_rule(self.wechat_version, self.required_version):
+        if not self.wechat_version:
             return
 
-        self.transport_status.warning = (
-            f"当前微信版本 {self.wechat_version} 不在建议范围 {self.required_version} 内"
-        )
-        if strict:
-            raise TransportUnavailableError(
-                f"silent mode requires WeChat {self.required_version}, current {self.wechat_version}"
+        if self.configured_required_version and not _matches_version_rule(
+            self.wechat_version,
+            self.configured_required_version,
+        ):
+            self.transport_status.warning = (
+                f"当前微信版本 {self.wechat_version} 不在配置要求范围 "
+                f"{self.configured_required_version} 内"
             )
+            if strict:
+                raise TransportUnavailableError(self.transport_status.warning)
+
+        detected_rule = ",".join(self.supported_wechat_versions)
+        if detected_rule and not _matches_version_rule(self.wechat_version, detected_rule):
+            self.transport_status.warning = (
+                f"已安装 wcferry 仅支持微信 {detected_rule}，当前为 {self.wechat_version}"
+            )
+            raise TransportUnavailableError(self.transport_status.warning)
 
     def _refresh_contact_maps(self) -> None:
         self._by_wxid: Dict[str, Dict[str, Any]] = {}
@@ -239,6 +302,7 @@ class WcferryWeChatClient:
             self._wcf.cleanup()
         except Exception:
             pass
+        relocate_known_root_artifacts()
 
     def get_transport_status(self) -> Dict[str, Any]:
         return {

@@ -3,6 +3,8 @@ from types import SimpleNamespace
 
 import pytest
 
+pytest.importorskip("aiosqlite")
+
 from backend.core.agent_runtime import AgentRuntime
 
 
@@ -16,10 +18,10 @@ class _FakeChatOpenAI:
         self.kwargs = kwargs
 
     async def ainvoke(self, messages, config=None):
-        return _FakeMessage("好的")
+        return _FakeMessage("ok")
 
     async def astream(self, messages, config=None):
-        for chunk in ("你", "好"):
+        for chunk in ("he", "llo"):
             yield _FakeMessage(chunk)
 
 
@@ -63,13 +65,13 @@ class _DummyMemory:
         self.updated_emotion = None
 
     async def get_recent_context(self, chat_id, limit):
-        return [{"role": "assistant", "content": "历史回复"}]
+        return [{"role": "assistant", "content": "history reply"}]
 
     async def get_user_profile(self, chat_id):
         return SimpleNamespace(
             wx_id=chat_id,
-            context_facts=["旧事实"],
-            personality="冷静",
+            context_facts=["old fact"],
+            personality="calm",
             relationship="unknown",
             message_count=3,
         )
@@ -92,10 +94,10 @@ class _DummyMemory:
 
 class _DummyExportRag:
     async def search(self, ai_client, chat_id, query_text):
-        return [{"text": "风格片段"}]
+        return [{"text": "style snippet"}]
 
     def build_memory_message(self, results):
-        return {"role": "system", "content": "风格片段"}
+        return {"role": "system", "content": "style snippet"}
 
 
 class _DummyVectorMemory:
@@ -103,7 +105,7 @@ class _DummyVectorMemory:
         self.inserted = []
 
     def search(self, query=None, n_results=5, filter_meta=None, query_embedding=None):
-        return [{"text": "运行记忆", "distance": 0.2}]
+        return [{"text": "runtime memory", "distance": 0.2}]
 
     def add_text(self, text, metadata, id, embedding=None):
         self.inserted.append(
@@ -114,6 +116,25 @@ class _DummyVectorMemory:
                 "embedding": embedding,
             }
         )
+
+
+class _CrossEncoderVectorMemory:
+    def search(self, query=None, n_results=5, filter_meta=None, query_embedding=None):
+        return [
+            {"text": "irrelevant chatter", "distance": 0.05},
+            {"text": "tonight release plan and rollback steps", "distance": 0.35},
+        ]
+
+
+class _FakeCrossEncoder:
+    def predict(self, pairs):
+        scores = []
+        for query, text in pairs:
+            if "release plan" in query and "release plan" in text:
+                scores.append(0.98)
+            else:
+                scores.append(0.05)
+        return scores
 
 
 def _fake_integrations(self):
@@ -141,7 +162,7 @@ async def test_agent_runtime_prepare_request_aggregates_context(monkeypatch):
             "embedding_model": "embed-model",
         },
         bot_cfg={
-            "system_prompt": "基础系统提示",
+            "system_prompt": "base prompt",
             "memory_context_limit": 5,
             "personalization_enabled": True,
             "emotion_detection_enabled": False,
@@ -152,9 +173,9 @@ async def test_agent_runtime_prepare_request_aggregates_context(monkeypatch):
     )
 
     prepared = await runtime.prepare_request(
-        event=SimpleNamespace(chat_name="张三", sender="用户", content="在吗"),
-        chat_id="friend:张三",
-        user_text="在吗",
+        event=SimpleNamespace(chat_name="Alice", sender="User", content="hello"),
+        chat_id="friend:alice",
+        user_text="hello",
         dependencies={
             "memory": _DummyMemory(),
             "export_rag": _DummyExportRag(),
@@ -162,8 +183,8 @@ async def test_agent_runtime_prepare_request_aggregates_context(monkeypatch):
         },
     )
 
-    assert "基础系统提示" in prepared.system_prompt
-    assert any(item["content"] == "风格片段" for item in prepared.memory_context)
+    assert "base prompt" in prepared.system_prompt
+    assert any(item["content"] == "style snippet" for item in prepared.memory_context)
     assert any(item["content"].startswith("Relevant past memories") for item in prepared.memory_context)
     assert len(prepared.prompt_messages) >= 3
 
@@ -212,9 +233,9 @@ async def test_agent_runtime_finalize_request_persists_messages(monkeypatch):
         agent_cfg={"enabled": True},
     )
     prepared = await runtime.prepare_request(
-        event=SimpleNamespace(chat_name="李四", sender="用户", content="你好"),
-        chat_id="friend:李四",
-        user_text="你好",
+        event=SimpleNamespace(chat_name="Bob", sender="User", content="hi"),
+        chat_id="friend:bob",
+        user_text="hi",
         dependencies={
             "memory": memory,
             "export_rag": None,
@@ -224,13 +245,54 @@ async def test_agent_runtime_finalize_request_persists_messages(monkeypatch):
 
     await runtime.finalize_request(
         prepared,
-        "收到",
+        "received",
         {"memory": memory, "export_rag": None, "vector_memory": vector_memory},
     )
     await asyncio.sleep(0)
     await runtime.close()
 
-    assert memory.saved_messages[0][0] == "friend:李四"
+    assert memory.saved_messages[0][0] == "friend:bob"
     saved_roles = [item["role"] for item in memory.saved_messages[0][1]]
     assert saved_roles == ["user", "assistant"]
     assert len(vector_memory.inserted) == 2
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_uses_cross_encoder_reranker_when_available(monkeypatch):
+    monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
+    monkeypatch.setattr(
+        AgentRuntime,
+        "_build_cross_encoder_reranker",
+        lambda self: _FakeCrossEncoder(),
+    )
+
+    runtime = AgentRuntime(
+        settings={
+            "base_url": "https://example.com/v1",
+            "api_key": "sk-test",
+            "model": "test-model",
+            "embedding_model": "embed-model",
+        },
+        bot_cfg={
+            "rag_enabled": True,
+            "emotion_detection_enabled": False,
+        },
+        agent_cfg={
+            "enabled": True,
+            "retriever_top_k": 1,
+            "retriever_rerank_mode": "cross_encoder",
+            "retriever_cross_encoder_model": "./models/bge-reranker-base",
+        },
+    )
+
+    result = await runtime._search_runtime_memory(
+        "friend:alice",
+        "release plan",
+        _CrossEncoderVectorMemory(),
+    )
+
+    assert result is not None
+    assert "release plan" in result["trace_snippets"][0]
+    status = runtime.get_status()
+    assert status["retriever_stats"]["rerank_backend"] == "cross_encoder"
+    assert status["retriever_stats"]["cross_encoder_configured"] is True

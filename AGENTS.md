@@ -1,133 +1,129 @@
-# 仓库指南
+# 仓库协作指南
 
-## 项目结构与模块组织
-- `run.py`: 统一入口点（启动/检查/设置/Web服务）。
-- `requirements.txt`: Python 运行时依赖。
-- `package.json`: Electron/Node.js 依赖。
-- `backend/`: 主应用程序包 (Python)。
-  - `bot.py`: 主 `WeChatBot` 类，控制生命周期。
-  - `main.py`: 异步入口点，初始化机器人。
-  - `config.py`: 运行时配置逻辑。
-  - `api.py`: 基于 Quart 的 Web API 服务器。
-  - `core/`: 核心业务逻辑（AI 客户端、记忆、工厂模式、情感分析）。
-  - `handlers/`: 消息处理程序（过滤器、发送器、转换器）。
-  - `utils/`: 通用工具（日志、配置加载器、常用工具）。
-- `src/`: Electron 前端源码。
-  - `main/`: Electron 主进程。
-  - `renderer/`: Web 界面 (HTML/JS/CSS)。
-- `tools/`: 独立工具。
-  - `chat_exporter/`: CSV 导出逻辑（支持直接读取数据库）。
-  - `prompt_gen/`: 个性化提示生成器。
-  - `wx_db/`: 微信数据库接口（解密与解析）。
-- `data/`: 数据目录（API 密钥、数据库 - gitignored）。
-- `scripts/`: 维护脚本（安装向导、检查）。
-- `wxauto_logs/`: 运行时日志。
+本文件面向自动化 Agent 与人工协作者，要求所有改动都遵循“小步、可验证、可回滚”。
 
-## 构建、测试与开发命令
-- `pip install -r requirements.txt`: 安装 Python 依赖。
-- `npm install`: 安装 Electron 依赖。
-- `npm run dev`: 在开发模式下启动桌面客户端（及后端）。
-- `python run.py start`: 运行机器人（无头模式）。
-- `python run.py web`: 运行 Web API 服务器。
-- `python run.py check`: 检查环境和依赖。
-- `python run.py setup`: 运行配置向导。
-- `python -m unittest discover -s tests`: 运行单元测试。
-- `.\build.bat`: 将项目构建为 Windows 可执行安装程序 (dist/)。
-- 应用程序仅针对 Windows + WeChat PC 3.9.x (不支持 4.x)。请保持客户端登录并运行。
-- `backend/config.py` 的更改会被轮询并热重载；逻辑更改需要重启。
+## 1. 项目画像
+- 项目名称：`wechat-ai-assistant`
+- 运行平台：Windows 10 / 11
+- 主要技术栈：
+  - Python 3.9+：`Quart`、`httpx`、`aiosqlite`、`LangChain`、`LangGraph`、`ChromaDB`
+  - Node.js 16+：`Electron`、`electron-builder`
+- 关键入口：
+  - `run.py`
+  - `backend/`
+  - `src/`
+  - `tests/`
+- 当前主要后端能力：
+  - `BaseTransport` 传输层抽象，内置 `hook_wcferry` 与 `compat_ui`
+  - LangGraph 运行时、SQLite 记忆、运行期 RAG、导出语料 RAG
+  - `/api/status` 结构化状态与 `/api/metrics` 指标导出
+  - 配置热重载优先使用 `watchdog`，缺失依赖时回退轮询
 
-## 项目运行逻辑图
-```mermaid
-flowchart TD
-    A[用户启动] --> B{入口}
-    B -->|桌面端| C[Electron 主进程]
-    B -->|命令行| D[run.py]
+## 2. 目录与职责
+- `backend/`
+  - `bot.py`：机器人主循环与消息处理
+  - `api.py`：Quart Web API
+  - `core/`：AI 客户端、记忆、RAG、情感分析、LangGraph 运行时
+  - `transports/`：传输层抽象与具体实现
+  - `utils/`：日志、配置加载、配置监听、IPC
+- `src/`
+  - `main/`：Electron 主进程
+  - `renderer/`：前端页面与状态管理
+- `tests/`：`pytest` 为主的回归测试
+- `docs/`：面向用户和维护者的说明文档
 
-    C --> C1[启动 Splash 与主窗口]
-    C --> C2[并行启动后端 web]
-    C2 -->|dev| C3[python run.py web --port]
-    C2 -->|prod| C4[wechat-bot-backend.exe web --port]
-    C --> C5[渲染进程初始化 App]
-    C5 --> C6[ApiService 连接后端]
-    C6 --> C7[/api/status 刷新状态]
-    C5 --> C8[用户操作按钮]
-    C8 --> C9[/api/start /api/stop /api/pause /api/resume]
+## 3. 协作原则
+- 先读后改：先确认现有实现、配置来源和调用链，再动代码或文档。
+- 单次只解决一个主题：不要把功能、重构、格式化混在一起。
+- 不猜测成功：所有“已完成”都必须有命令输出或测试结果支撑。
+- 优先复用：已有工具函数、配置结构、状态字段优先复用，不重复造轮子。
+- 改动影响使用方式、配置项或接口时，必须同步更新文档。
 
-    D -->|start| D1[backend.main: main()]
-    D1 --> D2[WeChatBot.run()]
-    D -->|web| D3[backend.api: run_server()]
-    D -->|setup/check| D4[scripts.setup_wizard / scripts.check]
+## 4. 安全与操作边界
+- 禁止输出或提交真实 `API Key`、聊天导出、日志中的敏感内容。
+- 禁止执行来源不明的下载脚本或破坏性命令。
+- 未经明确授权，不做下列操作：
+  - 删除用户数据
+  - 覆盖生产配置
+  - 强推分支
+  - 回滚不属于当前任务的改动
+- 涉及用户数据、权限或支付链路时，先写 1 到 3 条威胁模型，再改代码。
 
-    D3 --> E1[BotManager 单例]
-    E1 --> E2[管理 WeChatBot 生命周期]
-    E2 --> D2
+## 5. 开发与验证命令
+- 安装依赖：
+  - `pip install -r requirements.txt`
+  - `npm install`
+- 本地运行：
+  - `npm run dev`
+  - `python run.py start`
+  - `python run.py web`
+  - `python run.py check`
+- 推荐验证命令，按改动范围选择，不要求每次全跑：
+  - Python 语法检查：
+    - `python -m py_compile backend\core\agent_runtime.py backend\bot.py backend\bot_manager.py backend\api.py`
+  - 重点测试：
+    - `python -m pytest tests\test_agent_runtime.py -q`
+    - `python -m pytest tests\test_optimization_tasks.py -q`
+    - `python -m pytest tests\test_runtime_observability.py -q`
+  - 桌面端构建：
+    - `npm run build`
 
-    D2 --> F1[wxauto 初始化]
-    F1 --> F2[主循环轮询消息]
-    F2 --> F3[配置热重载]
-    F2 --> F4[IPC 命令检查]
-    F2 --> F5[消息归一化与过滤]
-    F5 --> F6[AI 客户端生成回复]
-    F6 --> F7[发送消息并更新统计]
-```
+说明：
+- 若环境缺少 `aiosqlite`、`quart` 或可选的 `sentence-transformers`，要在结论里明确说明影响范围。
+- 不要声称验证通过，除非命令已经实际执行。
 
-## 配置说明
-- `api`: 支持 `presets`（预设）+ `active_preset`（激活预设）；包含 `base_url`、`model`、`api_key`、超时、重试、`temperature`、`max_tokens`/`max_completion_tokens` 以及可选的 `reasoning_effort`。
-- `bot`: 回复后缀、表情策略 (`wechat`/`strip`/`keep`/`mixed`)、上下文/历史限制、轮询/延迟设置、保活/重连、群回复规则（`self_name`、`group_reply_only_when_at`、白名单、忽略列表）以及发送回退。
-- `bot` (个性化): `personalization_enabled`、`profile_update_frequency`、`remember_facts_enabled`、`max_context_facts`、`profile_inject_in_prompt`。
-- `bot` (情感): `emotion_detection_enabled`、`emotion_detection_mode` (keywords/ai)、`emotion_inject_in_prompt`、`emotion_log_enabled`。
-- `logging`: 级别/文件/轮换（默认 `wxauto_logs/bot.log`）。
+## 6. 配置与运行时约束
+- 主要配置来源：
+  - `backend/config.py`
+  - `data/config_override.json`
+  - `data/api_keys.py`
+  - `prompt_overrides.py`
+- 热重载相关字段：
+  - `bot.config_reload_mode`: `auto` / `polling` / `watchdog`
+  - `bot.config_reload_debounce_ms`
+- 运行期 RAG 精排相关字段：
+  - `agent.retriever_rerank_mode`: `lightweight` / `auto` / `cross_encoder`
+  - `agent.retriever_cross_encoder_model`
+  - `agent.retriever_cross_encoder_device`
+- 本地 `Cross-Encoder` 只支持显式配置本地模型目录；项目不会自动联网下载模型。
 
-## 已实现功能
-- 通过 `wxauto` 集成 WeChat PC 3.9.x，具有轮询循环和重连退避机制。
-- 私聊/群聊消息规范化，@-mention 检测，以及群上下文中可选的发送者前缀。
-- 仅处理文本；非文本消息基于消息类型标记被忽略。
-- 每个聊天的内存对话历史记录，具有最大轮数、TTL 和总聊天上限。
-- 多预设 API 探测/选择，具有占位符密钥检测和可选的空密钥允许。
-- `config.py`（以及可选的 `ai_client.py`）的热重载，支持运行时设置更新。
-- 表情清理策略和可配置的回复后缀模板。
-- 安全节流：随机拟人延迟和最小回复间隔。
-- 过滤器：忽略官方/服务号、命名聊天、关键词、静音过滤的聊天，以及可选的白名单群组。
-- **用户画像管理**：昵称、关系、性格和上下文事实存储。
-- **情感检测**：基于关键词和基于 AI 的情感分析，具有可配置模式。
-- **拟人化**：时间感知提示、对话风格适应、情感趋势分析和关系演进。
-- **个性化提示生成**：分析导出的聊天记录，生成模仿用户对话风格的每位联系人系统提示。
-- **Web API & 仪表板**：通过 HTTP/Electron 监控状态、发送消息和管理配置。前端采用 `StateManager` + `EventBus` 架构实现响应式 UI。
-- **关闭行为**：关闭弹窗可选择最小化或彻底关闭，并支持记住选择与重置。
+## 7. 文档同步要求
+- 改动以下内容时，至少同步 `README.md`、`docs/USER_GUIDE.md`、`docs/HIGHLIGHTS.md` 中的对应位置：
+  - 新增或修改配置项
+  - 新增或修改 API 接口
+  - 新增运行模式、监控指标或诊断字段
+  - 重要架构变化，如传输层抽象、RAG 精排策略
+- 若版本发布行为或安装产物变化，还要同步 `RELEASE_UPDATES.md`。
+- 若项目亮点或案例表述变化明显，还要同步 `STAR_REPO_STAR.md`。
 
-## 性能优化
-- `EmotionResult` 使用 `@dataclass(slots=True)` 以减少内存占用。
-- token 估算使用 `@lru_cache(maxsize=1024)` 避免冗余计算。
-- 使用 `frozenset` 或 `tuple` 进行高效成员检查（情感关键词、消息类型标记、允许的角色）。
-- `MemoryManager` 支持上下文管理器，用于自动资源清理；使用 `threading.RLock` 和细粒度锁保护关键状态，确保并发安全。
-- SQL 查询优化：历史消息查询使用主键索引排序 (`ORDER BY id DESC`) 以提升性能。
-- 使用 `asyncio.to_thread` 将 SQLite 数据库操作和文件 I/O 等 CPU 密集型/阻塞型任务分流到线程池，避免阻塞 Quart/AsyncIO 主事件循环。
-- CSV 导出器 (`csv_exporter.py`) 采用逐行写入模式，极大降低大规模数据导出时的内存消耗。
-- 情感分析模块优化：预编译正则表达式，优化关键词匹配逻辑。
-- Electron 客户端采用异步并行启动后端模式，配合 `ready-to-show` 事件机制，彻底解决启动白屏问题。
+## 8. 提交与评审
+- 提交信息使用 Conventional Commits：
+  - `feat`
+  - `fix`
+  - `docs`
+  - `refactor`
+  - `test`
+  - `chore`
+  - `build`
+  - `ci`
+- 提交说明至少包含：
+  - What：改了什么
+  - Why：为什么改
+  - How to verify：怎么验证，附命令和期望结果
+- 评审优先级：
+  - 行为回归
+  - 配置兼容性
+  - 错误处理与日志安全
+  - 测试覆盖是否足够
 
-## 数据工作流
-1. **导出聊天记录**：使用内置 CLI (`python -m tools.chat_exporter.cli`) 将微信聊天导出为 CSV 格式（支持直接 DB 解密）。
-2. **组织文件**：将导出文件放置在 `chat_exports/聊天记录/<ContactName(wxid)>/<ContactName>.csv`（导出器自动处理）。
-3. **生成提示**：运行 `python -m tools.prompt_gen.generator` 分析聊天并生成个性化提示。
-4. **审查输出**：检查 `chat_exports/top10_prompts_summary.json` 中的生成提示。
-5. **集成**：将提示复制到 `config.py` 的 `system_prompt_overrides` 或使用 `prompt_overrides.py`。
-
-## 代码风格与命名约定
-- Python，4 空格缩进；保持类型提示和文档字符串与现有模块一致。
-- 命名：函数/变量使用 `snake_case`，类使用 `CapWords`，常量使用 `UPPER_SNAKE_CASE`。
-- 没有配置格式化程序或 linter；保持更改小且可读。
-
-## 测试指南
-- 单元测试位于 `tests/` 中，使用标准库 `unittest` 运行器。
-- 运行测试：`python -m unittest discover -s tests`。
-
-## 提交与 Pull Request 指南
-- 此 checkout 没有 `.git` 历史记录，因此没有既定的提交消息约定。
-- 使用简短的命令式主题（例如，“Add retry backoff”），并在正文中解释配置更改。
-- PR 应包括：摘要、链接的问题（如果有）、如何验证更改以及任何配置或日志影响。
-
-## 安全与配置提示
-- `config.py` 包含 API 密钥；在版本控制中保留占位符，避免共享真实机密。
-- `wxauto_logs/` 中的日志可能包含消息内容；将其视为敏感信息，不要提交。
-- `chat_exports/` 包含敏感聊天记录；保持 gitignore 并不共享。
+## 9. 执行清单
+- 开始前：
+  - 明确目标文件、影响范围和回滚点
+  - 检查工作区是否已有用户未提交改动
+- 修改中：
+  - 每完成一块就做最小验证
+  - 发现和任务冲突的陌生改动时先停下确认
+- 结束前：
+  - 汇总改动文件
+  - 列出已执行验证命令与结果
+  - 说明剩余风险或环境限制

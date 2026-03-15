@@ -2,6 +2,10 @@
 import pytest
 from unittest.mock import MagicMock
 import sys
+import os
+
+os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
+sys.dont_write_bytecode = True
 
 # Mock wxauto module before it is imported by any code
 sys.modules["wxauto"] = MagicMock()

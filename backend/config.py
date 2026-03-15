@@ -22,6 +22,7 @@
 """
 
 from backend.utils.config import is_placeholder_key
+from backend.wechat_versions import OFFICIAL_SUPPORTED_WECHAT_VERSION
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -310,10 +311,10 @@ CONFIG = {
         "reply_quote_max_chars": 120,                 # 文本引用最大长度，0=不引用
         "reply_quote_timeout_sec": 5.0,               # 微信原生引用超时（增加以提高稳定性）
         "reply_quote_fallback_to_text": True,         # 原生引用失败时降级为文本引用
-        "transport_backend": "hook_wcferry",          # 主后端：hook_wcferry / compat_ui
-        "compat_ui_enabled": False,                   # 是否允许显式降级到 wxauto UI 模式
+        "transport_backend": "hook_wcferry",          # 主后端：hook_wcferry；compat_ui 仅保留为遗留兼容链路
+        "compat_ui_enabled": False,                   # 是否允许显式降级到 wxauto UI 兼容模式
         "silent_mode_required": False,                # 是否要求严格静默模式
-        "required_wechat_version": "",               # 可选版本门禁；支持精确值、前缀*、逗号分隔
+        "required_wechat_version": OFFICIAL_SUPPORTED_WECHAT_VERSION,  # 官方支持版本基线
         "capability_strict": True,                    # 能力缺失时是否拒绝启动
 
         # ┌─── 语音处理 ───────────────────────────────────────────────────────┐
@@ -371,6 +372,8 @@ CONFIG = {
 
         # ┌─── 热更新与重连 ───────────────────────────────────────────────────┐
         "config_reload_sec": 2.0,                     # 配置热重载检查间隔（秒）
+        "config_reload_mode": "auto",                # auto=优先 watchdog 事件监听，缺失时回退轮询
+        "config_reload_debounce_ms": 500,             # 文件事件防抖窗口（毫秒）
         "reload_ai_client_on_change": True,           # 配置变更时重载 AI 客户端
         "reload_ai_client_module": False,             # 重载 ai_client.py 模块
         "keepalive_idle_sec": 180.0,                  # 空闲超时触发重连阈值（秒）
@@ -462,6 +465,9 @@ CONFIG = {
         "history_strategy": "sqlite_memory",          # 历史策略标记
         "retriever_top_k": 3,                         # 运行期检索 top-k
         "retriever_score_threshold": 1.0,             # 运行期检索距离阈值
+        "retriever_rerank_mode": "lightweight",       # lightweight=轻量重排, auto=检测本地 Cross-Encoder, cross_encoder=优先本地 Cross-Encoder
+        "retriever_cross_encoder_model": "",          # 本地 Cross-Encoder 模型目录；仅加载本地路径，不会自动联网下载
+        "retriever_cross_encoder_device": "",         # 可选推理设备，例如 cpu / cuda
         "embedding_cache_ttl_sec": 300.0,            # Embedding 缓存 TTL（秒）
         "background_fact_extraction_enabled": True,   # 事实提取后台执行
         "emotion_fast_path_enabled": True,            # 优先走关键词情绪快速路径
