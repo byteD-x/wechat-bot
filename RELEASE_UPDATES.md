@@ -134,3 +134,48 @@ npm run publish:github
 
 - `.venv\Scripts\python.exe -m pytest tests\test_api.py -q`
   - 结果：`16 passed`
+
+## 2026-03-17 桌面端主链路与运行时配置体系修复
+
+本节可直接作为本轮发布说明或 PR 摘要使用，重点覆盖“用户可见变化 / 架构变化 / 验证方式”。
+
+### 用户可见变化
+
+- 桌面端恢复可点击状态，导航、窗口按钮和仪表盘主操作不再因前端初始化异常整体失效。
+- 仪表盘、消息中心、系统日志、配置中心完成清理与重接线，页面文本乱码已移除，主流程交互恢复。
+- 设置页支持真实配置加载、保存反馈、提示词预览、更新检查、预设编辑、预设连接测试和 Ollama 模型列表刷新。
+- 启动机器人后的状态反馈更完整，前端可显示运行时预设、配置变更数量、运行时热应用反馈和更新下载状态。
+- 语音消息转文字链路补齐失败兜底，转写失败时不会静默吞掉，界面和日志能反映真实结果。
+- 回复发送链路修复“前端显示成功但微信未实际发出”的假阳性问题，发送失败会暴露真实错误而不是误记成功。
+- 项目文档新增系统级链路说明，可直接查看启动、消息处理、语音转文字、RAG、配置热更新和状态诊断的实现路径。
+
+### 架构变化
+
+- 新增中心化配置快照服务 `backend/core/config_service.py`，运行时统一从快照读取配置，减少多来源配置分散读取。
+- 新增配置审计模块 `backend/core/config_audit.py`，为 `/api/config/audit`、设置页变更提示和运行时生效说明提供统一数据来源。
+- `backend/api.py`、`backend/bot_manager.py` 与 `backend/bot.py` 之间补齐配置保存、热应用、状态广播和运行时反馈闭环。
+- `AgentRuntime` 补强 `reasoning_content` 回退、情绪分析降级、群聊发送者注入和画像刷新频率控制，减少 OpenAI-compatible 差异导致的空回复或脏状态。
+- `sender.py`、`bot.py` 与音频转写模块统一了发送成功判定、错误上抛和转写结果解析，避免底层异常被误吞。
+- `WcferryWeChatClient` 补充限时 best-effort 清理与版本校验相关修复，减少 stop/reconnect 时的拖尾超时和运行时产物污染。
+- Electron 主进程、preload 和 renderer 重新梳理初始化链路，增加渲染日志回传、启动页收口和页面容错，避免单页脚本异常拖死整窗口。
+- 运行产物统一收口到 `data/runtime/`，并通过 `.gitignore` 忽略 `data/runtime/` 与 `*.log.*`，降低测试缓存和日志误入仓库的概率。
+
+### 验证方式
+
+本轮验证以项目 `.venv` 为准，已实际执行：
+
+- `E:\Project\wechat-chat\.venv\Scripts\python.exe -m pytest -q`
+  - 结果：`99 passed, 3 warnings`
+- `E:\Project\wechat-chat\.venv\Scripts\python.exe -m pytest tests\test_api.py -q`
+  - 结果：通过，覆盖 API 状态、配置保存、提示词预览与运行时反馈链路
+- `E:\Project\wechat-chat\.venv\Scripts\python.exe -m pytest tests\test_bot.py tests\test_handlers.py tests\test_agent_runtime.py tests\test_optimization_tasks.py -q`
+  - 结果：通过，覆盖 Bot 主链、发送判定、语音链路、运行时降级与 WCFerry 清理逻辑
+- `git show -s --format=%h%n%s%n%b HEAD`
+  - 结果：当前提交说明已按模块列出主要改动
+
+建议发布前再做一次人工验收：
+
+1. 以管理员身份启动 `.\dev.bat`。
+2. 在桌面端验证导航切换、设置保存、提示词预览、更新检查。
+3. 点击“启动机器人”，确认状态变更和日志输出正常。
+4. 用真实微信发送文本、语音、带 emoji 的消息各一条，确认机器人真实回复到微信客户端。
