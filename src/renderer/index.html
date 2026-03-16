@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 
 <head>
@@ -492,6 +492,12 @@
                     </div>
                 </div>
 
+                <div class="config-save-feedback" id="config-save-feedback" hidden>
+                    <div class="config-save-feedback-summary" id="config-save-feedback-summary">本次保存结果将在这里显示</div>
+                    <div class="config-save-feedback-meta" id="config-save-feedback-meta"></div>
+                    <div class="config-save-feedback-groups" id="config-save-feedback-groups"></div>
+                </div>
+
                 <div class="settings-container">
                     <!-- 当前配置 Hero (由 JS 动态渲染) -->
                     <div id="current-config-hero">
@@ -685,30 +691,6 @@
                                 <input type="number" id="setting-memory-cleanup-interval-sec" min="0" step="0.1">
                             </div>
                             <div class="form-group">
-                                <label class="form-checkbox" style="display: flex; align-items: center; gap: 12px; cursor: pointer;">
-                                    <input type="checkbox" id="setting-memory-seed-on-first-reply">
-                                    <span class="form-checkbox-label">首次回复抓取历史</span>
-                                </label>
-                            </div>
-                            <div class="form-group">
-                                <label class="form-label">首次抓取条数</label>
-                                <input type="number" id="setting-memory-seed-limit" min="0" step="1">
-                            </div>
-                            <div class="form-group">
-                                <label class="form-label">追加抓取次数</label>
-                                <input type="number" id="setting-memory-seed-load-more" min="0" step="1">
-                            </div>
-                            <div class="form-group">
-                                <label class="form-label">追加抓取间隔（秒）</label>
-                                <input type="number" id="setting-memory-seed-load-more-interval-sec" min="0" step="0.1">
-                            </div>
-                            <div class="form-group">
-                                <label class="form-checkbox" style="display: flex; align-items: center; gap: 12px; cursor: pointer;">
-                                    <input type="checkbox" id="setting-memory-seed-group">
-                                    <span class="form-checkbox-label">群聊也抓取历史</span>
-                                </label>
-                            </div>
-                            <div class="form-group">
                                 <label class="form-label">上下文轮数</label>
                                 <input type="number" id="setting-context-rounds" min="0" step="1">
                             </div>
@@ -724,20 +706,12 @@
                                 <label class="form-label">会话过期时间（秒，留空不过期）</label>
                                 <input type="number" id="setting-history-ttl-sec" min="0" step="1">
                             </div>
-                            <div class="form-group">
-                                <label class="form-label">历史日志间隔（秒）</label>
-                                <input type="number" id="setting-history-log-interval-sec" min="0" step="1">
-                            </div>
                         </div>
                     </div>
 
                     <div class="settings-card">
                         <h2 class="settings-card-title">轮询与延迟</h2>
                         <div class="settings-grid">
-                            <div class="form-group">
-                                <label class="form-label">轮询间隔（秒）</label>
-                                <input type="number" id="setting-poll-interval-sec" min="0" step="0.01">
-                            </div>
                             <div class="form-group">
                                 <label class="form-label">轮询最短间隔（秒）</label>
                                 <input type="number" id="setting-poll-interval-min-sec" min="0" step="0.01">
@@ -833,6 +807,31 @@
                             <div class="form-group">
                                 <label class="form-label">单段最大长度（字符）</label>
                                 <input type="number" id="setting-stream-chunk-max-chars" min="0" step="1">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="settings-card">
+                        <h2 class="settings-card-title">微信连接与传输</h2>
+                        <div class="settings-grid">
+                            <div class="form-group">
+                                <label class="form-label">微信接入方式</label>
+                                <select class="form-input" id="setting-transport-backend">
+                                    <option value="hook_wcferry">hook_wcferry</option>
+                                </select>
+                                <span class="form-hint">当前版本仅支持 hook_wcferry；保存后若机器人正在运行，会自动重连微信传输层。</span>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">目标微信版本</label>
+                                <input type="text" id="setting-required-wechat-version" placeholder="例如：3.9.12.51">
+                                <span class="form-hint">用于校验当前微信客户端版本，建议保持为官方支持版本。</span>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-checkbox" style="display: flex; align-items: center; gap: 12px; cursor: pointer;">
+                                    <input type="checkbox" id="setting-silent-mode-required">
+                                    <span class="form-checkbox-label">要求严格静默模式</span>
+                                </label>
+                                <span class="form-hint">开启后会更严格地校验静默运行条件，不满足时会提示连接风险。</span>
                             </div>
                         </div>
                     </div>
@@ -969,7 +968,7 @@
                             <div class="form-group full-width">
                                 <label class="form-label">单独 embedding 模型</label>
                                 <input type="text" id="setting-vector-memory-embedding-model" placeholder="留空则跟随当前预设；Ollama 可填 nomic-embed-text">
-                                <div class="form-help-text" id="setting-vector-memory-help">关闭总开关后，运行期 RAG 和导出聊天记录 RAG 都不会建立向量索引或执行召回。</div>
+                                <div class="form-help-text" id="vector-memory-help">关闭总开关后，运行期 RAG 和导出聊天记录 RAG 都不会建立向量索引或执行召回。</div>
                             </div>
                             <div class="form-group">
                                 <label class="form-checkbox" style="display: flex; align-items: center; gap: 12px; cursor: pointer;">
@@ -997,7 +996,7 @@
                             </div>
                             <div class="form-group full-width">
                                 <label class="form-label">索引状态</label>
-                                <div id="setting-export-rag-status" class="form-help-text">状态：未加载</div>
+                                <div id="export-rag-status" class="form-help-text">状态：未加载</div>
                             </div>
                         </div>
                     </div>
@@ -1123,10 +1122,6 @@
                                 <input type="text" id="setting-agent-graph-mode" placeholder="state_graph">
                             </div>
                             <div class="form-group">
-                                <label class="form-label">历史策略</label>
-                                <input type="text" id="setting-agent-history-strategy" placeholder="sqlite_memory">
-                            </div>
-                            <div class="form-group">
                                 <label class="form-label">Retriever Top-K</label>
                                 <input type="number" id="setting-agent-retriever-top-k" min="1" step="1">
                             </div>
@@ -1170,7 +1165,7 @@
                             </div>
                             <div class="form-group">
                                 <label class="form-label">LangSmith Key 状态</label>
-                                <input type="text" id="setting-agent-langsmith-key-status" disabled placeholder="未配置">
+                                <input type="text" id="agent-langsmith-key-status" disabled placeholder="未配置">
                             </div>
                         </div>
                     </div>

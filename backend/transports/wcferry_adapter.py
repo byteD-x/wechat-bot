@@ -7,6 +7,9 @@ import os
 import re
 import shutil
 import subprocess
+import threading
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -24,6 +27,10 @@ from ..utils.runtime_artifacts import (
 
 logger = logging.getLogger(__name__)
 _VERSION_PATTERN = re.compile(rb"3\.9\.\d{1,2}\.\d{1,2}")
+_WCFERRY_MSG_DIAL_TIMEOUT_SEC = 12.0
+_WCFERRY_MSG_DIAL_RETRY_INTERVAL_SEC = 0.6
+_WCFERRY_ENABLE_RECV_TIMEOUT_SEC = 18.0
+_WCFERRY_ENABLE_RECV_RETRY_INTERVAL_SEC = 1.0
 
 
 class TransportUnavailableError(RuntimeError):
@@ -36,7 +43,6 @@ class TransportStatus:
     silent_mode: bool
     wechat_version: str = ""
     required_version: str = ""
-    compat_mode: bool = False
     supports_native_quote: bool = False
     supports_voice_transcription: bool = True
     status: str = "unknown"
@@ -58,6 +64,66 @@ def _powershell(command: str) -> str:
         check=False,
     )
     return (completed.stdout or "").strip()
+
+
+def _is_windows_admin() -> bool:
+    if os.name != "nt":
+        return False
+    try:
+        import ctypes  # type: ignore
+
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
+@contextmanager
+def _prevent_os_exit() -> Any:
+    """
+    wcferry uses os._exit() on some init/RPC failures, which would kill the entire backend process.
+    Temporarily override it so we can surface a readable error and keep the API server alive.
+    """
+
+    original = getattr(os, "_exit", None)
+
+    def _raise(code: int) -> None:
+        raise RuntimeError(f"os._exit({code}) called by wcferry")
+
+    try:
+        if callable(original):
+            os._exit = _raise  # type: ignore[assignment]
+        yield
+    finally:
+        if callable(original):
+            os._exit = original  # type: ignore[assignment]
+
+
+def _best_effort_wcf_call(label: str, func, timeout_sec: float = 2.0) -> bool:
+    if not callable(func):
+        return False
+
+    outcome: Dict[str, Optional[BaseException]] = {"error": None}
+
+    def _runner() -> None:
+        try:
+            func()
+        except BaseException as exc:  # pragma: no cover - defensive path
+            outcome["error"] = exc
+
+    thread = threading.Thread(
+        target=_runner,
+        name=f"WcferryCleanup:{label}",
+        daemon=True,
+    )
+    thread.start()
+    thread.join(max(float(timeout_sec or 0.0), 0.01))
+    if thread.is_alive():
+        logger.warning("wcferry cleanup step timed out: %s", label)
+        return False
+    if outcome["error"] is not None:
+        logger.debug("wcferry cleanup step failed: %s | %s", label, outcome["error"])
+        return False
+    return True
 
 
 def detect_wechat_path() -> str:
@@ -83,6 +149,17 @@ def detect_wechat_path() -> str:
     for candidate in candidates:
         if candidate and os.path.exists(candidate):
             return os.path.abspath(candidate)
+
+    # Fallback: detect from running process (helps when installed in a non-standard location).
+    try:
+        proc_path = _powershell(
+            "(Get-Process WeChat,Weixin -ErrorAction SilentlyContinue | "
+            "Select-Object -First 1 -ExpandProperty Path)"
+        )
+        if proc_path and os.path.exists(proc_path):
+            return os.path.abspath(proc_path)
+    except Exception:
+        pass
     return ""
 
 
@@ -220,7 +297,6 @@ class WcferryWeChatClient(BaseTransport):
         )
         self.wechat_path = detect_wechat_path()
         self.wechat_version = detect_wechat_version(self.wechat_path)
-        self.compat_mode = False
         self.transport_status = TransportStatus(
             backend=self.backend_name,
             silent_mode=True,
@@ -237,24 +313,168 @@ class WcferryWeChatClient(BaseTransport):
             raise TransportUnavailableError("wcferry not installed") from exc
 
         try:
+            if os.name == "nt" and not _is_windows_admin():
+                raise TransportUnavailableError(
+                    "wcferry 注入需要管理员权限：请用“以管理员身份运行”启动本项目（Electron/后端），并确保微信已启动且已登录。"
+                )
             ensure_runtime_directories()
             with chdir_temporarily(WCFERRY_DIR):
-                self._wcf = Wcf(debug=False)
+                # Use non-blocking mode and handle login wait ourselves so backend startup
+                # won't hang indefinitely if WeChat isn't ready yet.
+                with _prevent_os_exit():
+                    self._wcf = Wcf(debug=False, block=False)
             relocate_known_root_artifacts()
         except Exception as exc:
             raise TransportUnavailableError(str(exc)) from exc
 
-        if not self._wcf.is_login():
-            raise TransportUnavailableError("wechat not logged in")
+        try:
+            if not self._wait_for_login(timeout_sec=18.0):
+                raise TransportUnavailableError("wechat not logged in")
 
-        self.self_wxid = self._wcf.get_self_wxid()
-        self.self_name = str(self.bot_cfg.get("self_name") or "").strip()
-        self._contacts = self._wcf.get_contacts()
-        self._refresh_contact_maps()
-        if not self._wcf.enable_receiving_msg():
-            raise TransportUnavailableError("failed to enable message receiving")
+            self._recv_ready = threading.Event()
+            self._recv_last_error = ""
 
-        self.transport_status.status = "connected"
+            self.self_wxid = self._wcf_call(
+                "get_self_wxid",
+                self._wcf.get_self_wxid,
+            )
+            self.self_name = str(self.bot_cfg.get("self_name") or "").strip()
+            self._contacts = self._wcf_call("get_contacts", self._wcf.get_contacts)
+            self._refresh_contact_maps()
+            self._enable_receiving_msg_robust()
+
+            self.transport_status.status = "connected"
+        except Exception:
+            # Best-effort cleanup; otherwise a failed init can leave stray RPC threads
+            # and block subsequent restarts (appearing as a "hang").
+            try:
+                self._wcf._is_receiving_msg = False
+            except Exception:
+                pass
+            _best_effort_wcf_call("disable_recv_msg", getattr(self._wcf, "disable_recv_msg", None))
+            _best_effort_wcf_call("cleanup", getattr(self._wcf, "cleanup", None))
+            relocate_known_root_artifacts()
+            raise
+
+    def _wait_for_login(self, timeout_sec: float = 15.0) -> bool:
+        deadline = time.time() + float(timeout_sec or 0.0)
+        while time.time() < deadline:
+            if self._wcf_call("is_login", self._wcf.is_login):
+                return True
+            time.sleep(0.6)
+        return False
+
+    def _wcf_call(self, label: str, func, *args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except SystemExit as exc:
+            # wcferry internally uses sys.exit() on some RPC errors. Never let that kill our backend process.
+            raise TransportUnavailableError(f"wcferry call exited during {label}") from exc
+
+    def _enable_receiving_msg_robust(self) -> None:
+        """
+        Enable receiving messages with a retrying dial loop.
+
+        wcferry's built-in enable_receiving_msg starts a daemon thread that dials msg_url once.
+        If the server opens the msg port slightly later, that dial can fail with ConnectionRefused,
+        killing the thread while _is_receiving_msg stays True. We implement a small, resilient
+        receive loop to make startup reliable.
+        """
+        try:
+            from wcferry import wcf_pb2
+            from wcferry.wxmsg import WxMsg
+            import pynng
+        except Exception as exc:
+            raise TransportUnavailableError("wcferry runtime unavailable") from exc
+
+        if getattr(self._wcf, "_is_receiving_msg", False):
+            # Another instance may have enabled it already; still require the msg channel to be ready.
+            if self._recv_ready.is_set():
+                return
+
+        deadline = time.time() + _WCFERRY_ENABLE_RECV_TIMEOUT_SEC
+        last_error = ""
+        rsp = None
+        while time.time() < deadline:
+            req = wcf_pb2.Request()
+            req.func = wcf_pb2.FUNC_ENABLE_RECV_TXT  # FUNC_ENABLE_RECV_TXT
+            req.flag = False
+            try:
+                rsp = self._wcf_call("enable_recv_txt", self._wcf._send_request, req)
+                if getattr(rsp, "status", 1) == 0:
+                    break
+                last_error = f"enable_recv_txt status={getattr(rsp, 'status', 'unknown')}"
+            except Exception as exc:
+                last_error = str(exc)
+            time.sleep(_WCFERRY_ENABLE_RECV_RETRY_INTERVAL_SEC)
+
+        if rsp is None or getattr(rsp, "status", 1) != 0:
+            raise TransportUnavailableError(
+                f"failed to enable message receiving: {last_error or 'timeout'}"
+            )
+
+        # Match wcferry's state flag so other API calls behave consistently.
+        self._wcf._is_receiving_msg = True
+
+        def _connect_msg_socket(deadline_ts: float) -> bool:
+            last_exc: Optional[BaseException] = None
+            while self._wcf._is_receiving_msg and time.time() < deadline_ts:
+                try:
+                    old = getattr(self._wcf, "msg_socket", None)
+                    if old is not None:
+                        try:
+                            old.close()
+                        except Exception:
+                            pass
+
+                    sock = pynng.Pair1()
+                    sock.send_timeout = 5000
+                    sock.recv_timeout = 5000
+                    sock.dial(self._wcf.msg_url, block=True)
+                    self._wcf.msg_socket = sock
+                    return True
+                except BaseException as exc:
+                    last_exc = exc
+                    self._recv_last_error = str(exc)
+                    time.sleep(_WCFERRY_MSG_DIAL_RETRY_INTERVAL_SEC)
+
+            if last_exc is not None:
+                self._recv_last_error = str(last_exc)
+            return False
+
+        def listening_msg():
+            # First connect: bounded retries so init can fail fast and report a clear issue.
+            deadline = time.time() + _WCFERRY_MSG_DIAL_TIMEOUT_SEC
+            if not _connect_msg_socket(deadline):
+                # Mark as not receiving so callers can retry via reconnect logic.
+                self._wcf._is_receiving_msg = False
+                return
+
+            self._recv_ready.set()
+
+            rsp_local = wcf_pb2.Response()
+            while self._wcf._is_receiving_msg:
+                try:
+                    rsp_local.ParseFromString(self._wcf.msg_socket.recv_msg().bytes)
+                    self._wcf.msgQ.put(WxMsg(rsp_local.wxmsg))
+                except Exception as exc:
+                    # On disconnects/transient errors, try reconnecting the message socket.
+                    self._recv_last_error = str(exc)
+                    time.sleep(0.15)
+                    _connect_msg_socket(time.time() + 2.0)
+
+        threading.Thread(target=listening_msg, name="GetMessageRobust", daemon=True).start()
+
+        # Require msg channel ready; otherwise, receiving/replying will never work reliably.
+        if not self._recv_ready.wait(timeout=_WCFERRY_MSG_DIAL_TIMEOUT_SEC):
+            try:
+                self._wcf.disable_recv_msg()
+            except Exception:
+                pass
+            detail = self._recv_last_error or "dial timeout"
+            raise TransportUnavailableError(
+                f"wcferry message channel not ready (msg_url={getattr(self._wcf, 'msg_url', '')}): {detail}"
+            )
 
     def _validate_version_gate(self) -> None:
         strict = bool(self.bot_cfg.get("silent_mode_required", True))
@@ -295,13 +515,11 @@ class WcferryWeChatClient(BaseTransport):
 
     def close(self) -> None:
         try:
-            self._wcf.disable_recv_msg()
+            self._wcf._is_receiving_msg = False
         except Exception:
             pass
-        try:
-            self._wcf.cleanup()
-        except Exception:
-            pass
+        _best_effort_wcf_call("disable_recv_msg", getattr(self._wcf, "disable_recv_msg", None))
+        _best_effort_wcf_call("cleanup", getattr(self._wcf, "cleanup", None))
         relocate_known_root_artifacts()
 
     def get_transport_status(self) -> Dict[str, Any]:
@@ -310,7 +528,6 @@ class WcferryWeChatClient(BaseTransport):
             "silent_mode": self.transport_status.silent_mode,
             "wechat_version": self.transport_status.wechat_version,
             "required_wechat_version": self.transport_status.required_version,
-            "compat_mode": self.transport_status.compat_mode,
             "supports_native_quote": self.transport_status.supports_native_quote,
             "supports_voice_transcription": self.transport_status.supports_voice_transcription,
             "transport_status": self.transport_status.status,
@@ -331,6 +548,12 @@ class WcferryWeChatClient(BaseTransport):
         if not target:
             raise ValueError("missing target")
         if target in self._by_wxid:
+            return target
+
+        # 允许直接传入 wxid / chatroom id（即使未出现在联系人列表中也尝试发送）。
+        # 这能提高 hook_wcferry 在“群名未收录/联系人缓存未刷新”场景下的可用性。
+        lowered = target.lower()
+        if lowered == "filehelper" or lowered.startswith("wxid_") or lowered.startswith("gh_") or lowered.endswith("@chatroom"):
             return target
 
         matched = self._name_map.get(target.lower(), [])
@@ -369,7 +592,7 @@ class WcferryWeChatClient(BaseTransport):
         grouped: Dict[str, Dict[str, Any]] = {}
         while True:
             try:
-                msg = self._wcf.get_msg(block=False)
+                msg = self._wcf_call("get_msg", self._wcf.get_msg, block=False)
             except Empty:
                 break
             except Exception as exc:
@@ -413,7 +636,7 @@ class WcferryWeChatClient(BaseTransport):
                 aters = ",".join(ids)
             else:
                 aters = self._resolve_receiver(str(at), exact=True)
-        status = self._wcf.send_text(str(msg or ""), receiver, aters=aters)
+        status = self._wcf_call("send_text", self._wcf.send_text, str(msg or ""), receiver, aters=aters)
         return {
             "success": status == 0,
             "code": status,
@@ -423,7 +646,7 @@ class WcferryWeChatClient(BaseTransport):
 
     def SendFiles(self, filepath: str, who: Optional[str] = None, exact: bool = True) -> Dict[str, Any]:
         receiver = self._resolve_receiver(who or "", exact=exact)
-        status = self._wcf.send_file(filepath, receiver)
+        status = self._wcf_call("send_file", self._wcf.send_file, filepath, receiver)
         return {
             "success": status == 0,
             "code": status,
@@ -435,11 +658,29 @@ class WcferryWeChatClient(BaseTransport):
         target = Path(target_path)
         target.parent.mkdir(parents=True, exist_ok=True)
         if item.type == "image":
-            downloaded = self._wcf.download_image(int(item.id), item.extra, str(target.parent))
+            downloaded = self._wcf_call(
+                "download_image",
+                self._wcf.download_image,
+                int(item.id),
+                item.extra,
+                str(target.parent),
+            )
         elif item.type == "voice":
-            downloaded = self._wcf.get_audio_msg(int(item.id), str(target.parent), timeout=5)
+            downloaded = self._wcf_call(
+                "get_audio_msg",
+                self._wcf.get_audio_msg,
+                int(item.id),
+                str(target.parent),
+                timeout=5,
+            )
         else:
-            status = self._wcf.download_attach(int(item.id), item.thumb, item.extra)
+            status = self._wcf_call(
+                "download_attach",
+                self._wcf.download_attach,
+                int(item.id),
+                item.thumb,
+                item.extra,
+            )
             if status != 0:
                 raise RuntimeError(f"download_attach failed: {status}")
             downloaded = item.extra
@@ -456,7 +697,13 @@ class WcferryWeChatClient(BaseTransport):
     def transcribe_voice(self, item: WcfMessageItem) -> Any:
         audio_dir = Path(os.getcwd()) / "temp_audio"
         audio_dir.mkdir(parents=True, exist_ok=True)
-        audio_path = self._wcf.get_audio_msg(int(item.id), str(audio_dir), timeout=5)
+        audio_path = self._wcf_call(
+            "get_audio_msg",
+            self._wcf.get_audio_msg,
+            int(item.id),
+            str(audio_dir),
+            timeout=5,
+        )
         if not audio_path:
             return {"error": "voice download failed"}
 

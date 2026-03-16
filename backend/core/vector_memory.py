@@ -8,7 +8,6 @@
 
 import os
 import logging
-import chromadb
 from typing import List, Dict, Optional, Any
 from ..utils.runtime_artifacts import chdir_temporarily, CHROMA_DIR, relocate_known_root_artifacts
 
@@ -18,8 +17,14 @@ class VectorMemory:
     def __init__(self, db_path: str = "data/vector_db"):
         self.db_path = os.path.abspath(db_path)
         os.makedirs(self.db_path, exist_ok=True)
+
+        self.client = None
+        self.collection = None
         
         try:
+            # Lazy import: avoid slowing down bot startup when vector memory is not used.
+            import chromadb
+
             with chdir_temporarily(CHROMA_DIR):
                 self.client = chromadb.PersistentClient(path=self.db_path)
             self.collection = self.client.get_or_create_collection(
@@ -32,6 +37,11 @@ class VectorMemory:
             logger.error(f"Failed to initialize ChromaDB: {e}")
             self.client = None
             self.collection = None
+
+    def __bool__(self) -> bool:
+        # Treat partially-initialized instances as unavailable so callers can
+        # correctly short-circuit (e.g. export_rag.sync).
+        return bool(self.collection)
 
     def add_text(self, text: str, metadata: Dict[str, Any], id: str, embedding: Optional[List[float]] = None) -> None:
         if not self.collection:

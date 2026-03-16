@@ -27,36 +27,47 @@ class App {
         this._statusMaxIntervalMs = 30000;
         this._backendStartAttempted = false;
         this._statusPausedByVisibility = false;
-        this._lastStatusSignature = null;
         this._lastUpdateToastVersion = '';
         this._removeUpdateListener = null;
         this._eventSource = null;
+        this._sseReconnectTimer = null;
+        this._sseReconnectAttempt = 0;
     }
 
     async init() {
         console.log('[App] 正在初始化...');
 
-        await apiService.init();
         notificationService.init();
+        await this._runInitStep('apiService.init', () => apiService.init());
 
-        await this._setupVersion();
-        await this._setupUpdater();
+        await this._runInitStep('_setupVersion', () => this._setupVersion());
+        await this._runInitStep('_setupUpdater', () => this._setupUpdater());
 
         this._bindGlobalEvents();
         this._bindKeyboardShortcuts();
         this._setupCloseChoiceModal();
 
-        for (const page of Object.values(this.pages)) {
-            await page.onInit();
+        for (const [pageName, page] of Object.entries(this.pages)) {
+            await this._runInitStep(`${pageName}.onInit`, () => page.onInit());
         }
 
-        await this._checkBackendConnection();
-        await this._refreshStatus();
-        this._connectSSE();
-        await this._switchPage('dashboard');
+        await this._runInitStep('_checkBackendConnection', () => this._checkBackendConnection());
+        await this._runInitStep('_refreshStatus', () => this._refreshStatus());
+        await this._runInitStep('_connectSSE', () => this._connectSSE());
+        await this._runInitStep('_switchPage', () => this._switchPage('dashboard'));
         this._startStatusRefresh();
-
         console.log('[App] 初始化完成');
+
+    }
+
+    async _runInitStep(stepName, fn) {
+        try {
+            return await fn();
+        } catch (error) {
+            console.error(`[App] 初始化步骤失败: ${stepName}`, error);
+            notificationService.error(`初始化步骤失败：${stepName}`);
+            return null;
+        }
     }
 
     async _setupVersion() {
@@ -343,8 +354,8 @@ class App {
             notificationService.show(result.message, result.success ? 'success' : 'error');
             await this._refreshStatus();
         } catch (error) {
-            console.error('[App] 快捷键重启失败:', error);
             notificationService.error('快捷键重启失败');
+
         }
     }
 
@@ -418,7 +429,7 @@ class App {
         }
 
         const result = await window.electronAPI.openUpdateDownload();
-        if (!result?.success && stateManager.get('updater.available')) {
+        if (!result?.success) {
             notificationService.warning('未找到 GitHub Releases 下载地址。');
         }
     }
@@ -478,10 +489,8 @@ class App {
             'bot.status': status
         });
 
-        const statusSignature = JSON.stringify(status);
-        if (this.pages.dashboard && statusSignature !== this._lastStatusSignature) {
+        if (this.pages.dashboard && this.pages.dashboard.isActive()) {
             this.pages.dashboard.updateStats(status);
-            this._lastStatusSignature = statusSignature;
         }
 
         this._updateConnectionStatus();
@@ -493,15 +502,71 @@ class App {
         }
         this._eventSource = apiService.connectSSE(
             (payload) => this._handleRealtimeEvent(payload),
-            () => {
-                stateManager.set('bot.connected', false);
-                this._updateConnectionStatus();
-            }
+            (err) => this._handleSSEError(err),
+            () => this._handleSSEOpen()
         );
+    }
+
+    _handleSSEOpen() {
+        this._clearSSEReconnectTimer();
+        this._sseReconnectAttempt = 0;
+        stateManager.set('bot.connected', true);
+        this._updateConnectionStatus();
+    }
+
+    _handleSSEError(err) {
+        console.warn('[App] SSE 连接异常，准备重连', err);
+        stateManager.set('bot.connected', false);
+        this._updateConnectionStatus();
+
+        this._closeSSE();
+        this._scheduleSSEReconnect();
+    }
+
+    _closeSSE() {
+        if (!this._eventSource) {
+            return;
+        }
+        try {
+            this._eventSource.close();
+        } catch (_) {
+            // ignore
+        }
+        this._eventSource = null;
+    }
+
+    _clearSSEReconnectTimer() {
+        if (!this._sseReconnectTimer) {
+            return;
+        }
+        clearTimeout(this._sseReconnectTimer);
+        this._sseReconnectTimer = null;
+    }
+
+    _scheduleSSEReconnect() {
+        if (this._sseReconnectTimer) {
+            return;
+        }
+
+        const attempt = Math.min(this._sseReconnectAttempt, 6);
+        const baseDelay = Math.min(15000, 1000 * Math.pow(2, attempt));
+        const jitter = Math.floor(Math.random() * 300);
+        const delay = baseDelay + jitter;
+        this._sseReconnectAttempt = attempt + 1;
+
+        this._sseReconnectTimer = setTimeout(() => {
+            this._sseReconnectTimer = null;
+            this._connectSSE();
+        }, delay);
     }
 
     _handleRealtimeEvent(payload) {
         if (!payload || typeof payload !== 'object') {
+            return;
+        }
+        if (payload.type === 'heartbeat') {
+            stateManager.set('bot.connected', true);
+            this._updateConnectionStatus();
             return;
         }
         if (payload.type === 'status_change' && payload.data) {
@@ -517,12 +582,14 @@ class App {
 
     _getNextStatusIntervalMs() {
         const startupActive = !!stateManager.get('bot.status.startup.active');
+        const currentPage = stateManager.get('currentPage') || 'dashboard';
+        const dashboardActive = currentPage === 'dashboard';
         if (startupActive && this._statusFailureCount <= 0) {
-            return 400;
+            return dashboardActive ? 800 : 2000;
         }
 
         if (this._statusFailureCount <= 0) {
-            return this._statusBaseIntervalMs;
+            return dashboardActive ? this._statusBaseIntervalMs : 15000;
         }
 
         const backoff = this._statusBaseIntervalMs * Math.pow(2, this._statusFailureCount);
@@ -541,21 +608,33 @@ class App {
         const connected = stateManager.get('bot.connected');
         const running = stateManager.get('bot.running');
         const paused = stateManager.get('bot.paused');
+        const status = stateManager.get('bot.status');
+        const startupActive = !!(status && typeof status === 'object' && status?.startup?.active);
+
+        let labelText = '已停止';
+        let dotClass = 'status-dot offline';
 
         if (!connected) {
-            dot.className = 'status-dot offline';
-            label.textContent = '未连接';
+            labelText = '未连接';
+            dotClass = 'status-dot offline';
+        } else if (!running && startupActive) {
+            labelText = '启动中';
+            dotClass = 'status-dot warning';
         } else if (running) {
             if (paused) {
-                dot.className = 'status-dot warning';
-                label.textContent = '已暂停';
+                labelText = '已暂停';
+                dotClass = 'status-dot warning';
             } else {
-                dot.className = 'status-dot online';
-                label.textContent = '运行中';
+                labelText = '运行中';
+                dotClass = 'status-dot online';
             }
-        } else {
-            dot.className = 'status-dot offline';
-            label.textContent = '已停止';
+        }
+
+        if (label) {
+            label.textContent = labelText;
+        }
+        if (dot) {
+            dot.className = dotClass;
         }
     }
 

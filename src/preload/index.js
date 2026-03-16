@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
      */
     getFlaskUrl: () => ipcRenderer.invoke('get-flask-url'),
 
+    getApiToken: () => ipcRenderer.invoke('get-api-token'),
+
     /**
      * 检查后端是否运行
      */

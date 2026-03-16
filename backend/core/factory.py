@@ -4,16 +4,15 @@
 本模块提供了创建 AI 客户端、微信客户端以及管理重连策略的工厂函数。
 """
 
+from __future__ import annotations
+
 import asyncio
 import importlib
 import json
 import logging
-from types import MethodType
 from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
-from ..core.ai_client import AIClient
-from ..core.agent_runtime import AgentRuntime
-from ..transports import TransportUnavailableError, WcferryWeChatClient
 from ..types import ReconnectPolicy
+from .config_service import get_config_service
 from ..utils.common import as_int, as_float, as_optional_int, as_optional_str
 from ..utils.config import normalize_system_prompt, build_api_candidates, get_setting, is_placeholder_key
 
@@ -31,12 +30,12 @@ __all__ = [
 ]
 
 if TYPE_CHECKING:
-    from wxauto import WeChat
+    from ..core.ai_client import AIClient
+    from ..core.agent_runtime import AgentRuntime
 
 
 # 全局变量用于 reload
-from ..core import ai_client as ai_module_ref
-_ai_module = ai_module_ref
+_ai_module = None
 _last_transport_error = ""
 
 
@@ -82,6 +81,8 @@ def build_ai_client(settings: Dict[str, Any], bot_cfg: Dict[str, Any]) -> AIClie
     Returns:
         AIClient: 初始化后的客户端实例
     """
+    from ..core.ai_client import AIClient
+
     history_ttl_raw = bot_cfg.get("history_ttl_sec", 24 * 60 * 60)
     if history_ttl_raw is None:
         history_ttl_sec = None
@@ -128,6 +129,8 @@ def build_agent_runtime(
     agent_cfg: Optional[Dict[str, Any]] = None,
 ) -> AgentRuntime:
     """根据配置构建 LangChain/LangGraph 运行时。"""
+    from ..core.agent_runtime import AgentRuntime
+
     return AgentRuntime(settings=settings, bot_cfg=bot_cfg, agent_cfg=agent_cfg)
 
 
@@ -267,26 +270,6 @@ def get_reconnect_policy(bot_cfg: Dict[str, Any]) -> ReconnectPolicy:
     )
 
 
-def patch_wechat_polling_client(wx: "WeChat", is_red_pixel: Any) -> "WeChat":
-    """Avoid forcing the WeChat window to foreground during passive polling."""
-    if getattr(wx, "_codex_background_poll_patch", False):
-        return wx
-
-    original_check_new_message = wx.CheckNewMessage
-
-    def check_new_message_without_foreground(self) -> bool:
-        try:
-            return is_red_pixel(self.A_ChatIcon)
-        except Exception as exc:
-            logging.debug("后台检测新消息失败，回退到 wxauto 原始实现: %s", exc)
-            return original_check_new_message()
-
-    wx.CheckNewMessage = MethodType(check_new_message_without_foreground, wx)
-    wx._codex_background_poll_patch = True
-    logging.info("已禁用轮询新消息时自动拉起微信前台。")
-    return wx
-
-
 async def reconnect_wechat(
     reason: str,
     policy: ReconnectPolicy,
@@ -294,73 +277,69 @@ async def reconnect_wechat(
     bot_cfg: Optional[Dict[str, Any]] = None,
     ai_client: Optional[Any] = None,
 ) -> Optional[Any]:
-    """
-    尝试重连微信客户端。
-    
-    Args:
-        reason: 重连原因（用于日志）
-        policy: 重连策略配置
-        
-    Returns:
-        WeChat: 成功返回实例，失败返回 None
-    """
+    """Reconnect the supported hook transport with bounded retries."""
     if bot_cfg is None:
+        config_path = None
         try:
-            from backend.config import CONFIG
-            bot_cfg = CONFIG.get("bot", {})
+            from backend.bot_manager import get_bot_manager
+
+            config_path = get_bot_manager().config_path
+        except Exception:
+            config_path = None
+        try:
+            bot_cfg = get_config_service().get_snapshot(config_path=config_path).bot
         except Exception:
             bot_cfg = {}
+
     bot_cfg = dict(bot_cfg or {})
     preferred_backend = str(bot_cfg.get("transport_backend") or "hook_wcferry").strip().lower()
-    allow_compat = bool(bot_cfg.get("compat_ui_enabled", False))
+    if preferred_backend and preferred_backend != "hook_wcferry":
+        detail = f"unsupported transport backend: {preferred_backend}"
+        _set_last_transport_error(detail)
+        logging.error(detail)
+        return None
 
-    def _build_compat_client() -> Optional[Any]:
-        try:
-            from wxauto import WeChat
-            from wxauto.utils import IsRedPixel
-        except ImportError:
-            return None
-        return patch_wechat_polling_client(WeChat(), IsRedPixel)
+    from ..transports import TransportUnavailableError, WcferryWeChatClient
 
-    logging.warning("准备重连微信：%s", reason)
-    if preferred_backend == "hook_wcferry":
+    logging.warning("Preparing WeChat reconnect: %s", reason)
+    for attempt in range(policy.max_retries + 1):
         try:
-            client = WcferryWeChatClient(bot_cfg, ai_client=ai_client)
+            client = await asyncio.to_thread(
+                WcferryWeChatClient,
+                bot_cfg,
+                ai_client=ai_client,
+            )
             _set_last_transport_error("")
             logging.info("Hook transport initialized: %s", client.backend_name)
             return client
         except TransportUnavailableError as exc:
             _set_last_transport_error(str(exc))
-            logging.error("Hook transport unavailable: %s", exc)
-            if not allow_compat:
-                return None
-            logging.warning("Falling back to compat_ui backend")
-        except Exception as exc:
-            _set_last_transport_error(str(exc))
-            logging.exception("Hook transport failed: %s", exc)
-            if not allow_compat:
-                return None
-
-    for attempt in range(policy.max_retries + 1):
-        try:
-            wx = _build_compat_client()
-            if wx is None:
-                _set_last_transport_error("compat_ui backend unavailable: wxauto not installed")
-                return None
-            _set_last_transport_error("")
-            logging.info("微信重连成功。")
-            return wx
-        except Exception as exc:
-            _set_last_transport_error(str(exc))
+            if attempt >= policy.max_retries:
+                logging.error("Hook transport unavailable: %s", exc)
+                break
             wait = min(policy.max_delay_sec, policy.base_delay_sec * (1.5**attempt))
             logging.warning(
-                "微信重连失败（第 %s 次）：%s，%s 秒后重试",
+                "Hook transport unavailable (attempt %s): %s; retrying in %s seconds",
                 attempt + 1,
                 exc,
                 round(wait, 2),
             )
             await asyncio.sleep(wait)
-    logging.error("微信重连多次失败，请检查客户端状态。")
+        except Exception as exc:
+            _set_last_transport_error(str(exc))
+            if attempt >= policy.max_retries:
+                logging.exception("Hook transport failed: %s", exc)
+                break
+            wait = min(policy.max_delay_sec, policy.base_delay_sec * (1.5**attempt))
+            logging.warning(
+                "Hook transport failed (attempt %s): %s; retrying in %s seconds",
+                attempt + 1,
+                exc,
+                round(wait, 2),
+            )
+            await asyncio.sleep(wait)
+
+    logging.error("WeChat reconnect failed after multiple attempts.")
     return None
 
 
@@ -445,4 +424,8 @@ async def reload_ai_module(ai_client: Optional[AIClient] = None) -> None:
     global _ai_module
     if ai_client and hasattr(ai_client, "close"):
         await ai_client.close()
+    if _ai_module is None:
+        from ..core import ai_client as ai_module_ref
+
+        _ai_module = ai_module_ref
     _ai_module = importlib.reload(_ai_module)

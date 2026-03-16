@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, Optional, Tuple
 
-import requests
+import httpx
 
 
 def _normalize_base_url(base_url: str) -> str:
@@ -52,7 +52,7 @@ def transcribe_audio_file(
                     "application/octet-stream",
                 )
             }
-            response = requests.post(
+            response = httpx.post(
                 endpoint,
                 headers=headers,
                 data=data,
@@ -65,7 +65,7 @@ def transcribe_audio_file(
     if response.status_code >= 400:
         body = ""
         try:
-            body = response.text[:300]
+            body = (response.text or "")[:300]
         except Exception:
             body = ""
         return None, body or f"http {response.status_code}"

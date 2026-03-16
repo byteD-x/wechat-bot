@@ -107,6 +107,21 @@ npm run publish:github
 - 运行期 RAG 先做轻量重排，并支持可选本地 `Cross-Encoder` 精排；缺失依赖或本地模型目录时自动回退。
 - 统一项目的微信版本基线为 `3.9.12.51`，并将 `compat_ui` 明确为遗留兼容链路。
 
+### 第五批（安全与稳定性补丁）
+
+本批完成了本机默认安全基线、配置生效一致性和前端注入面收口：
+
+- Web API 默认仅允许本机访问（`127.0.0.1/localhost`），并支持 `WECHAT_BOT_API_TOKEN` 轻量鉴权；Electron 会自动携带 Token，手工调试可在 `python run.py web` 输出中获取。
+- 修复 `prompt_overrides.py` 未生效：启动时会将其合并进 `bot.system_prompt_overrides`（保持“现有配置优先”）。
+- 修复提示词注入在运行期与预览不一致：`user_profile` 支持 Pydantic 对象，同时 `profile_inject_in_prompt` / `emotion_inject_in_prompt` 作为开关统一生效。
+- 让记忆保留策略配置真正生效：初始化与热重载时把 `memory_ttl_sec` / `memory_cleanup_interval_sec` 传入并更新。
+- 修复语音转写依赖不一致：`audio_transcription` 统一使用 `httpx`，避免缺少 `requests` 导致运行时报错。
+- 清理后端不可达死代码与指标格式：健康检查构建逻辑去重，Prometheus `wechat_bot_health_check` 的 `HELP/TYPE` 不再重复输出。
+- 脚本与主配置路径对齐：`setup_wizard` 改写 `data/config_override.json`，`check.py` 读取 `backend/config.py` 并尝试应用 override。
+- 前端彻底移除动态 `innerHTML/insertAdjacentHTML` 渲染：Settings/Dashboard/Logs/Messages 全部改为 DOM 构建或 `textContent`，降低 XSS 风险。
+- Electron 安全基线增强：启用 `sandbox`，阻止非 `file:` 导航与重定向，`window.open` 统一 deny 并仅允许外部打开 `http(s)/mailto`。
+- 运行时产物目录收口：忽略 `data/runtime/`，避免测试缓存误入版本控制。
+
 ### 本轮验证
 
 - `python -m py_compile backend\core\agent_runtime.py backend\config_schemas.py backend\config.py tests\test_agent_runtime.py`
@@ -114,3 +129,8 @@ npm run publish:github
 - `python -m pytest tests\test_agent_runtime.py tests\test_optimization_tasks.py tests\test_runtime_observability.py -q`
   - 结果：`4 passed, 2 skipped`
   - 说明：跳过由当前环境缺少 `aiosqlite` 触发，不是代码报错
+
+补充：本机 `.venv` 环境验证（含 Quart）
+
+- `.venv\Scripts\python.exe -m pytest tests\test_api.py -q`
+  - 结果：`16 passed`

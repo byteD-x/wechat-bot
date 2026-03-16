@@ -17,6 +17,7 @@ import os
 import sys
 import asyncio
 from typing import Optional, Dict, Any
+import json
 
 # 项目根目录（bot 目录的父目录）
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -147,7 +148,9 @@ def input_confirm(prompt: str, default: bool = True) -> bool:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-async def test_api_connection(base_url: str, api_key: str, model: str) -> tuple[bool, str]:
+async def test_api_connection(
+    base_url: str, api_key: str, model: str
+) -> tuple[bool, str]:
     """测试 API 连接"""
     try:
         import httpx
@@ -221,31 +224,32 @@ def save_api_keys(preset_name: str, api_key: str) -> bool:
 
 
 def update_config_preset(preset_name: str) -> bool:
-    """更新 config.py 中的 active_preset"""
-    config_path = os.path.join(PROJECT_ROOT, "app", "config.py")
-    if not os.path.exists(config_path):
-        print("⚠️ config.py 不存在，跳过预设更新")
-        return False
+    """更新 data/config_override.json 中的 active_preset（不直接改源码配置）。"""
+    override_dir = os.path.join(PROJECT_ROOT, "data")
+    os.makedirs(override_dir, exist_ok=True)
+    override_path = os.path.join(override_dir, "config_override.json")
 
     try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            content = f.read()
+        overrides = {}
+        if os.path.exists(override_path):
+            with open(override_path, "r", encoding="utf-8") as f:
+                overrides = json.load(f) or {}
+        if not isinstance(overrides, dict):
+            overrides = {}
 
-        # 简单替换 active_preset
-        import re
-        new_content = re.sub(
-            r'"active_preset":\s*[\'"][^\'"]*[\'"]',
-            f'"active_preset": \'{preset_name}\'',
-            content,
-        )
+        api = overrides.get("api")
+        if not isinstance(api, dict):
+            api = {}
+        api["active_preset"] = str(preset_name)
+        overrides["api"] = api
 
-        if new_content != content:
-            with open(config_path, "w", encoding="utf-8") as f:
-                f.write(new_content)
-            return True
-        return False
+        tmp_path = override_path + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(overrides, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, override_path)
+        return True
     except Exception as e:
-        print(f"⚠️ 更新 config.py 失败: {e}")
+        print(f"⚠️ 更新 config_override.json 失败: {e}")
         return False
 
 
@@ -343,8 +347,8 @@ async def run_wizard():
     print("═" * 60)
     print(f"""
 您的配置摘要:
-  • AI 服务: {selected_preset['display']}
-  • 模型: {selected_preset['model']}
+  • AI 服务: {selected_preset["display"]}
+  • 模型: {selected_preset["model"]}
   • 配置文件: data/api_keys.py
 
 下一步:

@@ -206,8 +206,19 @@ class UpdateManager {
 
     _emitState() {
         const win = this.getMainWindow?.();
-        if (win && !win.isDestroyed()) {
-            win.webContents.send('update-state-changed', this.getState());
+        if (!win || win.isDestroyed()) {
+            return;
+        }
+
+        const wc = win.webContents;
+        if (!wc || (typeof wc.isDestroyed === 'function' && wc.isDestroyed())) {
+            return;
+        }
+
+        try {
+            wc.send('update-state-changed', this.getState());
+        } catch (e) {
+            // If the window is closing/destroyed during send, ignore to avoid crashing the main process.
         }
     }
 

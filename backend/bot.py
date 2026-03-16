@@ -22,14 +22,17 @@ from .core.factory import (
     get_last_transport_error,
     reconnect_wechat,
     compute_api_signature,
+    reload_ai_module,
 )
+from .core.config_service import get_config_service
+from .core.config_audit import diff_config_paths
 
 from .types import MessageEvent
 from .handlers.filter import should_reply
 from .handlers.sender import send_message, send_reply_chunks
 from .handlers.converters import normalize_new_messages
 from .utils.common import as_float, as_int, get_file_mtime, iter_items
-from .utils.config import load_config, get_model_alias
+from .utils.config import get_model_alias
 from .utils.logging import (
     setup_logging,
     get_logging_settings,
@@ -55,6 +58,7 @@ from .wechat_versions import OFFICIAL_SUPPORTED_WECHAT_VERSION
 class WeChatBot:
     def __init__(self, config_path: str, memory_manager: Optional[MemoryManager] = None):
         self.config_path = config_path
+        self.config_service = get_config_service()
         self.config: Dict[str, Any] = {}
         self.bot_cfg: Dict[str, Any] = {}
         self.api_cfg: Dict[str, Any] = {}
@@ -115,6 +119,49 @@ class WeChatBot:
         self.ignore_names_set: Set[str] = set()
         self.ignore_keywords_list: List[str] = []
 
+    def _load_effective_config(self, *, force_reload: bool = False) -> Dict[str, Any]:
+        snapshot = self.config_service.get_snapshot(
+            config_path=self.config_path,
+            force_reload=force_reload,
+        )
+        self.config = snapshot.to_dict()
+        return self.config
+
+    @staticmethod
+    def _transport_reconnect_required(changed_paths: List[str]) -> bool:
+        transport_paths = {
+            "bot.transport_backend",
+            "bot.required_wechat_version",
+            "bot.silent_mode_required",
+        }
+        return any(path in transport_paths for path in changed_paths)
+
+    async def _reconnect_transport(self, reason: str) -> Dict[str, Any]:
+        policy = get_reconnect_policy(self.bot_cfg)
+        new_wx = await reconnect_wechat(
+            reason,
+            policy,
+            bot_cfg=self.bot_cfg,
+            ai_client=self.ai_client,
+        )
+        if new_wx is None:
+            return {
+                "success": False,
+                "message": "微信传输层重连失败，请检查微信状态后重试",
+            }
+
+        if hasattr(new_wx, "ai_client"):
+            new_wx.ai_client = self.ai_client
+
+        async with self.wx_lock:
+            self.wx = new_wx
+            self._wx_supports_filter_mute = None
+
+        return {
+            "success": True,
+            "message": "微信传输层已自动重连并生效",
+        }
+
     async def initialize(self) -> Optional["WeChat"]:
         try:
             await self.bot_manager.update_startup_state(
@@ -125,7 +172,7 @@ class WeChatBot:
             )
             self.config_mtime = get_file_mtime(self.config_path)
             self.override_mtime = get_file_mtime(self.override_path)
-            self.config = load_config(self.config_path)
+            self._load_effective_config()
         except Exception as exc:
             logging.error("无法加载配置文件: %s", exc)
             self._set_ai_health("error", "No available AI preset", error=True)
@@ -512,11 +559,14 @@ class WeChatBot:
             self.override_mtime = new_override_mtime
 
         if should_reload:
+            previous_config = dict(self.config or {})
             try:
-                new_config = load_config(self.config_path)
+                snapshot = self.config_service.reload(config_path=self.config_path)
+                new_config = snapshot.to_dict()
             except Exception as exc:
                 logging.warning("配置重载失败: %s", exc)
                 return
+            changed_paths = diff_config_paths(previous_config, new_config)
 
             self.config = new_config
             self._apply_config()
@@ -529,6 +579,8 @@ class WeChatBot:
                     {"api": self.api_cfg, "agent": self.agent_cfg}
                 )
                 if new_signature != self.api_signature:
+                    if self.bot_cfg.get("reload_ai_client_module", False):
+                        await reload_ai_module(self.ai_client)
                     new_client, new_preset = await select_ai_client(
                         self.api_cfg, self.bot_cfg, self.agent_cfg
                     )
@@ -544,81 +596,135 @@ class WeChatBot:
                             success=True,
                         )
                         logging.info("配置更新，已重新加载 AI 客户端: %s", new_preset)
+            if self.wx is not None and self._transport_reconnect_required(changed_paths):
+                reconnect_result = await self._reconnect_transport("配置热更新")
+                if not reconnect_result.get("success"):
+                    logging.warning("配置热更新后微信重连失败: %s", reconnect_result.get("message"))
             await self._schedule_export_rag_sync(force=False)
+            self.bot_manager._invalidate_status_cache()
+            await self.bot_manager.notify_status_change()
 
     async def reload_runtime_config(
         self,
         *,
         new_config: Optional[Dict[str, Any]] = None,
+        changed_paths: Optional[List[str]] = None,
         force_ai_reload: bool = False,
         strict_active_preset: bool = False,
     ) -> Dict[str, Any]:
         """
         立即重载运行时配置，并在需要时立刻切换 AI 客户端。
         """
+        previous_config = dict(self.config or {})
         try:
-            self.config = new_config if new_config is not None else load_config(self.config_path)
+            if new_config is not None:
+                snapshot = self.config_service.publish(
+                    new_config,
+                    config_path=self.config_path,
+                    source="runtime_reload",
+                )
+            else:
+                snapshot = self.config_service.reload(config_path=self.config_path)
+            self.config = snapshot.to_dict()
+            self.config_mtime = get_file_mtime(self.config_path)
+            self.override_mtime = get_file_mtime(self.override_path)
         except Exception as exc:
             logging.warning("立即重载配置失败: %s", exc)
             return {"success": False, "message": f"配置加载失败: {exc}", "runtime_preset": self.runtime_preset_name}
 
+        resolved_changed_paths = list(changed_paths or diff_config_paths(previous_config, self.config))
         self._apply_config()
+        self._ensure_config_reload_watcher()
         self._ensure_vector_memory()
+        transport_reconnect_required = self._transport_reconnect_required(resolved_changed_paths)
         new_signature = compute_api_signature(
             {"api": self.api_cfg, "agent": self.agent_cfg}
         )
-        need_reload_client = force_ai_reload or new_signature != self.api_signature
+        need_reload_client = (
+            force_ai_reload
+            or bool(self.bot_cfg.get("reload_ai_client_module", False))
+            or new_signature != self.api_signature
+        )
+        transport_reconnected = False
+        messages: List[str] = []
 
-        if not need_reload_client:
+        if not need_reload_client and not transport_reconnect_required:
             await self._schedule_export_rag_sync(force=True)
+            self.bot_manager._invalidate_status_cache()
+            await self.bot_manager.notify_status_change()
             return {
                 "success": True,
                 "message": "配置已立即应用",
                 "runtime_preset": self.runtime_preset_name,
+                "transport_reconnect_required": False,
+                "transport_reconnected": False,
             }
 
         if not self.bot_cfg.get("reload_ai_client_on_change", True) and not force_ai_reload:
-            return {
-                "success": True,
-                "message": "配置已应用，AI 客户端保持不变",
-                "runtime_preset": self.runtime_preset_name,
-            }
+            messages.append("配置已应用，AI 客户端保持不变")
+        elif need_reload_client:
+            active_preset = str(self.api_cfg.get("active_preset") or "").strip()
+            if self.bot_cfg.get("reload_ai_client_module", False):
+                await reload_ai_module(self.ai_client)
+            if strict_active_preset and active_preset:
+                new_client, new_preset = await select_specific_ai_client(
+                    self.api_cfg, self.bot_cfg, active_preset, self.agent_cfg
+                )
+            else:
+                new_client, new_preset = await select_ai_client(
+                    self.api_cfg, self.bot_cfg, self.agent_cfg
+                )
 
-        active_preset = str(self.api_cfg.get("active_preset") or "").strip()
-        if strict_active_preset and active_preset:
-            new_client, new_preset = await select_specific_ai_client(
-                self.api_cfg, self.bot_cfg, active_preset, self.agent_cfg
+            if not new_client:
+                self._set_ai_health("error", "AI hot reload failed", error=True)
+                return {
+                    "success": False,
+                    "message": "AI 客户端重载失败，请检查当前激活预设的连接配置",
+                    "runtime_preset": self.runtime_preset_name,
+                    "transport_reconnect_required": transport_reconnect_required,
+                    "transport_reconnected": False,
+                }
+
+            if self.ai_client and hasattr(self.ai_client, "close"):
+                await self.ai_client.close()
+
+            self.ai_client = new_client
+            self.api_signature = new_signature
+            self.runtime_preset_name = new_preset or active_preset
+            self._set_ai_health(
+                "healthy",
+                f"AI preset {self.runtime_preset_name or 'unknown'} hot-switched successfully",
+                success=True,
             )
-        else:
-            new_client, new_preset = await select_ai_client(
-                self.api_cfg, self.bot_cfg, self.agent_cfg
-            )
+            logging.info("已立即切换运行中 AI 客户端: %s", self.runtime_preset_name)
+            messages.append(f"运行中的 AI 已立即切换到 {self.runtime_preset_name}")
+        elif not messages:
+            messages.append("配置已立即应用")
 
-        if not new_client:
-            self._set_ai_health("error", "AI hot reload failed", error=True)
-            return {
-                "success": False,
-                "message": "AI 客户端重载失败，请检查当前激活预设的连接配置",
-                "runtime_preset": self.runtime_preset_name,
-            }
+        if transport_reconnect_required and self.wx is not None:
+            reconnect_result = await self._reconnect_transport("配置更新")
+            if not reconnect_result.get("success"):
+                self.bot_manager._invalidate_status_cache()
+                await self.bot_manager.notify_status_change()
+                return {
+                    "success": False,
+                    "message": reconnect_result.get("message") or "微信传输层重连失败",
+                    "runtime_preset": self.runtime_preset_name,
+                    "transport_reconnect_required": True,
+                    "transport_reconnected": False,
+                }
+            transport_reconnected = True
+            messages.append(reconnect_result.get("message") or "微信传输层已自动重连并生效")
 
-        if self.ai_client and hasattr(self.ai_client, "close"):
-            await self.ai_client.close()
-
-        self.ai_client = new_client
-        self.api_signature = new_signature
-        self.runtime_preset_name = new_preset or active_preset
-        self._set_ai_health(
-            "healthy",
-            f"AI preset {self.runtime_preset_name or 'unknown'} hot-switched successfully",
-            success=True,
-        )
-        logging.info("已立即切换运行中 AI 客户端: %s", self.runtime_preset_name)
         await self._schedule_export_rag_sync(force=True)
+        self.bot_manager._invalidate_status_cache()
+        await self.bot_manager.notify_status_change()
         return {
             "success": True,
-            "message": f"运行中的 AI 已立即切换到 {self.runtime_preset_name}",
+            "message": "；".join(messages) if messages else "配置已立即应用",
             "runtime_preset": self.runtime_preset_name,
+            "transport_reconnect_required": transport_reconnect_required,
+            "transport_reconnected": transport_reconnected,
         }
 
     async def _schedule_export_rag_sync(self, *, force: bool) -> None:
@@ -866,6 +972,12 @@ class WeChatBot:
                     voice_text, err = await transcribe_voice_message(event, self.bot_cfg, self.wx_lock)
                     if not voice_text:
                         logging.warning("语音转文字失败: %s", err)
+                        fail_reply = str(self.bot_cfg.get("voice_to_text_fail_reply") or "").strip()
+                        if fail_reply:
+                            async with self.wx_lock:
+                                await asyncio.to_thread(
+                                    send_message, wx, event.chat_name, fail_reply, self.bot_cfg
+                                )
                         return
                     event.content = voice_text
                     if message_log_override is None:
@@ -1093,7 +1205,7 @@ class WeChatBot:
                 if not emitted and quote_mode == "text" and first_quote_fallback:
                     sanitized = f"{first_quote_fallback}{sanitized}"
                     first_quote_fallback = None
-                await send_reply_chunks(
+                result = await send_reply_chunks(
                     wx,
                     event.chat_name,
                     sanitized,
@@ -1107,6 +1219,7 @@ class WeChatBot:
                     quote_timeout_sec=quote_timeout_sec,
                     quote_fallback_text=first_quote_fallback if not emitted else None,
                 )
+                self._ensure_send_succeeded(result, context="流式回复分段")
                 emitted = True
                 first_quote_item = None
                 first_quote_fallback = None
@@ -1118,7 +1231,7 @@ class WeChatBot:
                 if not emitted and quote_mode == "text" and first_quote_fallback:
                     sanitized = f"{first_quote_fallback}{sanitized}"
                     first_quote_fallback = None
-                await send_reply_chunks(
+                result = await send_reply_chunks(
                     wx,
                     event.chat_name,
                     sanitized,
@@ -1132,11 +1245,12 @@ class WeChatBot:
                     quote_timeout_sec=quote_timeout_sec,
                     quote_fallback_text=first_quote_fallback if not emitted else None,
                 )
+                self._ensure_send_succeeded(result, context="流式回复尾段")
                 emitted = True
 
         suffix = self._build_reply_suffix_text()
         if suffix and emitted:
-            await send_reply_chunks(
+            result = await send_reply_chunks(
                 wx,
                 event.chat_name,
                 suffix,
@@ -1147,6 +1261,7 @@ class WeChatBot:
                 self.last_reply_ts,
                 self.wx_lock,
             )
+            self._ensure_send_succeeded(result, context="回复后缀")
 
         return "".join(collected_parts)
 
@@ -1194,9 +1309,15 @@ class WeChatBot:
         
         # 自然分段逻辑
         if self.bot_cfg.get("natural_split_enabled", False):
-            segments = split_reply_naturally(sanitized_reply)
+            split_config = self._get_natural_split_config()
+            segments = split_reply_naturally(
+                sanitized_reply,
+                min_chars=split_config["min_chars"],
+                max_chars=split_config["max_chars"],
+                max_segments=split_config["max_segments"],
+            )
             for idx, seg in enumerate(segments):
-                await send_reply_chunks(
+                result = await send_reply_chunks(
                     wx, event.chat_name, seg, self.bot_cfg,
                     chunk_size, delay_sec, min_interval,
                     self.last_reply_ts, self.wx_lock,
@@ -1204,10 +1325,11 @@ class WeChatBot:
                     quote_timeout_sec=quote_timeout_sec,
                     quote_fallback_text=quote_fallback_text if idx == 0 else None
                 )
-                if idx < len(segments) - 1:
-                    await asyncio.sleep(random.uniform(0.8, 2.0))
+                self._ensure_send_succeeded(result, context="自然分段回复")
+                if idx < len(segments) - 1 and split_config["delay_max"] > 0:
+                    await asyncio.sleep(random.uniform(split_config["delay_min"], split_config["delay_max"]))
         else:
-            await send_reply_chunks(
+            result = await send_reply_chunks(
                 wx, event.chat_name, sanitized_reply, self.bot_cfg,
                 chunk_size, delay_sec, min_interval,
                 self.last_reply_ts, self.wx_lock,
@@ -1215,12 +1337,21 @@ class WeChatBot:
                 quote_timeout_sec=quote_timeout_sec,
                 quote_fallback_text=quote_fallback_text
             )
+            self._ensure_send_succeeded(result, context="回复")
 
     def _sanitize_reply_segment(self, reply_text: str) -> str:
         emoji_policy = str(self.bot_cfg.get("emoji_policy", "wechat"))
         replacements = self.bot_cfg.get("emoji_replacements")
         refined_reply = refine_reply_text(reply_text)
         return sanitize_reply_text(refined_reply, emoji_policy, replacements)
+
+    @staticmethod
+    def _ensure_send_succeeded(result: Any, *, context: str) -> None:
+        ok, err_msg = result
+        if ok:
+            return
+        detail = str(err_msg or "").strip() or "unknown error"
+        raise RuntimeError(f"{context}发送失败: {detail}")
 
     def _build_final_reply_text(self, reply_text: str) -> str:
         sanitized = self._sanitize_reply_segment(reply_text)
@@ -1234,6 +1365,28 @@ class WeChatBot:
         model_name = getattr(self.ai_client, "model", "") if self.ai_client else ""
         alias = get_model_alias(self.ai_client)
         return build_reply_suffix(reply_suffix, model_name or "", alias)
+
+    def _get_natural_split_config(self) -> Dict[str, float]:
+        delay_range = self.bot_cfg.get("natural_split_delay_sec")
+        delay_min = as_float(
+            delay_range[0] if isinstance(delay_range, (list, tuple)) and len(delay_range) > 0 else 0.3,
+            0.3,
+            min_value=0.0,
+        )
+        delay_max = as_float(
+            delay_range[1] if isinstance(delay_range, (list, tuple)) and len(delay_range) > 1 else delay_min,
+            delay_min,
+            min_value=0.0,
+        )
+        if delay_max < delay_min:
+            delay_min, delay_max = delay_max, delay_min
+        return {
+            "min_chars": as_int(self.bot_cfg.get("natural_split_min_chars", 30), 30, min_value=1),
+            "max_chars": as_int(self.bot_cfg.get("natural_split_max_chars", 120), 120, min_value=1),
+            "max_segments": as_int(self.bot_cfg.get("natural_split_max_segments", 3), 3, min_value=1),
+            "delay_min": delay_min,
+            "delay_max": delay_max,
+        }
 
     def _record_reply_stats(self, user_text: str, reply_text: str) -> None:
         state = get_bot_state()
@@ -1375,9 +1528,11 @@ class WeChatBot:
             
         try:
             async with self.wx_lock:
-                 await asyncio.to_thread(
+                ok, err_msg = await asyncio.to_thread(
                     send_message, self.wx, target, content, self.bot_cfg
                 )
+            if not ok:
+                return {'success': False, 'message': err_msg or '发送失败'}
             
             # 记录到 IPC/日志
             self.ipc.log_message("API", content, "outgoing", target)
@@ -1416,24 +1571,23 @@ class WeChatBot:
                 logging.debug("获取 transport 状态失败: %s", exc)
         if self.wx:
             return {
-                "transport_backend": "compat_ui",
-                "silent_mode": False,
+                "transport_backend": "hook_wcferry",
+                "silent_mode": True,
                 "wechat_version": "",
                 "required_wechat_version": "",
-                "compat_mode": True,
-                "supports_native_quote": True,
+                "supports_native_quote": False,
                 "supports_voice_transcription": True,
                 "transport_status": "connected",
                 "transport_warning": "",
             }
-        preferred_backend = str(self.bot_cfg.get("transport_backend") or "hook_wcferry").strip().lower()
         return {
-            "transport_backend": preferred_backend,
-            "silent_mode": preferred_backend == "hook_wcferry",
+            "transport_backend": "hook_wcferry",
+            "silent_mode": True,
             "wechat_version": "",
-            "required_wechat_version": str(self.bot_cfg.get("required_wechat_version") or "").strip(),
-            "compat_mode": preferred_backend == "compat_ui",
-            "supports_native_quote": preferred_backend != "hook_wcferry",
+            "required_wechat_version": str(
+                self.bot_cfg.get("required_wechat_version") or ""
+            ).strip(),
+            "supports_native_quote": False,
             "supports_voice_transcription": True,
             "transport_status": "disconnected",
             "transport_warning": get_last_transport_error(),

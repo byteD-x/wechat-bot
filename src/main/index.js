@@ -13,9 +13,36 @@ const fs = require('fs');
 const path = require('path');
 const { spawn, exec } = require('child_process');
 const http = require('http');
+const crypto = require('crypto');
 const Store = require('electron-store');
 const iconv = require('iconv-lite');
 const { UpdateManager } = require('./update-manager');
+
+// Electron on Windows can be launched without a valid stdout/stderr (or the pipe can be closed),
+// which makes console.* throw synchronously with EPIPE and crash the main process.
+function installBrokenPipeGuards() {
+    const wrapWrite = (stream) => {
+        if (!stream || typeof stream.write !== 'function') return;
+        const origWrite = stream.write.bind(stream);
+        stream.write = (...args) => {
+            try {
+                return origWrite(...args);
+            } catch (e) {
+                if (e && e.code === 'EPIPE') return false;
+                throw e;
+            }
+        };
+        if (typeof stream.on === 'function') {
+            stream.on('error', (e) => {
+                if (e && e.code === 'EPIPE') return;
+            });
+        }
+    };
+
+    wrapWrite(process.stdout);
+    wrapWrite(process.stderr);
+}
+installBrokenPipeGuards();
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //                               配置与全局状态
@@ -29,6 +56,7 @@ const store = new Store({
         flaskPort: 5000,
         isFirstRun: true,
         closeBehavior: 'ask',
+        apiToken: '',
         update: {
             feedUrl: '',
             autoCheckOnLaunch: true,
@@ -47,8 +75,49 @@ const GLOBAL_STATE = {
     isQuitting: false,
     isDev: process.argv.includes('--dev'),
     flaskPort: store.get('flaskPort'),
+    apiToken: (() => {
+        const existing = String(store.get('apiToken') || '').trim();
+        if (existing) {
+            return existing;
+        }
+        const next = crypto.randomBytes(24).toString('hex');
+        store.set('apiToken', next);
+        return next;
+    })(),
     get flaskUrl() { return `http://localhost:${this.flaskPort}`; }
 };
+
+function getMainWindowSafe() {
+    const win = GLOBAL_STATE.mainWindow;
+    if (!win || (typeof win.isDestroyed === 'function' && win.isDestroyed())) return null;
+    return win;
+}
+
+function showMainWindowSafe() {
+    const win = getMainWindowSafe();
+    if (!win) return false;
+    try {
+        if (typeof win.isMinimized === 'function' && win.isMinimized()) win.restore();
+        win.show();
+        win.focus();
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
+function sendToMainWindowSafe(channel, ...args) {
+    const win = getMainWindowSafe();
+    if (!win) return false;
+    const wc = win.webContents;
+    if (!wc || (typeof wc.isDestroyed === 'function' && wc.isDestroyed())) return false;
+    try {
+        wc.send(channel, ...args);
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
 
 function updateSplashStatus(message, progress = 0) {
     const splash = GLOBAL_STATE.splashWindow;
@@ -94,7 +163,8 @@ const PathUtils = {
 const BackendManager = {
     checkServer() {
         return new Promise((resolve) => {
-            const req = http.get(`${GLOBAL_STATE.flaskUrl}/api/status`, (res) => {
+            const tokenParam = GLOBAL_STATE.apiToken ? `?token=${encodeURIComponent(GLOBAL_STATE.apiToken)}` : '';
+            const req = http.get(`${GLOBAL_STATE.flaskUrl}/api/status${tokenParam}`, (res) => {
                 resolve(res.statusCode === 200);
             });
             req.on('error', () => resolve(false));
@@ -113,8 +183,8 @@ const BackendManager = {
         }
 
         if (GLOBAL_STATE.pythonProcess) {
-            console.log('[Backend] 鍚庣姝ｅ湪鍚姩');
-            updateSplashStatus('鍚庣鏈嶅姟鍚姩涓?..', 50);
+            console.log('[Backend] 后端正在启动');
+            updateSplashStatus('后端服务启动中...', 50);
             return;
         }
 
@@ -123,11 +193,12 @@ const BackendManager = {
         if (GLOBAL_STATE.isDev) {
             const venvPython = path.join(PathUtils.resourcePath, '.venv', 'Scripts', 'python.exe');
             cmd = venvPython;
-            args = ['run.py', 'web', '--port', GLOBAL_STATE.flaskPort.toString()];
+            args = ['run.py', 'web', '--host', '127.0.0.1', '--port', GLOBAL_STATE.flaskPort.toString()];
             options = {
                 cwd: PathUtils.resourcePath,
                 env: {
                     ...process.env,
+                    WECHAT_BOT_API_TOKEN: GLOBAL_STATE.apiToken,
                     PYTHONUNBUFFERED: '1',
                     PYTHONIOENCODING: 'utf-8',
                     PYTHONLEGACYWINDOWSSTDIO: '1'
@@ -136,11 +207,12 @@ const BackendManager = {
         } else {
             const exePath = PathUtils.backendExecutable;
             cmd = exePath;
-            args = ['web', '--port', GLOBAL_STATE.flaskPort.toString()];
+            args = ['web', '--host', '127.0.0.1', '--port', GLOBAL_STATE.flaskPort.toString()];
             options = {
                 cwd: path.dirname(exePath),
                 env: {
                     ...process.env,
+                    WECHAT_BOT_API_TOKEN: GLOBAL_STATE.apiToken,
                     PYTHONLEGACYWINDOWSSTDIO: '1'
                 }
             };
@@ -165,7 +237,12 @@ const BackendManager = {
             };
             console.log('[Backend] 正在停止...');
             proc.once('exit', done);
-            proc.kill('SIGTERM');
+            try {
+                proc.kill('SIGTERM');
+            } catch (e) {
+                // If the process is already gone, treat it as stopped.
+                done();
+            }
             const pid = proc.pid;
             setTimeout(() => {
                 try { process.kill(pid, 0) && process.kill(pid, 'SIGKILL'); } catch (e) {}
@@ -176,21 +253,52 @@ const BackendManager = {
     },
 
     _setupProcessListeners(proc) {
+        if (!proc) {
+            return;
+        }
         proc.on('error', (err) => {
             console.error(`[Backend Spawn Error] ${err.message}`);
             GLOBAL_STATE.pythonProcess = null;
         });
 
-        proc.stdout.on('data', (data) => {
-            const str = iconv.decode(data, 'utf-8');
-            console.log(`[Backend] ${str.trim()}`);
-            updateSplashStatus('后端服务启动中...', 50);
-        });
+        const decodeSafe = (data) => {
+            try {
+                const buffer = Buffer.isBuffer(data) ? data : Buffer.from(String(data));
+                const utf8 = iconv.decode(buffer, 'utf-8');
+                if (!utf8.includes('\ufffd')) {
+                    return utf8;
+                }
+                return iconv.decode(buffer, 'cp936');
+            } catch (e) {
+                try {
+                    return Buffer.isBuffer(data) ? data.toString('utf8') : String(data);
+                } catch (_) {
+                    return '';
+                }
+            }
+        };
 
-        proc.stderr.on('data', (data) => {
-            const str = iconv.decode(data, 'utf-8');
-            console.error(`[Backend Err] ${str.trim()}`);
-        });
+        if (proc.stdout && typeof proc.stdout.on === 'function') {
+            // Avoid crashing the main process on unhandled stream errors.
+            proc.stdout.on('error', (err) => {
+                console.warn('[Backend Stdout Error]', err?.message || err);
+            });
+            proc.stdout.on('data', (data) => {
+                const str = decodeSafe(data);
+                console.log(`[Backend] ${str.trim()}`);
+                updateSplashStatus('后端服务启动中...', 50);
+            });
+        }
+
+        if (proc.stderr && typeof proc.stderr.on === 'function') {
+            proc.stderr.on('error', (err) => {
+                console.warn('[Backend Stderr Error]', err?.message || err);
+            });
+            proc.stderr.on('data', (data) => {
+                const str = decodeSafe(data);
+                console.error(`[Backend Err] ${str.trim()}`);
+            });
+        }
 
         proc.on('exit', (code) => {
             console.log(`[Backend] 退出代码: ${code}`);
@@ -201,10 +309,10 @@ const BackendManager = {
 
 async function requestAppClose(options = {}) {
     const { showWindow } = options;
-    const win = GLOBAL_STATE.mainWindow;
+    const win = getMainWindowSafe();
     const pref = store.get('closeBehavior') || 'ask';
     if (pref === 'minimize') {
-        win?.hide();
+        try { win?.hide(); } catch (e) {}
         return { action: 'minimize' };
     }
     if (pref === 'quit') {
@@ -218,10 +326,9 @@ async function requestAppClose(options = {}) {
         return { action: 'quit' };
     }
     if (showWindow) {
-        win?.show();
-        win?.focus();
+        showMainWindowSafe();
     }
-    win?.webContents.send('app-close-dialog');
+    sendToMainWindowSafe('app-close-dialog');
     return { action: 'ask' };
 }
 
@@ -240,8 +347,15 @@ const WindowManager = {
             center: true,
             skipTaskbar: true,
             alwaysOnTop: true,
+            focusable: false,
             webPreferences: { contextIsolation: true, nodeIntegration: false }
         });
+        // Splash is display-only. Never let it intercept clicks intended for the main window.
+        try {
+            GLOBAL_STATE.splashWindow.setIgnoreMouseEvents(true);
+        } catch (e) {
+            console.warn('[Splash] Failed to ignore mouse events:', e?.message || e);
+        }
         GLOBAL_STATE.splashWindow.loadFile(path.join(__dirname, '..', 'renderer', 'splash.html'));
         updateSplashStatus('正在启动桌面客户端...', 12);
     },
@@ -249,13 +363,24 @@ const WindowManager = {
     createMain() {
         const { width, height } = store.get('windowBounds');
 
+        // Close any existing (possibly hidden) main window instance.
+        try {
+            const existing = GLOBAL_STATE.mainWindow;
+            if (existing && !existing.isDestroyed()) {
+                existing.removeAllListeners();
+                existing.close();
+            }
+        } catch (e) {
+            // ignore
+        }
+
         GLOBAL_STATE.mainWindow = new BrowserWindow({
             width, height,
             minWidth: 900,
             minHeight: 600,
             title: '微信AI助手',
             icon: PathUtils.iconPath,
-            backgroundColor: '#0A0A0F', // 关键：与 CSS 背景一致，防止白屏
+            backgroundColor: '#F7F7F8', // 关键：与 CSS 背景一致，防止白屏
             frame: false,
             show: false, // 关键：初始隐藏
             webPreferences: {
@@ -269,25 +394,107 @@ const WindowManager = {
         GLOBAL_STATE.mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
         updateSplashStatus('正在加载界面资源...', 72);
 
+        GLOBAL_STATE.mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+            const safeSource = sourceId ? `${sourceId}:${line}` : `line:${line}`;
+            console.log(`[Renderer:${level}] ${safeSource} ${message}`);
+        });
+        GLOBAL_STATE.mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+            console.error(`[Renderer Load Failed] ${errorCode} ${errorDescription} ${validatedURL || ''}`.trim());
+        });
+        GLOBAL_STATE.mainWindow.webContents.on('dom-ready', () => {
+            console.log('[Renderer] dom-ready');
+        });
+        GLOBAL_STATE.mainWindow.webContents.on('did-finish-load', () => {
+            console.log('[Renderer] did-finish-load');
+            const splash = GLOBAL_STATE.splashWindow;
+            if (splash && !splash.isDestroyed()) {
+                try { splash.close(); } catch (e) {}
+                GLOBAL_STATE.splashWindow = null;
+            }
+        });
+
+        GLOBAL_STATE.mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+            if (typeof url === 'string' && /^(https?|mailto):/i.test(url)) {
+                shell.openExternal(url);
+            } else {
+                console.warn('[WindowOpen] Blocked:', url);
+            }
+            return { action: 'deny' };
+        });
+
         this._setupMainListeners();
+
+        GLOBAL_STATE.mainWindow.on('closed', () => {
+            if (GLOBAL_STATE.mainWindow && GLOBAL_STATE.mainWindow.isDestroyed()) {
+                GLOBAL_STATE.mainWindow = null;
+            }
+        });
         
         // if (GLOBAL_STATE.isDev) GLOBAL_STATE.mainWindow.webContents.openDevTools();
     },
 
+    _setupWebSecurity() {
+        const win = GLOBAL_STATE.mainWindow;
+        if (!win || win.isDestroyed()) {
+            return;
+        }
+
+        win.webContents.on('will-navigate', (event, url) => {
+            if (typeof url === 'string' && (url.startsWith('file:') || url.startsWith('about:'))) {
+                return;
+            }
+            event.preventDefault();
+            console.warn('[Navigate] Blocked:', url);
+        });
+
+        win.webContents.on('will-redirect', (event, url) => {
+            if (typeof url === 'string' && (url.startsWith('file:') || url.startsWith('about:'))) {
+                return;
+            }
+            event.preventDefault();
+            console.warn('[Redirect] Blocked:', url);
+        });
+    },
+
     _setupMainListeners() {
         const win = GLOBAL_STATE.mainWindow;
+
+        this._setupWebSecurity();
+
+        // If the renderer crashes, try to recover instead of leaving the app in a broken state.
+        win.webContents.on('render-process-gone', (_event, details) => {
+            console.error('[MainWindow] Renderer process gone:', details);
+            if (GLOBAL_STATE.isQuitting) {
+                return;
+            }
+            try {
+                setTimeout(() => {
+                    if (win && !win.isDestroyed()) {
+                        win.reload();
+                    }
+                }, 800);
+            } catch (e) {
+                // ignore
+            }
+        });
 
         // 关键：原生级平滑启动
         win.once('ready-to-show', () => {
             // 给一个小延迟确保 CSS 渲染完成
             setTimeout(() => {
                 updateSplashStatus('界面已准备完成...', 100);
-                if (GLOBAL_STATE.splashWindow) {
-                    GLOBAL_STATE.splashWindow.close();
-                    GLOBAL_STATE.splashWindow = null;
+                const splash = GLOBAL_STATE.splashWindow;
+                if (splash && !splash.isDestroyed()) {
+                    try { splash.close(); } catch (e) {}
                 }
-                win.show();
-                win.focus();
+                GLOBAL_STATE.splashWindow = null;
+
+                if (win && !win.isDestroyed()) {
+                    try {
+                        win.show();
+                        win.focus();
+                    } catch (e) {}
+                }
             }, 50); 
         });
 
@@ -309,19 +516,27 @@ const WindowManager = {
         GLOBAL_STATE.tray = new Tray(icon.resize({ width: 16, height: 16 }));
         
         const contextMenu = Menu.buildFromTemplate([
-            { label: '显示主窗口', click: () => GLOBAL_STATE.mainWindow?.show() },
+            { label: '显示主窗口', click: () => showMainWindowSafe() },
             { type: 'separator' },
-            { label: '启动机器人', click: () => GLOBAL_STATE.mainWindow?.webContents.send('tray-action', 'start-bot') },
-            { label: '停止机器人', click: () => GLOBAL_STATE.mainWindow?.webContents.send('tray-action', 'stop-bot') },
+            { label: '启动机器人', click: () => sendToMainWindowSafe('tray-action', 'start-bot') },
+            { label: '停止机器人', click: () => sendToMainWindowSafe('tray-action', 'stop-bot') },
             { type: 'separator' },
             { label: '退出', click: () => {
                 requestAppClose({ showWindow: true });
             }}
         ]);
 
+        // Ensure tray operations won't throw if the window/webContents has been destroyed.
+        try {
+            const items = contextMenu.items || [];
+            if (items[0]) items[0].click = () => showMainWindowSafe();
+            if (items[2]) items[2].click = () => sendToMainWindowSafe('tray-action', 'start-bot');
+            if (items[3]) items[3].click = () => sendToMainWindowSafe('tray-action', 'stop-bot');
+        } catch (e) {}
+
         GLOBAL_STATE.tray.setToolTip('微信AI助手');
         GLOBAL_STATE.tray.setContextMenu(contextMenu);
-        GLOBAL_STATE.tray.on('double-click', () => GLOBAL_STATE.mainWindow?.show());
+        GLOBAL_STATE.tray.on('double-click', () => showMainWindowSafe());
     }
 };
 
@@ -331,6 +546,7 @@ const WindowManager = {
 
 function setupIPC() {
     ipcMain.handle('get-flask-url', () => GLOBAL_STATE.flaskUrl);
+    ipcMain.handle('get-api-token', () => GLOBAL_STATE.apiToken);
     ipcMain.handle('check-backend', () => BackendManager.checkServer());
     ipcMain.handle('start-backend', async () => {
         try {
@@ -401,13 +617,22 @@ function setupIPC() {
         }
     });
 
-    ipcMain.handle('minimize-to-tray', () => GLOBAL_STATE.mainWindow?.hide());
+    ipcMain.handle('minimize-to-tray', () => {
+        const win = getMainWindowSafe();
+        try { win?.hide(); } catch (e) {}
+    });
 
     // 窗口控制
-    ipcMain.handle('window-minimize', () => GLOBAL_STATE.mainWindow?.minimize());
+    ipcMain.handle('window-minimize', () => {
+        const win = getMainWindowSafe();
+        try { win?.minimize(); } catch (e) {}
+    });
     ipcMain.handle('window-maximize', () => {
-        const win = GLOBAL_STATE.mainWindow;
-        win?.isMaximized() ? win.unmaximize() : win.maximize();
+        const win = getMainWindowSafe();
+        if (!win) return;
+        try {
+            win.isMaximized() ? win.unmaximize() : win.maximize();
+        } catch (e) {}
     });
     ipcMain.handle('window-close', () => requestAppClose({ showWindow: false }));
 
@@ -468,6 +693,14 @@ function setupIPC() {
     });
 }
 
+function safeSetupIPC() {
+    try {
+        setupIPC();
+    } catch (e) {
+        console.error('[IPC] setup failed:', e);
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 //                               应用生命周期
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -476,12 +709,32 @@ if (!app.requestSingleInstanceLock()) {
     app.quit();
 } else {
     app.on('second-instance', () => {
-        const win = GLOBAL_STATE.mainWindow;
-        if (win) {
-            if (win.isMinimized()) win.restore();
-            win.show();
-            win.focus();
-        }
+        // The event may fire while the first instance is still booting.
+        // Only touch BrowserWindow after app is ready.
+        app.whenReady().then(() => {
+            try {
+                const windows = BrowserWindow.getAllWindows();
+                const win = (windows || []).find(w => w && !w.isDestroyed()) || null;
+                if (win) {
+                    GLOBAL_STATE.mainWindow = win;
+                    try {
+                        if (win.isMinimized()) win.restore();
+                        win.show();
+                        win.focus();
+                        return;
+                    } catch (e) {
+                        console.warn('[SecondInstance] Failed to focus window:', e);
+                    }
+                }
+
+                // If the main window is missing, recreate it.
+                WindowManager.createMain();
+            } catch (e) {
+                console.error('[SecondInstance] Handler failed:', e);
+            }
+        }).catch((e) => {
+            console.error('[SecondInstance] whenReady failed:', e);
+        });
     });
 
     app.whenReady().then(() => {
@@ -492,7 +745,7 @@ if (!app.requestSingleInstanceLock()) {
         BackendManager.start().catch(err => console.error('Backend start error:', err));
 
         // 3. 设置 IPC
-        setupIPC();
+        safeSetupIPC();
 
         // 4. 创建主窗口 (后台加载，ready-to-show 时自动切换)
         WindowManager.createMain();

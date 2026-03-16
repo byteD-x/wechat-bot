@@ -9,28 +9,91 @@ from quart import Quart, jsonify, request, make_response
 from quart_cors import cors
 import logging
 import os
-import json
 import asyncio
+from datetime import datetime
 from types import SimpleNamespace
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
 from .bot_manager import get_bot_manager
-from backend.config import CONFIG
-from backend.model_catalog import get_model_catalog, infer_provider_id, merge_provider_defaults
+from backend.core.config_audit import (
+    build_config_audit,
+    build_reload_plan,
+    diff_config_paths,
+    get_effect_for_path,
+)
+from backend.core.config_service import get_config_service
+from backend.model_catalog import (
+    get_model_catalog,
+    infer_provider_id,
+    merge_provider_defaults,
+)
 from backend.utils.logging import setup_logging, get_logging_settings
 from backend.utils.config import resolve_system_prompt
 
 # 配置日志
-level, log_file, max_bytes, backup_count, format_type = get_logging_settings(CONFIG)
+config_service = get_config_service()
+_initial_snapshot = config_service.get_snapshot()
+level, log_file, max_bytes, backup_count, format_type = get_logging_settings(
+    _initial_snapshot.config
+)
 setup_logging(level, log_file, max_bytes, backup_count, format_type)
 
 logger = logging.getLogger(__name__)
 
+API_TOKEN = str(os.environ.get("WECHAT_BOT_API_TOKEN") or "").strip()
+
+
+def _is_local_request() -> bool:
+    try:
+        host = str(getattr(request, "host", "") or "")
+    except Exception:
+        host = ""
+    host_lower = host.lower()
+    return host_lower.startswith("127.0.0.1") or host_lower.startswith("localhost")
+
+
 # 创建 Quart 应用
 app = Quart(__name__)
-app = cors(app, allow_origin="*")
+app = cors(
+    app,
+    allow_origin="*",
+    allow_headers=["Content-Type", "X-Api-Token"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+)
+
+# Security note: API is intended for local Electron clients only.
+# - Run server defaults bind to 127.0.0.1.
+# - When WECHAT_BOT_API_TOKEN is set, all /api/* endpoints require it.
+
+
+@app.before_request
+async def _refresh_and_enforce_local_api_token():
+    # Keep token in sync for long-running debug reloader sessions.
+    global API_TOKEN
+    API_TOKEN = str(os.environ.get("WECHAT_BOT_API_TOKEN") or "").strip()
+
+    if request.method == "OPTIONS":
+        return None
+
+    path = str(getattr(request, "path", "") or "")
+    if not path.startswith("/api/"):
+        return None
+
+    if not _is_local_request():
+        return jsonify({"success": False, "message": "forbidden"}), 403
+
+    if not API_TOKEN:
+        return None
+
+    header_token = str(request.headers.get("X-Api-Token") or "").strip()
+    query_token = str(request.args.get("token") or "").strip()
+    if header_token == API_TOKEN or query_token == API_TOKEN:
+        return None
+
+    return jsonify({"success": False, "message": "unauthorized"}), 401
+
 
 # 获取 BotManager 实例
 manager = get_bot_manager()
@@ -53,7 +116,9 @@ def _mask_preset(preset: dict) -> dict:
         masked["api_key_masked"] = ""
     elif key and not key.startswith("YOUR_"):
         masked["api_key_configured"] = True
-        masked["api_key_masked"] = key[:8] + "****" + key[-4:] if len(key) > 12 else "****"
+        masked["api_key_masked"] = (
+            key[:8] + "****" + key[-4:] if len(key) > 12 else "****"
+        )
     else:
         masked["api_key_configured"] = False
         masked["api_key_masked"] = ""
@@ -63,37 +128,38 @@ def _mask_preset(preset: dict) -> dict:
     return masked
 
 
-def _build_config_payload() -> dict:
-    from backend.config import CONFIG
+def _build_config_payload(snapshot=None) -> dict:
+    active_snapshot = snapshot or config_service.get_snapshot()
+    config_dict = active_snapshot.config
 
-    api_cfg = CONFIG.get('api', {})
-    agent_cfg = dict(CONFIG.get('agent', {}))
+    api_cfg = config_dict.get("api", {})
+    agent_cfg = dict(config_dict.get("agent", {}))
     presets = []
-    for preset in api_cfg.get('presets', []):
+    for preset in api_cfg.get("presets", []):
         presets.append(_mask_preset(preset))
 
     api_cfg_safe = api_cfg.copy()
-    api_cfg_safe['presets'] = presets
-    langsmith_key = str(agent_cfg.get('langsmith_api_key') or '').strip()
-    agent_cfg['langsmith_api_key_configured'] = bool(langsmith_key)
-    agent_cfg.pop('langsmith_api_key', None)
+    api_cfg_safe["presets"] = presets
+    langsmith_key = str(agent_cfg.get("langsmith_api_key") or "").strip()
+    agent_cfg["langsmith_api_key_configured"] = bool(langsmith_key)
+    agent_cfg.pop("langsmith_api_key", None)
     return {
-        'api': api_cfg_safe,
-        'bot': CONFIG.get('bot', {}),
-        'logging': CONFIG.get('logging', {}),
-        'agent': agent_cfg,
+        "api": api_cfg_safe,
+        "bot": config_dict.get("bot", {}),
+        "logging": config_dict.get("logging", {}),
+        "agent": agent_cfg,
     }
 
 
 def _resolve_request_api_key(target_preset: dict, api_cfg: dict) -> str:
-    allow_empty_key = target_preset.get('allow_empty_key')
+    allow_empty_key = target_preset.get("allow_empty_key")
     if allow_empty_key is None:
-        allow_empty_key = api_cfg.get('allow_empty_key', False)
+        allow_empty_key = api_cfg.get("allow_empty_key", False)
     if allow_empty_key:
-        value = target_preset.get('api_key')
+        value = target_preset.get("api_key")
         return "" if value is None else str(value).strip()
 
-    return str(target_preset.get('api_key') or api_cfg.get('api_key') or "").strip()
+    return str(target_preset.get("api_key") or api_cfg.get("api_key") or "").strip()
 
 
 def _normalize_ollama_tags_url(base_url: str) -> str:
@@ -132,92 +198,93 @@ def _fetch_ollama_models_sync(base_url: str) -> list[str]:
 #                               API 路由
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@app.route('/api/status', methods=['GET'])
+
+@app.route("/api/status", methods=["GET"])
 async def get_status():
     """获取机器人状态"""
     return jsonify(manager.get_status())
 
 
-@app.route('/api/metrics', methods=['GET'])
+@app.route("/api/metrics", methods=["GET"])
 async def get_metrics():
     """Export Prometheus-style runtime metrics."""
     return app.response_class(
         manager.export_metrics(),
-        mimetype='text/plain; version=0.0.4; charset=utf-8',
+        mimetype="text/plain; version=0.0.4; charset=utf-8",
     )
 
 
-@app.route('/api/events')
+@app.route("/api/events")
 async def sse_events():
     """SSE 事件流"""
     response = await make_response(
         manager.event_generator(),
         {
-            'Content-Type': 'text/event-stream',
-            'Cache-Control': 'no-cache',
-            'Connection': 'keep-alive',
-        }
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        },
     )
     response.timeout = None
     return response
 
 
-@app.route('/api/start', methods=['POST'])
+@app.route("/api/start", methods=["POST"])
 async def start_bot():
     """启动机器人"""
     result = await manager.start()
     return jsonify(result)
 
 
-@app.route('/api/stop', methods=['POST'])
+@app.route("/api/stop", methods=["POST"])
 async def stop_bot():
     """停止机器人"""
     result = await manager.stop()
     return jsonify(result)
 
 
-@app.route('/api/pause', methods=['POST'])
+@app.route("/api/pause", methods=["POST"])
 async def pause_bot():
     """暂停机器人"""
     data = await request.get_json(silent=True) or {}
-    reason = str(data.get('reason') or '用户暂停').strip() or '用户暂停'
+    reason = str(data.get("reason") or "用户暂停").strip() or "用户暂停"
     result = await manager.pause(reason)
     return jsonify(result)
 
 
-@app.route('/api/resume', methods=['POST'])
+@app.route("/api/resume", methods=["POST"])
 async def resume_bot():
     """恢复机器人"""
     result = await manager.resume()
     return jsonify(result)
 
 
-@app.route('/api/restart', methods=['POST'])
+@app.route("/api/restart", methods=["POST"])
 async def restart_bot():
     """重启机器人"""
     result = await manager.restart()
     return jsonify(result)
 
 
-@app.route('/api/recover', methods=['POST'])
+@app.route("/api/recover", methods=["POST"])
 async def recover_bot():
     """一键恢复机器人"""
     result = await manager.recover()
     return jsonify(result)
 
 
-@app.route('/api/messages', methods=['GET'])
+@app.route("/api/messages", methods=["GET"])
 async def get_messages():
     """获取消息历史"""
     try:
-        limit = request.args.get('limit', 50, type=int)
-        offset = request.args.get('offset', 0, type=int)
-        chat_id = request.args.get('chat_id', '', type=str)
-        keyword = request.args.get('keyword', '', type=str)
-        
+        limit = request.args.get("limit", 50, type=int)
+        offset = request.args.get("offset", 0, type=int)
+        chat_id = request.args.get("chat_id", "", type=str)
+        keyword = request.args.get("keyword", "", type=str)
+
         # 使用共享的 MemoryManager 实例
         mem_mgr = manager.get_memory_manager()
-        
+
         page = await mem_mgr.get_message_page(
             limit=limit,
             offset=offset,
@@ -225,354 +292,339 @@ async def get_messages():
             keyword=keyword,
         )
         chats = await mem_mgr.list_chat_summaries()
-            
-        return jsonify({
-            'success': True,
-            'messages': page['messages'],
-            'total': page['total'],
-            'limit': page['limit'],
-            'offset': page['offset'],
-            'has_more': page['has_more'],
-            'chats': chats,
-        })
+
+        return jsonify(
+            {
+                "success": True,
+                "messages": page["messages"],
+                "total": page["total"],
+                "limit": page["limit"],
+                "offset": page["offset"],
+                "has_more": page["has_more"],
+                "chats": chats,
+            }
+        )
     except Exception as e:
         logger.error(f"获取消息失败: {e}")
-        return jsonify({'success': False, 'message': f'获取消息失败: {str(e)}'})
+        return jsonify({"success": False, "message": f"获取消息失败: {str(e)}"})
 
-@app.route('/api/send', methods=['POST'])
+
+@app.route("/api/send", methods=["POST"])
 async def send_message():
     """发送消息"""
     try:
         data = await request.get_json()
-        target = data.get('target')
-        content = data.get('content')
-        
+        target = data.get("target")
+        content = data.get("content")
+
         if not target or not content:
-            return jsonify({'success': False, 'message': '缺少目标或内容'})
-            
+            return jsonify({"success": False, "message": "缺少目标或内容"})
+
         result = await manager.send_message(target, content)
         return jsonify(result)
     except Exception as e:
         logger.error(f"发送消息异常: {e}")
-        return jsonify({'success': False, 'message': f'发送异常: {str(e)}'})
+        return jsonify({"success": False, "message": f"发送异常: {str(e)}"})
 
-@app.route('/api/usage', methods=['GET'])
+
+@app.route("/api/usage", methods=["GET"])
 async def get_usage():
     """获取使用统计"""
     try:
         stats = manager.get_usage()
-        return jsonify({'success': True, 'stats': stats})
+        return jsonify({"success": True, "stats": stats})
     except Exception as e:
-         return jsonify({'success': False, 'message': str(e)})
+        return jsonify({"success": False, "message": str(e)})
 
 
-@app.route('/api/model_catalog', methods=['GET'])
+@app.route("/api/model_catalog", methods=["GET"])
 async def get_model_catalog_api():
     """获取前端使用的模型目录"""
     try:
-        return jsonify({'success': True, **get_model_catalog()})
+        return jsonify({"success": True, **get_model_catalog()})
     except Exception as e:
         logger.error(f"获取模型目录失败: {e}")
-        return jsonify({'success': False, 'message': f'获取模型目录失败: {str(e)}'})
+        return jsonify({"success": False, "message": f"获取模型目录失败: {str(e)}"})
 
 
-@app.route('/api/ollama/models', methods=['GET'])
+@app.route("/api/ollama/models", methods=["GET"])
 async def get_ollama_models():
     """获取本地 Ollama 已安装模型列表"""
     try:
-        base_url = request.args.get('base_url', 'http://127.0.0.1:11434/v1', type=str)
+        base_url = request.args.get("base_url", "http://127.0.0.1:11434/v1", type=str)
         models = await asyncio.to_thread(_fetch_ollama_models_sync, base_url)
-        return jsonify({'success': True, 'models': models, 'base_url': base_url})
+        return jsonify({"success": True, "models": models, "base_url": base_url})
     except Exception as e:
         logger.warning(f"获取 Ollama 模型列表失败: {e}")
-        return jsonify({'success': False, 'message': f'获取 Ollama 模型列表失败: {str(e)}', 'models': []})
+        return jsonify(
+            {
+                "success": False,
+                "message": f"获取 Ollama 模型列表失败: {str(e)}",
+                "models": [],
+            }
+        )
 
 
-@app.route('/api/config', methods=['GET'])
+@app.route("/api/config", methods=["GET"])
 async def get_config():
     """获取配置"""
     try:
-        response = {'success': True, **_build_config_payload()}
+        snapshot = config_service.get_snapshot()
+        response = {"success": True, **_build_config_payload(snapshot)}
         return jsonify(response)
     except Exception as e:
         logger.error(f"获取配置失败: {e}")
-        return jsonify({'success': False, 'message': f'获取配置失败: {str(e)}'})
+        return jsonify({"success": False, "message": f"获取配置失败: {str(e)}"})
 
 
+@app.route("/api/config/audit", methods=["GET"])
+async def get_config_audit():
+    """返回当前生效配置的审计信息。"""
+    try:
+        snapshot = config_service.get_snapshot()
+        loaded_at_raw = getattr(snapshot, "loaded_at", None)
+        if hasattr(loaded_at_raw, "isoformat"):
+            loaded_at = loaded_at_raw.isoformat()
+        elif loaded_at_raw:
+            loaded_at = datetime.fromtimestamp(float(loaded_at_raw)).isoformat()
+        else:
+            loaded_at = None
+        audit = build_config_audit(
+            snapshot.config,
+            override_path=os.path.join("data", "config_override.json"),
+        )
+        return jsonify(
+            {
+                "success": True,
+                "version": snapshot.version,
+                "loaded_at": loaded_at,
+                "audit": audit,
+            }
+        )
+    except Exception as e:
+        logger.error(f"配置审计失败: {e}")
+        return jsonify({"success": False, "message": f"配置审计失败: {str(e)}"})
 
 
-
-@app.route('/api/config', methods=['POST'])
+@app.route("/api/config", methods=["POST"])
 async def save_config():
     """保存配置覆写"""
     try:
         data = await request.get_json()
-        override_file = os.path.join('data', 'config_override.json')
+        current_snapshot = config_service.get_snapshot()
+        current_config = current_snapshot.to_dict()
         requested_active = None
         force_ai_reload = False
         strict_active_preset = False
         if isinstance(data, dict):
-            api_updates = data.get('api')
+            api_updates = data.get("api")
             if isinstance(api_updates, dict):
                 force_ai_reload = True
-                requested_active = str(api_updates.get('active_preset') or "").strip() or None
+                requested_active = (
+                    str(api_updates.get("active_preset") or "").strip() or None
+                )
                 strict_active_preset = True
 
         # 确保目录存在
-        os.makedirs(os.path.dirname(override_file), exist_ok=True)
-        
-        def _sync_save_config(new_data):
-            # 读取现有覆写
-            existing = {}
-            if os.path.exists(override_file):
-                try:
-                    with open(override_file, 'r', encoding='utf-8') as f:
-                        existing = json.load(f)
-                except Exception:
-                    pass
-            
-            # 合并新配置
-            # 注意：这里需要导入 CONFIG 来获取当前预设，但为了避免线程安全问题，
-            # 我们尽量只读取。CONFIG 是全局变量。
-            from backend.config import CONFIG
-            
-            for section, settings in new_data.items():
-                if section not in existing:
-                    existing[section] = {}
+        config_path = getattr(manager, "config_path", None)
+        if not isinstance(config_path, str) or not config_path.strip():
+            config_path = None
 
-                if section == 'agent' and isinstance(settings, dict):
-                    settings = dict(settings)
-                    settings.pop('langsmith_api_key_configured', None)
-                
-                # 特殊处理 api.presets 的 API Key 保护
-                if section == 'api' and 'presets' in settings:
-                    current_presets = CONFIG.get('api', {}).get('presets', [])
-                    new_presets = settings['presets']
-                    
-                    # 获取 override 文件中的旧配置，用于辅助判断
-                    existing_api = existing.get('api', {})
-                    existing_presets = existing_api.get('presets', [])
-
-                    for new_p in new_presets:
-                        p_name = new_p.get('name')
-                        mem_p = next((p for p in current_presets if p.get('name') == p_name), None)
-                        file_p = next((p for p in existing_presets if p.get('name') == p_name), None)
-
-                        if not new_p.get('provider_id'):
-                            new_p['provider_id'] = (
-                                (mem_p or {}).get('provider_id')
-                                or (file_p or {}).get('provider_id')
-                            )
-
-                        merged_preset = merge_provider_defaults(new_p)
-                        new_p.clear()
-                        new_p.update(merged_preset)
-
-                        key = new_p.get('api_key')
-
-                        # 判断是否需要恢复 Key：
-                        # 1. 带有 _keep_key 标记 (前端明确表示没改)
-                        # 2. Key 为空 (前端没传)
-                        # 3. Key 是掩码 (前端传回了掩码)
-                        should_restore = new_p.get('_keep_key') or not key or '****' in key
-
-                        if should_restore:
-                            if mem_p and mem_p.get('api_key') and not mem_p.get('api_key').startswith('****'):
-                                # 内存里有明文 Key，直接用
-                                new_p['api_key'] = mem_p['api_key']
-                            else:
-                                # 尝试从 existing file 里找
-                                if file_p and file_p.get('api_key'):
-                                    new_p['api_key'] = file_p['api_key']
-                                else:
-                                    # 实在找不到，就只能删掉 key 字段了
-                                    if 'api_key' in new_p:
-                                        del new_p['api_key']
-                        
-                        # 清理临时字段
-                        for field in ['_keep_key', 'api_key_configured', 'api_key_masked']:
-                            if field in new_p:
-                                del new_p[field]
-                    
-                if isinstance(settings, dict):
-                    existing[section].update(settings)
-                else:
-                    existing[section] = settings
-            
-            # 保存
-            with open(override_file, 'w', encoding='utf-8') as f:
-                json.dump(existing, f, ensure_ascii=False, indent=2)
-            
-            return existing
-
-        # 在线程池中执行文件 I/O
-        await asyncio.to_thread(_sync_save_config, data)
-            
-        # 实时更新内存中的配置 (回到主线程执行)
-        from backend.config import CONFIG, _apply_config_overrides, _apply_api_keys, _apply_prompt_overrides
-        _apply_config_overrides(CONFIG)
-        _apply_api_keys(CONFIG) # 重新应用 Key 可能有变
-        _apply_prompt_overrides(CONFIG)
+        snapshot = await asyncio.to_thread(
+            config_service.update_override,
+            data or {},
+            config_path=config_path,
+            override_path=os.path.join("data", "config_override.json"),
+            source="api_override",
+        )
+        effective_config = snapshot.to_dict()
+        changed_paths = diff_config_paths(current_config, effective_config)
+        reload_plan = build_reload_plan(changed_paths)
+        if changed_paths:
+            force_ai_reload = force_ai_reload or any(
+                get_effect_for_path(path).get("component") == "ai_client"
+                for path in changed_paths
+            )
 
         # 🔍 检测模型切换并输出高亮日志
-        new_api_cfg = CONFIG.get('api', {})
-        new_active = new_api_cfg.get('active_preset')
-        
+        new_api_cfg = snapshot.api
+        new_active = new_api_cfg.get("active_preset")
+
         if new_active:
-             preset_info = next((p for p in new_api_cfg.get('presets', []) if p['name'] == new_active), {})
-             model_name = preset_info.get('model', 'Unknown')
-             alias = preset_info.get('alias', '')
-             
-             logger.info("\n" + "═"*50)
-             logger.info(f"✨ 模型配置已更新 | 当前预设: {new_active}")
-             logger.info(f"📦 模型: {model_name} | 👤 别名: {alias}")
-             logger.info("═"*50 + "\n")
+            preset_info = next(
+                (p for p in new_api_cfg.get("presets", []) if p["name"] == new_active),
+                {},
+            )
+            model_name = preset_info.get("model", "Unknown")
+            alias = preset_info.get("alias", "")
+
+            logger.info("\n" + "═" * 50)
+            logger.info(f"✨ 模型配置已更新 | 当前预设: {new_active}")
+            logger.info(f"📦 模型: {model_name} | 👤 别名: {alias}")
+            logger.info("═" * 50 + "\n")
 
         runtime_apply = None
         if manager.is_running and manager.bot:
             runtime_apply = await manager.reload_runtime_config(
-                new_config=CONFIG,
+                new_config=effective_config,
+                changed_paths=changed_paths,
                 force_ai_reload=force_ai_reload,
                 strict_active_preset=strict_active_preset,
             )
-            if requested_active and runtime_apply.get('success'):
-                runtime_apply['requested_preset'] = requested_active
+            if requested_active and runtime_apply.get("success"):
+                runtime_apply["requested_preset"] = requested_active
 
-        return jsonify({
-            'success': True,
-            'config': _build_config_payload(),
-            'runtime_apply': runtime_apply,
-        })
-        
+        return jsonify(
+            {
+                "success": True,
+                "config": _build_config_payload(snapshot),
+                "changed_paths": changed_paths,
+                "reload_plan": reload_plan,
+                "runtime_apply": runtime_apply,
+            }
+        )
+
     except Exception as e:
         logger.error(f"保存配置失败: {e}")
-        return jsonify({'success': False, 'message': f'保存失败: {str(e)}'})
+        return jsonify({"success": False, "message": f"保存失败: {str(e)}"})
 
 
-@app.route('/api/test_connection', methods=['POST'])
+@app.route("/api/test_connection", methods=["POST"])
 async def test_connection():
     """测试 LLM 连接"""
     try:
         data = await request.get_json()
-        preset_name = data.get('preset_name')
-        
-        # 获取配置
-        from backend.config import CONFIG
-        api_cfg = CONFIG.get('api', {})
-        presets = api_cfg.get('presets', [])
-        
+        preset_name = data.get("preset_name")
+
+        snapshot = config_service.get_snapshot()
+        api_cfg = snapshot.api
+        presets = api_cfg.get("presets", [])
+
         target_preset = None
         if preset_name:
-            target_preset = next((p for p in presets if p['name'] == preset_name), None)
+            target_preset = next((p for p in presets if p["name"] == preset_name), None)
         else:
             # 如果未指定，使用当前激活的
-            active_name = api_cfg.get('active_preset')
-            target_preset = next((p for p in presets if p['name'] == active_name), None)
-            
+            active_name = api_cfg.get("active_preset")
+            target_preset = next((p for p in presets if p["name"] == active_name), None)
+
         if not target_preset:
-            return jsonify({'success': False, 'message': '未找到指定的预设配置'})
-            
+            return jsonify({"success": False, "message": "未找到指定的预设配置"})
+
         # 实例化 AIClient
         from backend.core.ai_client import AIClient
-        
+
         # 构造参数，注意处理默认值
         # 注意：AIClient 需要完整的参数，这里做一些回退处理
         client = AIClient(
-            base_url=target_preset.get('base_url') or api_cfg.get('base_url'),
+            base_url=target_preset.get("base_url") or api_cfg.get("base_url"),
             api_key=_resolve_request_api_key(target_preset, api_cfg),
-            model=target_preset.get('model') or api_cfg.get('model'),
+            model=target_preset.get("model") or api_cfg.get("model"),
             timeout_sec=(
-                target_preset.get('timeout_sec')
-                or target_preset.get('timeout')
-                or api_cfg.get('timeout_sec')
-                or api_cfg.get('timeout', 10.0)
+                target_preset.get("timeout_sec")
+                or target_preset.get("timeout")
+                or api_cfg.get("timeout_sec")
+                or api_cfg.get("timeout", 10.0)
             ),
-            max_retries=0 # 测试时不重试
+            max_retries=0,  # 测试时不重试
         )
-        
+
         # 调用 probe，并在测试结束后释放共享连接引用
         try:
             success = await client.probe()
         finally:
             await client.close()
-        
+
         if success:
-            return jsonify({'success': True, 'message': '连接测试成功'})
+            return jsonify({"success": True, "message": "连接测试成功"})
         else:
-            return jsonify({'success': False, 'message': '连接测试失败，请检查配置或网络'})
-            
+            return jsonify(
+                {"success": False, "message": "连接测试失败，请检查配置或网络"}
+            )
+
     except Exception as e:
         logger.error(f"连接测试异常: {e}")
-        return jsonify({'success': False, 'message': f'测试异常: {str(e)}'})
+        return jsonify({"success": False, "message": f"测试异常: {str(e)}"})
 
 
-@app.route('/api/preview_prompt', methods=['POST'])
+@app.route("/api/preview_prompt", methods=["POST"])
 async def preview_prompt():
     """预览当前配置生成的系统提示词。"""
     try:
         data = await request.get_json(silent=True) or {}
-        bot_cfg = dict(CONFIG.get('bot', {}))
-        bot_overrides = data.get('bot')
+        snapshot = config_service.get_snapshot()
+        bot_cfg = dict(snapshot.bot)
+        bot_overrides = data.get("bot")
         if isinstance(bot_overrides, dict):
             bot_cfg.update(bot_overrides)
 
-        sample = data.get('sample') if isinstance(data.get('sample'), dict) else {}
+        sample = data.get("sample") if isinstance(data.get("sample"), dict) else {}
         event = SimpleNamespace(
-            chat_name=str(sample.get('chat_name') or '预览联系人'),
-            sender=str(sample.get('sender') or '预览用户'),
-            content=str(sample.get('message') or ''),
-            is_group=bool(sample.get('is_group', False)),
+            chat_name=str(sample.get("chat_name") or "预览联系人"),
+            sender=str(sample.get("sender") or "预览用户"),
+            content=str(sample.get("message") or ""),
+            is_group=bool(sample.get("is_group", False)),
         )
 
-        user_profile = {
-            "nickname": str(sample.get('nickname') or event.sender),
-            "relationship": str(sample.get('relationship') or 'friend'),
-            "message_count": int(sample.get('message_count') or 12),
-        } if bot_cfg.get("profile_inject_in_prompt") else None
+        user_profile = (
+            {
+                "nickname": str(sample.get("nickname") or event.sender),
+                "relationship": str(sample.get("relationship") or "friend"),
+                "message_count": int(sample.get("message_count") or 12),
+            }
+            if bot_cfg.get("profile_inject_in_prompt")
+            else None
+        )
 
         emotion = None
         if bot_cfg.get("emotion_inject_in_prompt"):
-            emotion = SimpleNamespace(emotion=str(sample.get('emotion') or 'neutral'))
+            emotion = SimpleNamespace(emotion=str(sample.get("emotion") or "neutral"))
 
         context = []
         preview = resolve_system_prompt(event, bot_cfg, user_profile, emotion, context)
         overrides = bot_cfg.get("system_prompt_overrides") or {}
 
-        return jsonify({
-            'success': True,
-            'prompt': preview,
-            'summary': {
-                'chars': len(preview),
-                'lines': len([line for line in preview.splitlines() if line.strip()]),
-                'override_applied': bool(getattr(event, "chat_name", "") in overrides),
-                'profile_injected': bool(user_profile),
-                'emotion_injected': emotion is not None,
+        return jsonify(
+            {
+                "success": True,
+                "prompt": preview,
+                "summary": {
+                    "chars": len(preview),
+                    "lines": len(
+                        [line for line in preview.splitlines() if line.strip()]
+                    ),
+                    "override_applied": bool(
+                        getattr(event, "chat_name", "") in overrides
+                    ),
+                    "profile_injected": bool(user_profile),
+                    "emotion_injected": emotion is not None,
+                },
             }
-        })
+        )
     except Exception as e:
         logger.error(f"预览提示词失败: {e}")
-        return jsonify({'success': False, 'message': f'预览失败: {str(e)}'})
+        return jsonify({"success": False, "message": f"预览失败: {str(e)}"})
 
 
-@app.route('/api/logs', methods=['GET'])
+@app.route("/api/logs", methods=["GET"])
 async def get_logs():
     """获取日志"""
     try:
-        from backend.config import CONFIG
-        log_file = CONFIG.get('logging', {}).get('file', 'data/logs/bot.log')
-        
+        snapshot = config_service.get_snapshot()
+        log_file = snapshot.logging.get("file", "data/logs/bot.log")
+
         if not os.path.exists(log_file):
-            return jsonify({'success': True, 'logs': []})
-            
-        lines_count = request.args.get('lines', 500, type=int)
-        
+            return jsonify({"success": True, "logs": []})
+
+        lines_count = request.args.get("lines", 500, type=int)
+
         def _read_logs():
             if lines_count <= 0:
                 return []
-            with open(log_file, 'rb') as f:
+            with open(log_file, "rb") as f:
                 f.seek(0, os.SEEK_END)
                 end = f.tell()
-                buffer = b''
+                buffer = b""
                 lines = []
                 chunk_size = 8192
                 while end > 0 and len(lines) <= lines_count:
@@ -581,52 +633,58 @@ async def get_logs():
                     f.seek(end)
                     buffer = f.read(read_size) + buffer
                     lines = buffer.splitlines()
-                decoded = [line.decode('utf-8', errors='replace').strip() for line in lines if line.strip()]
+                decoded = [
+                    line.decode("utf-8", errors="replace").strip()
+                    for line in lines
+                    if line.strip()
+                ]
                 return decoded[-lines_count:]
 
         logs = await asyncio.to_thread(_read_logs)
-        return jsonify({'success': True, 'logs': logs})
+        return jsonify({"success": True, "logs": logs})
     except Exception as e:
         logger.error(f"读取日志失败: {e}")
-        return jsonify({'success': False, 'message': f'读取日志失败: {str(e)}'})
+        return jsonify({"success": False, "message": f"读取日志失败: {str(e)}"})
 
 
-@app.route('/api/logs/clear', methods=['POST'])
+@app.route("/api/logs/clear", methods=["POST"])
 async def clear_logs():
     """清空日志"""
     try:
-        from backend.config import CONFIG
         import asyncio
-        
-        log_file = CONFIG.get('logging', {}).get('file', 'data/logs/bot.log')
-        
+
+        snapshot = config_service.get_snapshot()
+        log_file = snapshot.logging.get("file", "data/logs/bot.log")
+
         def _clear_file():
             # 清空文件内容
-            with open(log_file, 'w', encoding='utf-8') as f:
-                 f.write("")
-                 
+            with open(log_file, "w", encoding="utf-8") as f:
+                f.write("")
+
         await asyncio.to_thread(_clear_file)
-             
-        return jsonify({'success': True, 'message': '日志已清空'})
+
+        return jsonify({"success": True, "message": "日志已清空"})
     except Exception as e:
-        return jsonify({'success': False, 'message': f"清空日志失败: {str(e)}"})
+        return jsonify({"success": False, "message": f"清空日志失败: {str(e)}"})
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #                               启动入口
 # ═══════════════════════════════════════════════════════════════════════════════
 
-async def run_server_async(host='0.0.0.0', port=5000):
+
+async def run_server_async(host="127.0.0.1", port=5000):
     """异步启动 API 服务"""
     logger.info(f"API 服务启动于 http://{host}:{port}")
     await app.run_task(host=host, port=port)
 
 
-def run_server(host='0.0.0.0', port=5000, debug=False):
+def run_server(host="127.0.0.1", port=5000, debug=False):
     """启动 API 服务（同步入口）"""
     import asyncio
+
     logger.info(f"API 服务启动于 http://{host}:{port} (Debug={debug})")
-    
+
     if debug:
         # Debug 模式下使用 app.run 启用 reloader
         # 注意：这会阻塞，直到服务停止
@@ -636,5 +694,5 @@ def run_server(host='0.0.0.0', port=5000, debug=False):
         asyncio.run(app.run_task(host=host, port=port))
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     run_server(debug=True)

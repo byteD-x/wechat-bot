@@ -1,5 +1,5 @@
 /**
- * 页面模块统一导出
+ * 页面模块统一导出。
  */
 
 export { DashboardPage } from './DashboardPage.js';

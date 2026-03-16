@@ -57,6 +57,16 @@ def normalize_new_messages(raw: Any, self_name: str) -> List[MessageEvent]:
     # 部分版本会返回消息字典列表。
     if isinstance(raw, list):
         for item in raw:
+            # hook_wcferry 当前返回结构：[{ "chat_name": "...", "chat_type": "...", "msg": [...] }, ...]
+            if isinstance(item, dict) and "chat_name" in item and "msg" in item:
+                chat_name = str(item.get("chat_name", "")).strip()
+                chat_type = str(item.get("chat_type", "")).strip()
+                for msg_item in iter_items(item.get("msg", [])):
+                    event = normalize_message_item(chat_name, msg_item, self_name, chat_type)
+                    if event:
+                        events.append(event)
+                continue
+
             event = normalize_message_item_from_list(item, self_name)
             if event:
                 events.append(event)

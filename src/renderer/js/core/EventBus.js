@@ -4,6 +4,8 @@
  * 提供模块间松耦合通信机制
  */
 
+import { debugLog } from './Debug.js';
+
 class EventBus {
     constructor() {
         // 事件 -> 处理器集合
@@ -36,8 +38,21 @@ class EventBus {
      */
     off(event, handler) {
         if (handler) {
-            this._handlers.get(event)?.delete(handler);
-            this._onceHandlers.get(event)?.delete(handler);
+            const regular = this._handlers.get(event);
+            if (regular) {
+                regular.delete(handler);
+                if (regular.size === 0) {
+                    this._handlers.delete(event);
+                }
+            }
+
+            const once = this._onceHandlers.get(event);
+            if (once) {
+                once.delete(handler);
+                if (once.size === 0) {
+                    this._onceHandlers.delete(event);
+                }
+            }
         } else {
             // 如果没有指定处理器，移除该事件的所有处理器
             this._handlers.delete(event);
@@ -66,11 +81,16 @@ class EventBus {
      * @param {*} data - 事件数据
      */
     emit(event, data) {
-        console.log(`[EventBus] 触发事件: ${event}`, data);
+        if (!this._handlers.has(event) && !this._onceHandlers.has(event)) {
+            return;
+        }
+        debugLog(`[EventBus] 触发事件: ${event}`, data);
 
         // 触发普通处理器
-        if (this._handlers.has(event)) {
-            for (const handler of this._handlers.get(event)) {
+        const regularHandlers = this._handlers.get(event);
+        if (regularHandlers && regularHandlers.size > 0) {
+            // Copy to prevent handler mutation (on/off) from affecting iteration order.
+            for (const handler of Array.from(regularHandlers)) {
                 try {
                     handler(data);
                 } catch (error) {
@@ -80,8 +100,9 @@ class EventBus {
         }
 
         // 触发一次性处理器
-        if (this._onceHandlers.has(event)) {
-            for (const handler of this._onceHandlers.get(event)) {
+        const onceHandlers = this._onceHandlers.get(event);
+        if (onceHandlers && onceHandlers.size > 0) {
+            for (const handler of Array.from(onceHandlers)) {
                 try {
                     handler(data);
                 } catch (error) {

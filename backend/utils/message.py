@@ -245,7 +245,18 @@ def parse_voice_to_text_result(result: Any) -> Tuple[Optional[str], Optional[str
     if result is None:
         return None, "empty"
     if isinstance(result, dict):
-        message = result.get("message") or result.get("error") or ""
+        text = result.get("text") or result.get("content") or ""
+        if not text and isinstance(result.get("data"), dict):
+            text = result["data"].get("text") or result["data"].get("content") or ""
+        text = str(text).strip() if text else ""
+        if text:
+            return text, None
+
+        error = result.get("error")
+        if isinstance(error, dict):
+            error = error.get("message") or error.get("error") or ""
+
+        message = error or result.get("message") or ""
         message = str(message).strip() if message else ""
         return None, message or "unknown"
     text = str(result).strip()

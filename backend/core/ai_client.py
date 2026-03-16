@@ -36,6 +36,8 @@ from typing import AsyncIterator, Deque, Dict, Iterable, List, Optional, Tuple
 import httpx
 from tenacity import AsyncRetrying, stop_after_attempt, wait_exponential, retry_if_exception_type, RetryError
 
+from ..utils.common import as_optional_int, as_optional_str
+
 try:
     import tiktoken
 except Exception:  # pragma: no cover - 可选依赖
@@ -51,6 +53,31 @@ MAX_RETRIES = 2             # 最大重试次数
 
 _tiktoken_encoder = None
 _tiktoken_probe_done = False
+
+
+def _is_internal_task_chat_id(chat_id: str) -> bool:
+    # Internal augmentation tasks (emotion/facts/etc.) use a "__xxx__" prefix.
+    return str(chat_id or "").startswith("__")
+
+
+def _extract_text(value: object) -> str:
+    """Extract human-readable text from OpenAI-compatible content payloads."""
+
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, list):
+        parts: List[str] = []
+        for item in value:
+            if isinstance(item, dict):
+                text = item.get("text")
+                if text:
+                    parts.append(str(text).strip())
+            elif item:
+                parts.append(str(item).strip())
+        return "\n".join(part for part in parts if part).strip()
+    return str(value).strip()
 
 
 def _build_client_pool_signature(base_url: str, timeout_sec: float) -> str:
@@ -234,9 +261,13 @@ class AIClient:
             self.context_max_tokens = max(1, int(context_max_tokens))
         self.system_prompt = system_prompt
         self.temperature = temperature
-        self.max_tokens = max_tokens
-        self.max_completion_tokens = max_completion_tokens
-        self.reasoning_effort = reasoning_effort
+        self.max_tokens = as_optional_int(max_tokens)
+        if self.max_tokens is not None and self.max_tokens <= 0:
+            self.max_tokens = None
+        self.max_completion_tokens = as_optional_int(max_completion_tokens)
+        if self.max_completion_tokens is not None and self.max_completion_tokens <= 0:
+            self.max_completion_tokens = None
+        self.reasoning_effort = as_optional_str(reasoning_effort)
         self.history_max_chats = max(1, int(history_max_chats))
         if history_ttl_sec is None:
             self.history_ttl_sec = None
@@ -422,12 +453,23 @@ class AIClient:
                                     ) from exc
                                 if data.get("error"):
                                     raise RuntimeError(f"接口错误：{data.get('error')}")
-                                reply = (
-                                    data.get("choices", [{}])[0]
-                                    .get("message", {})
-                                    .get("content", "")
-                                )
-                                reply = reply.strip()
+                                choices = data.get("choices") or []
+                                choice = choices[0] if choices else {}
+                                message = choice.get("message") or {}
+                                reply = _extract_text(message.get("content"))
+                                if not reply and _is_internal_task_chat_id(chat_id):
+                                    reply = _extract_text(
+                                        message.get("reasoning_content")
+                                        or message.get("reasoning")
+                                        or choice.get("reasoning_content")
+                                        or choice.get("reasoning")
+                                    )
+                                    if reply:
+                                        logging.info(
+                                            "AI content empty; using reasoning_content for internal task (%s, len=%s)",
+                                            chat_id,
+                                            len(reply),
+                                        )
                                 if not reply:
                                     raise RuntimeError("AI 返回内容为空。")
 
@@ -529,6 +571,18 @@ class AIClient:
                                                 .get("message", {})
                                                 .get("content")
                                             )
+                                        if not chunk and _is_internal_task_chat_id(chat_id):
+                                            chunk = (
+                                                delta.get("reasoning_content")
+                                                or delta.get("reasoning")
+                                                or data.get("choices", [{}])[0]
+                                                .get("message", {})
+                                                .get("reasoning_content")
+                                                or data.get("choices", [{}])[0]
+                                                .get("message", {})
+                                                .get("reasoning")
+                                            )
+                                        chunk = _extract_text(chunk)
                                         if not chunk:
                                             continue
                                         reply_parts.append(chunk)

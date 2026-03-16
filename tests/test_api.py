@@ -1,6 +1,7 @@
 
 import pytest
 import asyncio
+from datetime import datetime
 from unittest.mock import MagicMock, AsyncMock, patch
 from quart import Quart
 
@@ -11,6 +12,19 @@ sys.modules["wxauto"] = MagicMock()
 # Import app
 from backend.api import app
 import backend.api as api_module
+
+
+def _build_snapshot(config):
+    snapshot = MagicMock()
+    snapshot.config = config
+    snapshot.api = config.get("api", {})
+    snapshot.bot = config.get("bot", {})
+    snapshot.logging = config.get("logging", {})
+    snapshot.agent = config.get("agent", {})
+    snapshot.version = 1
+    snapshot.loaded_at = datetime(2026, 3, 16, 17, 0, 0)
+    snapshot.to_dict.return_value = config
+    return snapshot
 
 @pytest.fixture
 def client():
@@ -166,7 +180,7 @@ async def test_api_config_masks_key_and_infers_provider(client):
         "logging": {},
     }
 
-    with patch("backend.config.CONFIG", test_config):
+    with patch.object(api_module.config_service, "get_snapshot", return_value=_build_snapshot(test_config)):
         response = await client.get('/api/config')
 
     assert response.status_code == 200
@@ -201,7 +215,7 @@ async def test_api_config_marks_ollama_as_no_key_required(client):
         "logging": {},
     }
 
-    with patch("backend.config.CONFIG", test_config):
+    with patch.object(api_module.config_service, "get_snapshot", return_value=_build_snapshot(test_config)):
         response = await client.get('/api/config')
 
     data = await response.get_json()
@@ -225,13 +239,37 @@ async def test_api_config_masks_langsmith_key(client):
         },
     }
 
-    with patch("backend.config.CONFIG", test_config):
+    with patch.object(api_module.config_service, "get_snapshot", return_value=_build_snapshot(test_config)):
         response = await client.get("/api/config")
 
     data = await response.get_json()
     assert data["agent"]["langsmith_enabled"] is True
     assert data["agent"]["langsmith_api_key_configured"] is True
     assert "langsmith_api_key" not in data["agent"]
+
+
+@pytest.mark.asyncio
+async def test_api_config_audit_reports_unknown_override_paths(client):
+    test_config = {
+        "api": {"presets": []},
+        "bot": {
+            "filter_mute": True,
+            "profile_update_frequency": 10,
+        },
+        "logging": {},
+        "agent": {},
+    }
+
+    with (
+        patch.object(api_module.config_service, "get_snapshot", return_value=_build_snapshot(test_config)),
+        patch("backend.api.build_config_audit", return_value={"dormant_paths": [], "unknown_override_paths": ["bot.memory_seed_limit"]}),
+    ):
+        response = await client.get("/api/config/audit")
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["success"] is True
+    assert "bot.memory_seed_limit" in data["audit"]["unknown_override_paths"]
 
 
 @pytest.mark.asyncio
@@ -268,7 +306,7 @@ async def test_api_preview_prompt_applies_overrides_and_injections(client):
         }
     }
 
-    with patch.object(api_module, "CONFIG", preview_config):
+    with patch.object(api_module.config_service, "get_snapshot", return_value=_build_snapshot(preview_config)):
         response = await client.post('/api/preview_prompt', json={
             "sample": {
                 "chat_name": "项目群",
@@ -323,14 +361,17 @@ async def test_api_save_config_triggers_runtime_reload(client, mock_manager):
         "logging": {},
     }
 
-    async_to_thread = AsyncMock(return_value={})
+    snapshot = _build_snapshot(test_config)
+
+    async def _fake_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    async_to_thread = AsyncMock(side_effect=_fake_to_thread)
+    update_override = MagicMock(return_value=snapshot)
     with (
         patch("backend.api.asyncio.to_thread", async_to_thread),
-        patch("backend.api._build_config_payload", return_value=test_config),
-        patch("backend.config.CONFIG", test_config),
-        patch("backend.config._apply_config_overrides"),
-        patch("backend.config._apply_api_keys"),
-        patch("backend.config._apply_prompt_overrides"),
+        patch.object(api_module.config_service, "get_snapshot", return_value=snapshot),
+        patch.object(api_module.config_service, "update_override", update_override),
     ):
         response = await client.post("/api/config", json={"api": {"active_preset": "DeepSeek"}})
 
@@ -338,5 +379,58 @@ async def test_api_save_config_triggers_runtime_reload(client, mock_manager):
     data = await response.get_json()
     assert data["success"] is True
     assert data["config"]["api"]["active_preset"] == "OpenAI"
+    assert data["changed_paths"] == []
+    assert isinstance(data["reload_plan"], list)
     assert data["runtime_apply"]["success"] is True
     mock_manager.reload_runtime_config.assert_awaited_once()
+    update_override.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_api_save_config_forces_ai_reload_for_agent_changes(client, mock_manager):
+    current_config = {
+        "api": {
+            "active_preset": "OpenAI",
+            "presets": [],
+        },
+        "bot": {},
+        "logging": {},
+        "agent": {
+            "enabled": True,
+            "langsmith_enabled": False,
+        },
+    }
+    updated_config = {
+        "api": {
+            "active_preset": "OpenAI",
+            "presets": [],
+        },
+        "bot": {},
+        "logging": {},
+        "agent": {
+            "enabled": True,
+            "langsmith_enabled": True,
+        },
+    }
+
+    current_snapshot = _build_snapshot(current_config)
+    updated_snapshot = _build_snapshot(updated_config)
+
+    async def _fake_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    with (
+        patch("backend.api.asyncio.to_thread", AsyncMock(side_effect=_fake_to_thread)),
+        patch.object(api_module.config_service, "get_snapshot", return_value=current_snapshot),
+        patch.object(api_module.config_service, "update_override", return_value=updated_snapshot),
+    ):
+        response = await client.post("/api/config", json={"agent": {"langsmith_enabled": True}})
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["success"] is True
+    assert "agent.langsmith_enabled" in data["changed_paths"]
+    mock_manager.reload_runtime_config.assert_awaited()
+    _, kwargs = mock_manager.reload_runtime_config.await_args
+    assert kwargs["force_ai_reload"] is True
+    assert "agent.langsmith_enabled" in kwargs["changed_paths"]

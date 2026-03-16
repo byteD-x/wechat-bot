@@ -2,6 +2,8 @@
 
 这份文档用于集中展示当前项目的技术亮点，以及已经落地的 LangChain/LangGraph 主链路。
 
+如需查看覆盖 Electron、Quart API、Bot 生命周期、传输层、语音转文字、记忆/RAG、回复发送、配置热更新和状态诊断的完整链路，请参考 [SYSTEM_CHAINS.md](SYSTEM_CHAINS.md)。
+
 ## 1. 当前阶段的核心亮点
 
 ### 1.1 微信自动化 + 现代 AI 编排
@@ -65,6 +67,7 @@
 - `/api/metrics` 提供 Prometheus 风格导出
 - Electron 仪表盘展示 CPU、内存、队列积压、AI 延迟和组件健康状态
 - 配置热重载优先使用 `watchdog`，缺失依赖时回退轮询，并带防抖
+- 后端新增中心化 Config Snapshot，GUI 保存配置后会返回 `changed_paths` 与 `reload_plan`，并可通过 `/api/config/audit` 排查未生效或未知配置项。
 
 ### 1.6 面向性能的实现细节已经落地
 

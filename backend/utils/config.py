@@ -6,8 +6,7 @@ import importlib.util
 import logging
 from typing import Any, Dict, List, Optional
 
-from .common import as_int, as_float, as_optional_int, as_optional_str, iter_items
-from backend.config_schemas import AppConfig
+from .common import as_int, as_float, as_optional_int, as_optional_str, iter_items, truncate_text
 
 __all__ = [
     "normalize_system_prompt",
@@ -48,13 +47,17 @@ def load_config_py(path: str) -> Dict[str, Any]:
 def load_config(path: str) -> Dict[str, Any]:
     """加载配置文件（目前仅支持 .py），并使用 Pydantic 验证。"""
     raw_config = load_config_py(path)
-    
+
     # 验证并规范化
     try:
+        # Lazy import: Pydantic schema validation is relatively heavy, and most
+        # modules only need lightweight helpers (e.g. normalize_system_prompt).
+        from backend.config_schemas import AppConfig
+
         # Pydantic 验证
         app_config = AppConfig(**raw_config)
         # 转换回字典，使用 mode='json' 确保枚举等类型被序列化为基本类型
-        validated_config = app_config.model_dump(mode='json')
+        validated_config = app_config.model_dump(mode="json")
         return validated_config
     except Exception as e:
         logging.error(f"配置验证失败: {e}。将使用原始配置。")
@@ -83,10 +86,10 @@ def build_api_candidates(api_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
     """构建 API 候选列表，支持多预设。"""
     # 按照 active_preset > presets 顺序构建候选列表
     candidates = []
-    
+
     active_name = str(api_cfg.get("active_preset") or "").strip()
     presets_data = api_cfg.get("presets", [])
-    
+
     # 统一转换为字典映射 {name: config}
     presets_map = {}
     if isinstance(presets_data, list):
@@ -95,7 +98,7 @@ def build_api_candidates(api_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
                 presets_map[str(p["name"])] = p
     elif isinstance(presets_data, dict):
         presets_map = presets_data
-    
+
     # 1. Active Preset (只取匹配的一个)
     if active_name and active_name in presets_map:
         candidate = dict(presets_map[active_name])
@@ -119,7 +122,7 @@ def build_api_candidates(api_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
         "max_tokens": api_cfg.get("max_tokens"),
         "alias": api_cfg.get("alias"),
     }
-    
+
     # 防止重复：如果 active_preset 就是 root_config 并不存在(name不同)，所以通常不冲突
     # 但如果 root config 非常不完整，可以跳过
     if root_candidate.get("base_url"):
@@ -156,7 +159,7 @@ def resolve_system_prompt(
 ) -> str:
     """
     解析最终的 System Prompt。
-    
+
     支持逻辑：
     1. 特定会话覆盖 (Overrides)
     2. 基础 Prompt 规范化
@@ -165,26 +168,156 @@ def resolve_system_prompt(
     """
     base_prompt = bot_cfg.get("system_prompt", "")
     overrides = bot_cfg.get("system_prompt_overrides", {})
-    
+
     # 1. 覆盖检查
     # 匹配精确名称或简单部分匹配（暂时保持简单）
     chat_name = getattr(event, "chat_name", "")
     if chat_name in overrides:
         base_prompt = overrides[chat_name]
-    
+
     # 2. 规范化
     system_prompt = normalize_system_prompt(base_prompt)
-    
-    # 3. 注入用户画像 (目前仅简单追加)
-    if user_profile and isinstance(user_profile, dict):
-        profile_text = "\n".join(f"- {k}: {v}" for k, v in user_profile.items())
-        if profile_text:
-            system_prompt += f"\n\n[User Profile]\n{profile_text}"
-            
-    # 4. 注入情绪状态
-    if emotion:
-        # 假设 emotion 是包含 'emotion' (str) 和 'confidence' (float) 的对象
-        emotion_str = getattr(emotion, "emotion", str(emotion))
-        system_prompt += f"\n\n[Current Emotion]\n{emotion_str}"
+
+    template = system_prompt
+    has_history_placeholder = "{history_context}" in template
+    has_profile_placeholder = "{user_profile}" in template
+    has_emotion_placeholder = "{emotion_hint}" in template
+    has_time_placeholder = "{time_hint}" in template
+    has_style_placeholder = "{style_hint}" in template
+
+    def _build_profile_text(profile: Any) -> str:
+        profile_map: Dict[str, Any] = {}
+        if profile is None:
+            return ""
+        if isinstance(profile, dict):
+            profile_map = dict(profile)
+        elif hasattr(profile, "model_dump"):
+            try:
+                profile_map = dict(profile.model_dump(mode="json"))
+            except Exception:
+                profile_map = {}
+        elif hasattr(profile, "dict"):
+            try:
+                profile_map = dict(profile.dict())
+            except Exception:
+                profile_map = {}
+        else:
+            try:
+                profile_map = dict(getattr(profile, "__dict__", {}) or {})
+            except Exception:
+                profile_map = {}
+        profile_map.pop("raw_item", None)
+        profile_text = "\n".join(
+            f"- {k}: {v}" for k, v in profile_map.items() if k and v not in (None, "")
+        )
+        return profile_text.strip()
+
+    def _build_history_context(items: List[Any], max_items: int = 6) -> str:
+        lines: List[str] = []
+        for item in items or []:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role") or "").strip().lower()
+            if role not in ("user", "assistant"):
+                continue
+            content = str(item.get("content") or "").strip()
+            if not content:
+                continue
+            content = truncate_text(content, 160)
+            prefix = "User" if role == "user" else "Assistant"
+            lines.append(f"{prefix}: {content}")
+        if not lines:
+            return ""
+        if max_items > 0:
+            lines = lines[-max_items:]
+        return "\n".join(lines).strip()
+
+    def _build_emotion_hint(value: Any) -> str:
+        if value is None:
+            return ""
+        emotion_label = str(getattr(value, "emotion", "") or str(value) or "").strip()
+        if not emotion_label:
+            return ""
+        parts = [f"【当前情绪】{emotion_label}"]
+        confidence = getattr(value, "confidence", None)
+        if confidence is not None:
+            try:
+                parts.append(f"【置信度】{float(confidence):.2f}")
+            except Exception:
+                parts.append(f"【置信度】{confidence}")
+        intensity = getattr(value, "intensity", None)
+        if intensity is not None:
+            try:
+                parts.append(f"【强度】{int(intensity)}/5")
+            except Exception:
+                parts.append(f"【强度】{intensity}")
+        suggested_tone = str(getattr(value, "suggested_tone", "") or "").strip()
+        if suggested_tone:
+            parts.append(f"【建议语气】{suggested_tone}")
+        return "\n".join(parts).strip()
+
+    profile_text = (
+        _build_profile_text(user_profile)
+        if bot_cfg.get("profile_inject_in_prompt", False)
+        else ""
+    )
+    history_context_text = _build_history_context(context) if has_history_placeholder else ""
+    emotion_hint_text = (
+        _build_emotion_hint(emotion)
+        if bot_cfg.get("emotion_inject_in_prompt", False)
+        else ""
+    )
+
+    time_hint_text = ""
+    if has_time_placeholder:
+        try:
+            from backend.core.emotion import get_time_aware_prompt_addition
+
+            time_hint_text = str(get_time_aware_prompt_addition() or "").strip()
+        except Exception:
+            time_hint_text = ""
+
+    style_hint_text = ""
+    if has_style_placeholder:
+        try:
+            from backend.core.emotion import analyze_conversation_style, get_style_adaptation_hint
+
+            style_info = analyze_conversation_style(
+                [item for item in (context or []) if isinstance(item, dict)]
+            )
+            hint = str(get_style_adaptation_hint(style_info) or "").strip()
+            if hint:
+                style_hint_text = f"【对话风格】{hint}"
+        except Exception:
+            style_hint_text = ""
+
+    # Replace placeholders (if present) to avoid leaking template markers to the model.
+    if has_history_placeholder:
+        system_prompt = system_prompt.replace("{history_context}", history_context_text)
+    if has_profile_placeholder:
+        system_prompt = system_prompt.replace("{user_profile}", profile_text)
+    if has_emotion_placeholder:
+        replacement = (emotion_hint_text + "\n") if emotion_hint_text else ""
+        system_prompt = system_prompt.replace("{emotion_hint}", replacement)
+    if has_time_placeholder:
+        replacement = (time_hint_text + "\n") if time_hint_text else ""
+        system_prompt = system_prompt.replace("{time_hint}", replacement)
+    if has_style_placeholder:
+        replacement = (style_hint_text + "\n") if style_hint_text else ""
+        system_prompt = system_prompt.replace("{style_hint}", replacement)
+
+    # Backward compatible injection for prompts without placeholders.
+    if (
+        not has_profile_placeholder
+        and bot_cfg.get("profile_inject_in_prompt", False)
+        and profile_text
+    ):
+        system_prompt += f"\n\n[User Profile]\n{profile_text}"
+    if (
+        not has_emotion_placeholder
+        and bot_cfg.get("emotion_inject_in_prompt", False)
+        and emotion_hint_text
+    ):
+        system_prompt += f"\n\n[Current Emotion]\n{emotion_hint_text}"
 
     return system_prompt

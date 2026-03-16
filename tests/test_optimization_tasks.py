@@ -1,5 +1,6 @@
 import os
 import tempfile
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -16,6 +17,7 @@ from backend.core.memory import MemoryManager
 from backend.transports import BaseTransport, WcferryWeChatClient
 from backend.transports.wcferry_adapter import (
     TransportUnavailableError,
+    _best_effort_wcf_call,
     _extract_supported_wechat_versions,
 )
 from backend.wechat_versions import OFFICIAL_SUPPORTED_WECHAT_VERSION
@@ -243,6 +245,39 @@ def test_wcferry_version_gate_blocks_unsupported_runtime_version():
         client._validate_version_gate()
 
 
+def test_best_effort_wcf_call_times_out_quickly():
+    started = time.perf_counter()
+    ok = _best_effort_wcf_call("cleanup", lambda: time.sleep(0.2), timeout_sec=0.05)
+    elapsed = time.perf_counter() - started
+
+    assert ok is False
+    assert elapsed < 0.15
+
+
+def test_wcferry_close_uses_best_effort_cleanup(monkeypatch):
+    client = object.__new__(WcferryWeChatClient)
+    client._wcf = SimpleNamespace(
+        _is_receiving_msg=True,
+        disable_recv_msg=lambda: None,
+        cleanup=lambda: None,
+    )
+
+    calls = []
+    monkeypatch.setattr(
+        "backend.transports.wcferry_adapter._best_effort_wcf_call",
+        lambda label, func, timeout_sec=2.0: calls.append(label) or True,
+    )
+    monkeypatch.setattr(
+        "backend.transports.wcferry_adapter.relocate_known_root_artifacts",
+        lambda: calls.append("relocate"),
+    )
+
+    client.close()
+
+    assert client._wcf._is_receiving_msg is False
+    assert calls == ["disable_recv_msg", "cleanup", "relocate"]
+
+
 def test_relocate_known_root_artifacts_moves_files(tmp_path, monkeypatch):
     project_root = tmp_path / "repo"
     project_root.mkdir()
@@ -381,3 +416,45 @@ async def test_select_specific_ai_client_prefers_vector_memory_embedding_overrid
     assert client is not None
     assert preset_name == "Ollama"
     assert captured["embedding_model"] == "bge-m3:latest"
+
+
+@pytest.mark.asyncio
+async def test_reconnect_wechat_retries_hook_transport(monkeypatch):
+    attempts = {"count": 0}
+
+    class _FakeTransportUnavailableError(RuntimeError):
+        pass
+
+    class _FakeTransport:
+        backend_name = "hook_wcferry"
+
+        def __init__(self, bot_cfg, ai_client=None):
+            attempts["count"] += 1
+            if attempts["count"] < 3:
+                raise _FakeTransportUnavailableError("timed out")
+
+    async def _fake_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    async def _fake_sleep(_seconds):
+        return None
+
+    import backend.transports as transports_module
+
+    monkeypatch.setattr(factory_module.asyncio, "to_thread", _fake_to_thread)
+    monkeypatch.setattr(factory_module.asyncio, "sleep", _fake_sleep)
+    monkeypatch.setattr(transports_module, "WcferryWeChatClient", _FakeTransport)
+    monkeypatch.setattr(transports_module, "TransportUnavailableError", _FakeTransportUnavailableError)
+
+    client = await factory_module.reconnect_wechat(
+        "test",
+        factory_module.ReconnectPolicy(
+            max_retries=3,
+            base_delay_sec=0.1,
+            max_delay_sec=0.2,
+        ),
+        bot_cfg={"transport_backend": "hook_wcferry"},
+    )
+
+    assert client is not None
+    assert attempts["count"] == 3

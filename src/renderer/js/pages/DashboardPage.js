@@ -11,100 +11,125 @@ export class DashboardPage extends PageController {
     constructor() {
         super('DashboardPage', 'page-dashboard');
         this._lastStats = null;
+        this._recentMessages = [];
     }
 
     async onInit() {
         await super.onInit();
         this._bindEvents();
+        this.listenEvent(Events.MESSAGE_RECEIVED, (message) => {
+            this._appendRecentMessage(message);
+        });
     }
 
     async onEnter() {
         await super.onEnter();
         this._updateBotUI();
+
         const status = this.getState('bot.status');
         if (status) {
             this.updateStats(status);
         }
+
+        await this._loadRecentMessages();
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    //                           事件绑定
-    // ═══════════════════════════════════════════════════════════════════════
-
     _bindEvents() {
-        // 启动/停止按钮
         this.bindEvent('#btn-toggle-bot', 'click', () => this._toggleBot());
-
-        // 暂停按钮
         this.bindEvent('#btn-pause', 'click', () => this._togglePause());
-
-        // 重启按钮
         this.bindEvent('#btn-restart', 'click', () => this._restartBot());
         this.bindEvent('#btn-recover-bot', 'click', () => this._recoverBot());
+        this.bindEvent('#btn-view-logs', 'click', () => this.emit(Events.PAGE_CHANGE, 'logs'));
+        this.bindEvent('#btn-view-all-messages', 'click', () => this.emit(Events.PAGE_CHANGE, 'messages'));
 
-        // 快捷操作
-        this.bindEvent('#btn-open-wechat', 'click', async () => {
-            try {
-                if (window.electronAPI && window.electronAPI.openWeChat) {
-                    await window.electronAPI.openWeChat();
-                    toast.success('正在打开微信...');
-                } else {
-                    toast.info('请手动打开微信客户端');
-                }
-            } catch (e) {
-                console.error('打开微信失败:', e);
-                if (e.message && e.message.includes('No handler registered')) {
-                    toast.error('请重启应用以应用最新更改');
-                } else {
-                    toast.error('打开微信失败，请手动打开');
-                }
-            }
-        });
-
-        this.bindEvent('#btn-view-logs', 'click', () => {
-            this.emit(Events.PAGE_CHANGE, 'logs');
-        });
-
-        this.bindEvent('#btn-refresh-status', 'click', async () => {
+        this.bindEvent('#btn-refresh-status', 'click', () => {
             this.emit(Events.BOT_STATUS_CHANGE, {});
-            toast.success('状态已刷新');
+            toast.success('已触发状态刷新');
         });
 
         this.bindEvent('#btn-minimize-tray', 'click', () => {
             window.electronAPI?.minimizeToTray();
         });
 
-        // 监听状态变化
-        this.watchState('bot.*', () => this._updateBotUI());
-    }
+        this.bindEvent('#btn-open-wechat', 'click', async () => {
+            try {
+                if (window.electronAPI?.openWeChat) {
+                    await window.electronAPI.openWeChat();
+                    toast.success('正在打开微信客户端...');
+                } else {
+                    toast.info('请手动打开微信客户端');
+                }
+            } catch (error) {
+                console.error('[DashboardPage] 打开微信失败:', error);
+                if (String(error?.message || '').includes('No handler registered')) {
+                    toast.error('请重启应用后重试');
+                } else {
+                    toast.error('打开微信客户端失败');
+                }
+            }
+        });
 
-    // ═══════════════════════════════════════════════════════════════════════
-    //                           机器人控制
-    // ═══════════════════════════════════════════════════════════════════════
+        const updateIfActive = () => {
+            if (this.isActive()) {
+                this._updateBotUI();
+            }
+        };
+        this.watchState('bot.status', updateIfActive);
+        this.watchState('bot.running', updateIfActive);
+        this.watchState('bot.paused', updateIfActive);
+        this.watchState('bot.connected', updateIfActive);
+    }
 
     async _toggleBot() {
         const btn = this.$('#btn-toggle-bot');
         const btnText = btn?.querySelector('span');
-        if (!btn) return;
+        if (!btn) {
+            return;
+        }
 
         btn.disabled = true;
 
         try {
-            const isRunning = this.getState('bot.running');
+            const isRunning = !!this.getState('bot.running');
+
             if (isRunning) {
-                btnText.textContent = '停止中...';
+                if (btnText) {
+                    btnText.textContent = '停止中...';
+                }
                 const result = await apiService.stopBot();
-                toast.show(result.message, result.success ? 'success' : 'error');
+                toast.show(
+                    result?.message || (result?.success ? '机器人已停止' : '停止机器人失败'),
+                    result?.success ? 'success' : 'error'
+                );
             } else {
-                btnText.textContent = '启动中...';
+                if (btnText) {
+                    btnText.textContent = '启动中...';
+                }
+
+                const prevStatus = this.getState('bot.status');
+                const base = prevStatus && typeof prevStatus === 'object' ? prevStatus : {};
+                this.setState('bot.status', {
+                    ...base,
+                    startup: {
+                        stage: 'starting',
+                        message: '正在启动机器人...',
+                        progress: 0,
+                        active: true,
+                        updated_at: Date.now() / 1000
+                    }
+                });
+
                 const result = await apiService.startBot();
-                toast.show(result.message, result.success ? 'success' : 'error');
+                toast.show(
+                    result?.message || (result?.success ? '机器人启动中' : '启动机器人失败'),
+                    result?.success ? 'success' : 'error'
+                );
             }
 
-            // 延迟触发状态刷新
+            this.emit(Events.BOT_STATUS_CHANGE, {});
             setTimeout(() => this.emit(Events.BOT_STATUS_CHANGE, {}), 1000);
         } catch (error) {
-            toast.error(toast.getErrorMessage(error, '操作失败'));
+            toast.error(toast.getErrorMessage(error, '启动机器人失败'));
         } finally {
             btn.disabled = false;
         }
@@ -112,18 +137,18 @@ export class DashboardPage extends PageController {
 
     async _togglePause() {
         try {
-            const isPaused = this.getState('bot.paused');
-            if (isPaused) {
-                const result = await apiService.resumeBot();
-                toast.show(result.message, result.success ? 'success' : 'error');
-            } else {
-                const result = await apiService.pauseBot();
-                toast.show(result.message, result.success ? 'success' : 'error');
-            }
+            const isPaused = !!this.getState('bot.paused');
+            const result = isPaused
+                ? await apiService.resumeBot()
+                : await apiService.pauseBot();
 
+            toast.show(
+                result?.message || (result?.success ? '操作成功' : '操作失败'),
+                result?.success ? 'success' : 'error'
+            );
             this.emit(Events.BOT_STATUS_CHANGE, {});
         } catch (error) {
-            toast.error(toast.getErrorMessage(error, '操作失败'));
+            toast.error(toast.getErrorMessage(error, '暂停/恢复失败'));
         }
     }
 
@@ -131,11 +156,14 @@ export class DashboardPage extends PageController {
         try {
             toast.info('正在重启机器人...');
             const result = await apiService.restartBot();
-            toast.show(result.message, result.success ? 'success' : 'error');
-
+            toast.show(
+                result?.message || (result?.success ? '机器人正在重启' : '重启机器人失败'),
+                result?.success ? 'success' : 'error'
+            );
+            this.emit(Events.BOT_STATUS_CHANGE, {});
             setTimeout(() => this.emit(Events.BOT_STATUS_CHANGE, {}), 2000);
         } catch (error) {
-            toast.error(toast.getErrorMessage(error, '重启失败'));
+            toast.error(toast.getErrorMessage(error, '重启机器人失败'));
         }
     }
 
@@ -143,62 +171,79 @@ export class DashboardPage extends PageController {
         try {
             toast.info('正在尝试恢复机器人...');
             const result = await apiService.recoverBot();
-            toast.show(result.message, result.success ? 'success' : 'error');
+            toast.show(
+                result?.message || (result?.success ? '机器人恢复中' : '恢复机器人失败'),
+                result?.success ? 'success' : 'error'
+            );
+            this.emit(Events.BOT_STATUS_CHANGE, {});
             setTimeout(() => this.emit(Events.BOT_STATUS_CHANGE, {}), 1500);
         } catch (error) {
-            toast.error(toast.getErrorMessage(error, '恢复失败'));
+            toast.error(toast.getErrorMessage(error, '恢复机器人失败'));
         }
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    //                           UI 更新
-    // ═══════════════════════════════════════════════════════════════════════
-
     _updateBotUI() {
-        const isRunning = this.getState('bot.running');
-        const isPaused = this.getState('bot.paused');
+        const isRunning = !!this.getState('bot.running');
+        const isPaused = !!this.getState('bot.paused');
         const status = this.getState('bot.status') || {};
+        const startupActive = !!status?.startup?.active;
 
-        // 更新机器人状态显示
         const stateElem = this.$('#bot-state');
         if (stateElem) {
             const dot = stateElem.querySelector('.bot-state-dot');
             const text = stateElem.querySelector('.bot-state-text');
+            let stateText = '已停止';
+            let dotClass = 'bot-state-dot offline';
 
-            if (isRunning) {
-                if (isPaused) {
-                    dot.className = 'bot-state-dot paused';
-                    text.textContent = '已暂停';
-                } else {
-                    dot.className = 'bot-state-dot online';
-                    text.textContent = '运行中';
-                }
-            } else {
-                dot.className = 'bot-state-dot offline';
-                text.textContent = '离线';
+            if (isRunning && isPaused) {
+                stateText = '已暂停';
+                dotClass = 'bot-state-dot paused';
+            } else if (isRunning) {
+                stateText = '运行中';
+                dotClass = 'bot-state-dot online';
+            } else if (startupActive) {
+                stateText = '启动中';
+                dotClass = 'bot-state-dot starting';
+            }
+
+            if (dot) {
+                dot.className = dotClass;
+            }
+            if (text) {
+                text.textContent = stateText;
             }
         }
 
-        // 更新暂停按钮文本
         const pauseBtn = this.$('#btn-pause');
         const pauseText = pauseBtn?.querySelector('span');
+        if (pauseBtn) {
+            pauseBtn.disabled = !isRunning;
+        }
         if (pauseText) {
-            pauseText.textContent = isPaused ? '恢复' : '暂停';
+            pauseText.textContent = isPaused ? '继续运行' : '暂停';
         }
 
-        // 更新切换按钮
+        const restartBtn = this.$('#btn-restart');
+        if (restartBtn) {
+            restartBtn.disabled = !isRunning && !startupActive;
+        }
+
         const toggleBtn = this.$('#btn-toggle-bot');
         if (toggleBtn) {
             const icon = toggleBtn.querySelector('svg use');
             const text = toggleBtn.querySelector('span');
 
-            if (isRunning) {
-                text.textContent = '停止机器人';
+            if (isRunning || startupActive) {
+                if (text) {
+                    text.textContent = startupActive && !isRunning ? '启动中...' : '停止机器人';
+                }
                 icon?.setAttribute('href', '#icon-square');
                 toggleBtn.classList.remove('btn-primary');
                 toggleBtn.classList.add('btn-secondary');
             } else {
-                text.textContent = '启动机器人';
+                if (text) {
+                    text.textContent = '启动机器人';
+                }
                 icon?.setAttribute('href', '#icon-play');
                 toggleBtn.classList.remove('btn-secondary');
                 toggleBtn.classList.add('btn-primary');
@@ -210,16 +255,11 @@ export class DashboardPage extends PageController {
         this._renderDiagnostics(status.diagnostics);
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    //                           消息加载
-    // ═══════════════════════════════════════════════════════════════════════
-
     async _loadRecentMessages() {
         try {
             const result = await apiService.getMessages({ limit: 5, offset: 0 });
             const container = this.$('#recent-messages');
-
-            if (result.success && result.messages && container) {
+            if (result?.success && Array.isArray(result.messages) && container) {
                 this._recentMessages = [...result.messages].reverse();
                 this._renderMessages(container, this._recentMessages);
             }
@@ -236,58 +276,112 @@ export class DashboardPage extends PageController {
         if (!container) {
             return;
         }
+
         const normalized = {
             sender: message.sender,
             content: message.content,
+            text: message.text,
             timestamp: message.timestamp,
             is_self: message.direction === 'outgoing'
         };
+
         this._recentMessages = [...this._recentMessages, normalized].slice(-5);
         this._renderMessages(container, this._recentMessages);
     }
 
     _renderMessages(container, messages) {
+        container.textContent = '';
+
         if (!messages || messages.length === 0) {
-            container.innerHTML = `
-                <div class="empty-state">
-                    <svg class="icon"><use href="#icon-inbox"/></svg>
-                    <span class="empty-state-text">暂无消息记录</span>
-                </div>
-            `;
+            const empty = document.createElement('div');
+            empty.className = 'empty-state';
+
+            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            svg.setAttribute('class', 'icon');
+            const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+            use.setAttribute('href', '#icon-inbox');
+            use.setAttributeNS('http://www.w3.org/1999/xlink', 'href', '#icon-inbox');
+            svg.appendChild(use);
+
+            const text = document.createElement('span');
+            text.className = 'empty-state-text';
+            text.textContent = '暂无消息记录';
+
+            empty.appendChild(svg);
+            empty.appendChild(text);
+            container.appendChild(empty);
             return;
         }
 
-        container.innerHTML = messages.map((msg, index) => {
-            const icon = msg.is_self
-                ? '<svg class="icon"><use href="#icon-bot"/></svg>'
-                : '<svg class="icon"><use href="#icon-user"/></svg>';
-            const sender = msg.sender || (msg.is_self ? 'AI助手' : '用户');
+        const frag = document.createDocumentFragment();
+        messages.forEach((msg, index) => {
+            const isSelf = !!msg.is_self;
+            const sender = msg.sender || (isSelf ? 'AI 助手' : '用户');
             const time = this._formatTime(msg.timestamp);
-            const text = this._escapeHtml(msg.content || msg.text || '');
-            const roleClass = msg.is_self ? 'is-self' : 'is-user';
+            const content = msg.content || msg.text || '';
 
-            return `
-                <div class="message-item ${roleClass}" style="animation-delay: ${index * 0.05}s">
-                    <div class="message-avatar">${icon}</div>
-                    <div class="message-body">
-                        <div class="message-meta">
-                            <span class="message-sender">${sender}</span>
-                            <span class="message-time">${time}</span>
-                        </div>
-                        <div class="message-text">${text}</div>
-                    </div>
-                </div>
-            `;
-        }).join('');
+            const item = document.createElement('div');
+            item.className = `message-item ${isSelf ? 'is-self' : 'is-user'}`;
+            item.style.animationDelay = `${index * 0.05}s`;
+
+            const avatar = document.createElement('div');
+            avatar.className = 'message-avatar';
+            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            svg.setAttribute('class', 'icon');
+            const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+            const href = isSelf ? '#icon-bot' : '#icon-user';
+            use.setAttribute('href', href);
+            use.setAttributeNS('http://www.w3.org/1999/xlink', 'href', href);
+            svg.appendChild(use);
+            avatar.appendChild(svg);
+
+            const body = document.createElement('div');
+            body.className = 'message-body';
+
+            const meta = document.createElement('div');
+            meta.className = 'message-meta';
+
+            const senderEl = document.createElement('span');
+            senderEl.className = 'message-sender';
+            senderEl.textContent = String(sender);
+
+            const timeEl = document.createElement('span');
+            timeEl.className = 'message-time';
+            timeEl.textContent = String(time);
+
+            const textEl = document.createElement('div');
+            textEl.className = 'message-text';
+            textEl.textContent = String(content);
+
+            meta.appendChild(senderEl);
+            meta.appendChild(timeEl);
+            body.appendChild(meta);
+            body.appendChild(textEl);
+            item.appendChild(avatar);
+            item.appendChild(body);
+            frag.appendChild(item);
+        });
+
+        container.appendChild(frag);
     }
 
     _formatTime(timestamp) {
-        if (!timestamp) return '';
-        const date = new Date(timestamp * 1000);
-        const now = new Date();
+        if (!timestamp) {
+            return '';
+        }
 
+        const raw = Number(timestamp);
+        const date = new Date(raw > 1e12 ? raw : raw * 1000);
+        if (Number.isNaN(date.getTime())) {
+            return '';
+        }
+
+        const now = new Date();
         if (date.toDateString() === now.toDateString()) {
-            return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+            return date.toLocaleTimeString('zh-CN', {
+                hour: '2-digit',
+                minute: '2-digit'
+            });
         }
 
         return date.toLocaleString('zh-CN', {
@@ -298,31 +392,26 @@ export class DashboardPage extends PageController {
         });
     }
 
-    _escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-    }
-
-    /**
-     * 更新统计数据
-     */
     updateStats(stats) {
         const nextStats = {
             uptime: stats.uptime || '--',
             today_replies: stats.today_replies ?? 0,
             today_tokens: stats.today_tokens ?? 0,
             total_replies: stats.total_replies ?? 0,
-            transport_backend: stats.transport_backend || 'compat_ui',
+            transport_backend: stats.transport_backend || '--',
             wechat_version: stats.wechat_version || '--',
-            compat_mode: !!stats.compat_mode,
+            silent_mode: stats.silent_mode !== false,
             transport_warning: stats.transport_warning || '',
             startup: stats.startup || null,
             diagnostics: stats.diagnostics || null,
             system_metrics: stats.system_metrics || {},
             health_checks: stats.health_checks || {},
             merge_feedback: stats.merge_feedback || null,
+            retriever_stats: stats.retriever_stats || {},
+            runtime_timings: stats.runtime_timings || {},
+            export_rag: stats.export_rag || null,
         };
+
         const uptimeElem = this.$('#stat-uptime');
         const todayRepliesElem = this.$('#stat-today-replies');
         const todayTokensElem = this.$('#stat-today-tokens');
@@ -331,38 +420,43 @@ export class DashboardPage extends PageController {
         const transportVersionElem = this.$('#bot-transport-version');
         const transportWarningElem = this.$('#bot-transport-warning');
 
-        if (!this._lastStats || this._lastStats.uptime !== nextStats.uptime) {
-            if (uptimeElem) uptimeElem.textContent = nextStats.uptime;
+        if (uptimeElem) {
+            uptimeElem.textContent = nextStats.uptime;
         }
-        if (!this._lastStats || this._lastStats.today_replies !== nextStats.today_replies) {
-            if (todayRepliesElem) todayRepliesElem.textContent = this._formatNumber(nextStats.today_replies);
+        if (todayRepliesElem) {
+            todayRepliesElem.textContent = this._formatNumber(nextStats.today_replies);
         }
-        if (!this._lastStats || this._lastStats.today_tokens !== nextStats.today_tokens) {
-            if (todayTokensElem) todayTokensElem.textContent = this._formatTokens(nextStats.today_tokens);
+        if (todayTokensElem) {
+            todayTokensElem.textContent = this._formatTokens(nextStats.today_tokens);
         }
-        if (!this._lastStats || this._lastStats.total_replies !== nextStats.total_replies) {
-            if (totalRepliesElem) totalRepliesElem.textContent = this._formatNumber(nextStats.total_replies);
+        if (totalRepliesElem) {
+            totalRepliesElem.textContent = this._formatNumber(nextStats.total_replies);
         }
-        if (!this._lastStats || this._lastStats.transport_backend !== nextStats.transport_backend || this._lastStats.compat_mode !== nextStats.compat_mode) {
-            if (transportBackendElem) {
-                const modeText = nextStats.compat_mode ? '兼容模式' : '静默模式';
-                transportBackendElem.textContent = `后端: ${nextStats.transport_backend} (${modeText})`;
-            }
+        if (transportBackendElem) {
+            const modeText = nextStats.silent_mode ? '静默模式' : '标准模式';
+            transportBackendElem.textContent = `后端: ${nextStats.transport_backend} (${modeText})`;
         }
-        if (!this._lastStats || this._lastStats.wechat_version !== nextStats.wechat_version) {
-            if (transportVersionElem) transportVersionElem.textContent = `微信: ${nextStats.wechat_version}`;
+        if (transportVersionElem) {
+            transportVersionElem.textContent = `微信: ${nextStats.wechat_version}`;
         }
-        if (!this._lastStats || this._lastStats.transport_warning !== nextStats.transport_warning) {
-            if (transportWarningElem) {
-                transportWarningElem.hidden = !nextStats.transport_warning;
-                transportWarningElem.textContent = nextStats.transport_warning || '';
-            }
+        if (transportWarningElem) {
+            transportWarningElem.hidden = !nextStats.transport_warning;
+            transportWarningElem.textContent = nextStats.transport_warning || '';
         }
 
         this._renderStartupState(nextStats.startup);
         this._syncStartupMeta(nextStats.startup);
         this._renderDiagnostics(nextStats.diagnostics);
-        this._renderHealthMetrics(nextStats.system_metrics, nextStats.health_checks, nextStats.merge_feedback);
+        this._renderHealthMetrics(
+            nextStats.system_metrics,
+            nextStats.health_checks,
+            nextStats.merge_feedback
+        );
+        this._renderRetrieval(
+            nextStats.retriever_stats,
+            nextStats.runtime_timings,
+            nextStats.export_rag
+        );
 
         this._lastStats = nextStats;
     }
@@ -384,9 +478,10 @@ export class DashboardPage extends PageController {
 
         const progressValue = Number(startup?.progress || 0);
         const stageLabel = this._getStartupStageLabel(startup?.stage);
+        const updatedAt = this._formatStartupUpdatedAt(startup?.updated_at);
+
         label.textContent = startup?.message || '正在启动机器人...';
         progress.style.width = `${Math.max(0, Math.min(progressValue, 100))}%`;
-        const updatedAt = this._formatStartupUpdatedAt(startup?.updated_at);
         meta.textContent = updatedAt
             ? `${progressValue}% · ${stageLabel} · ${updatedAt}`
             : `${progressValue}% · ${stageLabel}`;
@@ -397,6 +492,7 @@ export class DashboardPage extends PageController {
         if (!meta || !startup?.active) {
             return;
         }
+
         const progressValue = Number(startup?.progress || 0);
         const stageLabel = this._getStartupStageLabel(startup?.stage);
         const updatedAt = this._formatStartupUpdatedAt(startup?.updated_at);
@@ -417,7 +513,7 @@ export class DashboardPage extends PageController {
 
         if (!diagnostics) {
             panel.hidden = true;
-            list.innerHTML = '';
+            list.textContent = '';
             return;
         }
 
@@ -425,9 +521,18 @@ export class DashboardPage extends PageController {
         panel.dataset.level = diagnostics.level || 'warning';
         title.textContent = diagnostics.title || '运行诊断';
         detail.textContent = diagnostics.detail || '检测到需要关注的运行状态。';
-        list.innerHTML = Array.isArray(diagnostics.suggestions)
-            ? diagnostics.suggestions.map(item => `<li>${this._escapeHtml(item)}</li>`).join('')
-            : '';
+        list.textContent = '';
+
+        if (Array.isArray(diagnostics.suggestions)) {
+            const frag = document.createDocumentFragment();
+            diagnostics.suggestions.forEach((item) => {
+                const li = document.createElement('li');
+                li.textContent = String(item ?? '');
+                frag.appendChild(li);
+            });
+            list.appendChild(frag);
+        }
+
         action.hidden = !diagnostics.recoverable;
         action.textContent = diagnostics.action_label || '一键恢复';
     }
@@ -444,15 +549,19 @@ export class DashboardPage extends PageController {
         }
 
         cpuElem.textContent = this._formatPercent(metrics.cpu_percent);
-        memoryElem.textContent = this._formatMemory(metrics.process_memory_mb, metrics.system_memory_percent);
-        queueElem.textContent = this._formatQueue(metrics.pending_tasks, metrics.merge_pending_chats, metrics.merge_pending_messages);
+        memoryElem.textContent = this._formatMemory(
+            metrics.process_memory_mb,
+            metrics.system_memory_percent
+        );
+        queueElem.textContent = this._formatQueue(
+            metrics.pending_tasks,
+            metrics.merge_pending_chats,
+            metrics.merge_pending_messages
+        );
         latencyElem.textContent = this._formatLatency(metrics.ai_latency_ms);
-
         warningElem.hidden = !metrics.warning;
         warningElem.textContent = metrics.warning || '';
-
-        const mergeText = mergeFeedback?.status_text || '消息合并状态：未激活';
-        mergeElem.textContent = mergeText;
+        mergeElem.textContent = mergeFeedback?.status_text || '消息合并状态：未激活';
         mergeElem.dataset.active = mergeFeedback?.active ? 'true' : 'false';
 
         this._renderHealthCheckItem('health-ai', checks.ai);
@@ -465,8 +574,12 @@ export class DashboardPage extends PageController {
         if (!item) {
             return;
         }
+
         const text = item.querySelector('.health-check-text');
-        const level = ['healthy', 'warning', 'error'].includes(check?.level) ? check.level : 'warning';
+        const level = ['healthy', 'warning', 'error'].includes(check?.level)
+            ? check.level
+            : 'warning';
+
         item.dataset.level = level;
         item.dataset.status = check?.status || 'unknown';
         if (text) {
@@ -474,15 +587,149 @@ export class DashboardPage extends PageController {
         }
     }
 
+    _renderRetrieval(retrieverStats = {}, timings = {}, exportRag = null) {
+        const vectorEl = this.$('#retrieval-vector');
+        const exportEl = this.$('#retrieval-export');
+        const topkEl = this.$('#retrieval-topk');
+        const thresholdEl = this.$('#retrieval-threshold');
+        const rerankEl = this.$('#retrieval-rerank');
+        const hitsEl = this.$('#retrieval-hits');
+        const timingsGrid = this.$('#retrieval-timings');
+        const timingsEmpty = this.$('#retrieval-timings-empty');
+
+        if (vectorEl) {
+            const enabled = exportRag?.vector_memory_enabled;
+            const ready = exportRag?.vector_memory_ready;
+            if (enabled === true) {
+                vectorEl.textContent = ready === false ? '初始化中' : '已启用';
+            } else if (enabled === false) {
+                vectorEl.textContent = '未启用';
+            } else {
+                vectorEl.textContent = '--';
+            }
+        }
+
+        if (exportEl) {
+            const enabled = exportRag?.enabled;
+            exportEl.textContent = enabled === true ? '已启用' : enabled === false ? '关闭' : '--';
+        }
+
+        if (topkEl) {
+            const value = retrieverStats?.top_k;
+            topkEl.textContent = Number.isFinite(Number(value)) ? String(value) : '--';
+        }
+
+        if (thresholdEl) {
+            const value = retrieverStats?.score_threshold;
+            thresholdEl.textContent =
+                value === undefined || value === null || Number.isNaN(Number(value))
+                    ? '--'
+                    : String(value);
+        }
+
+        if (rerankEl) {
+            const backend = String(
+                retrieverStats?.rerank_backend || retrieverStats?.rerank_mode || '--'
+            );
+            const configured = retrieverStats?.cross_encoder_configured;
+            const fallbacks = retrieverStats?.rerank_fallbacks;
+            let text = backend;
+            if (backend === 'cross_encoder' && configured === false) {
+                text = `${backend} (未配置)`;
+            }
+            if (Number.isFinite(Number(fallbacks)) && Number(fallbacks) > 0) {
+                text = `${text} (回退 ${fallbacks})`;
+            }
+            rerankEl.textContent = text;
+        }
+
+        if (hitsEl) {
+            const hits = retrieverStats?.hits;
+            hitsEl.textContent = Number.isFinite(Number(hits))
+                ? this._formatNumber(Number(hits))
+                : '--';
+        }
+
+        if (!timingsGrid || !timingsEmpty) {
+            return;
+        }
+
+        const normalized = timings && typeof timings === 'object' ? timings : {};
+        const primaryOrder = [
+            'prepare_total_sec',
+            'load_context_sec',
+            'build_prompt_sec',
+            'invoke_sec',
+            'stream_sec'
+        ];
+        const primaryKeys = primaryOrder.filter((key) => Number.isFinite(Number(normalized[key])));
+        const extraKeys = Object.keys(normalized)
+            .filter((key) => !primaryOrder.includes(key))
+            .filter((key) => Number.isFinite(Number(normalized[key])))
+            .slice(0, 6);
+        const keys = [...primaryKeys, ...extraKeys];
+
+        timingsGrid.textContent = '';
+        if (keys.length === 0) {
+            timingsEmpty.hidden = false;
+            return;
+        }
+        timingsEmpty.hidden = true;
+
+        const frag = document.createDocumentFragment();
+        keys.forEach((key) => {
+            const cell = document.createElement('div');
+            const span = document.createElement('span');
+            const strong = document.createElement('strong');
+
+            span.textContent = this._formatTimingLabel(key);
+            strong.textContent = this._formatDurationSec(Number(normalized[key]));
+            cell.appendChild(span);
+            cell.appendChild(strong);
+            frag.appendChild(cell);
+        });
+
+        timingsGrid.appendChild(frag);
+    }
+
+    _formatDurationSec(value) {
+        const sec = Number(value);
+        if (!Number.isFinite(sec) || sec <= 0) {
+            return '--';
+        }
+
+        const ms = sec * 1000;
+        if (ms < 1000) {
+            return `${Math.round(ms)} ms`;
+        }
+        if (ms < 10000) {
+            return `${(ms / 1000).toFixed(2)} s`;
+        }
+        return `${(ms / 1000).toFixed(1)} s`;
+    }
+
+    _formatTimingLabel(key) {
+        const map = {
+            prepare_total_sec: '总准备耗时',
+            load_context_sec: '加载上下文',
+            build_prompt_sec: '构建提示词',
+            invoke_sec: '调用模型',
+            stream_sec: '流式输出',
+        };
+        return map[key] || String(key || '');
+    }
+
     _getStartupStageLabel(stage) {
         const stageMap = {
-            loading_config: '读取配置',
-            init_memory: '准备记忆库',
-            init_ai: '检查 AI',
+            loading_config: '加载配置',
+            init_memory: '准备记忆',
+            init_ai: '初始化 AI',
             connect_wechat: '连接微信',
             ready: '启动完成',
             failed: '启动失败',
-            idle: '等待启动'
+            idle: '等待启动',
+            stopped: '已停止',
+            starting: '启动中',
         };
         return stageMap[stage] || `当前阶段: ${stage || 'starting'}`;
     }
@@ -492,6 +739,7 @@ export class DashboardPage extends PageController {
         if (!Number.isFinite(value) || value <= 0) {
             return '';
         }
+
         return `更新于 ${new Date(value * 1000).toLocaleTimeString('zh-CN', {
             hour: '2-digit',
             minute: '2-digit',
@@ -507,12 +755,14 @@ export class DashboardPage extends PageController {
     }
 
     _formatMemory(processMemory, systemPercent) {
-        const processText = processMemory === undefined || processMemory === null || Number.isNaN(Number(processMemory))
-            ? '--'
-            : `${Number(processMemory).toFixed(0)} MB`;
-        const systemText = systemPercent === undefined || systemPercent === null || Number.isNaN(Number(systemPercent))
-            ? '--'
-            : `${Number(systemPercent).toFixed(0)}%`;
+        const processText =
+            processMemory === undefined || processMemory === null || Number.isNaN(Number(processMemory))
+                ? '--'
+                : `${Number(processMemory).toFixed(0)} MB`;
+        const systemText =
+            systemPercent === undefined || systemPercent === null || Number.isNaN(Number(systemPercent))
+                ? '--'
+                : `${Number(systemPercent).toFixed(0)}%`;
         return `${processText} / ${systemText}`;
     }
 
@@ -520,7 +770,7 @@ export class DashboardPage extends PageController {
         const tasks = Number.isFinite(Number(pendingTasks)) ? Number(pendingTasks) : 0;
         const chats = Number.isFinite(Number(pendingChats)) ? Number(pendingChats) : 0;
         const messages = Number.isFinite(Number(pendingMessages)) ? Number(pendingMessages) : 0;
-        return `${tasks} 任务 / ${chats} 会话 / ${messages} 条`;
+        return `${tasks} 个任务 / ${chats} 个会话 / ${messages} 条消息`;
     }
 
     _formatLatency(value) {
@@ -531,14 +781,24 @@ export class DashboardPage extends PageController {
     }
 
     _formatNumber(value) {
-        if (value === undefined || value === null) return '0';
-        return value.toLocaleString('zh-CN');
+        if (value === undefined || value === null) {
+            return '0';
+        }
+        return Number(value).toLocaleString('zh-CN');
     }
 
     _formatTokens(value) {
-        if (!value || value < 1000) return value || '0';
-        if (value < 1000000) return (value / 1000).toFixed(1) + 'K';
-        return (value / 1000000).toFixed(1) + 'M';
+        const num = Number(value || 0);
+        if (!Number.isFinite(num) || num <= 0) {
+            return '0';
+        }
+        if (num < 1000) {
+            return String(num);
+        }
+        if (num < 1000000) {
+            return `${(num / 1000).toFixed(1)}K`;
+        }
+        return `${(num / 1000000).toFixed(1)}M`;
     }
 }
 

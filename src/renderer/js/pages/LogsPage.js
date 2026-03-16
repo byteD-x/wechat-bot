@@ -1,366 +1,365 @@
-/**
- * 日志页面控制器
- */
-
 import { PageController } from '../core/PageController.js';
+import { Events } from '../core/EventBus.js';
 import { apiService } from '../services/ApiService.js';
 import { toast } from '../services/NotificationService.js';
+
+const TEXT = {
+    loading: '\u6b63\u5728\u52a0\u8f7d\u65e5\u5fd7...',
+    empty: '\u6682\u65e0\u65e5\u5fd7',
+    loadFailed: '\u52a0\u8f7d\u65e5\u5fd7\u5931\u8d25',
+    cleared: '\u65e5\u5fd7\u5df2\u6e05\u7a7a',
+    clearFailed: '\u6e05\u7a7a\u65e5\u5fd7\u5931\u8d25',
+    copied: '\u65e5\u5fd7\u5df2\u590d\u5236\u5230\u526a\u8d34\u677f',
+    copyFailed: '\u590d\u5236\u65e5\u5fd7\u5931\u8d25',
+    exported: '\u65e5\u5fd7\u5df2\u5bfc\u51fa',
+    lines: '\u884c',
+    matched: '\u5339\u914d',
+    updated: '\u521a\u521a',
+};
+
+function formatNow(date = new Date()) {
+    return new Intl.DateTimeFormat('zh-CN', {
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+    }).format(date);
+}
+
+function downloadTextFile(filename, content) {
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+}
 
 export class LogsPage extends PageController {
     constructor() {
         super('LogsPage', 'page-logs');
-        this._refreshInterval = null;
-        this._logLines = [];
-        this._maxLines = 500;
-        this._refreshIntervalMs = 2000;
-        this._isLoading = false;
-        this._searchKeyword = '';
-        this._levelFilter = '';
-        this._wrapEnabled = false;
-        this._lastUpdatedAt = null;
+        this._allLogs = [];
+        this._visibleLogs = [];
+        this._lineCount = 500;
+        this._keyword = '';
+        this._level = '';
+        this._refreshTimer = null;
     }
 
     async onInit() {
         await super.onInit();
         this._bindEvents();
+        this._syncOptionState();
     }
 
     async onEnter() {
         await super.onEnter();
-        const linesSelect = this.$('#log-lines');
-        if (linesSelect) {
-            const value = parseInt(linesSelect.value, 10);
-            if (!Number.isNaN(value)) {
-                this._maxLines = value;
-            }
-        }
-        const wrapToggle = this.$('#setting-wrap');
-        if (wrapToggle) {
-            this._wrapEnabled = wrapToggle.checked;
-            this._updateWrap();
-        }
-        await this._loadLogs(true);
-        this._startAutoRefresh();
+        this._syncOptionState();
+        await this._refreshLogs({ silent: true });
+        this._setupAutoRefresh();
     }
 
     async onLeave() {
+        this._clearRefreshTimer();
         await super.onLeave();
-        this._stopAutoRefresh();
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    //                           事件绑定
-    // ═══════════════════════════════════════════════════════════════════════
+    async onDestroy() {
+        this._clearRefreshTimer();
+        await super.onDestroy();
+    }
 
     _bindEvents() {
-        this.bindEvent('#btn-refresh-logs', 'click', () => this._loadLogs(true));
+        this.bindEvent('#btn-refresh-logs', 'click', () => {
+            void this._refreshLogs();
+        });
 
-        this.bindEvent('#btn-clear-logs', 'click', async () => {
-            try {
-                const result = await apiService.clearLogs();
-                toast.show(result.message, result.success ? 'success' : 'error');
-                this._logLines = [];
-                this._loadLogs(true);
-            } catch (error) {
-                toast.error('清空日志失败');
+        this.bindEvent('#btn-clear-logs', 'click', () => {
+            void this._clearLogs();
+        });
+
+        this.bindEvent('#btn-copy-logs', 'click', () => {
+            void this._copyLogs();
+        });
+
+        this.bindEvent('#btn-export-logs', 'click', () => {
+            this._exportLogs();
+        });
+
+        const searchInput = this.$('#log-search');
+        searchInput?.addEventListener('input', () => {
+            this._keyword = String(searchInput.value || '').trim().toLowerCase();
+            this._applyFilters();
+        });
+
+        const levelSelect = this.$('#log-level');
+        levelSelect?.addEventListener('change', () => {
+            this._level = String(levelSelect.value || '').trim().toLowerCase();
+            this._applyFilters();
+        });
+
+        const lineSelect = this.$('#log-lines');
+        lineSelect?.addEventListener('change', () => {
+            const nextValue = Number(lineSelect.value || 500);
+            this._lineCount = Number.isFinite(nextValue) && nextValue > 0 ? nextValue : 500;
+            void this._refreshLogs();
+        });
+
+        const autoScroll = this.$('#setting-auto-scroll');
+        autoScroll?.addEventListener('change', () => {
+            this.setState('logs.autoScroll', !!autoScroll.checked);
+            if (autoScroll.checked) {
+                this._scrollToBottom();
             }
         });
 
-        this.bindEvent('#setting-auto-scroll', 'change', (e) => {
-            this.setState('logs.autoScroll', e.target.checked);
+        const autoRefresh = this.$('#setting-auto-refresh');
+        autoRefresh?.addEventListener('change', () => {
+            this.setState('logs.autoRefresh', !!autoRefresh.checked);
+            this._setupAutoRefresh();
         });
 
-        this.bindEvent('#setting-auto-refresh', 'change', (e) => {
-            this.setState('logs.autoRefresh', e.target.checked);
-            if (e.target.checked) {
-                this._startAutoRefresh();
-            } else {
-                this._stopAutoRefresh();
-            }
+        const wrap = this.$('#setting-wrap');
+        wrap?.addEventListener('change', () => {
+            this._updateWrapState(!!wrap.checked);
         });
-
-        this.bindEvent('#setting-wrap', 'change', (e) => {
-            this._wrapEnabled = e.target.checked;
-            this._updateWrap();
-        });
-
-        this.bindEvent('#log-search', 'input', (e) => {
-            this._searchKeyword = e.target.value.trim();
-            this._refreshFilteredView();
-        });
-
-        this.bindEvent('#log-level', 'change', (e) => {
-            this._levelFilter = e.target.value;
-            this._refreshFilteredView();
-        });
-
-        this.bindEvent('#log-lines', 'change', (e) => {
-            const value = parseInt(e.target.value, 10);
-            if (!Number.isNaN(value)) {
-                this._maxLines = value;
-                this._loadLogs(true);
-            }
-        });
-
-        this.bindEvent('#btn-copy-logs', 'click', () => this._copyLogs());
-        this.bindEvent('#btn-export-logs', 'click', () => this._exportLogs());
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    //                           日志加载
-    // ═══════════════════════════════════════════════════════════════════════
+    _syncOptionState() {
+        const autoScroll = this.$('#setting-auto-scroll');
+        const autoRefresh = this.$('#setting-auto-refresh');
+        if (autoScroll) {
+            autoScroll.checked = this.getState('logs.autoScroll') !== false;
+        }
+        if (autoRefresh) {
+            autoRefresh.checked = this.getState('logs.autoRefresh') !== false;
+        }
+        this._updateWrapState(!!this.$('#setting-wrap')?.checked);
+    }
 
-    async _loadLogs(force = false) {
+    async _refreshLogs(options = {}) {
         const container = this.$('#log-content');
-        if (!container) return;
-        if (this._isLoading) return;
-        this._isLoading = true;
+        const { silent = false } = options;
+
+        if (!silent && container) {
+            container.textContent = TEXT.loading;
+        }
 
         try {
-            const result = await apiService.getLogs(this._maxLines);
-
-            if (result.success && result.logs) {
-                const mergeResult = this._mergeLogs(this._logLines, result.logs, force);
-                this._logLines = mergeResult.merged;
-                if (this._hasFilters()) {
-                    this._refreshFilteredView();
-                } else if (mergeResult.mode === 'append') {
-                    this._appendLogs(container, mergeResult.appendLines);
-                    this._updateMeta(this._logLines.length, this._logLines.length);
-                } else {
-                    this._renderLogs(container, this._logLines);
-                    this._updateMeta(this._logLines.length, this._logLines.length);
-                }
-                this._lastUpdatedAt = Date.now();
-                this._updateLastUpdated();
+            const result = await apiService.getLogs(this._lineCount);
+            if (!result?.success) {
+                throw new Error(result?.message || TEXT.loadFailed);
             }
+
+            this._allLogs = Array.isArray(result.logs) ? result.logs : [];
+            this._applyFilters();
+            this._updateMeta();
+            this.emit(Events.LOGS_LOADED, {
+                total: this._allLogs.length,
+                visible: this._visibleLogs.length,
+            });
         } catch (error) {
-            container.textContent = toast.getErrorMessage(error, '加载日志失败');
-        } finally {
-            this._isLoading = false;
-        }
-    }
-
-    _renderLogs(container, logs, emptyText = '暂无日志...') {
-        if (!logs || logs.length === 0) {
-            container.textContent = emptyText;
-            return;
-        }
-
-        const coloredLogs = logs.map(line => this._colorizeLine(line)).join('\n');
-        container.innerHTML = coloredLogs;
-
-        // 自动滚动
-        const autoScroll = this.getState('logs.autoScroll');
-        if (autoScroll !== false) {
-            container.scrollTop = container.scrollHeight;
-        }
-    }
-
-    _appendLogs(container, logs) {
-        if (!logs || logs.length === 0) return;
-        if (container.textContent === '暂无日志...' || container.textContent === '等待日志加载...') {
-            this._renderLogs(container, logs);
-            return;
-        }
-        const coloredLogs = logs.map(line => this._colorizeLine(line)).join('\n');
-        container.insertAdjacentHTML('beforeend', '\n' + coloredLogs);
-        const autoScroll = this.getState('logs.autoScroll');
-        if (autoScroll !== false) {
-            container.scrollTop = container.scrollHeight;
-        }
-    }
-
-    _mergeLogs(existing, incoming, force = false) {
-        if (force || existing.length === 0) {
-            return { mode: 'replace', merged: incoming, appendLines: [] };
-        }
-        if (!incoming || incoming.length === 0) {
-            return { mode: 'append', merged: existing, appendLines: [] };
-        }
-        const maxOverlap = Math.min(existing.length, incoming.length);
-        let overlap = 0;
-        for (let i = maxOverlap; i > 0; i--) {
-            const tail = existing.slice(-i);
-            const head = incoming.slice(0, i);
-            let matched = true;
-            for (let j = 0; j < i; j++) {
-                if (tail[j] !== head[j]) {
-                    matched = false;
-                    break;
-                }
+            console.error('[LogsPage] load failed:', error);
+            if (container) {
+                container.textContent = toast.getErrorMessage(error, TEXT.loadFailed);
             }
-            if (matched) {
-                overlap = i;
-                break;
+            if (!silent) {
+                toast.error(toast.getErrorMessage(error, TEXT.loadFailed));
             }
         }
-        if (overlap === 0) {
-            return { mode: 'replace', merged: incoming, appendLines: [] };
-        }
-        const appendLines = incoming.slice(overlap);
-        let merged = existing.concat(appendLines);
-        if (merged.length > this._maxLines) {
-            merged = merged.slice(-this._maxLines);
-            return { mode: 'replace', merged, appendLines: [] };
-        }
-        return { mode: 'append', merged, appendLines };
     }
 
-    _colorizeLine(line) {
-        const escaped = this._escapeHtml(line);
-        const level = this._getLineLevel(line);
-        if (!level) {
-            return escaped;
-        }
-        return `<span class="log-${level}">${escaped}</span>`;
-    }
-
-    _getLineLevel(line) {
-        if (line.includes('ERROR') || line.includes('错误')) {
-            return 'error';
-        }
-        if (line.includes('WARNING') || line.includes('警告')) {
-            return 'warning';
-        }
-        if (line.includes('成功') || line.includes('完成')) {
-            return 'success';
-        }
-        if (line.includes('INFO') || line.includes('信息')) {
-            return 'info';
-        }
-        if (line.includes('发送') || line.includes('回复')) {
-            return 'send';
-        }
-        if (line.includes('收到') || line.includes('接收')) {
-            return 'receive';
-        }
-        return '';
-    }
-
-    _hasFilters() {
-        return Boolean(this._searchKeyword || this._levelFilter);
-    }
-
-    _getFilteredLogs() {
-        if (!this._logLines || this._logLines.length === 0) return [];
-        const keyword = this._searchKeyword.toLowerCase();
-        const level = this._levelFilter;
-        return this._logLines.filter((line) => {
-            if (keyword && !line.toLowerCase().includes(keyword)) {
-                return false;
+    async _clearLogs() {
+        try {
+            const result = await apiService.clearLogs();
+            if (!result?.success) {
+                throw new Error(result?.message || TEXT.clearFailed);
             }
-            if (level) {
-                return this._getLineLevel(line) === level;
-            }
-            return true;
-        });
-    }
-
-    _refreshFilteredView() {
-        const container = this.$('#log-content');
-        if (!container) return;
-        const filtered = this._getFilteredLogs();
-        const emptyText = this._logLines.length ? '没有匹配的日志...' : '暂无日志...';
-        this._renderLogs(container, filtered, emptyText);
-        this._updateMeta(this._logLines.length, filtered.length);
-    }
-
-    _updateWrap() {
-        const wrapper = this.$('.log-container');
-        if (!wrapper) return;
-        wrapper.classList.toggle('wrap', this._wrapEnabled);
-    }
-
-    _updateMeta(totalCount, visibleCount) {
-        const countElem = this.$('#log-count');
-        const visibleElem = this.$('#log-visible-count');
-        if (countElem) countElem.textContent = `${totalCount} 行`;
-        if (visibleElem) visibleElem.textContent = `${visibleCount} 匹配`;
-    }
-
-    _updateLastUpdated() {
-        const updatedElem = this.$('#log-updated');
-        if (!updatedElem) return;
-        if (!this._lastUpdatedAt) {
-            updatedElem.textContent = '--';
-            return;
+            this._allLogs = [];
+            this._visibleLogs = [];
+            this._renderLogs();
+            this._updateMeta();
+            this.emit(Events.LOGS_CLEARED, {});
+            toast.success(result?.message || TEXT.cleared);
+        } catch (error) {
+            console.error('[LogsPage] clear failed:', error);
+            toast.error(toast.getErrorMessage(error, TEXT.clearFailed));
         }
-        const date = new Date(this._lastUpdatedAt);
-        updatedElem.textContent = date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     }
 
     async _copyLogs() {
-        const logs = this._hasFilters() ? this._getFilteredLogs() : this._logLines;
-        if (!logs || logs.length === 0) {
-            toast.info('暂无可复制日志');
+        const content = this._visibleLogs.join('\n');
+        if (!content) {
+            toast.info(TEXT.empty);
             return;
         }
-        const text = logs.join('\n');
+
         try {
             if (navigator.clipboard?.writeText) {
-                await navigator.clipboard.writeText(text);
+                await navigator.clipboard.writeText(content);
             } else {
                 const textarea = document.createElement('textarea');
-                textarea.value = text;
+                textarea.value = content;
+                textarea.setAttribute('readonly', 'readonly');
                 textarea.style.position = 'fixed';
                 textarea.style.opacity = '0';
                 document.body.appendChild(textarea);
                 textarea.select();
                 document.execCommand('copy');
-                document.body.removeChild(textarea);
+                textarea.remove();
             }
-            toast.success('日志已复制');
+            toast.success(TEXT.copied);
         } catch (error) {
-            toast.error('复制失败');
+            console.error('[LogsPage] copy failed:', error);
+            toast.error(TEXT.copyFailed);
         }
     }
 
     _exportLogs() {
-        const logs = this._hasFilters() ? this._getFilteredLogs() : this._logLines;
-        if (!logs || logs.length === 0) {
-            toast.info('暂无可导出日志');
+        const content = this._visibleLogs.join('\n');
+        downloadTextFile(`wechat-ai-assistant-logs-${Date.now()}.log`, content || '');
+        toast.success(TEXT.exported);
+    }
+
+    _applyFilters() {
+        const keyword = this._keyword;
+        const level = this._level;
+
+        this._visibleLogs = this._allLogs.filter((line) => {
+            const content = String(line || '');
+            const lower = content.toLowerCase();
+            if (keyword && !lower.includes(keyword)) {
+                return false;
+            }
+            if (level) {
+                const detected = this._getLogLevel(content);
+                if (detected !== level) {
+                    return false;
+                }
+            }
+            return true;
+        });
+
+        this._renderLogs();
+        this._updateMeta();
+    }
+
+    _renderLogs() {
+        const container = this.$('#log-content');
+        if (!container) {
             return;
         }
-        const text = logs.join('\n');
-        const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-        a.href = url;
-        a.download = `logs-${timestamp}.txt`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-        toast.success('日志已导出');
+
+        container.textContent = '';
+
+        if (this._visibleLogs.length === 0) {
+            container.textContent = this._allLogs.length === 0 ? TEXT.empty : '\u6682\u65e0\u5339\u914d\u65e5\u5fd7';
+            return;
+        }
+
+        const fragment = document.createDocumentFragment();
+        for (const line of this._visibleLogs) {
+            const item = document.createElement('span');
+            const level = this._getLogLevel(line);
+            item.className = this._getLogClassName(level);
+            item.textContent = String(line);
+            fragment.appendChild(item);
+        }
+
+        container.appendChild(fragment);
+        if (this.getState('logs.autoScroll') !== false) {
+            this._scrollToBottom();
+        }
     }
 
-    _escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
+    _updateMeta() {
+        const total = this.$('#log-count');
+        const visible = this.$('#log-visible-count');
+        const updated = this.$('#log-updated');
+
+        if (total) {
+            total.textContent = `${this._allLogs.length} ${TEXT.lines}`;
+        }
+        if (visible) {
+            visible.textContent = `${this._visibleLogs.length} ${TEXT.matched}`;
+        }
+        if (updated) {
+            updated.textContent = this._allLogs.length > 0 ? formatNow() : '--';
+        }
     }
 
-    // ═══════════════════════════════════════════════════════════════════════
-    //                           自动刷新
-    // ═══════════════════════════════════════════════════════════════════════
+    _setupAutoRefresh() {
+        this._clearRefreshTimer();
 
-    _startAutoRefresh() {
-        this._stopAutoRefresh();
-        if (this.getState('logs.autoRefresh') === false) return;
-        this._refreshInterval = setInterval(() => {
-            // 页面不可见时不刷新，节省资源
-            if (!document.hidden) {
-                this._loadLogs();
-            }
-        }, this._refreshIntervalMs);
+        if (!this.isActive() || this.getState('logs.autoRefresh') === false) {
+            return;
+        }
+
+        this._refreshTimer = window.setInterval(() => {
+            void this._refreshLogs({ silent: true });
+        }, 5000);
+        this.setState('intervals.logs', this._refreshTimer);
     }
 
-    _stopAutoRefresh() {
-        if (this._refreshInterval) {
-            clearInterval(this._refreshInterval);
-            this._refreshInterval = null;
+    _clearRefreshTimer() {
+        if (this._refreshTimer) {
+            clearInterval(this._refreshTimer);
+            this._refreshTimer = null;
+        }
+        this.setState('intervals.logs', null);
+    }
+
+    _updateWrapState(enabled) {
+        const container = this.$('.log-container');
+        container?.classList.toggle('wrap', enabled);
+    }
+
+    _scrollToBottom() {
+        const container = this.$('#log-content');
+        if (!container) {
+            return;
+        }
+        container.scrollTop = container.scrollHeight;
+    }
+
+    _getLogLevel(line) {
+        const content = String(line || '').toLowerCase();
+        if (content.includes('[error]') || content.includes(' error ') || content.includes('traceback')) {
+            return 'error';
+        }
+        if (content.includes('[warning]') || content.includes(' warning ') || content.includes(' warn ')) {
+            return 'warning';
+        }
+        if (content.includes('[send]') || content.includes(' send ')) {
+            return 'send';
+        }
+        if (content.includes('[receive]') || content.includes(' receive ') || content.includes(' recv ')) {
+            return 'receive';
+        }
+        if (content.includes('[info]') || content.includes(' info ')) {
+            return 'info';
+        }
+        return 'default';
+    }
+
+    _getLogClassName(level) {
+        switch (level) {
+        case 'error':
+            return 'log-error';
+        case 'warning':
+            return 'log-warning';
+        case 'send':
+            return 'log-send';
+        case 'receive':
+            return 'log-receive';
+        case 'info':
+            return 'log-info';
+        default:
+            return '';
         }
     }
 }

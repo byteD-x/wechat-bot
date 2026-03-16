@@ -3,14 +3,14 @@
 """
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 
 
 
 from ..types import MessageEvent
 from ..utils.common import iter_items
 
-__all__ = ["should_reply"]
+__all__ = ["should_reply", "should_reply_with_reason"]
 
 
 def should_reply(
@@ -19,6 +19,23 @@ def should_reply(
     ignore_names_set: set = None,
     ignore_keywords_list: list = None,
 ) -> bool:
+    ok, _reason = should_reply_with_reason(
+        event,
+        config,
+        ignore_names_set=ignore_names_set,
+        ignore_keywords_list=ignore_keywords_list,
+    )
+    if not ok:
+        logging.debug("跳过消息：%s（原因：%s）", event.chat_name, _reason)
+    return ok
+
+
+def should_reply_with_reason(
+    event: MessageEvent,
+    config: Dict[str, Any],
+    ignore_names_set: set = None,
+    ignore_keywords_list: list = None,
+) -> Tuple[bool, str]:
     """
     判断是否应该回复该消息。
     
@@ -33,21 +50,16 @@ def should_reply(
     self_name = bot_cfg.get("self_name", "")
 
     if not event.content.strip():
-        logging.debug("跳过空消息：%s", event.chat_name)
-        return False
+        return False, "empty_content"
     if event.is_self:
-        logging.debug("跳过自己发送的消息：%s", event.chat_name)
-        return False
+        return False, "from_self"
     if self_name and event.sender == self_name:
-        logging.debug("跳过发送人等于自己昵称：%s", event.chat_name)
-        return False
+        return False, "sender_is_self_name"
 
     if bot_cfg.get("ignore_official", True) and event.chat_type == "official":
-        logging.debug("跳过公众号：%s", event.chat_name)
-        return False
+        return False, "official_account"
     if bot_cfg.get("ignore_service", True) and event.chat_type == "service":
-        logging.debug("跳过服务号：%s", event.chat_name)
-        return False
+        return False, "service_account"
 
     # 优化：使用预处理的集合/列表
     if ignore_names_set is None or ignore_keywords_list is None:
@@ -67,26 +79,18 @@ def should_reply(
     if ignore_names_set or ignore_keywords_list:
         chat_name_norm = event.chat_name.strip().lower()
         if chat_name_norm in ignore_names_set:
-            logging.debug("跳过忽略会话：%s", event.chat_name)
-            return False
+            return False, "ignored_chat_name"
         for keyword in ignore_keywords_list:
             if keyword in event.chat_name:
-                logging.debug(
-                    "跳过会话：%s（命中忽略关键词：%s）",
-                    event.chat_name,
-                    keyword,
-                )
-                return False
+                return False, f"ignored_chat_keyword:{keyword}"
 
     if bot_cfg.get("group_reply_only_when_at", False) and event.is_group:
         if not event.is_at_me:
-            logging.debug("群聊未被 @，跳过：%s", event.chat_name)
-            return False
+            return False, "group_not_at_me"
 
     if bot_cfg.get("whitelist_enabled", False) and event.is_group:
         whitelist = set(bot_cfg.get("whitelist", []))
         if event.chat_name not in whitelist:
-            logging.debug("群聊不在白名单，跳过：%s", event.chat_name)
-            return False
+            return False, "group_not_in_whitelist"
 
-    return True
+    return True, "ok"

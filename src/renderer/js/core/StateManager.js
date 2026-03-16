@@ -4,6 +4,8 @@
  * 提供统一的状态管理，支持订阅式更新。
  */
 
+import { debugLog } from './Debug.js';
+
 class StateManager {
     constructor() {
         this._state = {
@@ -75,19 +77,22 @@ class StateManager {
         }
 
         target[lastKey] = value;
-        this._history.push({
-            path,
-            oldValue,
-            newValue: value,
-            timestamp: Date.now()
-        });
+        // Avoid storing high-frequency large payloads (e.g. bot.status) in history.
+        if (path !== 'bot.status') {
+            this._history.push({
+                path,
+                oldValue,
+                newValue: value,
+                timestamp: Date.now()
+            });
 
-        if (this._history.length > 100) {
-            this._history.shift();
+            if (this._history.length > 100) {
+                this._history.shift();
+            }
         }
 
         this._notifySubscribers(path, value, oldValue);
-        console.log(`[StateManager] 状态更新: ${path}`, { oldValue, newValue: value });
+        debugLog(`[StateManager] 状态更新: ${path}`, { oldValue, newValue: value });
     }
 
     batchUpdate(updates) {
@@ -103,7 +108,14 @@ class StateManager {
         this._subscribers.get(path).add(callback);
 
         return () => {
-            this._subscribers.get(path)?.delete(callback);
+            const set = this._subscribers.get(path);
+            if (!set) {
+                return;
+            }
+            set.delete(callback);
+            if (set.size === 0) {
+                this._subscribers.delete(path);
+            }
         };
     }
 

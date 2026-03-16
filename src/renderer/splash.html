@@ -27,9 +27,10 @@
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            background: linear-gradient(135deg, #0A0A0F 0%, #12121A 50%, #1A1A24 100%);
+            background: linear-gradient(135deg, #FFFFFF 0%, #F8FAFC 55%, #F1F5F9 100%);
+            border: 1px solid rgba(15, 23, 42, 0.10);
             border-radius: 16px;
-            box-shadow: 0 25px 80px rgba(0, 0, 0, 0.6);
+            box-shadow: 0 25px 80px rgba(15, 23, 42, 0.15);
             position: relative;
             overflow: hidden;
         }
@@ -40,7 +41,7 @@
             position: absolute;
             width: 300px;
             height: 300px;
-            background: radial-gradient(circle, rgba(59, 130, 246, 0.15) 0%, transparent 70%);
+            background: radial-gradient(circle, rgba(37, 99, 235, 0.12) 0%, transparent 70%);
             top: -100px;
             left: 50%;
             transform: translateX(-50%);
@@ -70,9 +71,9 @@
         .logo {
             width: 72px;
             height: 72px;
-            color: #3B82F6;
+            color: #2563EB;
             animation: logoEnter 0.8s ease-out;
-            filter: drop-shadow(0 0 20px rgba(59, 130, 246, 0.4));
+            filter: drop-shadow(0 0 24px rgba(37, 99, 235, 0.25));
         }
 
         @keyframes logoEnter {
@@ -90,7 +91,7 @@
         .title {
             font-size: 24px;
             font-weight: 600;
-            color: #F1F5F9;
+            color: #0F172A;
             letter-spacing: 0.02em;
             margin-bottom: 32px;
             opacity: 0;
@@ -154,7 +155,7 @@
             width: 220px;
             height: 6px;
             border-radius: 999px;
-            background: rgba(255, 255, 255, 0.08);
+            background: rgba(15, 23, 42, 0.08);
             overflow: hidden;
             margin-top: 22px;
             opacity: 0;
@@ -165,7 +166,7 @@
             width: 12%;
             height: 100%;
             border-radius: inherit;
-            background: linear-gradient(90deg, #3B82F6, #60A5FA);
+            background: linear-gradient(90deg, #2563EB, #3B82F6);
             transition: width 0.25s ease;
         }
     </style>

@@ -33,8 +33,8 @@ def parse_send_result(result: Any) -> Tuple[bool, Optional[str]]:
         return bool(success), message
     if isinstance(result, dict):
         if "status" in result:
-            status = str(result.get("status") or "")
-            if status != "成功":
+            status = str(result.get("status") or "").strip().lower()
+            if status not in {"成功", "success", "ok", "0"}:
                 return False, result.get("message") or result.get("error")
             return True, result.get("message")
         if result.get("success") is False:
@@ -135,6 +135,19 @@ async def send_reply_chunks(
     """
     chunks = split_reply_chunks(text, chunk_size)
     quote_used = False
+    random_delay = bot_cfg.get("random_delay_range_sec")
+    random_delay_min = as_float(
+        random_delay[0] if isinstance(random_delay, (list, tuple)) and len(random_delay) > 0 else 0.0,
+        0.0,
+        min_value=0.0,
+    )
+    random_delay_max = as_float(
+        random_delay[1] if isinstance(random_delay, (list, tuple)) and len(random_delay) > 1 else random_delay_min,
+        random_delay_min,
+        min_value=0.0,
+    )
+    if random_delay_max < random_delay_min:
+        random_delay_min, random_delay_max = random_delay_max, random_delay_min
     for idx, chunk in enumerate(chunks):
         if not chunk:
             continue
@@ -142,6 +155,8 @@ async def send_reply_chunks(
             elapsed = time.time() - last_reply_ts.get("ts", 0.0)
             if elapsed < min_reply_interval:
                 await asyncio.sleep(min_reply_interval - elapsed)
+            if random_delay_max > 0:
+                await asyncio.sleep(random.uniform(random_delay_min, random_delay_max))
             if quote_item is not None and not quote_used:
                 ok, err_msg = await asyncio.to_thread(
                     send_quote_message, quote_item, chunk, quote_timeout_sec

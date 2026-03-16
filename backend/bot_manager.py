@@ -12,6 +12,7 @@ import os
 import sys
 import time
 from typing import Any, Dict, Optional, Set
+from .core.config_service import get_config_service
 from .wechat_versions import OFFICIAL_SUPPORTED_WECHAT_VERSION
 
 logger = logging.getLogger(__name__)
@@ -60,46 +61,42 @@ class _ProcessMemoryCounters(ctypes.Structure):
 class BotManager:
     """
     机器人生命周期管理器（单例）
-    
+
     负责管理 WeChatBot 实例的完整生命周期，包括：
     - 启动和停止
     - 暂停和恢复
     - 状态查询
     - 资源清理
     """
-    
-    _instance: Optional['BotManager'] = None
+
+    _instance: Optional["BotManager"] = None
     _lock = asyncio.Lock()
-    
-    def __new__(cls) -> 'BotManager':
+
+    def __new__(cls) -> "BotManager":
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._initialized = False
         return cls._instance
-    
+
     def __init__(self):
         if self._initialized:
             return
-            
+
         self._initialized = True
         self.bot = None  # WeChatBot 实例
         self.task: Optional[asyncio.Task] = None  # 运行任务
         self.stop_event = asyncio.Event()  # 停止信号
-        
+
         # 事件广播
         self._event_queues: Set[asyncio.Queue] = set()
-        
+
         # 状态
         self.is_running = False
         self.is_paused = False
         self.start_time: Optional[float] = None
-        
+
         # 统计
-        self.stats = {
-            'today_replies': 0,
-            'today_tokens': 0,
-            'total_replies': 0
-        }
+        self.stats = {"today_replies": 0, "today_tokens": 0, "total_replies": 0}
 
         self._status_cache: Optional[Dict[str, Any]] = None
         self._status_cache_time: float = 0.0
@@ -119,55 +116,66 @@ class BotManager:
             "wall_time": time.perf_counter(),
             "cpu_percent": 0.0,
         }
-        
+
         # 共享组件
         self.memory_manager = None
-        
+
         # 配置路径
-        self.config_path = os.path.join(
-            os.path.dirname(__file__), 'config.py'
-        )
-        
+        self.config_path = os.path.join(os.path.dirname(__file__), "config.py")
+        self.config_service = get_config_service()
+
         logger.info("BotManager 初始化完成")
-    
+
     @classmethod
-    def get_instance(cls) -> 'BotManager':
+    def get_instance(cls) -> "BotManager":
         """获取单例实例"""
         if cls._instance is None:
             cls._instance = cls()
         return cls._instance
-    
+
     def get_memory_manager(self):
         """获取或初始化共享记忆管理器"""
         if self.memory_manager is None:
-            from backend.config import CONFIG
             from backend.core.memory import MemoryManager
-            bot_cfg = CONFIG.get('bot', {})
-            db_path = bot_cfg.get('memory_db_path') or bot_cfg.get('sqlite_db_path') or 'data/chat_memory.db'
-            self.memory_manager = MemoryManager(db_path)
+
+            bot_cfg = self.config_service.get_snapshot(
+                config_path=self.config_path
+            ).bot
+            db_path = (
+                bot_cfg.get("memory_db_path")
+                or bot_cfg.get("sqlite_db_path")
+                or "data/chat_memory.db"
+            )
+            self.memory_manager = MemoryManager(
+                db_path,
+                ttl_sec=bot_cfg.get("memory_ttl_sec"),
+                cleanup_interval_sec=float(
+                    bot_cfg.get("memory_cleanup_interval_sec", 0.0) or 0.0
+                ),
+            )
         return self.memory_manager
 
     async def start(self, config_path: Optional[str] = None) -> Dict[str, Any]:
         """
         启动机器人
-        
+
         Args:
             config_path: 可选的配置文件路径，不提供则使用默认路径
-            
+
         Returns:
             包含 success 和 message 的字典
         """
         async with self._lock:
             if self.is_running:
-                return {'success': False, 'message': '机器人已在运行'}
-            
+                return {"success": False, "message": "机器人已在运行"}
+
             try:
                 from backend.bot import WeChatBot
                 from backend.core.bot_control import get_bot_state
-                
+
                 # 使用提供的配置路径或默认路径
                 path = config_path or self.config_path
-                
+
                 # 重置停止事件
                 self.stop_event.clear()
                 self.clear_issue()
@@ -178,16 +186,16 @@ class BotManager:
                     active=True,
                 )
                 state = get_bot_state()
-                
+
                 # 创建机器人实例
                 self.bot = WeChatBot(path, memory_manager=self.get_memory_manager())
-                
+
                 # 注入停止事件（让 bot 可以检查是否需要停止）
                 self.bot._stop_event = self.stop_event
-                
+
                 # 创建运行任务
                 self.task = asyncio.create_task(self._run_bot())
-                
+
                 self.is_running = True
                 self.is_paused = bool(state.is_paused)
                 self.start_time = time.time()
@@ -195,10 +203,10 @@ class BotManager:
                 state.save()
                 self._invalidate_status_cache()
                 await self.notify_status_change()
-                
-                logger.info("机器人启动成功")
-                return {'success': True, 'message': '机器人已启动'}
-                
+
+                logger.info("机器人启动流程已开始")
+                return {"success": True, "message": "机器人启动中，请稍候..."}
+
             except Exception as e:
                 logger.error(f"机器人启动失败: {e}")
                 self.is_running = False
@@ -222,8 +230,8 @@ class BotManager:
                     active=False,
                 )
                 self._invalidate_status_cache()
-                return {'success': False, 'message': f'启动失败: {str(e)}'}
-    
+                return {"success": False, "message": f"启动失败: {str(e)}"}
+
     async def _run_bot(self):
         """内部运行逻辑"""
         try:
@@ -256,22 +264,22 @@ class BotManager:
             self._invalidate_status_cache()
             await self.notify_status_change()
             logger.info("机器人已停止")
-    
+
     async def stop(self) -> Dict[str, Any]:
         """
         停止机器人
-        
+
         Returns:
             包含 success 和 message 的字典
         """
         async with self._lock:
             if not self.is_running:
-                return {'success': False, 'message': '机器人未在运行'}
-            
+                return {"success": False, "message": "机器人未在运行"}
+
             try:
                 # 设置停止信号
                 self.stop_event.set()
-                
+
                 # 等待任务完成或超时后取消
                 if self.task and not self.task.done():
                     try:
@@ -283,13 +291,13 @@ class BotManager:
                             await self.task
                         except asyncio.CancelledError:
                             pass
-                
+
                 # 清理资源
                 if self.bot:
-                    if hasattr(self.bot, 'shutdown'):
+                    if hasattr(self.bot, "shutdown"):
                         await self.bot.shutdown()
                     self.bot = None
-                
+
                 self.task = None
                 self.is_running = False
                 self.is_paused = False
@@ -302,40 +310,40 @@ class BotManager:
                 )
                 self._invalidate_status_cache()
                 await self.notify_status_change()
-                
+
                 logger.info("机器人停止成功")
-                return {'success': True, 'message': '机器人已停止'}
-                
+                return {"success": True, "message": "机器人已停止"}
+
             except Exception as e:
                 logger.error(f"停止机器人失败: {e}")
-                return {'success': False, 'message': f'停止失败: {str(e)}'}
-    
+                return {"success": False, "message": f"停止失败: {str(e)}"}
+
     async def pause(self, reason: str = "用户暂停") -> Dict[str, Any]:
         """暂停机器人"""
         if not self.is_running:
-            return {'success': False, 'message': '机器人未在运行'}
-        
+            return {"success": False, "message": "机器人未在运行"}
+
         if self.is_paused:
-            return {'success': False, 'message': '机器人已暂停'}
+            return {"success": False, "message": "机器人已暂停"}
 
         await self.apply_pause_state(True, reason=reason, propagate_to_bot=True)
-        
+
         logger.info("机器人已暂停")
-        return {'success': True, 'message': '机器人已暂停'}
-    
+        return {"success": True, "message": "机器人已暂停"}
+
     async def resume(self) -> Dict[str, Any]:
         """恢复机器人"""
         if not self.is_running:
-            return {'success': False, 'message': '机器人未在运行'}
-        
+            return {"success": False, "message": "机器人未在运行"}
+
         if not self.is_paused:
-            return {'success': False, 'message': '机器人未暂停'}
+            return {"success": False, "message": "机器人未暂停"}
 
         await self.apply_pause_state(False, propagate_to_bot=True)
-        
+
         logger.info("机器人已恢复")
-        return {'success': True, 'message': '机器人已恢复'}
-    
+        return {"success": True, "message": "机器人已恢复"}
+
     async def restart(self) -> Dict[str, Any]:
         """重启机器人"""
         await self.stop()
@@ -351,6 +359,7 @@ class BotManager:
         self,
         *,
         new_config: Optional[Dict[str, Any]] = None,
+        changed_paths: Optional[list[str]] = None,
         force_ai_reload: bool = False,
         strict_active_preset: bool = False,
     ) -> Dict[str, Any]:
@@ -358,13 +367,22 @@ class BotManager:
         立即将最新配置应用到运行中的机器人。
         """
         if not self.is_running or not self.bot:
-            return {'success': False, 'message': '机器人未运行，无法立即切换', 'skipped': True}
+            return {
+                "success": False,
+                "message": "机器人未运行，无法立即切换",
+                "skipped": True,
+            }
 
-        if not hasattr(self.bot, 'reload_runtime_config'):
-            return {'success': False, 'message': '当前机器人实例不支持立即重载', 'skipped': True}
+        if not hasattr(self.bot, "reload_runtime_config"):
+            return {
+                "success": False,
+                "message": "当前机器人实例不支持立即重载",
+                "skipped": True,
+            }
 
         return await self.bot.reload_runtime_config(
             new_config=new_config,
+            changed_paths=changed_paths,
             force_ai_reload=force_ai_reload,
             strict_active_preset=strict_active_preset,
         )
@@ -372,21 +390,21 @@ class BotManager:
     async def send_message(self, target: str, content: str) -> Dict[str, Any]:
         """
         发送消息
-        
+
         Args:
            target: 目标
            content: 内容
         """
         if not self.is_running or not self.bot:
-             return {'success': False, 'message': '机器人未运行'}
-             
+            return {"success": False, "message": "机器人未运行"}
+
         if self.is_paused:
-             return {'success': False, 'message': '机器人已暂停'}
-             
-        if hasattr(self.bot, 'send_text_message'):
-             return await self.bot.send_text_message(target, content)
-        
-        return {'success': False, 'message': '机器人实例不支持发送消息'}
+            return {"success": False, "message": "机器人已暂停"}
+
+        if hasattr(self.bot, "send_text_message"):
+            return await self.bot.send_text_message(target, content)
+
+        return {"success": False, "message": "机器人实例不支持发送消息"}
 
     def get_usage(self) -> Dict[str, Any]:
         """获取使用统计"""
@@ -402,15 +420,17 @@ class BotManager:
             from backend.core.bot_control import get_bot_state
 
             state = get_bot_state()
-            stats.update({
-                'today_replies': state.today_replies,
-                'today_tokens': state.today_tokens,
-                'total_replies': state.total_replies,
-                'total_tokens': state.total_tokens,
-            })
+            stats.update(
+                {
+                    "today_replies": state.today_replies,
+                    "today_tokens": state.today_tokens,
+                    "total_replies": state.total_replies,
+                    "total_tokens": state.total_tokens,
+                }
+            )
         except Exception:
             pass
-        if self.bot and hasattr(self.bot, 'get_stats'):
+        if self.bot and hasattr(self.bot, "get_stats"):
             try:
                 bot_stats = self.bot.get_stats()
                 if bot_stats:
@@ -422,77 +442,80 @@ class BotManager:
         self._stats_cache_time = now
         return dict(stats)
 
-    
     def get_status(self) -> Dict[str, Any]:
         """
         获取机器人状态
-        
+
         Returns:
             状态信息字典
         """
         now = time.time()
-        if self._status_cache and (now - self._status_cache_time) < self._status_cache_ttl:
+        if (
+            self._status_cache
+            and (now - self._status_cache_time) < self._status_cache_ttl
+        ):
             return dict(self._status_cache)
-        
-        uptime = '--'
+
+        uptime = "--"
         if self.is_running and self.start_time:
             elapsed = int(time.time() - self.start_time)
             hours, remainder = divmod(elapsed, 3600)
             minutes, seconds = divmod(remainder, 60)
             uptime = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-        
+
         # 尝试从 bot 获取统计数据
         stats = self._get_stats()
-        
+
         status = {
-            'running': self.is_running,
-            'is_paused': self.is_paused,
-            'uptime': uptime,
-            'today_replies': stats.get('today_replies', 0),
-            'today_tokens': stats.get('today_tokens', 0),
-            'total_replies': stats.get('total_replies', 0),
-            'total_tokens': stats.get('total_tokens', 0),
-            'engine': 'langgraph',
-            'startup': dict(self._startup_state),
+            "running": self.is_running,
+            "is_paused": self.is_paused,
+            "uptime": uptime,
+            "today_replies": stats.get("today_replies", 0),
+            "today_tokens": stats.get("today_tokens", 0),
+            "total_replies": stats.get("total_replies", 0),
+            "total_tokens": stats.get("total_tokens", 0),
+            "engine": "langgraph",
+            "startup": dict(self._startup_state),
         }
-        if self.bot and hasattr(self.bot, 'get_export_rag_status'):
+        if self.bot and hasattr(self.bot, "get_export_rag_status"):
             try:
-                status['export_rag'] = self.bot.get_export_rag_status()
+                status["export_rag"] = self.bot.get_export_rag_status()
             except Exception:
-                status['export_rag'] = None
+                status["export_rag"] = None
         else:
             try:
-                from backend.config import CONFIG
-                bot_cfg = CONFIG.get('bot', {})
-                status['export_rag'] = {
-                    'enabled': bool(bot_cfg.get('export_rag_enabled', False)),
-                    'base_dir': str(bot_cfg.get('export_rag_dir') or ''),
-                    'auto_ingest': bool(bot_cfg.get('export_rag_auto_ingest', True)),
-                    'indexed_contacts': 0,
-                    'indexed_chunks': 0,
-                    'last_scan_at': None,
-                    'last_scan_summary': {},
+                bot_cfg = self.config_service.get_snapshot(
+                    config_path=self.config_path
+                ).bot
+                status["export_rag"] = {
+                    "enabled": bool(bot_cfg.get("export_rag_enabled", False)),
+                    "base_dir": str(bot_cfg.get("export_rag_dir") or ""),
+                    "auto_ingest": bool(bot_cfg.get("export_rag_auto_ingest", True)),
+                    "indexed_contacts": 0,
+                    "indexed_chunks": 0,
+                    "last_scan_at": None,
+                    "last_scan_summary": {},
                 }
             except Exception:
-                status['export_rag'] = None
-        if self.bot and hasattr(self.bot, 'get_agent_status'):
+                status["export_rag"] = None
+        if self.bot and hasattr(self.bot, "get_agent_status"):
             try:
                 status.update(self.bot.get_agent_status())
             except Exception:
                 pass
-        if self.bot and hasattr(self.bot, 'get_transport_status'):
+        if self.bot and hasattr(self.bot, "get_transport_status"):
             try:
                 status.update(self.bot.get_transport_status())
             except Exception:
                 pass
-        if self.bot and hasattr(self.bot, 'get_runtime_status'):
+        if self.bot and hasattr(self.bot, "get_runtime_status"):
             try:
                 status.update(self.bot.get_runtime_status())
             except Exception:
                 pass
-        status['system_metrics'] = self._collect_system_metrics(status)
-        status['health_checks'] = self._build_health_checks(status)
-        status['diagnostics'] = self._build_diagnostics(status)
+        status["system_metrics"] = self._collect_system_metrics(status)
+        status["health_checks"] = self._build_health_checks(status)
+        status["diagnostics"] = self._build_diagnostics(status)
         self._status_cache = status
         self._status_cache_time = now
         return dict(status)
@@ -516,9 +539,9 @@ class BotManager:
         state.set_paused(paused, reason if paused else "")
         self.is_paused = paused
         if propagate_to_bot and self.bot:
-            if paused and hasattr(self.bot, 'pause'):
+            if paused and hasattr(self.bot, "pause"):
                 self.bot.pause()
-            elif not paused and hasattr(self.bot, 'resume'):
+            elif not paused and hasattr(self.bot, "resume"):
                 self.bot.resume()
         self._invalidate_status_cache()
         await self.notify_status_change()
@@ -534,12 +557,24 @@ class BotManager:
         *,
         active: bool,
     ) -> None:
-        self._startup_state = self._make_startup_state(
+        next_state = self._make_startup_state(
             stage=stage,
             message=message,
             progress=progress,
             active=active,
         )
+        prev_state = self._startup_state or {}
+        if (
+            str(prev_state.get("stage") or "") == str(next_state.get("stage") or "")
+            and str(prev_state.get("message") or "")
+            == str(next_state.get("message") or "")
+            and int(prev_state.get("progress", 0) or 0)
+            == int(next_state.get("progress", 0) or 0)
+            and bool(prev_state.get("active")) == bool(next_state.get("active"))
+        ):
+            return
+
+        self._startup_state = next_state
         self._invalidate_status_cache()
         await self.notify_status_change()
 
@@ -594,6 +629,11 @@ class BotManager:
     def _build_diagnostics(self, status: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if self._last_issue:
             return dict(self._last_issue)
+
+        startup = status.get("startup") or {}
+        if bool(startup.get("active")):
+            # 启动中：使用 startup 面板展示进度即可，避免把“尚未连接”误报为“已断开/失败”。
+            return None
 
         transport_status = str(status.get("transport_status") or "").strip().lower()
         transport_warning = str(status.get("transport_warning") or "").strip()
@@ -689,22 +729,34 @@ class BotManager:
 
         transport_status = str(status.get("transport_status") or "").strip().lower()
         transport_warning = str(status.get("transport_warning") or "").strip()
-        compat_mode = bool(status.get("compat_mode"))
+        startup = status.get("startup") or {}
+        startup_active = bool(startup.get("active"))
+        startup_stage = str(startup.get("stage") or "").strip().lower()
         if transport_status == "connected":
-            if compat_mode:
-                wechat_status = "warning"
-                wechat_detail = "Compatibility mode is active; connection is initialized but cannot be fully verified"
-            else:
-                wechat_status = "healthy"
-                wechat_detail = "Verified active WeChat connection"
+            wechat_status = "healthy"
+            wechat_detail = "Verified active WeChat connection"
             if transport_warning:
                 wechat_detail = f"{wechat_detail}; {transport_warning}"
+        elif self.is_running and startup_active:
+            wechat_status = "warning"
+            if startup_stage == "connect_wechat":
+                wechat_detail = "正在连接微信客户端..."
+            else:
+                wechat_detail = "机器人启动中，微信连接尚未就绪"
+            if transport_warning:
+                wechat_detail = f"{wechat_detail}；{transport_warning}"
         elif self.is_running:
             wechat_status = "error"
-            wechat_detail = transport_warning or "Bot is running, but no active WeChat connection was detected"
+            wechat_detail = (
+                transport_warning
+                or "Bot is running, but no active WeChat connection was detected"
+            )
         else:
             wechat_status = "warning"
-            wechat_detail = transport_warning or "Bot is stopped, so WeChat connection is not active"
+            wechat_detail = (
+                transport_warning
+                or "Bot is stopped, so WeChat connection is not active"
+            )
 
         db_status = "warning"
         db_detail = "Database connection has not been initialized"
@@ -720,7 +772,9 @@ class BotManager:
                 db_status = "healthy"
                 db_detail = db_path or "Verified active SQLite connection"
             elif db_path:
-                db_detail = f"Database path configured, but no active connection: {db_path}"
+                db_detail = (
+                    f"Database path configured, but no active connection: {db_path}"
+                )
 
         checks = {
             "ai": {
@@ -733,48 +787,6 @@ class BotManager:
             },
             "database": {
                 "status": db_status,
-                "detail": db_detail,
-            },
-        }
-        for item in checks.values():
-            item["level"] = _health_level_from_status(item.get("status", ""))
-            item["message"] = item.get("detail", "")
-        return checks
-
-        ai_status = "unknown"
-        ai_detail = "未检测到 AI 运行时"
-        ai_ready = bool(self.bot and getattr(self.bot, "ai_client", None))
-        if ai_ready:
-            ai_status = "healthy"
-            ai_detail = f"当前模型: {status.get('model') or 'unknown'}"
-        elif self.is_running:
-            ai_status = "degraded"
-            ai_detail = "机器人运行中，但 AI 客户端未就绪"
-
-        transport_connected = str(status.get("transport_status") or "").strip().lower() == "connected"
-        db_ok = False
-        db_detail = "数据库未初始化"
-        memory_manager = None
-        if self.bot and hasattr(self.bot, "memory"):
-            memory_manager = getattr(self.bot, "memory", None)
-        elif self.memory_manager is not None:
-            memory_manager = self.memory_manager
-        if memory_manager is not None:
-            db_path = str(getattr(memory_manager, "db_path", "") or "")
-            db_ok = bool(db_path)
-            db_detail = db_path or "内存中已创建数据库连接"
-
-        checks = {
-            "ai": {
-                "status": ai_status,
-                "detail": ai_detail,
-            },
-            "wechat": {
-                "status": "healthy" if transport_connected else "degraded",
-                "detail": status.get("transport_warning") or ("微信连接正常" if transport_connected else "当前微信未连接"),
-            },
-            "database": {
-                "status": "healthy" if db_ok else "degraded",
                 "detail": db_detail,
             },
         }
@@ -835,18 +847,16 @@ class BotManager:
             f"wechat_bot_startup_progress {int(startup.get('progress', 0) or 0)}",
             "# HELP wechat_bot_config_reload_mode Active config reload mode.",
             "# TYPE wechat_bot_config_reload_mode gauge",
-            f"wechat_bot_config_reload_mode{{mode=\"{config_reload.get('mode', 'unknown')}\"}} 1",
+            f'wechat_bot_config_reload_mode{{mode="{config_reload.get("mode", "unknown")}"}} 1',
+            "# HELP wechat_bot_health_check Component health state.",
+            "# TYPE wechat_bot_health_check gauge",
         ]
 
         for component, check in health_checks.items():
-            lines.extend([
-                "# HELP wechat_bot_health_check Component health state.",
-                "# TYPE wechat_bot_health_check gauge",
-                (
-                    f"wechat_bot_health_check{{component=\"{component}\","
-                    f"status=\"{str(check.get('status') or 'unknown').lower()}\"}} 1"
-                ),
-            ])
+            status_label = str(check.get("status") or "unknown").lower()
+            lines.append(
+                f'wechat_bot_health_check{{component="{component}",status="{status_label}"}} 1'
+            )
         return "\n".join(lines) + "\n"
 
     def _sample_process_cpu_percent(self) -> float:
@@ -901,30 +911,38 @@ class BotManager:
     async def broadcast_event(self, event_type: str, data: Any) -> None:
         """
         广播事件到所有监听者
-        
+
         Args:
             event_type: 事件类型 (e.g., 'message', 'status_change')
             data: 事件数据
         """
         if not self._event_queues:
             return
-            
+
         payload = {
             "type": event_type,
             "data": data,
-            "timestamp": asyncio.get_event_loop().time()
+            "timestamp": asyncio.get_running_loop().time(),
         }
-        
-        # 移除已关闭的队列
+
+        # Avoid disconnecting slow SSE clients: when a queue is full, drop the
+        # oldest event and keep pushing the latest one.
         closed = []
-        for q in self._event_queues:
+        # Iterate over a snapshot to avoid edge-case "set changed size during iteration"
+        # if a client disconnects while we are broadcasting.
+        for q in tuple(self._event_queues):
             try:
                 q.put_nowait(payload)
             except asyncio.QueueFull:
-                closed.append(q)
+                try:
+                    q.get_nowait()  # Drop oldest
+                    q.put_nowait(payload)
+                except Exception:
+                    # Still full or broken; drop this event for this queue.
+                    pass
             except Exception:
                 closed.append(q)
-        
+
         for q in closed:
             self._event_queues.discard(q)
 
@@ -934,21 +952,48 @@ class BotManager:
         """
         queue = asyncio.Queue(maxsize=100)
         self._event_queues.add(queue)
-        
+
+        import json
+
+        loop = asyncio.get_running_loop()
+        heartbeat_interval_sec = 15.0
+
         try:
+            # Send an initial status payload so the UI can render immediately without
+            # waiting for the first polling round-trip.
+            try:
+                initial = {
+                    "type": "status_change",
+                    "data": self.get_status(),
+                    "timestamp": loop.time(),
+                }
+                yield f"data: {json.dumps(initial, ensure_ascii=False)}\n\n"
+            except Exception:
+                # Status is best-effort; keep SSE alive even if status building fails.
+                pass
+
             while True:
-                # 等待新事件
-                event = await queue.get()
-                
+                # Wait for the next event, but emit a small heartbeat periodically to
+                # keep the EventSource connection alive (some proxies/timeouts are aggressive).
+                try:
+                    event = await asyncio.wait_for(
+                        queue.get(), timeout=heartbeat_interval_sec
+                    )
+                except asyncio.TimeoutError:
+                    event = {
+                        "type": "heartbeat",
+                        "data": None,
+                        "timestamp": loop.time(),
+                    }
+
                 # SSE 格式: data: <json>\n\n
-                import json
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         except asyncio.CancelledError:
             pass
         finally:
             self._event_queues.discard(queue)
-            
-            
+
+
 # 便捷访问函数
 def get_bot_manager() -> BotManager:
     """获取 BotManager 实例"""

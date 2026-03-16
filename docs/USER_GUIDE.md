@@ -4,6 +4,7 @@
 
 ## 目录
 
+- [系统链路说明](#系统链路说明)
 - [1. 环境要求](#1-环境要求)
 - [2. 安装依赖](#2-安装依赖)
 - [3. 首次配置](#3-首次配置)
@@ -15,6 +16,12 @@
 - [9. 常见问题](#9-常见问题)
 - [10. 开发与测试](#10-开发与测试)
 
+## 系统链路说明
+
+如果需要从整体上理解“启动、配置、收消息、语音转文字、AI 运行时、回复发送、状态诊断、热更新”这些链路之间如何衔接，请直接查看 [SYSTEM_CHAINS.md](SYSTEM_CHAINS.md)。
+
+这份手册继续侧重使用、配置和排障步骤；链路级节点职责、入口文件和实现方式集中维护在系统链路文档中。
+
 ## 1. 环境要求
 
 运行前请确认：
@@ -24,6 +31,12 @@
 - Python `3.9+`
 - Node.js `16+`
 - 微信客户端已登录
+
+关于管理员权限（重要）：
+
+- 默认传输后端 `hook_wcferry` 需要通过 WCFerry 向微信进程注入。在 Windows 下必须以“管理员身份运行”启动本项目（桌面端或后端），否则会提示 “wcferry 注入需要管理员权限”。  
+- 建议先启动并登录微信，再启动本项目。  
+- 当 `bot.transport_backend` 保持为 `hook_wcferry` 时，桌面端或后端都必须以管理员身份运行，否则无法注入微信进程。
 
 限制：
 
@@ -105,6 +118,12 @@ npm run dev
 3. `prompt_overrides.py`
 4. `backend/config.py`
 
+当前实现说明：
+
+- 后端会把这些来源合并为一份“生效配置快照”后，再提供给 API 与运行中的 Bot 读取。
+- GUI 保存配置时，`/api/config` 响应会附带 `changed_paths` 与 `reload_plan`，用于说明哪些字段发生变化、预计如何生效。
+- 可通过 `/api/config/audit` 检查当前生效配置中的已知未消费字段，以及 override 文件中是否存在未知字段。
+
 建议：
 
 - 默认配置放在 `backend/config.py`
@@ -140,6 +159,10 @@ npm run dev
 - 查看状态与日志
 - 通过仪表盘观察健康监控和启动进度
 
+注意：
+
+- 若使用默认后端 `hook_wcferry`：请用“以管理员身份运行”打开终端再执行 `npm run dev`，并确保微信已启动且已登录。
+
 ### 5.2 无头机器人模式
 
 ```bash
@@ -151,6 +174,10 @@ python run.py start
 - 已完成配置
 - 只需要机器人主循环
 - 不需要桌面控制台
+
+注意：
+
+- 若使用默认后端 `hook_wcferry`：请用“以管理员身份运行”启动本项目，否则注入会失败。
 
 ### 5.3 Web API 模式
 
@@ -164,6 +191,12 @@ python run.py web
 - 调试接口
 - 与 Electron 或外部控制端联动
 
+注意：
+
+- Web API 默认仅允许本机访问（`127.0.0.1/localhost`）。
+- 若设置了环境变量 `WECHAT_BOT_API_TOKEN`（桌面端会自动设置），访问 `/api/*` 需要携带 `X-Api-Token` 请求头；SSE（`/api/events`）也支持 `?token=` 参数。
+- `python run.py web` 若未显式设置 token，会自动生成并注入环境变量，但不会打印到控制台；如需手工调试，请在启动前自行设置 `WECHAT_BOT_API_TOKEN`（并妥善保管）。
+
 ## 6. 验证是否正常工作
 
 建议按以下顺序验证：
@@ -172,7 +205,15 @@ python run.py web
 2. 访问仪表盘，确认启动状态、健康检查和系统指标正常。
 3. 给允许回复的联系人发送一条简单文本。
 4. 查看 `data/logs/bot.log`。
-5. 检查 API `/api/status`、`/api/config` 和 `/api/metrics`。
+5. 检查 API `/api/status`、`/api/config`、`/api/config/audit` 和 `/api/metrics`（仅本机可访问；若设置了 `WECHAT_BOT_API_TOKEN`，需要携带 `X-Api-Token` 或 `?token=`）。
+
+示例（PowerShell）：
+
+```powershell
+$env:WECHAT_BOT_API_TOKEN = "your_token"
+python run.py web
+Invoke-RestMethod -Headers @{ "X-Api-Token" = "your_token" } http://127.0.0.1:5000/api/status
+```
 
 如需快速观察运行状态，重点看：
 
@@ -319,15 +360,14 @@ python -m tools.prompt_gen.generator
 
 - `config_reload_mode`: `auto` / `polling` / `watchdog`
 - `config_reload_debounce_ms`: 文件事件防抖窗口
-- `transport_backend`: `hook_wcferry` / `compat_ui`
+- `transport_backend`: `hook_wcferry`
 - `required_wechat_version`: 官方支持版本基线，当前应保持为 `3.9.12.51`
 - `vector_memory_enabled`: 向量记忆 / RAG 总开关，关闭后不会写入或检索向量记忆
-- `vector_memory_risk_acknowledged`: 首次开启向量记忆后记录用户已确认成本与隐私提示
 - `vector_memory_embedding_model`: 给向量记忆单独指定 embedding 模型，优先级高于预设和全局配置
 
 说明：
 - `hook_wcferry` 是当前默认且唯一官方支持的传输后端。
-- `compat_ui` 仅保留为遗留兼容链路，不能替代 `3.9.12.51` 这个项目基线版本要求。
+- 当前需要将 `hook_wcferry` 与微信 `3.9.12.51` 版本配套使用，否则传输层兼容性无法保证。
 
 ### 8.3 `agent`
 
@@ -454,6 +494,18 @@ python -m tools.prompt_gen.generator
 - 访问的端口是否正确
 - 代理或网关是否拦截了纯文本响应
 - `/api/status` 是否已经可访问
+
+### 9.8 提示 “wcferry 注入需要管理员权限”
+
+现象：
+
+- 启动后端时提示 `wcferry 注入需要管理员权限`，或传输后端一直无法连接。
+
+处理：
+
+1. 先启动并登录微信 PC（`3.9.12.51`）。
+2. 用“以管理员身份运行”启动本项目（桌面端或 `python run.py start/web`）。
+3. 确认 `hook_wcferry`、管理员权限和微信版本三者同时满足，再继续排查其余环境问题。
 
 ## 10. 开发与测试
 

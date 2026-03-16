@@ -50,7 +50,6 @@ def test_bot_manager_health_checks_include_dashboard_fields():
             "model": "gpt-test",
             "transport_status": "connected",
             "transport_warning": "",
-            "compat_mode": False,
             "ai_health": {
                 "status": "healthy",
                 "detail": "Last AI call succeeded",
@@ -67,7 +66,7 @@ def test_bot_manager_health_checks_include_dashboard_fields():
         manager.memory_manager = original_memory
 
 
-def test_bot_manager_health_checks_report_compat_mode_and_missing_db_connection():
+def test_bot_manager_health_checks_report_connected_transport_and_missing_db_connection():
     manager = BotManager.get_instance()
     original_bot = manager.bot
     original_memory = manager.memory_manager
@@ -82,16 +81,15 @@ def test_bot_manager_health_checks_report_compat_mode_and_missing_db_connection(
         checks = manager._build_health_checks({
             "transport_status": "connected",
             "transport_warning": "",
-            "compat_mode": True,
             "ai_health": {
                 "status": "warning",
-                "detail": "Compatibility-only AI probe",
+                "detail": "Transport connected but runtime check is degraded",
             },
         })
 
         assert checks["ai"]["level"] == "warning"
-        assert checks["wechat"]["status"] == "warning"
-        assert "cannot be fully verified" in checks["wechat"]["message"]
+        assert checks["wechat"]["status"] == "healthy"
+        assert "Verified active WeChat connection" in checks["wechat"]["message"]
         assert checks["database"]["status"] == "warning"
         assert "no active connection" in checks["database"]["message"]
     finally:

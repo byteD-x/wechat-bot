@@ -169,15 +169,22 @@ def get_emotion_response_guide(emotion: str) -> str:
 
 def get_emotion_analysis_prompt(message: str) -> str:
     """生成用于 AI 情感分析的 prompt"""
-    return f'''分析以下用户消息的情绪状态，以 JSON 格式返回分析结果。
+    return f'''你是一个情绪识别器。请读取用户消息并只输出一个 JSON 对象，不要输出任何额外文字或 Markdown 代码块。
 
-用户消息："{message}"
+约束：
+- emotion 只能是以下之一：happy / sad / angry / anxious / excited / tired / confused / neutral
+- confidence 必须是 0.0-1.0 的数字
+- intensity 必须是 1-5 的整数
+- suggested_tone 用一句话描述建议的回复语气
+- 如无法判断，emotion=neutral，confidence=0.5，intensity=3
 
-请返回如下 JSON 格式（不要包含其他文字）：
+用户消息：{message}
+
+只输出如下 JSON（字段名必须一致）：
 {{
-  "emotion": "happy/sad/angry/anxious/excited/tired/confused/neutral",
-  "confidence": 0.0-1.0,
-  "intensity": 1-5,
+  "emotion": "neutral",
+  "confidence": 0.5,
+  "intensity": 3,
   "reasoning": "简短说明判断理由",
   "suggested_tone": "建议的回复语气"
 }}'''
@@ -199,6 +206,8 @@ def parse_emotion_ai_response(response: str) -> Optional[EmotionResult]:
 
     try:
         data = json.loads(json_str)
+        if not isinstance(data, dict):
+            return None
         emotion = str(data.get("emotion", "neutral")).lower()
         if emotion not in EMOTION_RESPONSE_GUIDE:
             emotion = "neutral"
@@ -374,11 +383,18 @@ def analyze_conversation_style(messages: List[Dict[str, str]]) -> Dict[str, any]
     formal_count = 0
     emoji_count = 0
 
+    casual_markers = (CONVERSATION_STYLES.get("casual") or {}).get("markers") or []
+    formal_markers = (CONVERSATION_STYLES.get("formal") or {}).get("markers") or []
+    if not isinstance(casual_markers, (list, tuple)):
+        casual_markers = []
+    if not isinstance(formal_markers, (list, tuple)):
+        formal_markers = []
+
     for msg in user_messages:
-        for marker in CONVERSATION_STYLES["casual"]["markers"]:
+        for marker in casual_markers:
             if marker in msg:
                 casual_count += 1
-        for marker in CONVERSATION_STYLES["formal"]["markers"]:
+        for marker in formal_markers:
             if marker in msg:
                 formal_count += 1
         emoji_count += len(_EMOJI_PATTERN.findall(msg))

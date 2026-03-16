@@ -3,14 +3,18 @@ from types import SimpleNamespace
 
 import pytest
 
-pytest.importorskip("aiosqlite")
-
 from backend.core.agent_runtime import AgentRuntime
 
 
 class _FakeMessage:
     def __init__(self, content):
         self.content = content
+
+
+class _ReasoningMessage:
+    def __init__(self, content, reasoning_content):
+        self.content = content
+        self.additional_kwargs = {"reasoning_content": reasoning_content}
 
 
 class _FakeChatOpenAI:
@@ -215,6 +219,129 @@ async def test_agent_runtime_embedding_cache_hits(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_agent_runtime_emotion_ai_failure_falls_back_to_keywords(monkeypatch):
+    monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
+
+    runtime = AgentRuntime(
+        settings={
+            "base_url": "https://example.com/v1",
+            "api_key": "sk-test",
+            "model": "test-model",
+        },
+        bot_cfg={
+            "emotion_detection_enabled": True,
+            "emotion_detection_mode": "ai",
+        },
+        agent_cfg={"enabled": True},
+    )
+
+    async def _boom(*args, **kwargs):
+        raise RuntimeError("LangChain 返回空内容")
+
+    monkeypatch.setattr(runtime, "generate_reply", _boom)
+    emotion = await runtime._analyze_emotion("friend:alice", "hello")
+    assert emotion is not None
+    assert emotion.emotion == "neutral"
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_emotion_ai_uses_reasoning_content_when_content_empty(monkeypatch):
+    monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
+
+    runtime = AgentRuntime(
+        settings={
+            "base_url": "https://example.com/v1",
+            "api_key": "sk-test",
+            "model": "test-model",
+        },
+        bot_cfg={
+            "emotion_detection_enabled": True,
+            "emotion_detection_mode": "ai",
+        },
+        agent_cfg={"enabled": True},
+    )
+
+    async def _ainvoke(messages, config=None):
+        return _ReasoningMessage(
+            "",
+            '{"emotion":"happy","confidence":0.9,"intensity":4,"suggested_tone":"light"}',
+        )
+
+    runtime._chat_model.ainvoke = _ainvoke
+
+    emotion = await runtime._analyze_emotion("friend:alice", "hello")
+    assert emotion is not None
+    assert emotion.emotion == "happy"
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_invoke_uses_reasoning_content_for_ollama_user_reply(monkeypatch):
+    monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
+
+    runtime = AgentRuntime(
+        settings={
+            "base_url": "http://127.0.0.1:11434/v1",
+            "api_key": "",
+            "model": "deepseek-r1",
+            "provider_id": "ollama",
+            "allow_empty_key": True,
+        },
+        bot_cfg={},
+        agent_cfg={"enabled": True},
+    )
+    prepared = SimpleNamespace(
+        prompt_messages=[_FakeMessage("hello")],
+        chat_id="friend:alice",
+        response_metadata={},
+        timings={},
+    )
+
+    async def _ainvoke(messages, config=None):
+        return _ReasoningMessage("", "这是通过 reasoning_content 返回的回复")
+
+    runtime._chat_model.ainvoke = _ainvoke
+
+    reply = await runtime.invoke(prepared)
+
+    assert reply == "这是通过 reasoning_content 返回的回复"
+    assert prepared.response_metadata["used_reasoning_content"] is True
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_stream_uses_reasoning_content_for_ollama_user_reply(monkeypatch):
+    monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
+
+    runtime = AgentRuntime(
+        settings={
+            "base_url": "http://127.0.0.1:11434/v1",
+            "api_key": "",
+            "model": "deepseek-r1",
+            "provider_id": "ollama",
+            "allow_empty_key": True,
+        },
+        bot_cfg={},
+        agent_cfg={"enabled": True, "streaming_enabled": True},
+    )
+    prepared = SimpleNamespace(
+        prompt_messages=[_FakeMessage("hello")],
+        chat_id="friend:alice",
+        response_metadata={},
+        timings={},
+    )
+
+    async def _astream(messages, config=None):
+        yield _ReasoningMessage("", "第一段")
+        yield _ReasoningMessage("", "第二段")
+
+    runtime._stream_model.astream = _astream
+
+    chunks = [chunk async for chunk in runtime.stream_reply(prepared)]
+
+    assert chunks == ["第一段", "第二段"]
+    assert prepared.response_metadata["used_reasoning_content"] is True
+
+
+@pytest.mark.asyncio
 async def test_agent_runtime_finalize_request_persists_messages(monkeypatch):
     monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
 
@@ -296,3 +423,36 @@ async def test_agent_runtime_uses_cross_encoder_reranker_when_available(monkeypa
     status = runtime.get_status()
     assert status["retriever_stats"]["rerank_backend"] == "cross_encoder"
     assert status["retriever_stats"]["cross_encoder_configured"] is True
+
+
+def test_agent_runtime_group_include_sender_injects_sender(monkeypatch):
+    monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
+
+    runtime = AgentRuntime(
+        settings={"base_url": "https://example.com/v1", "api_key": "sk-test", "model": "test-model"},
+        bot_cfg={"group_include_sender": True},
+        agent_cfg={"enabled": True},
+    )
+
+    messages = runtime._build_prompt_messages(
+        system_prompt="",
+        memory_context=[],
+        user_text="今晚发版吗",
+        image_path=None,
+        event=SimpleNamespace(is_group=True, sender="小王"),
+    )
+
+    assert messages[0].content == "[小王] 今晚发版吗"
+
+
+def test_agent_runtime_profile_update_frequency_controls_refresh(monkeypatch):
+    monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
+
+    runtime = AgentRuntime(
+        settings={"base_url": "https://example.com/v1", "api_key": "sk-test", "model": "test-model"},
+        bot_cfg={"profile_update_frequency": 5},
+        agent_cfg={"enabled": True},
+    )
+
+    assert runtime._should_refresh_profile(SimpleNamespace(message_count=4)) is True
+    assert runtime._should_refresh_profile(SimpleNamespace(message_count=3)) is False

@@ -171,6 +171,16 @@ class UtilsToolsTest(unittest.TestCase):
             )
             self.assertEqual((text, err), (None, "bad"))
 
+            class DictTextRaw:
+                def to_text(self):
+                    return {"text": "voice text"}
+
+            event_dict_text = MessageEvent(msg_type="voice", raw_item=DictTextRaw(), **base)
+            text, err = await tools.transcribe_voice_message(
+                event_dict_text, {"voice_to_text": True}, lock
+            )
+            self.assertEqual((text, err), ("voice text", None))
+
             class TextRaw:
                 def to_text(self):
                     return "你好"

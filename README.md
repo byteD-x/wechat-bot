@@ -28,6 +28,7 @@
 
 ## Documentation
 
+- [系统链路说明](docs/SYSTEM_CHAINS.md)
 - [项目亮点与主链路](docs/HIGHLIGHTS.md)
 - [详细使用手册](docs/USER_GUIDE.md)
 - [配置说明](docs/USER_GUIDE.md#8-配置说明)
@@ -40,10 +41,11 @@
 - `LangGraph Runtime`: 用 LangChain/LangGraph 编排上下文加载、RAG、情绪分析、提示词构建、流式回复和后台事实提取。
 - `Memory`: SQLite 持久化短期记忆、用户画像、上下文事实和情绪历史。
 - `RAG`: 支持运行期对话向量记忆、导出聊天记录风格召回，以及可选本地 `Cross-Encoder` 精排；未配置本地模型或缺依赖时自动回退轻量重排。
-- `Transport Abstraction`: 传输层已抽象为 `BaseTransport`，当前内置 `hook_wcferry` 与 `compat_ui` 两种后端。
+- `Transport Abstraction`: 传输层统一抽象为 `BaseTransport`，默认走 `hook_wcferry`，为后续兼容实现预留扩展点。
 - `Desktop + Web`: Electron 桌面客户端与 Quart Web API 并存。
 - `Observability`: `/api/status` 提供启动进度、诊断、健康检查和系统指标，`/api/metrics` 提供 Prometheus 风格导出。
 - `Hot Reload`: 配置热重载优先使用 `watchdog` 事件监听，缺失依赖时自动回退轮询，并带防抖。
+- `Config Snapshot`: 后端已引入中心化配置快照服务，`/api/config/audit` 可返回当前生效配置、已知未消费字段和配置变更影响摘要。
 
 ## Architecture
 
@@ -51,9 +53,9 @@
 flowchart TD
     A[WeChat PC 3.9.12.51] --> B[BaseTransport]
     B --> B1[WCFerry Hook Backend]
-    B --> B2[wxauto Compat Backend]
+    B --> C[WeChatBot]
     B1 --> C[WeChatBot]
-    B2 --> C
+
     C --> D[LangGraph Runtime]
     D --> E[SQLite Memory]
     D --> F[Chroma Vector Store]
@@ -63,12 +65,13 @@ flowchart TD
     C --> J[Sender / Quote / Chunking]
     C --> K[Quart API]
     K --> L[Electron UI]
-    K --> M[/api/status]
-    K --> N[/api/metrics]
+    K --> M["/api/status"]
+    K --> N["/api/metrics"]
 ```
 
 核心路径：
 
+- 完整链路说明见 [系统链路说明](docs/SYSTEM_CHAINS.md)
 - `backend/bot.py`: 机器人生命周期、消息入口和发送出口。
 - `backend/core/agent_runtime.py`: LangChain/LangGraph 主运行时、RAG 召回与精排。
 - `backend/core/memory.py`: SQLite 记忆层。
@@ -87,9 +90,10 @@ flowchart TD
 说明：
 
 - 默认后端是 `hook_wcferry`，目标是在后台收发时不抢焦点、不抢键鼠。
+- `hook_wcferry` 通过 WCFerry 注入微信进程，因此在 Windows 下必须以管理员权限运行本项目。
 - 当前项目唯一官方支持的微信版本是 `3.9.12.51`。
 - 旧版本微信下载链接：https://github.com/tom-snow/wechat-windows-versions/releases/tag/v3.9.12.51
-- `compat_ui` 仅保留为遗留兼容链路，不再作为官方支持基线；即使启用，也应先以 `3.9.12.51` 为环境基准排障。
+- 当前需要将 `hook_wcferry` 与微信 `3.9.12.51` 版本配套使用。
 - `watchdog` 已纳入默认依赖，用于配置热重载事件监听。
 - 如需启用本地 `Cross-Encoder` 精排，需要额外安装 `sentence-transformers`，并在配置中提供本地模型目录；项目不会自动联网下载模型。
 
@@ -125,6 +129,8 @@ npm run dev
 
 完整配置流程见 [详细使用手册](docs/USER_GUIDE.md#3-首次配置)。
 
+- 设置卡片标题旁会显示配置生效方式；“微信连接与传输”卡片保存后会自动重连传输层，其它卡片会标注为“保存后立即生效”或“仅机器人运行时即时生效”。
+
 ## Run Modes
 
 ### Desktop Mode
@@ -159,6 +165,12 @@ python run.py web
 - `bot`: 回复策略、轮询、记忆、RAG、群聊规则、情绪识别、传输后端、配置热重载。
 - `agent`: LangChain / LangGraph 运行时、检索参数、精排策略、流式回复与 LangSmith 配置。
 - `logging`: 日志级别、文件、轮转和内容开关。
+
+配置运行机制：
+
+- 运行期优先读取后端内存中的配置快照，而不是让各模块零散读取多个来源。
+- GUI 保存配置后，`/api/config` 会返回 `changed_paths` 和 `reload_plan`，用于说明哪些字段变了、预计如何生效。
+- 可通过 `/api/config/audit` 查看当前生效配置中的已知未消费字段、未知 override 字段和生效策略摘要。
 
 当前与本轮功能直接相关的关键配置：
 
@@ -215,6 +227,7 @@ python -m pytest tests\\test_runtime_observability.py -q
 以下内容默认视为敏感数据：
 
 - `API Key`
+- `WECHAT_BOT_API_TOKEN`（如需手动调试 Web API，请自行设置并妥善保管；不要写入日志、不要截图外泄）
 - `data/` 下的密钥与覆盖配置
 - `data/chat_exports/`
 - `data/logs/`
@@ -225,3 +238,7 @@ python -m pytest tests\\test_runtime_observability.py -q
 ## License
 
 MIT
+
+## Legacy Config Cleanup
+
+- Removed from defaults and GUI saves: `bot.memory_seed_*`, `bot.history_log_interval_sec`, `bot.poll_interval_sec`, `agent.history_strategy`.

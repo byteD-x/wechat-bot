@@ -58,6 +58,22 @@ def _extract_message_text(message: Any) -> str:
     return str(content or "").strip()
 
 
+def _extract_reasoning_text(message: Any) -> str:
+    additional_kwargs = getattr(message, "additional_kwargs", None)
+    if isinstance(additional_kwargs, dict):
+        reasoning = additional_kwargs.get("reasoning_content") or additional_kwargs.get("reasoning")
+        if reasoning:
+            return str(reasoning).strip()
+
+    if isinstance(message, dict):
+        reasoning = message.get("reasoning_content") or message.get("reasoning")
+        if reasoning:
+            return str(reasoning).strip()
+
+    reasoning = getattr(message, "reasoning_content", None) or getattr(message, "reasoning", None)
+    return str(reasoning or "").strip()
+
+
 class AgentRuntime:
     """基于 LangChain/LangGraph 的统一编排运行时。"""
 
@@ -76,6 +92,7 @@ class AgentRuntime:
         self.runtime_api_key = self.api_key or ("ollama" if self.allow_empty_key else None)
         self.model = str(settings.get("model") or "").strip()
         self.model_alias = str(settings.get("alias") or "").strip()
+        self.provider_id = str(settings.get("provider_id") or "").strip().lower()
         embedding_model = str(settings.get("embedding_model") or "").strip()
         self.embedding_model = None if is_placeholder_key(embedding_model) else (embedding_model or None)
         self.timeout_sec = as_float(settings.get("timeout_sec", 10.0), 10.0, min_value=0.1)
@@ -318,6 +335,10 @@ class AgentRuntime:
                 },
             )
             reply_text = _extract_message_text(response)
+            if not reply_text and self._should_use_reasoning_fallback(prepared.chat_id):
+                reply_text = _extract_reasoning_text(response)
+                if reply_text:
+                    prepared.response_metadata["used_reasoning_content"] = True
             if not reply_text:
                 raise RuntimeError("LangChain 返回空内容")
             prepared.timings["invoke_sec"] = round(time.perf_counter() - started, 4)
@@ -340,6 +361,10 @@ class AgentRuntime:
                 },
             ):
                 text = _extract_message_text(chunk)
+                if not text and self._should_use_reasoning_fallback(prepared.chat_id):
+                    text = _extract_reasoning_text(chunk)
+                    if text:
+                        prepared.response_metadata["used_reasoning_content"] = True
                 if text:
                     yield text
             prepared.timings["stream_sec"] = round(time.perf_counter() - started, 4)
@@ -452,6 +477,7 @@ class AgentRuntime:
             memory_context=list(memory_context or []),
             user_text=user_text,
             image_path=image_path,
+            event=None,
         )
         prepared = AgentPreparedRequest(
             chat_id=chat_id,
@@ -630,6 +656,7 @@ class AgentRuntime:
             memory_context=list(state.get("memory_context") or []),
             user_text=str(state.get("user_text") or ""),
             image_path=state.get("image_path"),
+            event=state.get("event"),
         )
         timings = dict(state.get("timings") or {})
         timings["build_prompt_sec"] = round(time.perf_counter() - started, 4)
@@ -647,6 +674,7 @@ class AgentRuntime:
         memory_context: List[dict],
         user_text: str,
         image_path: Optional[str],
+        event: Any = None,
     ) -> List[Any]:
         system_message = self._imports["SystemMessage"]
         human_message = self._imports["HumanMessage"]
@@ -673,6 +701,16 @@ class AgentRuntime:
             else:
                 messages.append(human_message(content=text))
 
+        final_user_text = str(user_text or "")
+        if (
+            event is not None
+            and bool(getattr(event, "is_group", False))
+            and self.bot_cfg.get("group_include_sender", True)
+        ):
+            sender = str(getattr(event, "sender", "") or "").strip()
+            if sender:
+                final_user_text = f"[{sender}] {final_user_text}".strip()
+
         if image_path:
             base64_image = process_image_for_api(image_path)
             if base64_image:
@@ -689,8 +727,21 @@ class AgentRuntime:
                 )
                 return messages
 
-        messages.append(human_message(content=user_text))
+        messages.append(human_message(content=final_user_text))
         return messages
+
+    def _should_use_reasoning_fallback(self, chat_id: str) -> bool:
+        normalized_chat_id = str(chat_id or "").strip()
+        if normalized_chat_id.startswith("__"):
+            return True
+        if self.provider_id == "ollama":
+            return True
+        return "127.0.0.1:11434" in self.base_url or "localhost:11434" in self.base_url
+
+    def _should_refresh_profile(self, profile: Any) -> bool:
+        frequency = as_int(self.bot_cfg.get("profile_update_frequency", 10), 10, min_value=1)
+        message_count = as_int(getattr(profile, "message_count", 0), 0, min_value=0)
+        return message_count <= 0 or ((message_count + 1) % frequency == 0)
 
     async def _search_runtime_memory(self, chat_id: str, user_text: str, vector_memory: Any) -> Optional[dict]:
         if not str(user_text or "").strip():
@@ -885,6 +936,33 @@ class AgentRuntime:
             prompt,
             system_prompt="你是一个情感分析助手，只返回 JSON 格式的分析结果。",
         )
+        if not response:
+            return detect_emotion_keywords(text)
+
+        parsed = parse_emotion_ai_response(response)
+        return parsed or detect_emotion_keywords(text)
+
+    async def _analyze_emotion(self, chat_id: str, text: str) -> Optional[EmotionResult]:
+        if self.emotion_fast_path_enabled:
+            fast_result = detect_emotion_keywords(text)
+            if fast_result and fast_result.emotion != "neutral":
+                return fast_result
+
+        mode = str(self.bot_cfg.get("emotion_detection_mode", "keywords")).lower()
+        if mode != "ai":
+            return detect_emotion_keywords(text)
+
+        prompt = get_emotion_analysis_prompt(text)
+        try:
+            response = await self.generate_reply(
+                f"__emotion__{chat_id}",
+                prompt,
+                system_prompt="你是一个情感分析助手，只返回 JSON 格式的分析结果。",
+            )
+        except Exception as exc:
+            logger.warning("emotion AI analysis failed; falling back to keyword mode [%s]: %s", chat_id, exc)
+            return detect_emotion_keywords(text)
+
         if not response:
             return detect_emotion_keywords(text)
 

@@ -42,21 +42,21 @@ def check_dependencies() -> Tuple[bool, str, List[str]]:
     optional = ["wxauto"]
     missing = []
     installed = []
-    
+
     for pkg in required:
         try:
             __import__(pkg)
             installed.append(pkg)
         except ImportError:
             missing.append(pkg)
-    
+
     for pkg in optional:
         try:
             __import__(pkg)
             installed.append(pkg)
         except ImportError:
             pass  # 可选依赖不算缺失
-    
+
     if missing:
         return False, f"缺少: {', '.join(missing)}", missing
     return True, f"已安装: {', '.join(installed)}", []
@@ -66,6 +66,7 @@ def check_wxauto() -> Tuple[bool, str]:
     """检查 wxauto 模块"""
     try:
         from wxauto import WeChat
+
         return True, "wxauto 可用"
     except ImportError:
         return False, "wxauto 未安装"
@@ -77,6 +78,7 @@ def check_wechat_connection() -> Tuple[bool, str]:
     """检查微信连接"""
     try:
         from wxauto import WeChat
+
         wx = WeChat()
         return True, "微信连接正常"
     except ImportError:
@@ -96,19 +98,32 @@ def check_api_config() -> Tuple[bool, str, int]:
         config_path = os.path.join(PROJECT_ROOT, "app", "config.py")
         if not os.path.exists(config_path):
             return False, "config.py 不存在", 0
-    
+
     try:
         import importlib.util
+
         spec = importlib.util.spec_from_file_location("config", config_path)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         config = getattr(module, "CONFIG", {})
+
+        # 尝试应用 override（若存在）以匹配运行时行为
+        override_path = os.path.join(PROJECT_ROOT, "data", "config_override.json")
+        if os.path.exists(override_path):
+            try:
+                from backend.config import _apply_config_overrides
+
+                cfg = dict(config) if isinstance(config, dict) else {}
+                _apply_config_overrides(cfg)
+                config = cfg
+            except Exception:
+                pass
     except Exception as e:
         return False, f"配置加载失败: {e}", 0
-    
+
     api_cfg = config.get("api", {})
     presets = api_cfg.get("presets", [])
-    
+
     # 统计有效预设数量
     valid_count = 0
     for preset in presets:
@@ -117,12 +132,13 @@ def check_api_config() -> Tuple[bool, str, int]:
         api_key = preset.get("api_key", "")
         if api_key and not api_key.upper().startswith("YOUR_"):
             valid_count += 1
-    
+
     # 检查 data/api_keys.py 中的密钥
     api_keys_path = os.path.join(PROJECT_ROOT, "data", "api_keys.py")
     if os.path.exists(api_keys_path):
         try:
             from data.api_keys import API_KEYS
+
             if isinstance(API_KEYS, dict):
                 default_key = API_KEYS.get("default", "")
                 if default_key and not default_key.upper().startswith("YOUR_"):
@@ -134,7 +150,7 @@ def check_api_config() -> Tuple[bool, str, int]:
                             valid_count += 1
         except Exception:
             pass
-    
+
     if valid_count > 0:
         return True, f"检测到 {valid_count} 个有效预设", valid_count
     return False, "未配置有效的 API 密钥", 0
@@ -142,26 +158,39 @@ def check_api_config() -> Tuple[bool, str, int]:
 
 def check_whitelist() -> Tuple[bool, str]:
     """检查白名单配置"""
-    config_path = os.path.join(PROJECT_ROOT, "app", "config.py")
+    config_path = os.path.join(PROJECT_ROOT, "backend", "config.py")
     if not os.path.exists(config_path):
         return None, "跳过"
-    
+
     try:
         import importlib.util
+
         spec = importlib.util.spec_from_file_location("config", config_path)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         config = getattr(module, "CONFIG", {})
+
+        # 尝试应用 override（若存在）以匹配运行时行为
+        override_path = os.path.join(PROJECT_ROOT, "data", "config_override.json")
+        if os.path.exists(override_path):
+            try:
+                from backend.config import _apply_config_overrides
+
+                cfg = dict(config) if isinstance(config, dict) else {}
+                _apply_config_overrides(cfg)
+                config = cfg
+            except Exception:
+                pass
     except Exception:
         return None, "跳过"
-    
+
     bot_cfg = config.get("bot", {})
     whitelist_enabled = bot_cfg.get("whitelist_enabled", False)
     whitelist = bot_cfg.get("whitelist", [])
-    
+
     if not whitelist_enabled:
         return None, "未启用（将回复所有消息）"
-    
+
     if whitelist:
         return True, f"已配置 {len(whitelist)} 个白名单"
     return False, "已启用但列表为空"
@@ -178,10 +207,10 @@ def main():
     print("🔍 微信机器人环境检测")
     print("━" * 50)
     print()
-    
+
     issues = []
     suggestions = []
-    
+
     # 检查 Python 版本
     ok, msg = check_python_version()
     icon = "✅" if ok else "❌"
@@ -189,7 +218,7 @@ def main():
     if not ok:
         issues.append("Python 版本过低")
         suggestions.append("请升级到 Python 3.8 或更高版本")
-    
+
     # 检查依赖
     ok, msg, missing = check_dependencies()
     icon = "✅" if ok else "❌"
@@ -197,7 +226,7 @@ def main():
     if not ok:
         issues.append("缺少必要依赖")
         suggestions.append(f"运行: pip install {' '.join(missing)}")
-    
+
     # 检查 wxauto
     ok, msg = check_wxauto()
     icon = "✅" if ok else "❌"
@@ -205,7 +234,7 @@ def main():
     if not ok:
         issues.append("wxauto 不可用")
         suggestions.append("运行: pip install wxauto")
-    
+
     # 检查微信连接
     result, msg = check_wechat_connection()
     if result is None:
@@ -217,7 +246,7 @@ def main():
         issues.append("微信连接失败")
         suggestions.append("确保微信 PC 版 3.9.x 已登录并运行")
         suggestions.append("4.x 版本不支持，请到 https://pc.weixin.qq.com 下载 3.9.x")
-    
+
     # 检查 API 配置
     ok, msg, count = check_api_config()
     icon = "✅" if ok else "❌"
@@ -225,7 +254,7 @@ def main():
     if not ok:
         issues.append("API 未配置")
         suggestions.append("运行: python run.py setup")
-    
+
     # 检查白名单
     result, msg = check_whitelist()
     if result is None:
@@ -233,24 +262,24 @@ def main():
     else:
         icon = "✅" if result else "❌"
     print(f"{icon} 白名单: {msg}")
-    
+
     # 总结
     print()
     print("━" * 50)
-    
+
     if not issues:
         print("🎉 所有检测通过！可以运行: python run.py")
     else:
         print(f"❗ 发现 {len(issues)} 个问题:")
         for issue in issues:
             print(f"   • {issue}")
-        
+
         if suggestions:
             print()
             print("📋 建议操作:")
             for suggestion in suggestions:
                 print(f"   • {suggestion}")
-    
+
     print()
     return 0 if not issues else 1
 

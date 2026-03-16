@@ -8,6 +8,7 @@ data/config_override.json
 data/bot_state.json
 data/vector_db/
 data/logs/
+data/runtime/
 chat_exports/
 
 # Python
@@ -29,6 +30,7 @@ env/
 wxauto_logs/
 logs/
 *.log
+*.log.*
 
 # Node.js
 node_modules/

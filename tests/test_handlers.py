@@ -35,6 +35,11 @@ class SenderHandlersTest(unittest.TestCase):
         self.assertEqual(parse_send_result(0), (True, None))
         self.assertEqual(parse_send_result(1), (False, "1"))
 
+    def test_parse_send_result_accepts_success_status_text(self):
+        self.assertEqual(parse_send_result({"status": "成功", "message": "ok"}), (True, "ok"))
+        self.assertEqual(parse_send_result({"status": "success", "message": "ok"}), (True, "ok"))
+        self.assertEqual(parse_send_result({"status": "失败", "message": "bad"}), (False, "bad"))
+
 
 class ConvertersTest(unittest.TestCase):
     def test_normalize_msg_item_bad_timestamp(self):

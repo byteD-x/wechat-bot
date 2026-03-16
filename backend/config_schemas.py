@@ -1,5 +1,5 @@
 from typing import List, Dict, Optional, Any, Union, Literal
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from backend.wechat_versions import OFFICIAL_SUPPORTED_WECHAT_VERSION
 
 class PresetConfig(BaseModel):
@@ -53,12 +53,9 @@ class BotConfig(BaseModel):
     reply_quote_fallback_to_text: bool = True
 
     # Transport
-    transport_backend: Literal['hook_wcferry', 'compat_ui'] = 'hook_wcferry'
-    compat_ui_enabled: bool = False
+    transport_backend: Literal['hook_wcferry'] = 'hook_wcferry'
     silent_mode_required: bool = False
     required_wechat_version: str = OFFICIAL_SUPPORTED_WECHAT_VERSION
-    capability_strict: bool = True
-    
     # Voice
     voice_to_text: bool = True
     voice_to_text_fail_reply: str = ""
@@ -70,21 +67,13 @@ class BotConfig(BaseModel):
     memory_context_limit: int = 12
     memory_ttl_sec: Optional[float] = None
     memory_cleanup_interval_sec: float = 0.0
-    memory_seed_on_first_reply: bool = True
-    memory_seed_limit: int = 30
-    memory_seed_load_more: int = 0
-    memory_seed_load_more_interval_sec: float = 0.3
-    memory_seed_group: bool = False
-    
     # Context
     context_rounds: int = 4
     context_max_tokens: int = 1200
     history_max_chats: int = 120
     history_ttl_sec: Optional[float] = None
-    history_log_interval_sec: float = 300.0
     
     # Polling & Delay
-    poll_interval_sec: float = 0.05
     poll_interval_min_sec: float = 0.05
     poll_interval_max_sec: float = 1.0
     poll_interval_backoff_factor: float = 1.2
@@ -185,6 +174,14 @@ class BotConfig(BaseModel):
     emotion_inject_in_prompt: bool = True
     emotion_log_enabled: bool = True
 
+    @field_validator("transport_backend", mode="before")
+    @classmethod
+    def _normalize_transport_backend(cls, value):
+        backend = str(value or "hook_wcferry").strip().lower()
+        if backend == "compat_ui":
+            return "hook_wcferry"
+        return "hook_wcferry" if not backend else backend
+
 class LoggingConfig(BaseModel):
     level: str = "INFO"
     file: str = "data/logs/bot.log"
@@ -202,7 +199,6 @@ class AgentConfig(BaseModel):
     langsmith_project: str = "wechat-chat"
     langsmith_endpoint: Optional[str] = None
     langsmith_api_key: Optional[str] = None
-    history_strategy: str = "sqlite_memory"
     retriever_top_k: int = 3
     retriever_score_threshold: float = 1.0
     retriever_rerank_mode: Literal['auto', 'lightweight', 'cross_encoder'] = 'lightweight'

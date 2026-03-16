@@ -20,6 +20,8 @@
     - 部分配置项支持按会话覆盖（如 system_prompt_overrides）
     - 群聊功能需正确配置 self_name 和 whitelist
 """
+from copy import deepcopy
+
 
 from backend.utils.config import is_placeholder_key
 from backend.wechat_versions import OFFICIAL_SUPPORTED_WECHAT_VERSION
@@ -311,12 +313,9 @@ CONFIG = {
         "reply_quote_max_chars": 120,                 # 文本引用最大长度，0=不引用
         "reply_quote_timeout_sec": 5.0,               # 微信原生引用超时（增加以提高稳定性）
         "reply_quote_fallback_to_text": True,         # 原生引用失败时降级为文本引用
-        "transport_backend": "hook_wcferry",          # 主后端：hook_wcferry；compat_ui 仅保留为遗留兼容链路
-        "compat_ui_enabled": False,                   # 是否允许显式降级到 wxauto UI 兼容模式
+        "transport_backend": "hook_wcferry",          # 当前唯一受支持的微信传输后端
         "silent_mode_required": False,                # 是否要求严格静默模式
         "required_wechat_version": OFFICIAL_SUPPORTED_WECHAT_VERSION,  # 官方支持版本基线
-        "capability_strict": True,                    # 能力缺失时是否拒绝启动
-
         # ┌─── 语音处理 ───────────────────────────────────────────────────────┐
         "voice_to_text": True,                        # 启用语音转文字（微信内置功能）
         "voice_to_text_fail_reply": "",               # 转写失败时回复，留空=不回复
@@ -328,21 +327,14 @@ CONFIG = {
         "memory_context_limit": 12,                   # 每次注入的历史条数，0=禁用
         "memory_ttl_sec": None,                       # 记忆库过期时间（秒），None=不过期
         "memory_cleanup_interval_sec": 0.0,           # 记忆库清理间隔（秒）
-        "memory_seed_on_first_reply": True,           # 首次回复时抓取历史记录
-        "memory_seed_limit": 30,                      # 首次抓取历史条数上限，0=禁用
-        "memory_seed_load_more": 0,                   # 额外向上加载历史次数
-        "memory_seed_load_more_interval_sec": 0.3,    # 加载历史滚动间隔（秒）
-        "memory_seed_group": False,                   # 群聊是否也执行首次历史抓取
 
         # ┌─── 上下文管理 ─────────────────────────────────────────────────────┐
         "context_rounds": 4,                          # 对话轮数上限
         "context_max_tokens": 1200,                   # token 上限（优先于轮数）
         "history_max_chats": 120,                     # 内存中最多保留会话数
         "history_ttl_sec": None,                      # 对话记忆过期（秒），None=不过期
-        "history_log_interval_sec": 300.0,            # 历史统计日志间隔（秒）
 
         # ┌─── 轮询与延迟 ─────────────────────────────────────────────────────┐
-        "poll_interval_sec": 0.05,                    # 消息轮询间隔（秒），加快响应
         "poll_interval_min_sec": 0.05,                # 轮询最短间隔（秒），加快响应
         "poll_interval_max_sec": 1.0,                 # 轮询最长间隔（秒）
         "poll_interval_backoff_factor": 1.2,          # 空闲时轮询退避倍数
@@ -462,7 +454,6 @@ CONFIG = {
         "langsmith_project": "wechat-chat",           # LangSmith 项目名
         "langsmith_endpoint": "",                     # 私有 LangSmith Endpoint，留空使用默认
         "langsmith_api_key": "",                      # LangSmith API Key，建议放 data/api_keys.py
-        "history_strategy": "sqlite_memory",          # 历史策略标记
         "retriever_top_k": 3,                         # 运行期检索 top-k
         "retriever_score_threshold": 1.0,             # 运行期检索距离阈值
         "retriever_rerank_mode": "lightweight",       # lightweight=轻量重排, auto=检测本地 Cross-Encoder, cross_encoder=优先本地 Cross-Encoder
@@ -475,6 +466,7 @@ CONFIG = {
     },
 }
 
+DEFAULT_CONFIG = deepcopy(CONFIG)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #                               辅助函数
@@ -587,17 +579,25 @@ def _apply_prompt_overrides(config: dict) -> None:
 #                               应用配置覆写
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _apply_config_overrides(config_dict: dict):
+def _apply_config_overrides(
+    config_dict: dict,
+    *,
+    override_file: str = "",
+    override_data: dict = None,
+):
     """加载并应用 JSON 格式的配置覆写"""
     try:
         import os
         import json
-        override_file = os.path.join("data", "config_override.json")
-        if not os.path.exists(override_file):
-            return
+        resolved_override = override_file or os.path.join("data", "config_override.json")
+        if override_data is not None:
+            overrides = override_data if isinstance(override_data, dict) else {}
+        else:
+            if not os.path.exists(resolved_override):
+                return
 
-        with open(override_file, "r", encoding="utf-8") as f:
-            overrides = json.load(f)
+            with open(resolved_override, "r", encoding="utf-8") as f:
+                overrides = json.load(f)
 
         def _merge_preset_lists(default_presets, override_presets):
             if not isinstance(default_presets, list):
