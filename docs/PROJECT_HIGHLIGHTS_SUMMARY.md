@@ -96,8 +96,8 @@ RAG 不是"只要检索命中就塞进 Prompt"，而是实现了**两层精排**
 **节点拆解：**
 - `load_context`：并发收集短期记忆、画像、运行期 RAG、导出语料 RAG、情绪信息
 - `build_prompt`：统一拼装系统提示、画像、情绪、检索结果和历史上下文
-- `invoke / stream_reply`：统一走 OpenAI-compatible 接口
-- `finalize_request`：落库、情绪更新、向量写回、事实提取
+- `invoke`：统一走标准化兼容层，收敛正文、工具调用、错误结构与落盘元数据
+- `finalize_request`：先落库，再把情绪、事实、向量写回、联系人专属 Prompt 更新与导出语料同步交给后台成长任务
 
 **技术价值：**
 - 每个节点可独立测试、优化和替换

@@ -241,6 +241,21 @@ class ApiService {
         return this.request(query ? `/api/messages?${query}` : '/api/messages');
     }
 
+    async getContactProfile(chatId) {
+        const encoded = encodeURIComponent(String(chatId || '').trim());
+        return this.request(`/api/contact_profile?chat_id=${encoded}`);
+    }
+
+    async saveContactPrompt(chatId, contactPrompt) {
+        return this.request('/api/contact_prompt', {
+            method: 'POST',
+            body: {
+                chat_id: chatId,
+                contact_prompt: contactPrompt
+            }
+        });
+    }
+
     async sendMessage(target, content) {
         return this.request('/api/send', {
             method: 'POST',
@@ -258,11 +273,6 @@ class ApiService {
 
     async getModelCatalog() {
         return this.request('/api/model_catalog');
-    }
-
-    async getOllamaModels(baseUrl = 'http://127.0.0.1:11434/v1') {
-        const query = new URLSearchParams({ base_url: baseUrl }).toString();
-        return this.request(`/api/ollama/models?${query}`);
     }
 
     async saveConfig(config) {

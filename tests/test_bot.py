@@ -1,9 +1,14 @@
-
+import sys
+import types
 import pytest
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import MagicMock, patch, AsyncMock, ANY
+
+sys.modules.setdefault("aiosqlite", types.SimpleNamespace())
+
 from backend.bot import WeChatBot
+from backend.config_schemas import BotConfig
 
 
 def _build_mock_bot_manager():
@@ -38,7 +43,12 @@ def _build_config_service(config=None, *, error=None):
         service.get_snapshot.return_value = _build_snapshot(config)
         service.reload.return_value = _build_snapshot(config)
     service.publish.side_effect = lambda next_config, **kwargs: _build_snapshot(next_config)
+    service.sync_default_config_snapshot.return_value = False
     return service
+
+
+def test_bot_schema_allows_zero_reply_deadline():
+    assert BotConfig(reply_deadline_sec=0).reply_deadline_sec == 0
 
 @pytest.mark.asyncio
 async def test_bot_initialization(mock_config):
@@ -369,6 +379,10 @@ def test_bot_load_effective_config_uses_config_service_snapshot(mock_config):
         config_path="config.yaml",
         force_reload=False,
     )
+    mock_service.sync_default_config_snapshot.assert_called_once_with(
+        mock_config,
+        config_path="config.yaml",
+    )
 
 
 @pytest.mark.asyncio
@@ -414,6 +428,10 @@ async def test_reload_runtime_config_without_new_config_uses_config_service_relo
 
     assert result["success"] is True
     mock_service.reload.assert_called_once_with(config_path="config.yaml")
+    mock_service.sync_default_config_snapshot.assert_called_once_with(
+        next_config,
+        config_path="config.yaml",
+    )
     bot._ensure_config_reload_watcher.assert_called_once()
     bot.bot_manager.notify_status_change.assert_awaited_once()
     assert bot.bot_cfg["config_reload_mode"] == "watchdog"
@@ -435,6 +453,7 @@ async def test_handle_event_voice_transcription_failure_sends_configured_reply()
         content="[voice]",
         msg_type="voice",
         is_group=False,
+        is_self=False,
         raw_item=object(),
         timestamp=None,
     )
@@ -472,10 +491,10 @@ async def test_send_smart_reply_uses_natural_split_config():
     bot.wx_lock = asyncio.Lock()
     bot.last_reply_ts = {"ts": 0.0}
     bot.bot_cfg = {
+        "reply_deadline_sec": 3.0,
         "reply_chunk_size": 500,
         "reply_chunk_delay_sec": 0.0,
         "min_reply_interval_sec": 0.0,
-        "reply_quote_mode": "none",
         "natural_split_enabled": True,
         "natural_split_min_chars": 11,
         "natural_split_max_chars": 22,
@@ -500,6 +519,215 @@ async def test_send_smart_reply_uses_natural_split_config():
 
 
 @pytest.mark.asyncio
+async def test_process_and_reply_skips_empty_reply_when_invoke_returns_empty():
+    bot = WeChatBot("config.yaml")
+    bot.bot_cfg = {"reply_deadline_sec": 2.0}
+    bot.agent_cfg = {"enabled": True}
+    bot.sem = asyncio.Semaphore(1)
+    bot.wx_lock = asyncio.Lock()
+    bot.memory = None
+    bot.vector_memory = None
+    bot.export_rag = None
+    bot.runtime_preset_name = "Ollama"
+    bot._record_reply_stats = MagicMock()
+    bot._set_ai_health = MagicMock()
+
+    prepared = SimpleNamespace(
+        timings={},
+        trace={},
+        response_metadata={},
+    )
+    bot.ai_client = SimpleNamespace(
+        prepare_request=AsyncMock(return_value=prepared),
+        invoke=AsyncMock(return_value=""),
+        finalize_request=AsyncMock(),
+        get_status=MagicMock(return_value={"engine": "langgraph"}),
+        model="test-model",
+    )
+    bot._send_smart_reply = AsyncMock()
+    bot.ipc = MagicMock()
+    bot.bot_manager = _build_mock_bot_manager()
+
+    event = SimpleNamespace(
+        chat_name="文件传输助手",
+        sender="wxid_xxx",
+        content="1",
+        is_group=False,
+        msg_type="text",
+        raw_item=None,
+        timestamp=None,
+    )
+
+    await bot._process_and_reply(MagicMock(), event, "1", "1")
+
+    bot.ai_client.invoke.assert_awaited_once_with(prepared)
+    bot._send_smart_reply.assert_not_awaited()
+    bot.ai_client.finalize_request.assert_not_awaited()
+    assert prepared.response_metadata["empty_reply"] is True
+
+
+@pytest.mark.asyncio
+async def test_process_and_reply_uses_direct_reply_when_invoke_has_content():
+    bot = WeChatBot("config.yaml")
+    bot.bot_cfg = {"reply_deadline_sec": 2.0}
+    bot.agent_cfg = {"enabled": True}
+    bot.sem = asyncio.Semaphore(1)
+    bot.wx_lock = asyncio.Lock()
+    bot.memory = None
+    bot.vector_memory = None
+    bot.export_rag = None
+    bot.runtime_preset_name = "Ollama"
+    bot._record_reply_stats = MagicMock()
+    bot._set_ai_health = MagicMock()
+
+    prepared = SimpleNamespace(
+        timings={},
+        trace={},
+        response_metadata={},
+    )
+    bot.ai_client = SimpleNamespace(
+        prepare_request=AsyncMock(return_value=prepared),
+        invoke=AsyncMock(return_value="direct reply"),
+        finalize_request=AsyncMock(),
+        get_status=MagicMock(return_value={"engine": "langgraph"}),
+        model="test-model",
+    )
+    bot._send_smart_reply = AsyncMock(return_value="direct reply")
+    bot.ipc = MagicMock()
+    bot.bot_manager = _build_mock_bot_manager()
+
+    event = SimpleNamespace(
+        chat_name="文件传输助手",
+        sender="wxid_xxx",
+        content="1",
+        is_group=False,
+        msg_type="text",
+        raw_item=None,
+        timestamp=None,
+    )
+
+    await bot._process_and_reply(MagicMock(), event, "1", "1")
+
+    bot.ai_client.invoke.assert_awaited_once_with(prepared)
+    bot._send_smart_reply.assert_awaited_once()
+    bot.ai_client.finalize_request.assert_awaited_once()
+    assert prepared.response_metadata.get("deadline_missed") is not True
+
+
+@pytest.mark.asyncio
+async def test_process_and_reply_uses_direct_reply_when_deadline_disabled():
+    bot = WeChatBot("config.yaml")
+    bot.bot_cfg = {"reply_deadline_sec": 0}
+    bot.agent_cfg = {"enabled": True}
+    bot.sem = asyncio.Semaphore(1)
+    bot.wx_lock = asyncio.Lock()
+    bot.memory = None
+    bot.vector_memory = None
+    bot.export_rag = None
+    bot.runtime_preset_name = "Qwen"
+    bot._record_reply_stats = MagicMock()
+    bot._set_ai_health = MagicMock()
+
+    prepared = SimpleNamespace(
+        timings={},
+        trace={},
+        response_metadata={},
+    )
+    bot.ai_client = SimpleNamespace(
+        prepare_request=AsyncMock(return_value=prepared),
+        invoke=AsyncMock(return_value="direct reply"),
+        finalize_request=AsyncMock(),
+        get_status=MagicMock(return_value={"engine": "langgraph"}),
+        model="test-model",
+    )
+    bot._send_smart_reply = AsyncMock(return_value="direct reply")
+    bot.ipc = MagicMock()
+    bot.bot_manager = _build_mock_bot_manager()
+
+    event = SimpleNamespace(
+        chat_name="chat",
+        sender="user",
+        content="hello",
+        is_group=False,
+        msg_type="text",
+        raw_item=None,
+        timestamp=None,
+    )
+
+    await bot._process_and_reply(MagicMock(), event, "hello", "hello")
+
+    bot.ai_client.invoke.assert_awaited_once_with(prepared)
+    bot._send_smart_reply.assert_awaited_once_with(
+        ANY,
+        event,
+        "direct reply",
+        trace_id=ANY,
+    )
+    bot.ai_client.finalize_request.assert_awaited_once()
+    assert prepared.response_metadata.get("deadline_missed") is not True
+    assert prepared.response_metadata.get("delayed_reply") is not True
+    assert prepared.response_metadata.get("response_deadline_sec") is None
+    assert not bot.pending_tasks
+
+
+@pytest.mark.asyncio
+async def test_process_and_reply_propagates_invoke_failure_when_deadline_disabled():
+    bot = WeChatBot("config.yaml")
+    bot.bot_cfg = {"reply_deadline_sec": 0}
+    bot.agent_cfg = {"enabled": True}
+    bot.sem = asyncio.Semaphore(1)
+    bot.wx_lock = asyncio.Lock()
+    bot.memory = None
+    bot.vector_memory = None
+    bot.export_rag = None
+    bot.runtime_preset_name = "Qwen"
+    bot._record_reply_stats = MagicMock()
+    bot._set_ai_health = MagicMock()
+
+    prepared = SimpleNamespace(
+        timings={},
+        trace={},
+        response_metadata={},
+    )
+    bot.ai_client = SimpleNamespace(
+        prepare_request=AsyncMock(return_value=prepared),
+        invoke=AsyncMock(side_effect=RuntimeError("Request timed out.")),
+        finalize_request=AsyncMock(),
+        get_status=MagicMock(return_value={"engine": "langgraph"}),
+        model="test-model",
+    )
+    bot._send_smart_reply = AsyncMock()
+    bot.ipc = MagicMock()
+    bot.bot_manager = _build_mock_bot_manager()
+
+    event = SimpleNamespace(
+        chat_name="chat",
+        sender="user",
+        content="hello",
+        is_group=False,
+        msg_type="text",
+        raw_item=None,
+        timestamp=None,
+    )
+
+    with pytest.raises(RuntimeError, match="Request timed out\\."):
+        await bot._process_and_reply(MagicMock(), event, "hello", "hello")
+
+    bot.ai_client.invoke.assert_awaited_once_with(prepared)
+    bot._send_smart_reply.assert_not_awaited()
+    bot.ai_client.finalize_request.assert_not_awaited()
+    assert prepared.response_metadata["response_error"] == "Request timed out."
+    assert prepared.response_metadata.get("deadline_missed") is not True
+    assert prepared.response_metadata.get("delayed_reply") is not True
+    assert not bot.pending_tasks
+    bot._set_ai_health.assert_called_with(
+        "error",
+        "Last AI call failed: Request timed out.",
+        error=True,
+    )
+
+
+@pytest.mark.asyncio
 async def test_send_smart_reply_raises_when_send_reply_chunks_fails():
     bot = WeChatBot("config.yaml")
     bot.wx_lock = asyncio.Lock()
@@ -508,7 +736,6 @@ async def test_send_smart_reply_raises_when_send_reply_chunks_fails():
         "reply_chunk_size": 500,
         "reply_chunk_delay_sec": 0.0,
         "min_reply_interval_sec": 0.0,
-        "reply_quote_mode": "none",
         "emoji_policy": "keep",
         "reply_suffix": "",
     }
@@ -520,27 +747,60 @@ async def test_send_smart_reply_raises_when_send_reply_chunks_fails():
 
 
 @pytest.mark.asyncio
-async def test_stream_smart_reply_raises_when_send_reply_chunks_fails():
+async def test_process_and_reply_schedules_delayed_reply_when_invoke_exceeds_deadline():
     bot = WeChatBot("config.yaml")
+    bot.bot_cfg = {"reply_deadline_sec": 0.01}
+    bot.agent_cfg = {"enabled": True}
+    bot.sem = asyncio.Semaphore(1)
     bot.wx_lock = asyncio.Lock()
-    bot.last_reply_ts = {"ts": 0.0}
-    bot.bot_cfg = {
-        "reply_chunk_size": 500,
-        "reply_chunk_delay_sec": 0.0,
-        "min_reply_interval_sec": 0.0,
-        "stream_buffer_chars": 1,
-        "stream_chunk_max_chars": 10,
-        "reply_quote_mode": "none",
-        "emoji_policy": "keep",
-        "reply_suffix": "",
-    }
+    bot.memory = None
+    bot.vector_memory = None
+    bot.export_rag = None
+    bot.runtime_preset_name = "test"
+    bot._record_reply_stats = MagicMock()
+    bot._set_ai_health = MagicMock()
+    bot.ipc = MagicMock()
+    bot.bot_manager = _build_mock_bot_manager()
 
-    async def _stream_reply(_prepared):
-        yield "hello"
+    prepared = SimpleNamespace(
+        timings={},
+        trace={},
+        response_metadata={},
+    )
 
-    bot.ai_client = SimpleNamespace(stream_reply=_stream_reply)
-    event = SimpleNamespace(chat_name="chat", content="hello", sender="user", raw_item=None)
+    async def _slow_invoke(_prepared):
+        await asyncio.sleep(0.15)
+        return "late reply"
 
-    with patch("backend.bot.send_reply_chunks", new=AsyncMock(return_value=(False, "transport down"))):
-        with pytest.raises(RuntimeError, match="发送失败"):
-            await bot._stream_smart_reply(MagicMock(), event, MagicMock())
+    bot.ai_client = SimpleNamespace(
+        prepare_request=AsyncMock(return_value=prepared),
+        invoke=_slow_invoke,
+        finalize_request=AsyncMock(),
+        get_status=MagicMock(return_value={"engine": "langgraph"}),
+        model="test-model",
+    )
+    bot._send_smart_reply = AsyncMock(return_value="late reply")
+
+    event = SimpleNamespace(
+        chat_name="chat",
+        sender="user",
+        content="hello",
+        is_group=False,
+        msg_type="text",
+        raw_item=None,
+        timestamp=None,
+    )
+
+    await bot._process_and_reply(MagicMock(), event, "hello", "hello")
+    if bot.pending_tasks:
+        await asyncio.gather(*list(bot.pending_tasks), return_exceptions=True)
+
+    bot._send_smart_reply.assert_awaited_once_with(
+        ANY,
+        event,
+        "late reply",
+        trace_id=ANY,
+    )
+    bot.ai_client.finalize_request.assert_awaited_once()
+    assert prepared.response_metadata["deadline_missed"] is True
+    assert prepared.response_metadata["delayed_reply"] is True

@@ -17,6 +17,32 @@ class _ReasoningMessage:
         self.additional_kwargs = {"reasoning_content": reasoning_content}
 
 
+class _ReasoningBlockMessage:
+    def __init__(self, text):
+        self.content = [
+            {
+                "type": "reasoning",
+                "summary": [{"type": "summary_text", "text": text}],
+            }
+        ]
+        self.additional_kwargs = {}
+
+
+class _ReasoningAndAnswerBlockMessage:
+    def __init__(self, reasoning_text, answer_text):
+        self.content = [
+            {
+                "type": "reasoning",
+                "summary": [{"type": "summary_text", "text": reasoning_text}],
+            },
+            {
+                "type": "text",
+                "text": answer_text,
+            },
+        ]
+        self.additional_kwargs = {}
+
+
 class _FakeChatOpenAI:
     def __init__(self, **kwargs):
         self.kwargs = kwargs
@@ -67,6 +93,13 @@ class _DummyMemory:
     def __init__(self):
         self.saved_messages = []
         self.updated_emotion = None
+        self.profile_updates = []
+        self.context_facts = []
+        self.profile_message_count = 3
+        self.saved_contact_prompt = ""
+        self.saved_contact_prompt_source = ""
+        self.saved_contact_prompt_updated_at = 0
+        self.saved_contact_prompt_last_message_count = 0
 
     async def get_recent_context(self, chat_id, limit):
         return [{"role": "assistant", "content": "history reply"}]
@@ -77,11 +110,31 @@ class _DummyMemory:
             context_facts=["old fact"],
             personality="calm",
             relationship="unknown",
-            message_count=3,
+            message_count=self.profile_message_count,
+            profile_summary="关系：普通朋友；偏好：直接一点；事实：喜欢猫",
+            last_emotion="neutral",
+            contact_prompt=self.saved_contact_prompt,
+            contact_prompt_source=self.saved_contact_prompt_source,
+            contact_prompt_updated_at=self.saved_contact_prompt_updated_at,
+            contact_prompt_last_message_count=self.saved_contact_prompt_last_message_count,
         )
 
     async def increment_message_count(self, chat_id):
-        return 4
+        self.profile_message_count += 1
+        return self.profile_message_count
+
+    async def get_profile_prompt_snapshot(self, chat_id):
+        return {
+            "wx_id": chat_id,
+            "relationship": "unknown",
+            "message_count": self.profile_message_count,
+            "last_emotion": "neutral",
+            "profile_summary": "关系：普通朋友；偏好：直接一点；事实：喜欢猫",
+            "contact_prompt": self.saved_contact_prompt,
+            "contact_prompt_source": self.saved_contact_prompt_source,
+            "contact_prompt_updated_at": self.saved_contact_prompt_updated_at,
+            "contact_prompt_last_message_count": self.saved_contact_prompt_last_message_count,
+        }
 
     async def add_messages(self, chat_id, messages):
         self.saved_messages.append((chat_id, list(messages)))
@@ -90,10 +143,26 @@ class _DummyMemory:
         self.updated_emotion = (chat_id, emotion)
 
     async def add_context_fact(self, chat_id, fact, max_facts=20):
+        self.context_facts.append((chat_id, fact, max_facts))
         return None
 
     async def update_user_profile(self, chat_id, **fields):
+        self.profile_updates.append((chat_id, dict(fields)))
         return None
+
+    async def save_contact_prompt(self, chat_id, contact_prompt, *, source="user_edit", last_message_count=None):
+        self.saved_contact_prompt = str(contact_prompt or "")
+        self.saved_contact_prompt_source = str(source or "")
+        self.saved_contact_prompt_updated_at = 1710000000
+        self.saved_contact_prompt_last_message_count = int(last_message_count or 0)
+        return {
+            "chat_id": chat_id,
+            "contact_prompt": self.saved_contact_prompt,
+            "contact_prompt_source": self.saved_contact_prompt_source,
+            "contact_prompt_updated_at": self.saved_contact_prompt_updated_at,
+            "contact_prompt_last_message_count": self.saved_contact_prompt_last_message_count,
+            "profile_summary": "关系：普通朋友；偏好：直接一点；事实：喜欢猫",
+        }
 
 
 class _DummyExportRag:
@@ -102,6 +171,25 @@ class _DummyExportRag:
 
     def build_memory_message(self, results):
         return {"role": "system", "content": "style snippet"}
+
+    def __init__(self):
+        self.sync_calls = 0
+
+    async def sync(self, ai_client, force=False):
+        self.sync_calls += 1
+        return {"synced": True, "force": force}
+
+
+class _SlowProfileMemory(_DummyMemory):
+    async def get_profile_prompt_snapshot(self, chat_id):
+        await asyncio.sleep(0.2)
+        return await super().get_profile_prompt_snapshot(chat_id)
+
+
+class _SlowExportRag(_DummyExportRag):
+    async def search(self, ai_client, chat_id, query_text):
+        await asyncio.sleep(0.2)
+        return await super().search(ai_client, chat_id, query_text)
 
 
 class _DummyVectorMemory:
@@ -158,6 +246,14 @@ def _fake_integrations(self):
 async def test_agent_runtime_prepare_request_aggregates_context(monkeypatch):
     monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
 
+    class _UnexpectedExportRag(_DummyExportRag):
+        async def search(self, ai_client, chat_id, query_text):
+            raise AssertionError("prepare_request 不应再执行实时 export_rag.search")
+
+    class _UnexpectedVectorMemory(_DummyVectorMemory):
+        def search(self, query=None, n_results=5, filter_meta=None, query_embedding=None):
+            raise AssertionError("prepare_request 不应再执行实时 runtime_rag.search")
+
     runtime = AgentRuntime(
         settings={
             "base_url": "https://example.com/v1",
@@ -166,14 +262,15 @@ async def test_agent_runtime_prepare_request_aggregates_context(monkeypatch):
             "embedding_model": "embed-model",
         },
         bot_cfg={
-            "system_prompt": "base prompt",
+            "system_prompt": "base prompt\n{user_profile}",
             "memory_context_limit": 5,
             "personalization_enabled": True,
+            "profile_inject_in_prompt": True,
             "emotion_detection_enabled": False,
             "rag_enabled": True,
             "remember_facts_enabled": True,
         },
-        agent_cfg={"enabled": True, "streaming_enabled": True},
+        agent_cfg={"enabled": True},
     )
 
     prepared = await runtime.prepare_request(
@@ -182,15 +279,63 @@ async def test_agent_runtime_prepare_request_aggregates_context(monkeypatch):
         user_text="hello",
         dependencies={
             "memory": _DummyMemory(),
-            "export_rag": _DummyExportRag(),
-            "vector_memory": _DummyVectorMemory(),
+            "export_rag": _UnexpectedExportRag(),
+            "vector_memory": _UnexpectedVectorMemory(),
         },
     )
 
     assert "base prompt" in prepared.system_prompt
-    assert any(item["content"] == "style snippet" for item in prepared.memory_context)
-    assert any(item["content"].startswith("Relevant past memories") for item in prepared.memory_context)
-    assert len(prepared.prompt_messages) >= 3
+    assert "关系：普通朋友；偏好：直接一点；事实：喜欢猫" in prepared.system_prompt
+    assert prepared.memory_context == [{"role": "assistant", "content": "history reply"}]
+    assert prepared.trace["context_summary"]["growth_mode"] == "background_only"
+    assert len(prepared.prompt_messages) >= 2
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_prepare_request_skips_slow_optional_context_steps(monkeypatch):
+    monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
+
+    runtime = AgentRuntime(
+        settings={
+            "base_url": "https://example.com/v1",
+            "api_key": "sk-test",
+            "model": "test-model",
+            "embedding_model": "embed-model",
+        },
+        bot_cfg={
+            "reply_deadline_sec": 0.4,
+            "memory_context_limit": 5,
+            "personalization_enabled": True,
+            "emotion_detection_enabled": True,
+            "emotion_detection_mode": "ai",
+            "rag_enabled": False,
+        },
+        agent_cfg={"enabled": True},
+    )
+
+    async def _slow_emotion(_chat_id, _text):
+        await asyncio.sleep(0.2)
+        return None
+
+    monkeypatch.setattr(runtime, "_analyze_emotion", _slow_emotion)
+
+    prepared = await runtime.prepare_request(
+        event=SimpleNamespace(chat_name="Alice", sender="User", content="hello"),
+        chat_id="friend:alice",
+        user_text="hello",
+        dependencies={
+            "memory": _SlowProfileMemory(),
+            "export_rag": _SlowExportRag(),
+            "vector_memory": None,
+        },
+    )
+
+    skipped = prepared.response_metadata.get("skipped_context_steps") or []
+    assert "recent_context" not in skipped
+    assert "user_profile" in skipped
+    assert "export_rag" not in skipped
+    assert "emotion" not in skipped
+    await runtime.close()
 
 
 @pytest.mark.asyncio
@@ -275,7 +420,36 @@ async def test_agent_runtime_emotion_ai_uses_reasoning_content_when_content_empt
 
 
 @pytest.mark.asyncio
-async def test_agent_runtime_invoke_uses_reasoning_content_for_ollama_user_reply(monkeypatch):
+async def test_agent_runtime_emotion_ai_uses_reasoning_summary_blocks_when_content_empty(monkeypatch):
+    monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
+
+    runtime = AgentRuntime(
+        settings={
+            "base_url": "https://example.com/v1",
+            "api_key": "sk-test",
+            "model": "test-model",
+        },
+        bot_cfg={
+            "emotion_detection_enabled": True,
+            "emotion_detection_mode": "ai",
+        },
+        agent_cfg={"enabled": True},
+    )
+
+    async def _ainvoke(messages, config=None):
+        return _ReasoningBlockMessage(
+            '{"emotion":"sad","confidence":0.8,"intensity":3,"suggested_tone":"gentle"}'
+        )
+
+    runtime._chat_model.ainvoke = _ainvoke
+
+    emotion = await runtime._analyze_emotion("friend:alice", "hello")
+    assert emotion is not None
+    assert emotion.emotion == "sad"
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_invoke_prefers_visible_answer_over_reasoning_for_user_reply(monkeypatch):
     monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
 
     runtime = AgentRuntime(
@@ -297,18 +471,78 @@ async def test_agent_runtime_invoke_uses_reasoning_content_for_ollama_user_reply
     )
 
     async def _ainvoke(messages, config=None):
-        return _ReasoningMessage("", "这是通过 reasoning_content 返回的回复")
+        return _ReasoningAndAnswerBlockMessage("这是推理摘要", "这是最终回答")
 
     runtime._chat_model.ainvoke = _ainvoke
 
     reply = await runtime.invoke(prepared)
 
-    assert reply == "这是通过 reasoning_content 返回的回复"
-    assert prepared.response_metadata["used_reasoning_content"] is True
+    assert reply == "这是最终回答"
+    assert prepared.response_metadata["has_reasoning_output"] is True
+    assert prepared.response_metadata.get("used_reasoning_content") is not True
 
 
 @pytest.mark.asyncio
-async def test_agent_runtime_stream_uses_reasoning_content_for_ollama_user_reply(monkeypatch):
+async def test_agent_runtime_applies_qwen_timeout_floor(monkeypatch):
+    monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
+
+    runtime = AgentRuntime(
+        settings={
+            "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "api_key": "sk-qwen",
+            "model": "qwen3.5-flash",
+            "provider_id": "qwen",
+            "timeout_sec": 10,
+        },
+        bot_cfg={},
+        agent_cfg={"enabled": True},
+    )
+
+    prepared = await runtime.prepare_request(
+        event=None,
+        chat_id="friend:alice",
+        user_text="hello",
+        dependencies={},
+    )
+
+    assert runtime.timeout_sec == 10.0
+    assert runtime.effective_timeout_sec == 15.0
+    assert runtime._chat_model.kwargs["timeout"] == 15.0
+    assert prepared.response_metadata["effective_timeout_sec"] == 15.0
+    assert prepared.response_metadata["timeout_fallback_applied"] is True
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_keeps_non_qwen_timeout(monkeypatch):
+    monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
+
+    runtime = AgentRuntime(
+        settings={
+            "base_url": "https://example.com/v1",
+            "api_key": "sk-test",
+            "model": "test-model",
+            "provider_id": "openai",
+            "timeout_sec": 9,
+        },
+        bot_cfg={},
+        agent_cfg={"enabled": True},
+    )
+
+    prepared = await runtime.prepare_request(
+        event=None,
+        chat_id="friend:alice",
+        user_text="hello",
+        dependencies={},
+    )
+
+    assert runtime.effective_timeout_sec == 9.0
+    assert runtime._chat_model.kwargs["timeout"] == 9.0
+    assert prepared.response_metadata["effective_timeout_sec"] == 9.0
+    assert "timeout_fallback_applied" not in prepared.response_metadata
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_invoke_uses_reasoning_content_for_internal_task(monkeypatch):
     monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
 
     runtime = AgentRuntime(
@@ -320,7 +554,41 @@ async def test_agent_runtime_stream_uses_reasoning_content_for_ollama_user_reply
             "allow_empty_key": True,
         },
         bot_cfg={},
-        agent_cfg={"enabled": True, "streaming_enabled": True},
+        agent_cfg={"enabled": True},
+    )
+    prepared = SimpleNamespace(
+        prompt_messages=[_FakeMessage("hello")],
+        chat_id="__emotion__friend:alice",
+        response_metadata={},
+        timings={},
+    )
+
+    async def _ainvoke(messages, config=None):
+        return _ReasoningMessage("", "这是通过 reasoning_content 返回的结构化结果")
+
+    runtime._chat_model.ainvoke = _ainvoke
+
+    reply = await runtime.invoke(prepared)
+
+    assert reply == "这是通过 reasoning_content 返回的结构化结果"
+    assert prepared.response_metadata["has_reasoning_output"] is True
+    assert prepared.response_metadata["used_reasoning_content"] is True
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_invoke_falls_back_to_openai_compatible_reply_when_langchain_empty(monkeypatch):
+    monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
+
+    runtime = AgentRuntime(
+        settings={
+            "base_url": "http://127.0.0.1:11434/v1",
+            "api_key": "",
+            "model": "deepseek-v3.2:cloud",
+            "provider_id": "ollama",
+            "allow_empty_key": True,
+        },
+        bot_cfg={},
+        agent_cfg={"enabled": True},
     )
     prepared = SimpleNamespace(
         prompt_messages=[_FakeMessage("hello")],
@@ -329,16 +597,326 @@ async def test_agent_runtime_stream_uses_reasoning_content_for_ollama_user_reply
         timings={},
     )
 
-    async def _astream(messages, config=None):
-        yield _ReasoningMessage("", "第一段")
-        yield _ReasoningMessage("", "第二段")
+    async def _ainvoke(messages, config=None):
+        return _FakeMessage("")
 
-    runtime._stream_model.astream = _astream
+    async def _fallback(prepared_request):
+        return SimpleNamespace(
+            text="fallback reply",
+            reasoning="",
+            tool_calls=[],
+            finish_reason="stop",
+        )
+
+    runtime._chat_model.ainvoke = _ainvoke
+    monkeypatch.setattr(runtime, "_invoke_openai_compatible_reply", _fallback)
+
+    reply = await runtime.invoke(prepared)
+
+    assert reply == "fallback reply"
+    assert prepared.response_metadata["compat_fallback"] == "openai_chat_completions"
+    assert prepared.response_metadata["finish_reason"] == "stop"
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_invoke_records_tool_call_only_response(monkeypatch):
+    monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
+
+    runtime = AgentRuntime(
+        settings={
+            "base_url": "http://127.0.0.1:11434/v1",
+            "api_key": "",
+            "model": "test-model",
+            "allow_empty_key": True,
+        },
+        bot_cfg={},
+        agent_cfg={"enabled": True},
+    )
+    prepared = SimpleNamespace(
+        prompt_messages=[_FakeMessage("hello")],
+        chat_id="friend:alice",
+        response_metadata={},
+        timings={},
+    )
+
+    async def _ainvoke(messages, config=None):
+        return {
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "lookup_weather", "arguments": {"city": "Shanghai"}},
+                }
+            ],
+            "finish_reason": "tool_calls",
+        }
+
+    runtime._chat_model.ainvoke = _ainvoke
+
+    reply = await runtime.invoke(prepared)
+
+    assert reply == ""
+    assert prepared.response_metadata["tool_call_only_response"] is True
+    assert prepared.response_metadata["tool_call_count"] == 1
+    assert prepared.response_metadata["tool_calls"][0]["name"] == "lookup_weather"
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_invoke_does_not_fallback_for_tool_call_only_response(monkeypatch):
+    monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
+
+    runtime = AgentRuntime(
+        settings={
+            "base_url": "http://127.0.0.1:11434/v1",
+            "api_key": "",
+            "model": "test-model",
+            "allow_empty_key": True,
+        },
+        bot_cfg={},
+        agent_cfg={"enabled": True},
+    )
+    prepared = SimpleNamespace(
+        prompt_messages=[_FakeMessage("hello")],
+        chat_id="friend:alice",
+        response_metadata={},
+        timings={},
+    )
+
+    async def _ainvoke(messages, config=None):
+        return {
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "lookup_weather", "arguments": {"city": "Shanghai"}},
+                }
+            ],
+            "finish_reason": "tool_calls",
+        }
+
+    async def _unexpected_fallback(prepared_request):
+        raise AssertionError("tool-call-only 响应不应触发兼容回退")
+
+    runtime._chat_model.ainvoke = _ainvoke
+    monkeypatch.setattr(runtime, "_invoke_openai_compatible_reply", _unexpected_fallback)
+
+    reply = await runtime.invoke(prepared)
+
+    assert reply == ""
+    assert prepared.response_metadata["tool_call_only_response"] is True
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_invoke_raises_when_fallback_is_still_empty(monkeypatch):
+    monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
+
+    runtime = AgentRuntime(
+        settings={
+            "base_url": "http://127.0.0.1:11434/v1",
+            "api_key": "",
+            "model": "deepseek-v3.2:cloud",
+            "provider_id": "ollama",
+            "allow_empty_key": True,
+        },
+        bot_cfg={},
+        agent_cfg={"enabled": True},
+    )
+    prepared = SimpleNamespace(
+        prompt_messages=[_FakeMessage("hello")],
+        chat_id="friend:alice",
+        response_metadata={},
+        timings={},
+    )
+
+    async def _ainvoke(messages, config=None):
+        return _FakeMessage("")
+
+    async def _fallback(prepared_request):
+        return SimpleNamespace(
+            text="",
+            reasoning="",
+            tool_calls=[],
+            finish_reason="stop",
+        )
+
+    runtime._chat_model.ainvoke = _ainvoke
+    monkeypatch.setattr(runtime, "_invoke_openai_compatible_reply", _fallback)
+
+    with pytest.raises(RuntimeError, match="LangChain returned empty content"):
+        await runtime.invoke(prepared)
+
+    assert "compat_fallback" not in prepared.response_metadata
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_invoke_downgrades_fallback_timeout_to_empty_reply(monkeypatch):
+    monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
+
+    runtime = AgentRuntime(
+        settings={
+            "base_url": "http://127.0.0.1:11434/v1",
+            "api_key": "",
+            "model": "deepseek-v3.2:cloud",
+            "provider_id": "ollama",
+            "allow_empty_key": True,
+        },
+        bot_cfg={},
+        agent_cfg={"enabled": True},
+    )
+    prepared = SimpleNamespace(
+        prompt_messages=[_FakeMessage("hello")],
+        chat_id="friend:alice",
+        response_metadata={},
+        timings={},
+    )
+
+    async def _ainvoke(messages, config=None):
+        return _FakeMessage("")
+
+    async def _fallback(prepared_request):
+        raise RuntimeError("compat timeout")
+
+    runtime._chat_model.ainvoke = _ainvoke
+    monkeypatch.setattr(runtime, "_invoke_openai_compatible_reply", _fallback)
+
+    reply = await runtime.invoke(prepared)
+
+    assert reply == ""
+    assert prepared.response_metadata["compat_fallback_failed"] is True
+    assert prepared.response_metadata["compat_fallback_error"] == "compat timeout"
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_stream_prefers_visible_answer_over_reasoning_for_user_reply(monkeypatch):
+    monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
+
+    runtime = AgentRuntime(
+        settings={
+            "base_url": "http://127.0.0.1:11434/v1",
+            "api_key": "",
+            "model": "deepseek-r1",
+            "allow_empty_key": True,
+        },
+        bot_cfg={},
+        agent_cfg={"enabled": True},
+    )
+    prepared = SimpleNamespace(
+        prompt_messages=[_FakeMessage("hello")],
+        chat_id="friend:alice",
+        response_metadata={},
+        timings={},
+    )
+
+    async def _ainvoke(messages, config=None):
+        return _ReasoningAndAnswerBlockMessage("第一段推理", "这是最终回答")
+
+    runtime._chat_model.ainvoke = _ainvoke
 
     chunks = [chunk async for chunk in runtime.stream_reply(prepared)]
 
-    assert chunks == ["第一段", "第二段"]
+    assert chunks == ["这是最终回答"]
+    assert prepared.response_metadata["has_reasoning_output"] is True
+    assert prepared.response_metadata.get("used_reasoning_content") is not True
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_stream_uses_single_shot_reasoning_fallback_for_internal_task(monkeypatch):
+    monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
+
+    runtime = AgentRuntime(
+        settings={
+            "base_url": "http://127.0.0.1:11434/v1",
+            "api_key": "",
+            "model": "deepseek-r1",
+            "allow_empty_key": True,
+        },
+        bot_cfg={},
+        agent_cfg={"enabled": True},
+    )
+    prepared = SimpleNamespace(
+        prompt_messages=[_FakeMessage("hello")],
+        chat_id="__emotion__friend:alice",
+        response_metadata={},
+        timings={},
+    )
+
+    async def _ainvoke(messages, config=None):
+        return _ReasoningMessage("", "这是推理内容")
+
+    runtime._chat_model.ainvoke = _ainvoke
+
+    chunks = [chunk async for chunk in runtime.stream_reply(prepared)]
+
+    assert chunks == ["这是推理内容"]
+    assert prepared.response_metadata["has_reasoning_output"] is True
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_stream_uses_reasoning_content_for_internal_task(monkeypatch):
+    monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
+
+    runtime = AgentRuntime(
+        settings={
+            "base_url": "http://127.0.0.1:11434/v1",
+            "api_key": "",
+            "model": "deepseek-r1",
+            "allow_empty_key": True,
+        },
+        bot_cfg={},
+        agent_cfg={"enabled": True},
+    )
+    prepared = SimpleNamespace(
+        prompt_messages=[_FakeMessage("hello")],
+        chat_id="__emotion__friend:alice",
+        response_metadata={},
+        timings={},
+    )
+
+    async def _ainvoke(messages, config=None):
+        return _ReasoningMessage("", "第一段\n第二段")
+
+    runtime._chat_model.ainvoke = _ainvoke
+
+    chunks = [chunk async for chunk in runtime.stream_reply(prepared)]
+
+    assert chunks == ["第一段\n第二段"]
+    assert prepared.response_metadata["has_reasoning_output"] is True
     assert prepared.response_metadata["used_reasoning_content"] is True
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_stream_prefers_visible_answer_over_reasoning_summary_blocks_for_user_reply(monkeypatch):
+    monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
+
+    runtime = AgentRuntime(
+        settings={
+            "base_url": "http://127.0.0.1:11434/v1",
+            "api_key": "",
+            "model": "deepseek-r1",
+            "allow_empty_key": True,
+        },
+        bot_cfg={},
+        agent_cfg={"enabled": True},
+    )
+    prepared = SimpleNamespace(
+        prompt_messages=[_FakeMessage("hello")],
+        chat_id="friend:alice",
+        response_metadata={},
+        timings={},
+    )
+
+    async def _ainvoke(messages, config=None):
+        return _ReasoningAndAnswerBlockMessage("第一段推理", "这是最终回答")
+
+    runtime._chat_model.ainvoke = _ainvoke
+
+    chunks = [chunk async for chunk in runtime.stream_reply(prepared)]
+
+    assert chunks == ["这是最终回答"]
+    assert prepared.response_metadata["has_reasoning_output"] is True
+    assert prepared.response_metadata.get("used_reasoning_content") is not True
 
 
 @pytest.mark.asyncio
@@ -347,6 +925,7 @@ async def test_agent_runtime_finalize_request_persists_messages(monkeypatch):
 
     memory = _DummyMemory()
     vector_memory = _DummyVectorMemory()
+    export_rag = _DummyExportRag()
     runtime = AgentRuntime(
         settings={
             "base_url": "https://example.com/v1",
@@ -355,17 +934,32 @@ async def test_agent_runtime_finalize_request_persists_messages(monkeypatch):
             "embedding_model": "embed-model",
         },
         bot_cfg={
+            "personalization_enabled": True,
+            "profile_update_frequency": 4,
+            "emotion_detection_enabled": True,
+            "rag_enabled": True,
             "remember_facts_enabled": False,
+            "export_rag_enabled": True,
         },
         agent_cfg={"enabled": True},
     )
+    monkeypatch.setattr(
+        runtime,
+        "_analyze_emotion",
+        lambda chat_id, text: asyncio.sleep(0, result=SimpleNamespace(emotion="happy")),
+    )
+    async def _fake_generate_reply(chat_id, user_text, system_prompt=None, memory_context=None, image_path=None):
+        if str(chat_id).startswith("__contact_prompt__"):
+            return "这是联系人专属 Prompt"
+        return "ignored"
+    monkeypatch.setattr(runtime, "generate_reply", _fake_generate_reply)
     prepared = await runtime.prepare_request(
         event=SimpleNamespace(chat_name="Bob", sender="User", content="hi"),
         chat_id="friend:bob",
         user_text="hi",
         dependencies={
             "memory": memory,
-            "export_rag": None,
+            "export_rag": export_rag,
             "vector_memory": vector_memory,
         },
     )
@@ -373,7 +967,7 @@ async def test_agent_runtime_finalize_request_persists_messages(monkeypatch):
     await runtime.finalize_request(
         prepared,
         "received",
-        {"memory": memory, "export_rag": None, "vector_memory": vector_memory},
+        {"memory": memory, "export_rag": export_rag, "vector_memory": vector_memory},
     )
     await asyncio.sleep(0)
     await runtime.close()
@@ -381,7 +975,111 @@ async def test_agent_runtime_finalize_request_persists_messages(monkeypatch):
     assert memory.saved_messages[0][0] == "friend:bob"
     saved_roles = [item["role"] for item in memory.saved_messages[0][1]]
     assert saved_roles == ["user", "assistant"]
+    assert memory.updated_emotion == ("friend:bob", "happy")
     assert len(vector_memory.inserted) == 2
+    assert export_rag.sync_calls == 1
+    assert prepared.response_metadata["growth_message_count"] == 4
+    assert memory.saved_contact_prompt == "这是联系人专属 Prompt"
+    assert memory.saved_contact_prompt_source == "hybrid"
+    status = runtime.get_status()
+    assert status["growth_mode"] == "background_only"
+    assert status["growth_tasks_pending"] == 0
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_growth_failures_do_not_block_followup_steps(monkeypatch):
+    monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
+
+    memory = _DummyMemory()
+    vector_memory = _DummyVectorMemory()
+    export_rag = _DummyExportRag()
+    runtime = AgentRuntime(
+        settings={
+            "base_url": "https://example.com/v1",
+            "api_key": "sk-test",
+            "model": "test-model",
+            "embedding_model": "embed-model",
+        },
+        bot_cfg={
+            "personalization_enabled": True,
+            "profile_update_frequency": 4,
+            "emotion_detection_enabled": True,
+            "rag_enabled": True,
+            "remember_facts_enabled": True,
+            "export_rag_enabled": True,
+        },
+        agent_cfg={"enabled": True},
+    )
+
+    async def _emotion_boom(chat_id, text):
+        raise RuntimeError("emotion step boom")
+
+    fact_calls = []
+
+    async def _fake_extract_facts(chat_id, user_text, assistant_reply, user_profile, memory_obj):
+        fact_calls.append((chat_id, assistant_reply))
+
+    monkeypatch.setattr(runtime, "_analyze_emotion", _emotion_boom)
+    monkeypatch.setattr(runtime, "_extract_facts_background", _fake_extract_facts)
+
+    prepared = await runtime.prepare_request(
+        event=SimpleNamespace(chat_name="Bob", sender="User", content="hi"),
+        chat_id="friend:bob",
+        user_text="hi",
+        dependencies={
+            "memory": memory,
+            "export_rag": export_rag,
+            "vector_memory": vector_memory,
+        },
+    )
+
+    await runtime.finalize_request(
+        prepared,
+        "received",
+        {"memory": memory, "export_rag": export_rag, "vector_memory": vector_memory},
+    )
+    await asyncio.sleep(0)
+    await runtime.close()
+
+    assert prepared.response_metadata["growth_message_count"] == 4
+    assert len(vector_memory.inserted) == 2
+    assert fact_calls == [("friend:bob", "received")]
+    assert export_rag.sync_calls == 1
+    assert runtime.get_status()["last_growth_error"] == "emotion step boom"
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_prepare_request_uses_contact_prompt_as_effective_base(monkeypatch):
+    monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
+
+    memory = _DummyMemory()
+    memory.saved_contact_prompt = "你要像老朋友一样回复，但保持简短。"
+    memory.saved_contact_prompt_source = "user_edit"
+    runtime = AgentRuntime(
+        settings={
+            "base_url": "https://example.com/v1",
+            "api_key": "sk-test",
+            "model": "test-model",
+        },
+        bot_cfg={
+            "system_prompt": "base prompt\n{user_profile}",
+            "system_prompt_overrides": {"Alice": "override prompt"},
+            "memory_context_limit": 5,
+            "personalization_enabled": True,
+            "profile_inject_in_prompt": True,
+        },
+        agent_cfg={"enabled": True},
+    )
+
+    prepared = await runtime.prepare_request(
+        event=SimpleNamespace(chat_name="Alice", sender="User", content="hello"),
+        chat_id="friend:alice",
+        user_text="hello",
+        dependencies={"memory": memory, "export_rag": None, "vector_memory": None},
+    )
+
+    assert "你要像老朋友一样回复，但保持简短。" in prepared.system_prompt
+    assert "override prompt" not in prepared.system_prompt
 
 
 @pytest.mark.asyncio
@@ -456,3 +1154,37 @@ def test_agent_runtime_profile_update_frequency_controls_refresh(monkeypatch):
 
     assert runtime._should_refresh_profile(SimpleNamespace(message_count=4)) is True
     assert runtime._should_refresh_profile(SimpleNamespace(message_count=3)) is False
+
+
+def test_agent_runtime_contact_prompt_update_frequency_uses_dedicated_config(monkeypatch):
+    monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
+
+    runtime = AgentRuntime(
+        settings={"base_url": "https://example.com/v1", "api_key": "sk-test", "model": "test-model"},
+        bot_cfg={"profile_update_frequency": 10, "contact_prompt_update_frequency": 4},
+        agent_cfg={"enabled": True},
+    )
+
+    assert runtime._should_refresh_contact_prompt(
+        SimpleNamespace(message_count=4, contact_prompt="", contact_prompt_last_message_count=0)
+    ) is True
+    assert runtime._should_refresh_contact_prompt(
+        SimpleNamespace(message_count=3, contact_prompt="", contact_prompt_last_message_count=0)
+    ) is False
+
+
+def test_agent_runtime_build_user_message_metadata_accepts_string_msg_type():
+    prepared = SimpleNamespace(
+        event=SimpleNamespace(
+            chat_name="文件传输助手",
+            sender="Alice",
+            is_group=False,
+            msg_type="text",
+        ),
+        trace={},
+    )
+
+    metadata = AgentRuntime._build_user_message_metadata(prepared)
+
+    assert metadata["message_type"] == "text"
+    assert "message_type_code" not in metadata

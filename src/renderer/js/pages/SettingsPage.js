@@ -23,10 +23,8 @@ const RANGE_FIELD_DEFS = [];
 
 FIELD_DEFS.push(
     ['setting-self-name', 'bot', 'self_name', 'text'], ['setting-reply-suffix', 'bot', 'reply_suffix', 'text'],
-    ['setting-stream-reply', 'bot', 'stream_reply', 'checkbox'], ['setting-group-at-only', 'bot', 'group_reply_only_when_at', 'checkbox'],
-    ['setting-reply-quote-mode', 'bot', 'reply_quote_mode', 'text'], ['setting-reply-quote-template', 'bot', 'reply_quote_template', 'text'],
-    ['setting-reply-quote-max-chars', 'bot', 'reply_quote_max_chars', 'number'], ['setting-reply-quote-timeout', 'bot', 'reply_quote_timeout_sec', 'number'],
-    ['setting-reply-quote-fallback', 'bot', 'reply_quote_fallback_to_text', 'checkbox'], ['setting-system-prompt', 'bot', 'system_prompt', 'text'],
+    ['setting-group-at-only', 'bot', 'group_reply_only_when_at', 'checkbox'],
+    ['setting-system-prompt', 'bot', 'system_prompt', 'text'],
     ['setting-emoji-policy', 'bot', 'emoji_policy', 'text'], ['setting-voice-to-text', 'bot', 'voice_to_text', 'checkbox'],
     ['setting-voice-to-text-fail-reply', 'bot', 'voice_to_text_fail_reply', 'text'], ['setting-memory-db-path', 'bot', 'memory_db_path', 'text'],
     ['setting-memory-context-limit', 'bot', 'memory_context_limit', 'number'], ['setting-memory-ttl-sec', 'bot', 'memory_ttl_sec', 'number', { nullable: true }],
@@ -36,10 +34,10 @@ FIELD_DEFS.push(
     ['setting-poll-interval-max-sec', 'bot', 'poll_interval_max_sec', 'number'], ['setting-poll-interval-backoff-factor', 'bot', 'poll_interval_backoff_factor', 'number'],
     ['setting-min-reply-interval-sec', 'bot', 'min_reply_interval_sec', 'number'], ['setting-merge-user-messages-sec', 'bot', 'merge_user_messages_sec', 'number'],
     ['setting-merge-user-messages-max-wait-sec', 'bot', 'merge_user_messages_max_wait_sec', 'number'], ['setting-reply-chunk-size', 'bot', 'reply_chunk_size', 'number'],
-    ['setting-reply-chunk-delay-sec', 'bot', 'reply_chunk_delay_sec', 'number'], ['setting-max-concurrency', 'bot', 'max_concurrency', 'number'],
+    ['setting-reply-chunk-delay-sec', 'bot', 'reply_chunk_delay_sec', 'number'], ['setting-reply-deadline-sec', 'bot', 'reply_deadline_sec', 'number'],
+    ['setting-max-concurrency', 'bot', 'max_concurrency', 'number'],
     ['setting-natural-split-enabled', 'bot', 'natural_split_enabled', 'checkbox'], ['setting-natural-split-min-chars', 'bot', 'natural_split_min_chars', 'number'],
     ['setting-natural-split-max-chars', 'bot', 'natural_split_max_chars', 'number'], ['setting-natural-split-max-segments', 'bot', 'natural_split_max_segments', 'number'],
-    ['setting-stream-buffer-chars', 'bot', 'stream_buffer_chars', 'number'], ['setting-stream-chunk-max-chars', 'bot', 'stream_chunk_max_chars', 'number'],
     ['setting-transport-backend', 'bot', 'transport_backend', 'text'], ['setting-required-wechat-version', 'bot', 'required_wechat_version', 'text'],
     ['setting-silent-mode-required', 'bot', 'silent_mode_required', 'checkbox'], ['setting-config-reload-sec', 'bot', 'config_reload_sec', 'number'],
     ['setting-reload-ai-client-on-change', 'bot', 'reload_ai_client_on_change', 'checkbox'], ['setting-reload-ai-client-module', 'bot', 'reload_ai_client_module', 'checkbox'],
@@ -48,7 +46,9 @@ FIELD_DEFS.push(
     ['setting-group-include-sender', 'bot', 'group_include_sender', 'checkbox'], ['setting-send-exact-match', 'bot', 'send_exact_match', 'checkbox'],
     ['setting-send-fallback-current-chat', 'bot', 'send_fallback_current_chat', 'checkbox'], ['setting-filter-mute', 'bot', 'filter_mute', 'checkbox'],
     ['setting-ignore-official', 'bot', 'ignore_official', 'checkbox'], ['setting-ignore-service', 'bot', 'ignore_service', 'checkbox'],
+    ['setting-allow-filehelper-self-message', 'bot', 'allow_filehelper_self_message', 'checkbox'],
     ['setting-personalization-enabled', 'bot', 'personalization_enabled', 'checkbox'], ['setting-profile-update-frequency', 'bot', 'profile_update_frequency', 'number'],
+    ['setting-contact-prompt-update-frequency', 'bot', 'contact_prompt_update_frequency', 'number'],
     ['setting-remember-facts-enabled', 'bot', 'remember_facts_enabled', 'checkbox'], ['setting-max-context-facts', 'bot', 'max_context_facts', 'number'],
     ['setting-profile-inject-in-prompt', 'bot', 'profile_inject_in_prompt', 'checkbox'], ['setting-vector-memory-enabled', 'bot', 'rag_enabled', 'checkbox'],
     ['setting-vector-memory-embedding-model', 'bot', 'vector_memory_embedding_model', 'text'], ['setting-export-rag-enabled', 'bot', 'export_rag_enabled', 'checkbox'],
@@ -62,7 +62,7 @@ FIELD_DEFS.push(
     ['setting-emotion-detection-enabled', 'bot', 'emotion_detection_enabled', 'checkbox'], ['setting-emotion-detection-mode', 'bot', 'emotion_detection_mode', 'text'],
     ['setting-emotion-inject-in-prompt', 'bot', 'emotion_inject_in_prompt', 'checkbox'], ['setting-emotion-log-enabled', 'bot', 'emotion_log_enabled', 'checkbox'],
     ['setting-whitelist-enabled', 'bot', 'whitelist_enabled', 'checkbox'], ['setting-agent-enabled', 'agent', 'enabled', 'checkbox'],
-    ['setting-agent-streaming-enabled', 'agent', 'streaming_enabled', 'checkbox'], ['setting-agent-graph-mode', 'agent', 'graph_mode', 'text'],
+    ['setting-agent-graph-mode', 'agent', 'graph_mode', 'text'],
     ['setting-agent-retriever-top-k', 'agent', 'retriever_top_k', 'number'], ['setting-agent-retriever-threshold', 'agent', 'retriever_score_threshold', 'number'],
     ['setting-agent-embedding-cache-ttl', 'agent', 'embedding_cache_ttl_sec', 'number'], ['setting-agent-max-parallel-retrievers', 'agent', 'max_parallel_retrievers', 'number'],
     ['setting-agent-background-facts', 'agent', 'background_fact_extraction_enabled', 'checkbox'], ['setting-agent-emotion-fast-path', 'agent', 'emotion_fast_path_enabled', 'checkbox'],
@@ -87,6 +87,22 @@ RANGE_FIELD_DEFS.push(
     ['setting-random-delay-min-sec', 'setting-random-delay-max-sec', 'bot', 'random_delay_range_sec'],
     ['setting-natural-split-delay-min-sec', 'setting-natural-split-delay-max-sec', 'bot', 'natural_split_delay_sec'],
 );
+
+const FIELD_META_BY_ID = new Map();
+
+FIELD_DEFS.forEach(([id, section, path, type, options = {}]) => {
+    FIELD_META_BY_ID.set(id, { id, section, path, type, options, kind: 'field' });
+});
+LIST_FIELD_DEFS.forEach(([id, section, path]) => {
+    FIELD_META_BY_ID.set(id, { id, section, path, kind: 'list' });
+});
+MAP_FIELD_DEFS.forEach(([id, section, path, separator]) => {
+    FIELD_META_BY_ID.set(id, { id, section, path, separator, kind: 'map' });
+});
+RANGE_FIELD_DEFS.forEach(([minId, maxId, section, path]) => {
+    FIELD_META_BY_ID.set(minId, { id: minId, pairId: maxId, section, path, kind: 'range' });
+    FIELD_META_BY_ID.set(maxId, { id: maxId, pairId: minId, section, path, kind: 'range' });
+});
 
 function deepClone(value) {
     return JSON.parse(JSON.stringify(value ?? {}));
@@ -176,6 +192,17 @@ function createElement(tag, className, text) {
     return element;
 }
 
+function pruneEmptySections(payload) {
+    const nextPayload = payload && typeof payload === 'object' ? payload : {};
+    Object.keys(nextPayload).forEach((section) => {
+        const value = nextPayload[section];
+        if (value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0) {
+            delete nextPayload[section];
+        }
+    });
+    return nextPayload;
+}
+
 export class SettingsPage extends PageController {
     constructor() {
         super('SettingsPage', 'page-settings');
@@ -188,18 +215,26 @@ export class SettingsPage extends PageController {
         this._selectedPresetIndex = -1;
         this._loaded = false;
         this._loadingPromise = null;
+        this._lastConfigVersion = 0;
+        this._isSaving = false;
+        this._mainContent = null;
+        this._scrollTopButton = null;
     }
 
     async onInit() {
         await super.onInit();
         this._bindEvents();
+        this._initModuleSaveButtons();
+        this._initScrollControls();
         this._watchUpdaterState();
     }
 
     async onEnter() {
         await super.onEnter();
-        if (!this._loaded) {
-            await this.loadSettings();
+        this._handleMainScroll();
+        const runtimeVersion = Number(this.getState('bot.status.config_snapshot.version') || 0);
+        if (!this._loaded || (runtimeVersion && runtimeVersion > this._lastConfigVersion)) {
+            await this.loadSettings({ preserveFeedback: true });
         } else {
             this._renderHero();
             this._renderUpdatePanel();
@@ -213,6 +248,7 @@ export class SettingsPage extends PageController {
         this.bindEvent('#btn-check-updates', 'click', () => void this._checkUpdates());
         this.bindEvent('#btn-open-update-download', 'click', () => void this._openUpdateDownload());
         this.bindEvent('#btn-reset-close-behavior', 'click', () => void this._resetCloseBehavior());
+        this.bindEvent('#btn-settings-scroll-top', 'click', () => this._scrollToTop());
         this.bindEvent('#btn-add-preset', 'click', () => this._openPresetModal());
         this.bindEvent('#btn-close-modal', 'click', () => this._closePresetModal());
         this.bindEvent('#btn-cancel-modal', 'click', () => this._closePresetModal());
@@ -244,6 +280,7 @@ export class SettingsPage extends PageController {
             if (this.isActive()) {
                 this._renderHero();
             }
+            this._maybeRefreshForRuntimeConfigChange();
         });
     }
 
@@ -252,7 +289,7 @@ export class SettingsPage extends PageController {
             return this._loadingPromise;
         }
 
-        const { silent = true } = options;
+        const { silent = true, preserveFeedback = false } = options;
         const hero = this.$('#current-config-hero');
         if (hero && !this._loaded) {
             hero.innerHTML = `<div class="config-hero-card" style="opacity:0.7;"><div class="hero-content"><div class="hero-title"><span class="hero-name">${TEXT.loading}</span></div></div></div>`;
@@ -281,13 +318,16 @@ export class SettingsPage extends PageController {
                 this._providersById = new Map((this._modelCatalog.providers || []).map((provider) => [provider.id, provider]));
                 this._presetDrafts = deepClone(this._config.api.presets || []);
                 this._activePreset = String(this._config.api.active_preset || '').trim();
+                this._lastConfigVersion = Number(this._configAudit?.version || this.getState('bot.status.config_snapshot.version') || 0);
 
                 this._fillForm();
                 this._renderPresetList();
                 this._renderHero();
                 this._renderUpdatePanel();
                 this._renderExportRagStatus();
-                this._hideSaveFeedback();
+                if (!preserveFeedback) {
+                    this._hideSaveFeedback();
+                }
                 this._loaded = true;
                 if (!silent) {
                     toast.success('配置已刷新');
@@ -306,6 +346,152 @@ export class SettingsPage extends PageController {
         return this._loadingPromise;
     }
 
+    _initModuleSaveButtons() {
+        this.$$('.settings-card').forEach((card) => {
+            const meta = this._getCardConfigMeta(card);
+            if (!meta) {
+                return;
+            }
+            this._ensureCardSaveButton(card, meta);
+        });
+    }
+
+    _getCardConfigMeta(card) {
+        if (!card) {
+            return null;
+        }
+
+        const ids = new Set(
+            Array.from(card.querySelectorAll('[id]'))
+                .map((element) => element.id)
+                .filter((id) => FIELD_META_BY_ID.has(id))
+        );
+        const includeApiPresets = !!card.querySelector('#preset-list');
+        const sections = new Set();
+        ids.forEach((id) => {
+            const meta = FIELD_META_BY_ID.get(id);
+            if (meta?.section) {
+                sections.add(meta.section);
+            }
+        });
+        if (includeApiPresets) {
+            sections.add('api');
+        }
+        if (!ids.size && !includeApiPresets) {
+            return null;
+        }
+
+        return {
+            title: card.querySelector('.settings-card-title')?.textContent?.trim() || '当前模块',
+            ids,
+            sections,
+            includeApiPresets,
+        };
+    }
+
+    _ensureCardSaveButton(card, meta) {
+        if (card.querySelector('[data-card-save-button]')) {
+            return;
+        }
+
+        let header = card.querySelector('.settings-card-header');
+        const title = card.querySelector('.settings-card-title');
+        if (!header && title) {
+            header = createElement('div', 'settings-card-header');
+            card.insertBefore(header, title);
+            title.style.marginBottom = '0';
+            header.appendChild(title);
+        }
+        if (!header) {
+            return;
+        }
+
+        let actions = header.querySelector('.settings-card-header-actions');
+        if (!actions) {
+            actions = createElement('div', 'settings-card-header-actions');
+            header.appendChild(actions);
+        }
+
+        const button = createElement('button', 'btn btn-primary btn-sm', '保存本模块');
+        button.type = 'button';
+        button.dataset.cardSaveButton = 'true';
+        button.dataset.cardTitle = meta.title;
+        button.addEventListener('click', () => {
+            void this._saveSettings({ scope: meta, triggerButton: button });
+        });
+        actions.appendChild(button);
+    }
+
+    _initScrollControls() {
+        this._mainContent = document.querySelector('.main-content');
+        this._scrollTopButton = this.$('#btn-settings-scroll-top');
+        if (!this._mainContent) {
+            return;
+        }
+
+        const onScroll = () => this._handleMainScroll();
+        this._mainContent.addEventListener('scroll', onScroll);
+        this._eventCleanups.push(() => {
+            this._mainContent?.removeEventListener('scroll', onScroll);
+        });
+    }
+
+    _handleMainScroll() {
+        if (!this._mainContent || !this._scrollTopButton) {
+            return;
+        }
+        const visible = this.isActive() && this._mainContent.scrollTop > 240;
+        this._scrollTopButton.classList.toggle('visible', visible);
+    }
+
+    _scrollToTop() {
+        this._mainContent?.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    _maybeRefreshForRuntimeConfigChange() {
+        if (!this.isActive() || this._loadingPromise || this._isSaving) {
+            return;
+        }
+
+        const runtimeVersion = Number(this.getState('bot.status.config_snapshot.version') || 0);
+        if (!runtimeVersion || runtimeVersion <= this._lastConfigVersion) {
+            return;
+        }
+
+        this._lastConfigVersion = runtimeVersion;
+        void this.loadSettings({ silent: true, preserveFeedback: true });
+    }
+
+    _setButtonLabel(button, label) {
+        if (!button) {
+            return;
+        }
+        const textNode = button.querySelector('span');
+        if (textNode) {
+            textNode.textContent = label;
+            return;
+        }
+        button.textContent = label;
+    }
+
+    _setSavingState(isSaving, triggerButton = null) {
+        this._isSaving = isSaving;
+        const buttons = [this.$('#btn-save-settings'), ...this.$$('[data-card-save-button]')].filter(Boolean);
+        buttons.forEach((button) => {
+            if (!button.dataset.originalLabel) {
+                button.dataset.originalLabel = button.querySelector('span')?.textContent || button.textContent || '保存';
+            }
+            button.disabled = isSaving;
+            if (button === triggerButton) {
+                button.classList.toggle('is-loading', isSaving);
+                this._setButtonLabel(button, isSaving ? '保存中...' : button.dataset.originalLabel);
+            } else if (!isSaving) {
+                button.classList.remove('is-loading');
+                this._setButtonLabel(button, button.dataset.originalLabel);
+            }
+        });
+    }
+
     _renderLoadError(message) {
         const hero = this.$('#current-config-hero');
         if (hero) {
@@ -313,8 +499,14 @@ export class SettingsPage extends PageController {
         }
     }
 
-    _fillForm() {
+    _fillForm(scope = null) {
+        const includeIds = scope?.ids instanceof Set ? scope.ids : null;
+        const includeSections = scope?.sections instanceof Set ? scope.sections : null;
+
         FIELD_DEFS.forEach(([id, section, path, type, options = {}]) => {
+            if ((includeSections && !includeSections.has(section)) || (includeIds && !includeIds.has(id))) {
+                return;
+            }
             const element = this.$(`#${id}`);
             if (!element) {
                 return;
@@ -333,6 +525,9 @@ export class SettingsPage extends PageController {
         });
 
         LIST_FIELD_DEFS.forEach(([id, section, path]) => {
+            if ((includeSections && !includeSections.has(section)) || (includeIds && !includeIds.has(id))) {
+                return;
+            }
             const element = this.$(`#${id}`);
             if (element) {
                 element.value = listToMultiline(getPathValue(this._config[section] || {}, path));
@@ -340,6 +535,9 @@ export class SettingsPage extends PageController {
         });
 
         MAP_FIELD_DEFS.forEach(([id, section, path, separator]) => {
+            if ((includeSections && !includeSections.has(section)) || (includeIds && !includeIds.has(id))) {
+                return;
+            }
             const element = this.$(`#${id}`);
             if (element) {
                 element.value = mapToMultiline(getPathValue(this._config[section] || {}, path), separator);
@@ -347,6 +545,9 @@ export class SettingsPage extends PageController {
         });
 
         RANGE_FIELD_DEFS.forEach(([minId, maxId, section, path]) => {
+            if ((includeSections && !includeSections.has(section)) || (includeIds && !includeIds.has(minId) && !includeIds.has(maxId))) {
+                return;
+            }
             const range = getPathValue(this._config[section] || {}, path);
             const [minValue, maxValue] = Array.isArray(range) ? range : ['', ''];
             if (this.$(`#${minId}`)) {
@@ -363,8 +564,11 @@ export class SettingsPage extends PageController {
         }
     }
 
-    _collectPayload() {
-        const payload = { api: { active_preset: this._activePreset, presets: deepClone(this._presetDrafts) }, bot: {}, logging: {}, agent: {} };
+    _collectPayload(scope = null) {
+        const includeIds = scope?.ids instanceof Set ? scope.ids : null;
+        const includeSections = scope?.sections instanceof Set ? scope.sections : null;
+        const includeApiPresets = !scope || !!scope.includeApiPresets;
+        const payload = {};
 
         FIELD_DEFS.forEach(([id, section, path, type, options = {}]) => {
             const element = this.$(`#${id}`);
@@ -389,57 +593,86 @@ export class SettingsPage extends PageController {
             } else {
                 value = element.value;
             }
+            if (!payload[section]) {
+                payload[section] = {};
+            }
             setPathValue(payload[section], path, value);
         });
 
         LIST_FIELD_DEFS.forEach(([id, section, path]) => {
+            if ((includeSections && !includeSections.has(section)) || (includeIds && !includeIds.has(id))) {
+                return;
+            }
             const element = this.$(`#${id}`);
             if (element) {
+                if (!payload[section]) {
+                    payload[section] = {};
+                }
                 setPathValue(payload[section], path, normalizeListText(element.value));
             }
         });
 
         MAP_FIELD_DEFS.forEach(([id, section, path, separator]) => {
+            if ((includeSections && !includeSections.has(section)) || (includeIds && !includeIds.has(id))) {
+                return;
+            }
             const element = this.$(`#${id}`);
             if (element) {
+                if (!payload[section]) {
+                    payload[section] = {};
+                }
                 setPathValue(payload[section], path, multilineToMap(element.value, separator));
             }
         });
 
         RANGE_FIELD_DEFS.forEach(([minId, maxId, section, path]) => {
+            if ((includeSections && !includeSections.has(section)) || (includeIds && !includeIds.has(minId) && !includeIds.has(maxId))) {
+                return;
+            }
+            if (!payload[section]) {
+                payload[section] = {};
+            }
             setPathValue(payload[section], path, [Number(this.$(`#${minId}`)?.value || 0), Number(this.$(`#${maxId}`)?.value || 0)]);
         });
 
-        return payload;
+        if (includeApiPresets) {
+            payload.api = {
+                ...(payload.api || {}),
+                active_preset: this._activePreset,
+                presets: deepClone(this._presetDrafts),
+            };
+        }
+
+        return pruneEmptySections(payload);
     }
 
-    async _saveSettings() {
+    async _saveSettings(options = {}) {
+        const { scope = null, triggerButton = null } = options;
         try {
-            if (!this._presetDrafts.length) {
+            const payload = this._collectPayload(scope);
+            if (payload.api && !this._presetDrafts.length) {
                 throw new Error(TEXT.presetMissing);
             }
-            const result = await apiService.saveConfig(this._collectPayload());
+            if (!Object.keys(payload).length) {
+                toast.info('当前模块没有可保存的配置项');
+                return;
+            }
+            this._setSavingState(true, triggerButton);
+            const result = await apiService.saveConfig(payload);
             if (!result?.success) {
                 throw new Error(result?.message || TEXT.saveFailed);
             }
 
-            this._config = {
-                api: deepClone(result.config?.api || this._config?.api || {}),
-                bot: deepClone(result.config?.bot || this._config?.bot || {}),
-                logging: deepClone(result.config?.logging || this._config?.logging || {}),
-                agent: deepClone(result.config?.agent || this._config?.agent || {}),
-            };
-            this._presetDrafts = deepClone(this._config.api.presets || []);
-            this._activePreset = String(this._config.api.active_preset || '').trim();
-            this._fillForm();
-            this._renderPresetList();
+            await this.loadSettings({ silent: true, preserveFeedback: true });
             this._renderHero(true);
             this._renderSaveFeedback(result);
             this._renderExportRagStatus();
+            this._setSavingState(false, triggerButton);
             toast.success(result?.runtime_apply?.message || '配置已保存');
         } catch (error) {
             console.error('[SettingsPage] save failed:', error);
             this._renderSaveFeedback({ success: false, message: toast.getErrorMessage(error, TEXT.saveFailed) });
+            this._setSavingState(false, triggerButton);
             toast.error(toast.getErrorMessage(error, TEXT.saveFailed));
         }
     }
@@ -745,12 +978,6 @@ export class SettingsPage extends PageController {
         }
         const provider = this._providersById.get(providerId) || null;
         let models = Array.isArray(provider?.models) ? [...provider.models] : [];
-        if (providerId === 'ollama') {
-            const result = await apiService.getOllamaModels(provider?.base_url || 'http://127.0.0.1:11434/v1').catch(() => null);
-            if (result?.success && Array.isArray(result.models) && result.models.length) {
-                models = result.models;
-            }
-        }
         select.textContent = '';
         [['', '-- 选择模型 --'], ...models.map((item) => [item, item]), ['__custom__', '自定义模型']].forEach(([value, label]) => {
             const option = document.createElement('option');
@@ -902,9 +1129,16 @@ export class SettingsPage extends PageController {
         const changedPaths = Array.isArray(result.changed_paths) ? result.changed_paths : [];
         const runtimeApply = result.runtime_apply;
         const reloadPlan = Array.isArray(result.reload_plan) ? result.reload_plan : [];
+        const defaultConfigSync = result.default_config_synced
+            ? (result.default_config_sync_message || '默认配置文件已同步更新')
+            : '默认配置文件：未同步';
         container.dataset.state = changedPaths.length > 0 ? 'warning' : 'success';
         summary.textContent = changedPaths.length > 0 ? '配置已保存' : '未检测到有效配置变更';
-        meta.textContent = [`变更项：${changedPaths.length} 个`, runtimeApply?.message ? `运行时反馈：${runtimeApply.message}` : '运行时反馈：无'].join(' · ');
+        meta.textContent = [
+            `变更项：${changedPaths.length} 个`,
+            runtimeApply?.message ? `运行时反馈：${runtimeApply.message}` : '运行时反馈：无',
+            defaultConfigSync,
+        ].join(' · ');
 
         reloadPlan.forEach((item) => {
             const block = createElement('div', 'config-save-feedback-item');

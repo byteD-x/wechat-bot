@@ -29,7 +29,11 @@ from backend.model_catalog import (
     infer_provider_id,
     merge_provider_defaults,
 )
-from backend.utils.logging import setup_logging, get_logging_settings
+from backend.utils.logging import (
+    setup_logging,
+    get_logging_settings,
+    configure_http_access_log_filters,
+)
 from backend.utils.config import resolve_system_prompt
 
 # 配置日志
@@ -43,6 +47,18 @@ setup_logging(level, log_file, max_bytes, backup_count, format_type)
 logger = logging.getLogger(__name__)
 
 API_TOKEN = str(os.environ.get("WECHAT_BOT_API_TOKEN") or "").strip()
+configure_http_access_log_filters()
+
+_REMOVED_PUBLIC_BOT_FIELDS = {
+    "reply_timeout_fallback_text",
+    "stream_buffer_chars",
+    "stream_chunk_max_chars",
+    "stream_reply",
+}
+
+_REMOVED_PUBLIC_AGENT_FIELDS = {
+    "streaming_enabled",
+}
 
 
 def _is_local_request() -> bool:
@@ -133,6 +149,7 @@ def _build_config_payload(snapshot=None) -> dict:
     config_dict = active_snapshot.config
 
     api_cfg = config_dict.get("api", {})
+    bot_cfg = dict(config_dict.get("bot", {}))
     agent_cfg = dict(config_dict.get("agent", {}))
     presets = []
     for preset in api_cfg.get("presets", []):
@@ -140,12 +157,16 @@ def _build_config_payload(snapshot=None) -> dict:
 
     api_cfg_safe = api_cfg.copy()
     api_cfg_safe["presets"] = presets
+    for field in _REMOVED_PUBLIC_BOT_FIELDS:
+        bot_cfg.pop(field, None)
+    for field in _REMOVED_PUBLIC_AGENT_FIELDS:
+        agent_cfg.pop(field, None)
     langsmith_key = str(agent_cfg.get("langsmith_api_key") or "").strip()
     agent_cfg["langsmith_api_key_configured"] = bool(langsmith_key)
     agent_cfg.pop("langsmith_api_key", None)
     return {
         "api": api_cfg_safe,
-        "bot": config_dict.get("bot", {}),
+        "bot": bot_cfg,
         "logging": config_dict.get("logging", {}),
         "agent": agent_cfg,
     }
@@ -309,6 +330,46 @@ async def get_messages():
         return jsonify({"success": False, "message": f"获取消息失败: {str(e)}"})
 
 
+@app.route("/api/contact_profile", methods=["GET"])
+async def get_contact_profile():
+    """获取指定联系人的成长画像与 Prompt 资产。"""
+    try:
+        chat_id = str(request.args.get("chat_id", "", type=str) or "").strip()
+        if not chat_id:
+            return jsonify({"success": False, "message": "缺少 chat_id"}), 400
+
+        mem_mgr = manager.get_memory_manager()
+        profile = await mem_mgr.get_contact_profile(chat_id)
+        return jsonify({"success": True, "profile": profile})
+    except Exception as e:
+        logger.error(f"获取联系人画像失败: {e}")
+        return jsonify({"success": False, "message": f"获取联系人画像失败: {str(e)}"})
+
+
+@app.route("/api/contact_prompt", methods=["POST"])
+async def save_contact_prompt():
+    """保存联系人专属 Prompt。"""
+    try:
+        data = await request.get_json(silent=True) or {}
+        chat_id = str(data.get("chat_id") or "").strip()
+        contact_prompt = str(data.get("contact_prompt") or "").strip()
+        if not chat_id:
+            return jsonify({"success": False, "message": "缺少 chat_id"}), 400
+        if not contact_prompt:
+            return jsonify({"success": False, "message": "联系人 Prompt 不能为空"}), 400
+
+        mem_mgr = manager.get_memory_manager()
+        profile = await mem_mgr.save_contact_prompt(
+            chat_id,
+            contact_prompt,
+            source="user_edit",
+        )
+        return jsonify({"success": True, "profile": profile})
+    except Exception as e:
+        logger.error(f"保存联系人 Prompt 失败: {e}")
+        return jsonify({"success": False, "message": f"保存联系人 Prompt 失败: {str(e)}"})
+
+
 @app.route("/api/send", methods=["POST"])
 async def send_message():
     """发送消息"""
@@ -431,7 +492,7 @@ async def save_config():
             config_path = None
 
         snapshot = await asyncio.to_thread(
-            config_service.update_override,
+            config_service.save_effective_config,
             data or {},
             config_path=config_path,
             override_path=os.path.join("data", "config_override.json"),
@@ -481,6 +542,8 @@ async def save_config():
                 "changed_paths": changed_paths,
                 "reload_plan": reload_plan,
                 "runtime_apply": runtime_apply,
+                "default_config_synced": True,
+                "default_config_sync_message": "默认配置文件已同步更新（敏感字段仍保留在安全来源）",
             }
         )
 
@@ -559,6 +622,7 @@ async def preview_prompt():
             bot_cfg.update(bot_overrides)
 
         sample = data.get("sample") if isinstance(data.get("sample"), dict) else {}
+        chat_id = str(sample.get("chat_id") or "").strip()
         event = SimpleNamespace(
             chat_name=str(sample.get("chat_name") or "预览联系人"),
             sender=str(sample.get("sender") or "预览用户"),
@@ -566,15 +630,30 @@ async def preview_prompt():
             is_group=bool(sample.get("is_group", False)),
         )
 
-        user_profile = (
-            {
+        user_profile = None
+        wants_contact_context = bool(chat_id or str(sample.get("contact_prompt") or "").strip())
+        if bot_cfg.get("profile_inject_in_prompt") or wants_contact_context:
+            user_profile = {
                 "nickname": str(sample.get("nickname") or event.sender),
                 "relationship": str(sample.get("relationship") or "friend"),
                 "message_count": int(sample.get("message_count") or 12),
+                "profile_summary": str(sample.get("profile_summary") or "").strip(),
+                "contact_prompt": str(sample.get("contact_prompt") or "").strip(),
             }
-            if bot_cfg.get("profile_inject_in_prompt")
-            else None
-        )
+            if chat_id:
+                try:
+                    mem_mgr = manager.get_memory_manager()
+                    stored_profile = await mem_mgr.get_profile_prompt_snapshot(chat_id)
+                    if isinstance(stored_profile, dict):
+                        user_profile.update(
+                            {
+                                key: value
+                                for key, value in stored_profile.items()
+                                if value not in (None, "")
+                            }
+                        )
+                except Exception:
+                    pass
 
         emotion = None
         if bot_cfg.get("emotion_inject_in_prompt"):
@@ -596,7 +675,13 @@ async def preview_prompt():
                     "override_applied": bool(
                         getattr(event, "chat_name", "") in overrides
                     ),
-                    "profile_injected": bool(user_profile),
+                    "contact_prompt_applied": bool(
+                        isinstance(user_profile, dict)
+                        and str(user_profile.get("contact_prompt") or "").strip()
+                    ),
+                    "profile_injected": bool(
+                        bot_cfg.get("profile_inject_in_prompt") and user_profile
+                    ),
                     "emotion_injected": emotion is not None,
                 },
             }

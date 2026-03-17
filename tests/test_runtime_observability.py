@@ -2,6 +2,7 @@ import os
 import tempfile
 import time
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from backend.bot_manager import BotManager
 from backend.utils.config_watcher import ConfigReloadWatcher
@@ -129,3 +130,115 @@ def test_bot_manager_export_metrics_includes_core_values(monkeypatch):
     assert "wechat_bot_today_replies 3" in metrics
     assert 'wechat_bot_config_reload_mode{mode="watchdog"} 1' in metrics
     assert 'wechat_bot_health_check{component="wechat",status="degraded"} 1' in metrics
+
+
+def test_bot_manager_status_log_message_is_human_readable():
+    manager = BotManager.get_instance()
+    message = manager._build_status_log_message({
+        "running": True,
+        "is_paused": False,
+        "uptime": "00:03:21",
+        "transport_status": "connected",
+        "runtime_preset": "DeepSeek-R1",
+        "health_checks": {
+            "ai": {"status": "healthy", "message": "Last AI call succeeded"},
+            "wechat": {"status": "healthy", "message": "Verified active WeChat connection"},
+        },
+        "startup": {"active": False},
+        "diagnostics": None,
+    })
+
+    assert "机器人运行中" in message
+    assert "已运行 00:03:21" in message
+    assert "微信已连接" in message
+    assert "AI可用：DeepSeek-R1" in message
+
+
+def test_bot_manager_status_log_message_surfaces_warnings():
+    manager = BotManager.get_instance()
+    message = manager._build_status_log_message({
+        "running": True,
+        "is_paused": False,
+        "transport_status": "disconnected",
+        "transport_warning": "注入失败，请重新连接微信",
+        "health_checks": {
+            "ai": {"status": "warning", "message": "模型返回空内容，已回退"},
+            "wechat": {"status": "error", "message": "WeChat disconnected"},
+        },
+        "startup": {"active": False},
+        "diagnostics": {
+            "level": "error",
+            "title": "微信连接已断开",
+            "detail": "当前未检测到有效的微信连接。",
+        },
+    })
+
+    assert "微信异常：注入失败，请重新连接微信" in message
+    assert "AI状态：模型返回空内容，已回退" in message
+    assert "诊断：微信连接已断开" in message
+
+
+def test_bot_manager_log_status_change_skips_duplicate_snapshot():
+    manager = BotManager.get_instance()
+    original_snapshot = manager._last_status_log_snapshot
+    try:
+        manager._last_status_log_snapshot = None
+        status = {
+            "running": True,
+            "is_paused": False,
+            "uptime": "00:00:10",
+            "transport_status": "connected",
+            "runtime_preset": "Qwen3",
+            "health_checks": {
+                "ai": {"status": "healthy", "message": "ok"},
+                "wechat": {"status": "healthy", "message": "ok"},
+                "database": {"status": "healthy", "message": "ok"},
+            },
+            "startup": {"active": False},
+            "diagnostics": None,
+        }
+
+        with patch("backend.bot_manager.logger.info") as mock_info:
+            manager._log_status_change(status)
+            manager._log_status_change(status)
+
+        mock_info.assert_called_once()
+    finally:
+        manager._last_status_log_snapshot = original_snapshot
+
+
+def test_bot_manager_get_status_includes_growth_runtime_fields():
+    manager = BotManager.get_instance()
+    original_bot = manager.bot
+    original_running = manager.is_running
+    original_status_cache = manager._status_cache
+    original_status_cache_time = manager._status_cache_time
+    try:
+        manager.is_running = True
+        manager._status_cache = None
+        manager._status_cache_time = 0.0
+        manager.bot = SimpleNamespace(
+            get_export_rag_status=lambda: {"enabled": True},
+            get_agent_status=lambda: {
+                "engine": "langgraph",
+                "growth_mode": "background_only",
+                "growth_tasks_pending": 2,
+                "last_growth_error": "emotion step boom",
+                "ai_health": {"status": "healthy", "detail": "ok"},
+            },
+            get_transport_status=lambda: {"transport_status": "connected", "transport_warning": ""},
+            get_runtime_status=lambda: {"pending_tasks": 1, "merge_pending_chats": 0, "merge_pending_messages": 0},
+        )
+
+        status = manager.get_status()
+
+        assert status["growth_mode"] == "background_only"
+        assert status["growth_tasks_pending"] == 2
+        assert status["last_growth_error"] == "emotion step boom"
+        assert status["config_snapshot"]["version"] >= 1
+        assert status["config_snapshot"]["valid"] is True
+    finally:
+        manager.bot = original_bot
+        manager.is_running = original_running
+        manager._status_cache = original_status_cache
+        manager._status_cache_time = original_status_cache_time

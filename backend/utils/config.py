@@ -175,6 +175,14 @@ def resolve_system_prompt(
     if chat_name in overrides:
         base_prompt = overrides[chat_name]
 
+    contact_prompt = ""
+    if isinstance(user_profile, dict):
+        contact_prompt = str(user_profile.get("contact_prompt") or "").strip()
+    elif user_profile is not None:
+        contact_prompt = str(getattr(user_profile, "contact_prompt", "") or "").strip()
+    if contact_prompt:
+        base_prompt = contact_prompt
+
     # 2. 规范化
     system_prompt = normalize_system_prompt(base_prompt)
 
@@ -206,6 +214,9 @@ def resolve_system_prompt(
                 profile_map = dict(getattr(profile, "__dict__", {}) or {})
             except Exception:
                 profile_map = {}
+        profile_summary = str(profile_map.get("profile_summary") or "").strip()
+        if profile_summary:
+            return profile_summary
         profile_map.pop("raw_item", None)
         profile_text = "\n".join(
             f"- {k}: {v}" for k, v in profile_map.items() if k and v not in (None, "")

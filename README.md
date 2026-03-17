@@ -38,12 +38,14 @@
 ## Features
 
 - `Multi-provider`: 支持 OpenAI、DeepSeek、Qwen、Doubao、Ollama、OpenRouter、Groq 等 OpenAI-compatible 接口。
-- `LangGraph Runtime`: 用 LangChain/LangGraph 编排上下文加载、RAG、情绪分析、提示词构建、流式回复和后台事实提取。
+- `LangGraph Runtime`: 用 LangChain/LangGraph 编排对话快路径；同步链只保留短期上下文和轻量画像注入，RAG、情绪、事实等高级能力统一后移到后台成长流水线。
 - `Memory`: SQLite 持久化短期记忆、用户画像、上下文事实和情绪历史。
+- `Contact Prompt Growth`: 每个联系人都可逐步沉淀一份专属 Prompt，支持后台生成、导出聊天增强和 UI 直接编辑。
 - `RAG`: 支持运行期对话向量记忆、导出聊天记录风格召回，以及可选本地 `Cross-Encoder` 精排；未配置本地模型或缺依赖时自动回退轻量重排。
-- `Transport Abstraction`: 传输层统一抽象为 `BaseTransport`，默认走 `hook_wcferry`，为后续兼容实现预留扩展点。
+- `Transport Abstraction`: 传输层统一抽象为 `BaseTransport`，默认走 `hook_wcferry`，并保证“接收消息 → 发送消息 → 完成落盘”的主闭环可独立演进。
+- `Provider Compatibility`: 后端统一标准化请求字段、响应正文、工具调用、错误结构与落盘元数据，避免为单一提供方写定向分支。
 - `Desktop + Web`: Electron 桌面客户端与 Quart Web API 并存。
-- `Observability`: `/api/status` 提供启动进度、诊断、健康检查和系统指标，`/api/metrics` 提供 Prometheus 风格导出。
+- `Observability`: `/api/status` 提供启动进度、诊断、健康检查、系统指标以及成长链状态，`/api/metrics` 提供 Prometheus 风格导出。
 - `Hot Reload`: 配置热重载优先使用 `watchdog` 事件监听，缺失依赖时自动回退轮询，并带防抖。
 - `Config Snapshot`: 后端已引入中心化配置快照服务，`/api/config/audit` 可返回当前生效配置、已知未消费字段和配置变更影响摘要。
 
@@ -73,7 +75,7 @@ flowchart TD
 
 - 完整链路说明见 [系统链路说明](docs/SYSTEM_CHAINS.md)
 - `backend/bot.py`: 机器人生命周期、消息入口和发送出口。
-- `backend/core/agent_runtime.py`: LangChain/LangGraph 主运行时、RAG 召回与精排。
+- `backend/core/agent_runtime.py`: LangChain/LangGraph 主运行时、对话快路径与后台成长任务。
 - `backend/core/memory.py`: SQLite 记忆层。
 - `backend/core/vector_memory.py`: Chroma 向量层。
 - `backend/transports/`: 传输层抽象与具体后端。
@@ -130,6 +132,7 @@ npm run dev
 完整配置流程见 [详细使用手册](docs/USER_GUIDE.md#3-首次配置)。
 
 - 设置卡片标题旁会显示配置生效方式；“微信连接与传输”卡片保存后会自动重连传输层，其它卡片会标注为“保存后立即生效”或“仅机器人运行时即时生效”。
+- 设置页支持“保存本模块”，便于只提交当前卡片的配置修改；消息页“消息详情”支持直接查看和编辑联系人画像摘要与专属 Prompt，日志页默认启用自动换行并按结构化阶段摘要展示重点事件。
 
 ## Run Modes
 
@@ -163,13 +166,13 @@ python run.py web
 
 - `api`: 模型、Base URL、API Key、预设、超时、重试、embedding 模型。
 - `bot`: 回复策略、轮询、记忆、RAG、群聊规则、情绪识别、传输后端、配置热重载。
-- `agent`: LangChain / LangGraph 运行时、检索参数、精排策略、流式回复与 LangSmith 配置。
+- `agent`: LangChain / LangGraph 运行时、检索参数、精排策略与 LangSmith 配置。
 - `logging`: 日志级别、文件、轮转和内容开关。
 
 配置运行机制：
 
 - 运行期优先读取后端内存中的配置快照，而不是让各模块零散读取多个来源。
-- GUI 保存配置后，`/api/config` 会返回 `changed_paths` 和 `reload_plan`，用于说明哪些字段变了、预计如何生效。
+- GUI 保存配置后，`/api/config` 会返回 `changed_paths` 和 `reload_plan`，用于说明哪些字段变了、预计如何生效；同时会把非敏感字段同步回写到 `backend/config.py`，并将真实 API Key 写入 `data/api_keys.py`。
 - 可通过 `/api/config/audit` 查看当前生效配置中的已知未消费字段、未知 override 字段和生效策略摘要。
 
 当前与本轮功能直接相关的关键配置：
@@ -178,6 +181,9 @@ python run.py web
 "bot": {
     "config_reload_mode": "auto",          # auto / polling / watchdog
     "config_reload_debounce_ms": 500,
+    "allow_filehelper_self_message": True, # 允许文件传输助手中的自发消息参与回复
+    "reply_deadline_sec": 2.0,             # 回复 deadline，优先争取 2 秒内给出真实回复
+                                          # 设为 0 可关闭该 deadline，主链路将等待到 provider 自己的超时/重试结束
 }
 
 "agent": {

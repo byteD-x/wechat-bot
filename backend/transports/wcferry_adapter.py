@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import shutil
+import socket
 import subprocess
 import threading
 import time
@@ -31,6 +32,11 @@ _WCFERRY_MSG_DIAL_TIMEOUT_SEC = 12.0
 _WCFERRY_MSG_DIAL_RETRY_INTERVAL_SEC = 0.6
 _WCFERRY_ENABLE_RECV_TIMEOUT_SEC = 18.0
 _WCFERRY_ENABLE_RECV_RETRY_INTERVAL_SEC = 1.0
+_WCFERRY_DEFAULT_HOST = "127.0.0.1"
+_WCFERRY_DEFAULT_PORT = 10086
+_SPECIAL_CONTACT_DISPLAY_NAMES = {
+    "filehelper": "文件传输助手",
+}
 
 
 class TransportUnavailableError(RuntimeError):
@@ -124,6 +130,104 @@ def _best_effort_wcf_call(label: str, func, timeout_sec: float = 2.0) -> bool:
         logger.debug("wcferry cleanup step failed: %s | %s", label, outcome["error"])
         return False
     return True
+
+
+def _is_tcp_port_open(host: str, port: int, timeout_sec: float = 0.25) -> bool:
+    try:
+        with socket.create_connection(
+            (str(host or _WCFERRY_DEFAULT_HOST), int(port)),
+            timeout=max(float(timeout_sec or 0.0), 0.05),
+        ):
+            return True
+    except OSError:
+        return False
+
+
+def _get_wcf_sdk_path() -> Optional[Path]:
+    try:
+        import wcferry
+    except ImportError:
+        return None
+
+    package_root = Path(getattr(wcferry, "__file__", "")).resolve().parent
+    sdk_path = package_root / "sdk.dll"
+    return sdk_path if sdk_path.exists() else None
+
+
+def _destroy_stale_local_wcf_session() -> bool:
+    sdk_path = _get_wcf_sdk_path()
+    if sdk_path is None:
+        return False
+
+    try:
+        import ctypes  # type: ignore
+
+        sdk = ctypes.cdll.LoadLibrary(str(sdk_path))
+        sdk.WxDestroySDK()
+        try:
+            ctypes.windll.kernel32.FreeLibrary.argtypes = [ctypes.wintypes.HMODULE]
+            ctypes.windll.kernel32.FreeLibrary(sdk._handle)
+        except Exception:
+            pass
+        return True
+    except Exception as exc:
+        logger.debug("best-effort stale wcferry cleanup failed: %s", exc)
+        return False
+
+
+def _cleanup_stale_wcferry_ports(
+    host: str = _WCFERRY_DEFAULT_HOST,
+    base_port: int = _WCFERRY_DEFAULT_PORT,
+    wait_timeout_sec: float = 3.0,
+) -> bool:
+    ports = (int(base_port), int(base_port) + 1)
+    if not any(_is_tcp_port_open(host, port) for port in ports):
+        return False
+
+    logger.warning(
+        "Detected stale local wcferry listeners on %s; destroying previous SDK session before reinjection",
+        ",".join(str(port) for port in ports),
+    )
+    _destroy_stale_local_wcf_session()
+
+    deadline = time.time() + max(float(wait_timeout_sec or 0.0), 0.2)
+    while time.time() < deadline:
+        if not any(_is_tcp_port_open(host, port) for port in ports):
+            return True
+        time.sleep(0.2)
+
+    return not any(_is_tcp_port_open(host, port) for port in ports)
+
+
+def _count_running_wechat_processes() -> int:
+    raw = _powershell(
+        "((Get-Process WeChat,Weixin -ErrorAction SilentlyContinue) | Measure-Object).Count"
+    )
+    try:
+        return int(str(raw or "0").strip())
+    except (TypeError, ValueError):
+        return 0
+
+
+def _build_local_wcferry_recovery_hint() -> str:
+    details: List[str] = []
+    ports = (_WCFERRY_DEFAULT_PORT, _WCFERRY_DEFAULT_PORT + 1)
+    if any(_is_tcp_port_open(_WCFERRY_DEFAULT_HOST, port) for port in ports):
+        details.append(
+            f"本机 {_WCFERRY_DEFAULT_HOST}:{ports[0]}/{ports[1]} 仍有旧的 wcferry 监听"
+        )
+
+    process_count = _count_running_wechat_processes()
+    if process_count > 1:
+        details.append(f"检测到 {process_count} 个 WeChat.exe 进程")
+
+    if not details:
+        return ""
+
+    return (
+        "；".join(details)
+        + "。请先完全退出所有微信进程，再重新打开并登录 1 个微信后重试。"
+    )
 
 
 def detect_wechat_path() -> str:
@@ -288,6 +392,7 @@ class WcferryWeChatClient(BaseTransport):
     def __init__(self, bot_cfg: Dict[str, Any], ai_client: Optional[Any] = None) -> None:
         self.bot_cfg = dict(bot_cfg or {})
         self.ai_client = ai_client
+        self._uses_local_wcf_sdk = False
         self.configured_required_version = str(
             self.bot_cfg.get("required_wechat_version") or ""
         ).strip()
@@ -319,13 +424,20 @@ class WcferryWeChatClient(BaseTransport):
                 )
             ensure_runtime_directories()
             with chdir_temporarily(WCFERRY_DIR):
+                _cleanup_stale_wcferry_ports()
                 # Use non-blocking mode and handle login wait ourselves so backend startup
                 # won't hang indefinitely if WeChat isn't ready yet.
                 with _prevent_os_exit():
                     self._wcf = Wcf(debug=False, block=False)
+                    self._uses_local_wcf_sdk = True
             relocate_known_root_artifacts()
         except Exception as exc:
-            raise TransportUnavailableError(str(exc)) from exc
+            message = str(exc)
+            if "os._exit(-1)" in message or "注入失败" in message or "load_ctx" in message:
+                hint = _build_local_wcferry_recovery_hint()
+                if hint:
+                    message = f"{message}；{hint}"
+            raise TransportUnavailableError(message) from exc
 
         try:
             if not self._wait_for_login(timeout_sec=18.0):
@@ -353,6 +465,8 @@ class WcferryWeChatClient(BaseTransport):
                 pass
             _best_effort_wcf_call("disable_recv_msg", getattr(self._wcf, "disable_recv_msg", None))
             _best_effort_wcf_call("cleanup", getattr(self._wcf, "cleanup", None))
+            if self._uses_local_wcf_sdk:
+                _destroy_stale_local_wcf_session()
             relocate_known_root_artifacts()
             raise
 
@@ -520,6 +634,8 @@ class WcferryWeChatClient(BaseTransport):
             pass
         _best_effort_wcf_call("disable_recv_msg", getattr(self._wcf, "disable_recv_msg", None))
         _best_effort_wcf_call("cleanup", getattr(self._wcf, "cleanup", None))
+        if self._uses_local_wcf_sdk:
+            _destroy_stale_local_wcf_session()
         relocate_known_root_artifacts()
 
     def get_transport_status(self) -> Dict[str, Any]:
@@ -535,6 +651,9 @@ class WcferryWeChatClient(BaseTransport):
         }
 
     def _resolve_name(self, wxid: str) -> str:
+        special_name = _SPECIAL_CONTACT_DISPLAY_NAMES.get(str(wxid or "").strip().lower())
+        if special_name:
+            return special_name
         contact = self._by_wxid.get(wxid) or {}
         return (
             str(contact.get("remark") or "").strip()
@@ -547,12 +666,15 @@ class WcferryWeChatClient(BaseTransport):
         target = str(receiver or "").strip()
         if not target:
             raise ValueError("missing target")
+        lowered = target.lower()
+        for wxid, display_name in _SPECIAL_CONTACT_DISPLAY_NAMES.items():
+            if lowered in {wxid, str(display_name).strip().lower()}:
+                return wxid
         if target in self._by_wxid:
             return target
 
         # 允许直接传入 wxid / chatroom id（即使未出现在联系人列表中也尝试发送）。
         # 这能提高 hook_wcferry 在“群名未收录/联系人缓存未刷新”场景下的可用性。
-        lowered = target.lower()
         if lowered == "filehelper" or lowered.startswith("wxid_") or lowered.startswith("gh_") or lowered.endswith("@chatroom"):
             return target
 

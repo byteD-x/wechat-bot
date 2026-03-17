@@ -570,6 +570,21 @@ function setupIPC() {
 
     ipcMain.handle('open-wechat', async () => {
         try {
+            const isWechatRunning = () => new Promise((resolve) => {
+                exec('tasklist /FI "IMAGENAME eq WeChat.exe" /FO CSV /NH', { windowsHide: true }, (err, stdout) => {
+                    if (err) return resolve(false);
+                    const rows = String(stdout || '')
+                        .split(/\r?\n/)
+                        .map(item => item.trim())
+                        .filter(Boolean);
+                    resolve(rows.some(row => !row.startsWith('INFO:')));
+                });
+            });
+
+            if (await isWechatRunning()) {
+                console.log('[OpenWeChat] WeChat already running, skip duplicate launch');
+                return { success: true, message: 'WeChat is already running' };
+            }
             // 尝试从注册表获取安装路径
             const getInstallPath = () => new Promise((resolve) => {
                 exec('reg query "HKEY_CURRENT_USER\\Software\\Tencent\\WeChat" /v InstallPath', (err, stdout) => {

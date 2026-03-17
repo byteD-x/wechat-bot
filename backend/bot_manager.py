@@ -111,6 +111,7 @@ class BotManager:
             active=False,
         )
         self._last_issue: Optional[Dict[str, Any]] = None
+        self._last_status_log_snapshot: Optional[Dict[str, Any]] = None
         self._cpu_sample: Dict[str, float] = {
             "cpu_time": time.process_time(),
             "wall_time": time.perf_counter(),
@@ -477,6 +478,23 @@ class BotManager:
             "engine": "langgraph",
             "startup": dict(self._startup_state),
         }
+        try:
+            snapshot = self.config_service.get_snapshot(config_path=self.config_path)
+            loaded_at = getattr(snapshot, "loaded_at", None)
+            if hasattr(loaded_at, "isoformat"):
+                loaded_at_value = loaded_at.isoformat()
+            elif loaded_at:
+                loaded_at_value = float(loaded_at)
+            else:
+                loaded_at_value = None
+            status["config_snapshot"] = {
+                "version": int(getattr(snapshot, "version", 0) or 0),
+                "loaded_at": loaded_at_value,
+                "source": str(getattr(snapshot, "source", "") or ""),
+                "valid": bool(getattr(snapshot, "valid", True)),
+            }
+        except Exception:
+            status["config_snapshot"] = None
         if self.bot and hasattr(self.bot, "get_export_rag_status"):
             try:
                 status["export_rag"] = self.bot.get_export_rag_status()
@@ -547,7 +565,116 @@ class BotManager:
         await self.notify_status_change()
 
     async def notify_status_change(self) -> None:
-        await self.broadcast_event("status_change", self.get_status())
+        status = self.get_status()
+        self._log_status_change(status)
+        await self.broadcast_event("status_change", status)
+
+    def _log_status_change(self, status: Dict[str, Any]) -> None:
+        snapshot = self._build_status_log_snapshot(status)
+        if snapshot == self._last_status_log_snapshot:
+            return
+
+        self._last_status_log_snapshot = snapshot
+        summary = self._build_status_log_message(status)
+        level = self._get_status_log_level(status)
+        if level == "warning":
+            logger.warning("状态更新: %s", summary)
+        else:
+            logger.info("状态更新: %s", summary)
+
+    def _build_status_log_snapshot(self, status: Dict[str, Any]) -> Dict[str, Any]:
+        startup = status.get("startup") or {}
+        health_checks = status.get("health_checks") or {}
+        ai = health_checks.get("ai") or {}
+        wechat = health_checks.get("wechat") or {}
+        diagnostics = status.get("diagnostics") or {}
+        return {
+            "running": bool(status.get("running")),
+            "is_paused": bool(status.get("is_paused")),
+            "startup_active": bool(startup.get("active")),
+            "startup_stage": str(startup.get("stage") or ""),
+            "startup_message": str(startup.get("message") or ""),
+            "startup_progress": int(startup.get("progress", 0) or 0),
+            "transport_status": str(status.get("transport_status") or ""),
+            "transport_warning": str(status.get("transport_warning") or ""),
+            "ai_status": str(ai.get("status") or ""),
+            "ai_message": str(ai.get("message") or ""),
+            "wechat_status": str(wechat.get("status") or ""),
+            "wechat_message": str(wechat.get("message") or ""),
+            "runtime_preset": str(status.get("runtime_preset") or ""),
+            "model": str(status.get("model") or ""),
+            "diagnostic_level": str(diagnostics.get("level") or ""),
+            "diagnostic_title": str(diagnostics.get("title") or ""),
+            "diagnostic_detail": str(diagnostics.get("detail") or ""),
+        }
+
+    def _build_status_log_message(self, status: Dict[str, Any]) -> str:
+        startup = status.get("startup") or {}
+        health_checks = status.get("health_checks") or {}
+        ai = health_checks.get("ai") or {}
+        wechat = health_checks.get("wechat") or {}
+        diagnostics = status.get("diagnostics") or {}
+
+        parts = []
+        if bool(startup.get("active")):
+            progress = int(startup.get("progress", 0) or 0)
+            message = str(startup.get("message") or "").strip() or "正在启动"
+            parts.append(f"启动中 {progress}%")
+            parts.append(message)
+        else:
+            if not bool(status.get("running")):
+                parts.append("机器人未运行")
+            elif bool(status.get("is_paused")):
+                parts.append("机器人已暂停")
+            else:
+                parts.append("机器人运行中")
+            uptime = str(status.get("uptime") or "").strip()
+            if uptime and uptime != "--":
+                parts.append(f"已运行 {uptime}")
+
+        wechat_status = str(status.get("transport_status") or wechat.get("status") or "").strip().lower()
+        wechat_message = str(status.get("transport_warning") or wechat.get("message") or "").strip()
+        if wechat_status == "connected":
+            parts.append("微信已连接")
+        elif wechat_status in {"connecting", "warning", "degraded"}:
+            parts.append("微信连接中" if not wechat_message else f"微信提示：{wechat_message}")
+        elif wechat_status in {"disconnected", "error", "offline"}:
+            parts.append("微信未连接" if not wechat_message else f"微信异常：{wechat_message}")
+
+        runtime_label = str(status.get("runtime_preset") or status.get("model") or "").strip()
+        ai_status = str(ai.get("status") or "").strip().lower()
+        ai_message = str(ai.get("message") or "").strip()
+        if ai_status == "healthy":
+            parts.append(f"AI可用：{runtime_label}" if runtime_label else "AI可用")
+        elif ai_status:
+            detail = ai_message or runtime_label or "请检查 AI 连接"
+            parts.append(f"AI状态：{detail}")
+
+        diagnostic_title = str(diagnostics.get("title") or "").strip()
+        diagnostic_detail = str(diagnostics.get("detail") or "").strip()
+        if diagnostic_title:
+            parts.append(f"诊断：{diagnostic_title}")
+            if diagnostic_detail:
+                compact = " ".join(diagnostic_detail.split())
+                if len(compact) > 80:
+                    compact = f"{compact[:80]}..."
+                parts.append(compact)
+
+        return " | ".join(part for part in parts if part)
+
+    @staticmethod
+    def _get_status_log_level(status: Dict[str, Any]) -> str:
+        diagnostics = status.get("diagnostics") or {}
+        if str(diagnostics.get("level") or "").strip().lower() in {"warning", "error"}:
+            return "warning"
+
+        health_checks = status.get("health_checks") or {}
+        for component in ("wechat", "ai", "database"):
+            item = health_checks.get(component) or {}
+            normalized = str(item.get("status") or "").strip().lower()
+            if normalized in {"warning", "degraded", "error", "failed", "offline"}:
+                return "warning"
+        return "info"
 
     async def update_startup_state(
         self,

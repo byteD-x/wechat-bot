@@ -542,47 +542,13 @@
                                 <input type="text" id="setting-reply-suffix" placeholder="（AI回复）">
                             </div>
                             <div class="form-group">
-                                <label class="form-checkbox" style="display: flex; align-items: center; gap: 12px; cursor: pointer;">
-                                    <input type="checkbox" id="setting-stream-reply">
-                                    <span class="form-checkbox-label">启用流式回复</span>
-                                </label>
+                                <label class="form-label">回复完成时限（秒）</label>
+                                <input type="number" id="setting-reply-deadline-sec" min="0.1" step="0.1">
                             </div>
                             <div class="form-group">
                                 <label class="form-checkbox" style="display: flex; align-items: center; gap: 12px; cursor: pointer;">
                                     <input type="checkbox" id="setting-group-at-only">
                                     <span class="form-checkbox-label">群聊仅@时回复</span>
-                                </label>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="settings-card">
-                        <h2 class="settings-card-title">引用设置</h2>
-                        <div class="settings-grid">
-                            <div class="form-group">
-                                <label class="form-label">引用方式</label>
-                                <select class="form-input" id="setting-reply-quote-mode">
-                                    <option value="wechat">微信原生引用</option>
-                                    <option value="text">文本引用</option>
-                                    <option value="none">不引用</option>
-                                </select>
-                            </div>
-                            <div class="form-group">
-                                <label class="form-label">引用模板</label>
-                                <input type="text" id="setting-reply-quote-template" placeholder="引用：{content}">
-                            </div>
-                            <div class="form-group">
-                                <label class="form-label">引用最大长度</label>
-                                <input type="number" id="setting-reply-quote-max-chars" min="0" step="1">
-                            </div>
-                            <div class="form-group">
-                                <label class="form-label">原生引用超时（秒）</label>
-                                <input type="number" id="setting-reply-quote-timeout" min="0" step="0.1">
-                            </div>
-                            <div class="form-group">
-                                <label class="form-checkbox" style="display: flex; align-items: center; gap: 12px; cursor: pointer;">
-                                    <input type="checkbox" id="setting-reply-quote-fallback">
-                                    <span class="form-checkbox-label">原生引用失败时降级文本引用</span>
                                 </label>
                             </div>
                         </div>
@@ -798,20 +764,6 @@
                     </div>
 
                     <div class="settings-card">
-                        <h2 class="settings-card-title">流式回复</h2>
-                        <div class="settings-grid">
-                            <div class="form-group">
-                                <label class="form-label">缓冲阈值（字符）</label>
-                                <input type="number" id="setting-stream-buffer-chars" min="0" step="1">
-                            </div>
-                            <div class="form-group">
-                                <label class="form-label">单段最大长度（字符）</label>
-                                <input type="number" id="setting-stream-chunk-max-chars" min="0" step="1">
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="settings-card">
                         <h2 class="settings-card-title">微信连接与传输</h2>
                         <div class="settings-grid">
                             <div class="form-group">
@@ -920,6 +872,13 @@
                                 </label>
                             </div>
                             <div class="form-group full-width">
+                                <label class="form-checkbox" style="display: flex; align-items: center; gap: 12px; cursor: pointer;">
+                                    <input type="checkbox" id="setting-allow-filehelper-self-message">
+                                    <span class="form-checkbox-label">允许文件传输助手中的自发消息参与回复</span>
+                                </label>
+                                <span class="form-hint">关闭后，文件传输助手里自己发出的消息也会被当作自发消息直接忽略。</span>
+                            </div>
+                            <div class="form-group full-width">
                                 <label class="form-label">忽略会话名（每行一个）</label>
                                 <textarea id="setting-ignore-names" rows="3"></textarea>
                             </div>
@@ -942,6 +901,10 @@
                             <div class="form-group">
                                 <label class="form-label">画像更新频率（每 N 条）</label>
                                 <input type="number" id="setting-profile-update-frequency" min="0" step="1">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">联系人 Prompt 更新频率（每 N 条）</label>
+                                <input type="number" id="setting-contact-prompt-update-frequency" min="0" step="1">
                             </div>
                             <div class="form-group">
                                 <label class="form-checkbox" style="display: flex; align-items: center; gap: 12px; cursor: pointer;">
@@ -1112,12 +1075,6 @@
                                 </label>
                             </div>
                             <div class="form-group">
-                                <label class="form-checkbox" style="display: flex; align-items: center; gap: 12px; cursor: pointer;">
-                                    <input type="checkbox" id="setting-agent-streaming-enabled">
-                                    <span class="form-checkbox-label">启用 LangChain 流式输出</span>
-                                </label>
-                            </div>
-                            <div class="form-group">
                                 <label class="form-label">图模式</label>
                                 <input type="text" id="setting-agent-graph-mode" placeholder="state_graph">
                             </div>
@@ -1254,6 +1211,10 @@
                     </div>
                 </div>
 
+                <button class="btn btn-primary btn-sm settings-scroll-top" id="btn-settings-scroll-top" type="button">
+                    回到顶部
+                </button>
+
                 <!-- 预设编辑模态框 -->
                 <div class="modal-overlay" id="preset-modal">
                     <div class="modal">
@@ -1355,7 +1316,7 @@
                             <span class="form-checkbox-label">自动刷新</span>
                         </label>
                         <label class="form-checkbox">
-                            <input type="checkbox" id="setting-wrap">
+                            <input type="checkbox" id="setting-wrap" checked>
                             <span class="form-checkbox-label">自动换行</span>
                         </label>
                         <button class="btn btn-secondary btn-sm" id="btn-clear-logs">

@@ -109,6 +109,11 @@ npm run dev
 4. 点击测试连接
 5. 保存配置
 
+补充说明：
+
+- 设置卡片右上角支持“保存本模块”，适合只修改单个主题后立即验证。
+- “微信连接与传输”卡片保存后会自动重连传输层；其它卡片会在界面上标出是立即生效还是仅运行中即时生效。
+
 ### 3.3 配置文件优先级
 
 运行时主要读取以下配置来源：
@@ -121,7 +126,7 @@ npm run dev
 当前实现说明：
 
 - 后端会把这些来源合并为一份“生效配置快照”后，再提供给 API 与运行中的 Bot 读取。
-- GUI 保存配置时，`/api/config` 响应会附带 `changed_paths` 与 `reload_plan`，用于说明哪些字段发生变化、预计如何生效。
+- GUI 保存配置时，`/api/config` 响应会附带 `changed_paths` 与 `reload_plan`，用于说明哪些字段发生变化、预计如何生效；同时会把非敏感字段同步回写到 `backend/config.py`，并把真实 API Key 写入 `data/api_keys.py`。
 - 可通过 `/api/config/audit` 检查当前生效配置中的已知未消费字段，以及 override 文件中是否存在未知字段。
 
 建议：
@@ -227,6 +232,7 @@ Invoke-RestMethod -Headers @{ "X-Api-Token" = "your_token" } http://127.0.0.1:50
 
 - 微信是否仍是 `3.9.12.51`
 - 当前会话是否被白名单或过滤规则限制
+- 如果使用“文件传输助手”做自测，确认“允许文件传输助手中的自发消息参与回复”已开启
 - API Key 是否有效
 - 激活预设是否可连通
 - 传输后端是否已连接
@@ -240,7 +246,6 @@ Invoke-RestMethod -Headers @{ "X-Api-Token" = "your_token" } http://127.0.0.1:50
 ```python
 "agent": {
     "enabled": True,
-    "streaming_enabled": True,
     "graph_mode": "state_graph",
     "retriever_top_k": 3,
     "retriever_score_threshold": 1.0,
@@ -258,7 +263,14 @@ Invoke-RestMethod -Headers @{ "X-Api-Token" = "your_token" } http://127.0.0.1:50
 建议：
 
 - 初次使用保持默认。
-- 性能调优时优先调整 `retriever_top_k`、阈值、精排模式和缓存 TTL。
+- 主链路默认直接等待真实模型回复返回；只有将 `bot.reply_deadline_sec` 设为大于 `0` 的值时，才会启用这层预算化同步回复。
+- 将 `bot.reply_deadline_sec` 设为 `0` 可关闭这层回复 deadline；关闭后主链路会直接等待真实模型返回，直到当前 provider 自己的 `timeout_sec` / `max_retries` 结束。
+- 对 `Qwen` 这类远程推理模型，运行时会对过低的 `timeout_sec` 自动应用安全下限；当前默认最小值为 `15s`，避免“探测可用但正式对话总超时”。
+- 当前默认模式为“对话快路径 + 后台成长增强”：同步对话只读取短期上下文和轻量画像摘要，RAG、情绪分析、事实提取、向量写回与导出语料同步都在回复后后台执行。
+- 系统会为活跃联系人后台生成并渐进更新一份“联系人专属 Prompt”；没有导出聊天记录时也会基于近期对话成长，有导出聊天记录时则会额外吸收历史风格特征。
+- 设置页可单独配置“联系人 Prompt 更新频率（每 N 条）”；它独立于“画像更新频率”，用于控制联系人专属 Prompt 的自动增量更新节奏。
+- 性能调优时优先调整 `retriever_top_k`、阈值、精排模式和缓存 TTL；这些参数现在主要影响后台增强链而不是首条回复。
+- 若日志中出现 `compat_fallback=openai_chat_completions`，表示底层 provider 实际返回了结果，但 LangChain 兼容层给出了异常空内容；系统已自动回退到原生 OpenAI-compatible `/chat/completions` 结果。
 - 开启 LangSmith 前先确认你接受外部 tracing。
 
 ### 7.2 运行期向量记忆
@@ -271,8 +283,8 @@ Invoke-RestMethod -Headers @{ "X-Api-Token" = "your_token" } http://127.0.0.1:50
 
 作用：
 
-- 对当前聊天中的历史消息做向量召回
-- 适合补充近期语义上下文
+- 将当前聊天沉淀为向量记忆，供后续成长能力持续积累
+- 默认不再参与本轮同步回复上下文拼装
 
 ### 7.3 运行期精排与本地 Cross-Encoder
 
@@ -313,6 +325,7 @@ Invoke-RestMethod -Headers @{ "X-Api-Token" = "your_token" } http://127.0.0.1:50
 
 - 从导出的真实聊天中召回你过去的表达风格
 - 更偏“风格模仿”，不是事实数据库
+- 默认作为后台成长能力运行，不阻塞当前对话回复
 
 使用方式：
 
@@ -346,7 +359,7 @@ python -m tools.prompt_gen.generator
 
 负责机器人行为：
 
-- 回复格式与引用
+- 回复格式
 - 轮询与并发
 - 记忆与上下文
 - 群聊规则
@@ -374,7 +387,6 @@ python -m tools.prompt_gen.generator
 负责 LangChain/LangGraph 运行时：
 
 - 主链路开关
-- 流式输出
 - Retriever 参数
 - RAG 精排模式
 - Embedding 缓存
@@ -402,6 +414,8 @@ python -m tools.prompt_gen.generator
 
 - `/api/status`: 结构化运行状态
 - `/api/metrics`: Prometheus 风格指标
+- `/api/contact_profile`: 返回当前联系人的画像摘要、专属 Prompt 和成长元数据
+- `/api/contact_prompt`: 保存人工编辑后的联系人专属 Prompt
 
 `/api/status` 重点字段：
 
@@ -410,6 +424,12 @@ python -m tools.prompt_gen.generator
 - `health_checks`
 - `system_metrics`
 - `config_reload`
+- `growth_mode`
+- `growth_tasks_pending`
+- `last_growth_error`
+
+消息页里的“消息详情”面板现在会展示当前联系人的画像摘要和专属 Prompt，并允许直接编辑；人工编辑后的版本会继续作为后台渐进式更新的基础。
+设置页支持“保存本模块”；日志页默认启用自动换行，并会把成长任务、发送链和 API 请求整理成更容易扫描的摘要行。
 
 ### 8.6 运行时文件位置
 

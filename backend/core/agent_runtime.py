@@ -8,11 +8,20 @@ import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Dict, Iterable, List, Optional
+import httpx
 
 from ..schemas import EmotionResult
 from ..utils.common import as_float, as_int
 from ..utils.config import is_placeholder_key, resolve_system_prompt
 from ..utils.image_processing import process_image_for_api
+from ..utils.logging import build_stage_log_message
+from .provider_compat import (
+    build_openai_chat_payload,
+    extract_reasoning_text as compat_extract_reasoning_text,
+    extract_visible_text as compat_extract_visible_text,
+    normalize_chat_result,
+    normalize_provider_error,
+)
 from .emotion import (
     detect_emotion_keywords,
     get_emotion_analysis_prompt,
@@ -23,6 +32,8 @@ from .emotion import (
 )
 
 logger = logging.getLogger(__name__)
+_ALLOW_EMPTY_KEY_PLACEHOLDER = "wechat-chat-allow-empty-key"
+_QWEN_RUNTIME_MIN_TIMEOUT_SEC = 15.0
 
 
 @dataclass(slots=True)
@@ -42,36 +53,69 @@ class AgentPreparedRequest:
 
 
 def _extract_message_text(message: Any) -> str:
-    content = getattr(message, "content", message)
-    if isinstance(content, str):
-        return content.strip()
-    if isinstance(content, list):
+    return compat_extract_visible_text(message)
+
+
+def _extract_reasoning_fragments(value: Any, *, inside_reasoning: bool = False) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text and inside_reasoning else []
+    if isinstance(value, list):
         parts: List[str] = []
-        for item in content:
-            if isinstance(item, dict):
-                text = item.get("text")
+        for item in value:
+            parts.extend(_extract_reasoning_fragments(item, inside_reasoning=inside_reasoning))
+        return parts
+    if isinstance(value, dict):
+        parts: List[str] = []
+        block_type = str(value.get("type") or "").strip().lower()
+        if block_type == "summary_text":
+            text = str(value.get("text") or "").strip()
+            if text and inside_reasoning:
+                parts.append(text)
+            return parts
+        if block_type == "reasoning":
+            parts.extend(_extract_reasoning_fragments(value.get("reasoning"), inside_reasoning=True))
+            parts.extend(_extract_reasoning_fragments(value.get("summary"), inside_reasoning=True))
+            parts.extend(_extract_reasoning_fragments(value.get("content"), inside_reasoning=True))
+        else:
+            parts.extend(_extract_reasoning_fragments(value.get("reasoning_content"), inside_reasoning=True))
+            parts.extend(_extract_reasoning_fragments(value.get("reasoning"), inside_reasoning=True))
+            parts.extend(_extract_reasoning_fragments(value.get("summary"), inside_reasoning=True))
+            if inside_reasoning and block_type in {"text", "output_text", "input_text", ""}:
+                text = str(value.get("text") or "").strip()
                 if text:
-                    parts.append(str(text).strip())
-            elif item:
-                parts.append(str(item).strip())
-        return "\n".join(part for part in parts if part).strip()
-    return str(content or "").strip()
+                    parts.append(text)
+        content = value.get("content")
+        if isinstance(content, list):
+            parts.extend(_extract_reasoning_fragments(content, inside_reasoning=inside_reasoning))
+        deduped: List[str] = []
+        for item in parts:
+            if item and item not in deduped:
+                deduped.append(item)
+        return deduped
+    return []
 
 
 def _extract_reasoning_text(message: Any) -> str:
-    additional_kwargs = getattr(message, "additional_kwargs", None)
-    if isinstance(additional_kwargs, dict):
-        reasoning = additional_kwargs.get("reasoning_content") or additional_kwargs.get("reasoning")
-        if reasoning:
-            return str(reasoning).strip()
+    return compat_extract_reasoning_text(message)
 
-    if isinstance(message, dict):
-        reasoning = message.get("reasoning_content") or message.get("reasoning")
-        if reasoning:
-            return str(reasoning).strip()
 
-    reasoning = getattr(message, "reasoning_content", None) or getattr(message, "reasoning", None)
-    return str(reasoning or "").strip()
+def _detect_message_role(message: Any) -> str:
+    role = str(
+        getattr(message, "type", None)
+        or getattr(message, "role", None)
+        or getattr(message, "message_type", None)
+        or ""
+    ).strip().lower()
+    if role in {"human", "user"}:
+        return "user"
+    if role in {"ai", "assistant"}:
+        return "assistant"
+    if role in {"system"}:
+        return "system"
+    return "user"
 
 
 class AgentRuntime:
@@ -89,18 +133,33 @@ class AgentRuntime:
         self.base_url = str(settings.get("base_url") or "").strip().rstrip("/")
         self.api_key = str(settings.get("api_key") or "").strip()
         self.allow_empty_key = bool(settings.get("allow_empty_key", False))
-        self.runtime_api_key = self.api_key or ("ollama" if self.allow_empty_key else None)
+        self.runtime_api_key = self.api_key or (
+            _ALLOW_EMPTY_KEY_PLACEHOLDER if self.allow_empty_key else None
+        )
         self.model = str(settings.get("model") or "").strip()
         self.model_alias = str(settings.get("alias") or "").strip()
         self.provider_id = str(settings.get("provider_id") or "").strip().lower()
         embedding_model = str(settings.get("embedding_model") or "").strip()
         self.embedding_model = None if is_placeholder_key(embedding_model) else (embedding_model or None)
         self.timeout_sec = as_float(settings.get("timeout_sec", 10.0), 10.0, min_value=0.1)
+        self.effective_timeout_sec = self._resolve_effective_timeout_sec(self.timeout_sec)
         self.max_retries = as_int(settings.get("max_retries", 1), 1, min_value=0)
         self.temperature = settings.get("temperature")
         self.max_tokens = settings.get("max_tokens")
         self.max_completion_tokens = settings.get("max_completion_tokens")
         self.reasoning_effort = settings.get("reasoning_effort")
+        self.reply_deadline_sec = as_float(
+            self.bot_cfg.get("reply_deadline_sec", 0.0), 0.0, min_value=0.0
+        )
+        prepare_budget_basis_sec = self.reply_deadline_sec
+        self.prepare_soft_budget_sec = max(
+            0.15,
+            min(0.8, round(prepare_budget_basis_sec * 0.35, 4)),
+        )
+        self.prepare_optional_timeout_sec = max(
+            0.05,
+            min(0.25, round(self.prepare_soft_budget_sec * 0.5, 4)),
+        )
 
         self.graph_mode = str(self.agent_cfg.get("graph_mode") or "state_graph").strip() or "state_graph"
         self.langsmith_enabled = bool(self.agent_cfg.get("langsmith_enabled", False))
@@ -148,6 +207,8 @@ class AgentRuntime:
             "retriever_hits": 0,
             "retriever_rerank_fallbacks": 0,
             "last_timings": {},
+            "growth_mode": "background_only",
+            "last_growth_error": "",
         }
 
         self._imports = self._load_integrations()
@@ -160,6 +221,14 @@ class AgentRuntime:
         self._stream_model = self._build_chat_model(streaming=True)
         self._embedding_client = self._build_embedding_client()
         self._prepare_graph = self._compile_prepare_graph()
+
+        if self.effective_timeout_sec != self.timeout_sec:
+            logger.info(
+                "Applied runtime timeout floor for provider %s: configured=%.1fs effective=%.1fs",
+                self.provider_id or "unknown",
+                self.timeout_sec,
+                self.effective_timeout_sec,
+            )
 
     def _load_integrations(self) -> Dict[str, Any]:
         try:
@@ -203,12 +272,17 @@ class AgentRuntime:
             model_kwargs["max_completion_tokens"] = self.max_completion_tokens
         return model_kwargs
 
+    def _resolve_effective_timeout_sec(self, configured_timeout_sec: float) -> float:
+        if self.provider_id == "qwen":
+            return max(float(configured_timeout_sec), _QWEN_RUNTIME_MIN_TIMEOUT_SEC)
+        return float(configured_timeout_sec)
+
     def _build_chat_model(self, *, streaming: bool) -> Any:
         kwargs: Dict[str, Any] = {
             "model": self.model,
             "api_key": self.runtime_api_key,
             "base_url": self.base_url or None,
-            "timeout": self.timeout_sec,
+            "timeout": self.effective_timeout_sec,
             "max_retries": self.max_retries,
             "streaming": streaming,
             "model_kwargs": self._build_model_kwargs(),
@@ -278,6 +352,165 @@ class AgentRuntime:
             self._chat_locks[chat_id] = lock
         return lock
 
+    @staticmethod
+    def _should_use_reasoning_as_reply(chat_id: str) -> bool:
+        return str(chat_id or "").strip().startswith("__")
+
+    def _build_openai_compatible_headers(self) -> Dict[str, str]:
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        return headers
+
+    def _serialize_prompt_messages_for_openai(self, prompt_messages: Iterable[Any]) -> List[Dict[str, Any]]:
+        serialized: List[Dict[str, Any]] = []
+        for item in prompt_messages or []:
+            content = getattr(item, "content", None)
+            if content is None and isinstance(item, dict):
+                content = item.get("content")
+            if content is None:
+                continue
+            serialized.append(
+                {
+                    "role": _detect_message_role(item),
+                    "content": content,
+                }
+            )
+        return serialized
+
+    def _build_openai_compatible_payload(
+        self,
+        prepared: AgentPreparedRequest,
+        *,
+        stream: bool,
+    ) -> Dict[str, Any]:
+        return build_openai_chat_payload(
+            model=self.model,
+            messages=self._serialize_prompt_messages_for_openai(prepared.prompt_messages),
+            stream=stream,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+            max_completion_tokens=self.max_completion_tokens,
+            reasoning_effort=self.reasoning_effort,
+        )
+
+    async def _invoke_openai_compatible_reply(
+        self,
+        prepared: AgentPreparedRequest,
+    ) -> Any:
+        url = f"{self.base_url}/chat/completions"
+        payload = self._build_openai_compatible_payload(prepared, stream=False)
+        headers = self._build_openai_compatible_headers()
+        max_attempts = max(1, int(self.max_retries) + 1)
+        last_error: Optional[RuntimeError] = None
+
+        async with httpx.AsyncClient(timeout=self.effective_timeout_sec) as client:
+            for attempt in range(1, max_attempts + 1):
+                response = None
+                try:
+                    response = await client.post(url, headers=headers, json=payload)
+                    response.raise_for_status()
+                    return normalize_chat_result(response.json())
+                except ValueError as exc:
+                    normalized_error = normalize_provider_error(
+                        exc=exc,
+                        response=response,
+                        payload=(response.text[:200] if response is not None else None),
+                    )
+                except Exception as exc:
+                    normalized_error = normalize_provider_error(exc=exc, response=response)
+
+                last_error = RuntimeError(normalized_error.message)
+                should_retry = normalized_error.retryable and attempt < max_attempts
+                logger.warning(
+                    "Compat fallback request failed (%s/%s) [%s]: %s",
+                    attempt,
+                    max_attempts,
+                    prepared.chat_id,
+                    normalized_error.message,
+                )
+                if not should_retry:
+                    raise last_error
+                await asyncio.sleep(min(0.25 * (2 ** (attempt - 1)), 1.5))
+
+        raise last_error or RuntimeError("provider request failed")
+
+    def _record_normalized_response_metadata(
+        self,
+        prepared: AgentPreparedRequest,
+        normalized: Any,
+    ) -> None:
+        tool_calls = [
+            {
+                "id": item.id,
+                "name": item.name,
+                "arguments": item.arguments,
+                "type": item.type,
+            }
+            for item in getattr(normalized, "tool_calls", []) or []
+        ]
+        if tool_calls:
+            prepared.response_metadata["tool_calls"] = tool_calls
+            prepared.response_metadata["tool_call_count"] = len(tool_calls)
+        finish_reason = str(getattr(normalized, "finish_reason", "") or "").strip()
+        if finish_reason:
+            prepared.response_metadata["finish_reason"] = finish_reason
+
+    @staticmethod
+    def _summarize_reasoning_for_log(reasoning_text: str, limit: int = 240) -> str:
+        compact = " ".join(str(reasoning_text or "").strip().split())
+        if len(compact) <= limit:
+            return compact
+        return f"{compact[:limit]}..."
+
+    def _log_reasoning_output(
+        self,
+        prepared: AgentPreparedRequest,
+        reasoning_text: str,
+        *,
+        source: str,
+    ) -> None:
+        cleaned = str(reasoning_text or "").strip()
+        if not cleaned:
+            return
+        prepared.response_metadata["has_reasoning_output"] = True
+        logger.info(
+            "Model reasoning captured [%s][%s]: %s",
+            prepared.chat_id,
+            source,
+            self._summarize_reasoning_for_log(cleaned),
+        )
+
+    def _consume_normalized_reply(
+        self,
+        prepared: AgentPreparedRequest,
+        normalized: Any,
+        *,
+        source: str,
+    ) -> tuple[str, str]:
+        self._record_normalized_response_metadata(prepared, normalized)
+        reply_text = str(getattr(normalized, "text", "") or "").strip()
+        reasoning_text = str(getattr(normalized, "reasoning", "") or "").strip()
+        if reasoning_text:
+            self._log_reasoning_output(prepared, reasoning_text, source=source)
+        if not reply_text and reasoning_text and self._should_use_reasoning_as_reply(prepared.chat_id):
+            reply_text = reasoning_text
+            prepared.response_metadata["used_reasoning_content"] = True
+        if not reply_text and getattr(normalized, "tool_calls", None):
+            prepared.response_metadata["tool_call_only_response"] = True
+        return reply_text, reasoning_text
+
+    @staticmethod
+    def _should_attempt_empty_reply_fallback(
+        normalized: Any,
+        *,
+        reply_text: str,
+        reasoning_text: str,
+    ) -> bool:
+        if reply_text or reasoning_text:
+            return False
+        return not bool(getattr(normalized, "tool_calls", None))
+
     async def probe(self) -> bool:
         human = self._imports["HumanMessage"]
         try:
@@ -320,6 +553,16 @@ class AgentRuntime:
             trace=dict(final_state.get("trace") or {}),
             image_path=image_path,
         )
+        skipped_context_steps = list(final_state.get("skipped_context_steps") or [])
+        if skipped_context_steps:
+            prepared.response_metadata["skipped_context_steps"] = skipped_context_steps
+        prepared.response_metadata["prepare_budget_sec"] = timings.get(
+            "load_context_budget_sec",
+            round(self.prepare_soft_budget_sec, 4),
+        )
+        prepared.response_metadata["effective_timeout_sec"] = self.effective_timeout_sec
+        if self.effective_timeout_sec != self.timeout_sec:
+            prepared.response_metadata["timeout_fallback_applied"] = True
         self._stats["last_timings"] = dict(timings)
         return prepared
 
@@ -334,13 +577,55 @@ class AgentRuntime:
                     "metadata": {"chat_id": prepared.chat_id, "engine": "langgraph"},
                 },
             )
-            reply_text = _extract_message_text(response)
-            if not reply_text and self._should_use_reasoning_fallback(prepared.chat_id):
-                reply_text = _extract_reasoning_text(response)
-                if reply_text:
-                    prepared.response_metadata["used_reasoning_content"] = True
-            if not reply_text:
-                raise RuntimeError("LangChain 返回空内容")
+            normalized = normalize_chat_result(response)
+            final_normalized = normalized
+            fallback_error: Optional[Exception] = None
+            reply_text, reasoning_text = self._consume_normalized_reply(
+                prepared,
+                normalized,
+                source="invoke",
+            )
+            if self._should_attempt_empty_reply_fallback(
+                normalized,
+                reply_text=reply_text,
+                reasoning_text=reasoning_text,
+            ):
+                try:
+                    fallback_normalized = await self._invoke_openai_compatible_reply(prepared)
+                    fallback_reply_text, fallback_reasoning_text = self._consume_normalized_reply(
+                        prepared,
+                        fallback_normalized,
+                        source="compat_fallback",
+                    )
+                    if fallback_reply_text or fallback_reasoning_text:
+                        prepared.response_metadata["compat_fallback"] = "openai_chat_completions"
+                        logger.warning(
+                            "LangChain empty reply fallback hit [%s][provider=%s]",
+                            prepared.chat_id,
+                            self.provider_id or "unknown",
+                        )
+                        final_normalized = fallback_normalized
+                        reply_text = fallback_reply_text
+                        reasoning_text = fallback_reasoning_text
+                except Exception as exc:
+                    fallback_error = exc
+                    prepared.response_metadata["compat_fallback_error"] = str(exc)
+                    logger.warning(
+                        "LangChain empty reply fallback failed [%s][provider=%s]: %s",
+                        prepared.chat_id,
+                        self.provider_id or "unknown",
+                        exc,
+                    )
+
+            if not reply_text and getattr(final_normalized, "tool_calls", None):
+                prepared.response_metadata["tool_call_only_response"] = True
+            elif not reply_text:
+                if fallback_error is not None:
+                    prepared.response_metadata["compat_fallback_failed"] = True
+                    prepared.timings["invoke_sec"] = round(time.perf_counter() - started, 4)
+                    self._stats["last_timings"] = dict(prepared.timings)
+                    return ""
+                raise RuntimeError("LangChain returned empty content.")
             prepared.timings["invoke_sec"] = round(time.perf_counter() - started, 4)
             self._stats["successes"] += 1
             self._stats["last_timings"] = dict(prepared.timings)
@@ -350,29 +635,9 @@ class AgentRuntime:
             raise
 
     async def stream_reply(self, prepared: AgentPreparedRequest) -> AsyncIterator[str]:
-        self._stats["requests"] += 1
-        started = time.perf_counter()
-        try:
-            async for chunk in self._stream_model.astream(
-                prepared.prompt_messages,
-                config={
-                    "tags": ["wechat-chat", "agent-runtime", "stream"],
-                    "metadata": {"chat_id": prepared.chat_id, "engine": "langgraph"},
-                },
-            ):
-                text = _extract_message_text(chunk)
-                if not text and self._should_use_reasoning_fallback(prepared.chat_id):
-                    text = _extract_reasoning_text(chunk)
-                    if text:
-                        prepared.response_metadata["used_reasoning_content"] = True
-                if text:
-                    yield text
-            prepared.timings["stream_sec"] = round(time.perf_counter() - started, 4)
-            self._stats["successes"] += 1
-            self._stats["last_timings"] = dict(prepared.timings)
-        except Exception:
-            self._stats["failures"] += 1
-            raise
+        reply_text = await self.invoke(prepared)
+        if reply_text:
+            yield reply_text
 
     async def finalize_request(
         self,
@@ -399,36 +664,163 @@ class AgentRuntime:
                     },
                 ],
             )
-            if prepared.current_emotion:
-                await memory.update_emotion(
-                    prepared.chat_id, prepared.current_emotion.emotion
+        self._spawn_background(
+            self._run_growth_pipeline(
+                prepared=prepared,
+                reply_text=reply_text,
+                dependencies=dependencies,
+            )
+        )
+
+    async def _run_growth_pipeline(
+        self,
+        *,
+        prepared: AgentPreparedRequest,
+        reply_text: str,
+        dependencies: Dict[str, Any],
+    ) -> None:
+        memory = dependencies.get("memory")
+        vector_memory = dependencies.get("vector_memory")
+        export_rag = dependencies.get("export_rag")
+        chat_id = prepared.chat_id
+
+        self._stats["last_growth_error"] = ""
+        logger.info(build_stage_log_message("GROWTH.START", chat_id=chat_id))
+
+        user_profile = prepared.user_profile
+        if memory and self.bot_cfg.get("personalization_enabled", False):
+            try:
+                next_count = await memory.increment_message_count(chat_id)
+                snapshot = getattr(memory, "get_profile_prompt_snapshot", None)
+                if callable(snapshot):
+                    user_profile = await snapshot(chat_id)
+                else:
+                    user_profile = await memory.get_user_profile(chat_id)
+                prepared.response_metadata["growth_message_count"] = next_count
+            except Exception as exc:
+                self._stats["last_growth_error"] = str(exc)
+                logger.warning(
+                    build_stage_log_message(
+                        "GROWTH.FAILED",
+                        chat_id=chat_id,
+                        step="profile",
+                        error=str(exc),
+                    )
                 )
 
-        vector_memory = dependencies.get("vector_memory")
-        if vector_memory is not None:
-            self._spawn_background(
-                self._update_vector_memory(
+        if memory and self.bot_cfg.get("emotion_detection_enabled", False):
+            try:
+                emotion = await self._analyze_emotion(chat_id, prepared.user_text)
+                if emotion is not None:
+                    await memory.update_emotion(chat_id, emotion.emotion)
+                    logger.info(
+                        build_stage_log_message(
+                            "GROWTH.EMOTION_DONE",
+                            chat_id=chat_id,
+                            emotion=emotion.emotion,
+                        )
+                    )
+            except Exception as exc:
+                self._stats["last_growth_error"] = str(exc)
+                logger.warning(
+                    build_stage_log_message(
+                        "GROWTH.EMOTION_FAILED",
+                        chat_id=chat_id,
+                        error=str(exc),
+                    )
+                )
+
+        if memory is not None and self.bot_cfg.get("personalization_enabled", False):
+            try:
+                refreshed_profile = user_profile
+                if refreshed_profile is None or self._should_refresh_contact_prompt(refreshed_profile):
+                    refreshed_profile = await memory.get_user_profile(chat_id)
+                if self._should_refresh_contact_prompt(refreshed_profile):
+                    asset = await self._refresh_contact_prompt_background(
+                        prepared=prepared,
+                        user_profile=refreshed_profile,
+                        memory=memory,
+                        export_rag=export_rag,
+                        reply_text=reply_text,
+                    )
+                    if asset:
+                        prepared.response_metadata["contact_prompt_source"] = asset.get("contact_prompt_source", "")
+                        prepared.response_metadata["contact_prompt_updated_at"] = asset.get("contact_prompt_updated_at", 0)
+                        logger.info(
+                            build_stage_log_message(
+                                "GROWTH.CONTACT_PROMPT_DONE",
+                                chat_id=chat_id,
+                                source=asset.get("contact_prompt_source", ""),
+                                updated_at=asset.get("contact_prompt_updated_at", 0),
+                            )
+                        )
+            except Exception as exc:
+                self._stats["last_growth_error"] = str(exc)
+                logger.warning(
+                    build_stage_log_message(
+                        "GROWTH.CONTACT_PROMPT_FAILED",
+                        chat_id=chat_id,
+                        error=str(exc),
+                    )
+                )
+
+        if vector_memory is not None and self.bot_cfg.get("rag_enabled", False):
+            try:
+                await self._update_vector_memory(
                     prepared.chat_id,
                     prepared.user_text,
                     reply_text,
                     vector_memory,
                 )
-            )
+                logger.info(build_stage_log_message("GROWTH.VECTOR_DONE", chat_id=chat_id))
+            except Exception as exc:
+                self._stats["last_growth_error"] = str(exc)
+                logger.warning(
+                    build_stage_log_message(
+                        "GROWTH.VECTOR_FAILED",
+                        chat_id=chat_id,
+                        error=str(exc),
+                    )
+                )
 
         if (
-            prepared.user_profile is not None
+            memory is not None
+            and user_profile is not None
             and self.bot_cfg.get("remember_facts_enabled", False)
             and self.background_fact_extraction_enabled
         ):
-            self._spawn_background(
-                self._extract_facts_background(
+            try:
+                await self._extract_facts_background(
                     prepared.chat_id,
                     prepared.user_text,
                     reply_text,
-                    prepared.user_profile,
+                    user_profile,
                     memory,
                 )
-            )
+                logger.info(build_stage_log_message("GROWTH.FACTS_DONE", chat_id=chat_id))
+            except Exception as exc:
+                self._stats["last_growth_error"] = str(exc)
+                logger.warning(
+                    build_stage_log_message(
+                        "GROWTH.FACTS_FAILED",
+                        chat_id=chat_id,
+                        error=str(exc),
+                    )
+                )
+
+        if export_rag is not None and self.bot_cfg.get("export_rag_enabled", False):
+            try:
+                await export_rag.sync(self, force=False)
+                logger.info(build_stage_log_message("GROWTH.EXPORT_RAG_DONE", chat_id=chat_id))
+            except Exception as exc:
+                self._stats["last_growth_error"] = str(exc)
+                logger.warning(
+                    build_stage_log_message(
+                        "GROWTH.EXPORT_RAG_FAILED",
+                        chat_id=chat_id,
+                        error=str(exc),
+                    )
+                )
 
     async def get_embedding(self, text: str) -> Optional[List[float]]:
         query = str(text or "").strip()
@@ -507,6 +899,9 @@ class AgentRuntime:
             "graph_mode": self.graph_mode,
             "langsmith_enabled": self.langsmith_enabled,
             "langsmith_project": self.langsmith_project,
+            "growth_mode": self._stats["growth_mode"],
+            "growth_tasks_pending": len(self._background_tasks),
+            "last_growth_error": self._stats["last_growth_error"],
             "retriever_stats": {
                 "top_k": self.retriever_top_k,
                 "fetch_k": self.retriever_fetch_k,
@@ -525,114 +920,113 @@ class AgentRuntime:
             "runtime_timings": dict(self._stats["last_timings"]),
         }
 
+    def _remaining_prepare_budget(self, started: float) -> float:
+        return max(0.0, self.prepare_soft_budget_sec - (time.perf_counter() - started))
+
+    async def _resolve_context_task(
+        self,
+        task: Optional[asyncio.Task],
+        *,
+        step_name: str,
+        started: float,
+        skipped_context_steps: List[str],
+        warning_message: str,
+        timeout_sec: Optional[float] = None,
+    ) -> Any:
+        if task is None:
+            return None
+
+        remaining_budget = self._remaining_prepare_budget(started)
+        if timeout_sec is not None:
+            remaining_budget = min(remaining_budget, timeout_sec)
+        if remaining_budget <= 0:
+            skipped_context_steps.append(step_name)
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            return None
+
+        try:
+            return await asyncio.wait_for(asyncio.shield(task), timeout=remaining_budget)
+        except asyncio.TimeoutError:
+            skipped_context_steps.append(step_name)
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            logger.info(
+                "Skipping %s for reply budget [%s] after %.0f ms",
+                step_name,
+                step_name,
+                remaining_budget * 1000,
+            )
+            return None
+        except Exception as exc:
+            logger.warning("%s [%s]: %s", warning_message, step_name, exc)
+            return None
+
     async def _load_context_node(self, state: Dict[str, Any]) -> Dict[str, Any]:
         event = state["event"]
         chat_id = state["chat_id"]
         user_text = state["user_text"]
         dependencies = state.get("dependencies") or {}
         memory = dependencies.get("memory")
-        export_rag = dependencies.get("export_rag")
-        vector_memory = dependencies.get("vector_memory")
 
         started = time.perf_counter()
         memory_context: List[dict] = []
         short_term_preview: List[str] = []
         user_profile = None
-        current_emotion: Optional[EmotionResult] = None
-        export_results: List[dict] = []
-        runtime_memory_snippets: List[str] = []
-
-        tasks: List[asyncio.Task] = []
+        skipped_context_steps: List[str] = []
         context_task: Optional[asyncio.Task] = None
         profile_task: Optional[asyncio.Task] = None
-        counter_task: Optional[asyncio.Task] = None
-        export_task: Optional[asyncio.Task] = None
-        vector_task: Optional[asyncio.Task] = None
-        emotion_task: Optional[asyncio.Task] = None
 
         limit = as_int(self.bot_cfg.get("memory_context_limit", 5), 5, min_value=0)
         if memory and limit > 0:
             context_task = asyncio.create_task(memory.get_recent_context(chat_id, limit))
-            tasks.append(context_task)
         if memory and self.bot_cfg.get("personalization_enabled", False):
-            profile_task = asyncio.create_task(memory.get_user_profile(chat_id))
-            counter_task = asyncio.create_task(memory.increment_message_count(chat_id))
-            tasks.extend([profile_task, counter_task])
-        if export_rag is not None:
-            export_task = asyncio.create_task(export_rag.search(self, chat_id, user_text))
-            tasks.append(export_task)
-        if vector_memory is not None and self.bot_cfg.get("rag_enabled", False):
-            vector_task = asyncio.create_task(self._search_runtime_memory(chat_id, user_text, vector_memory))
-            tasks.append(vector_task)
-        if self.bot_cfg.get("emotion_detection_enabled", False):
-            emotion_task = asyncio.create_task(self._analyze_emotion(chat_id, user_text))
-            tasks.append(emotion_task)
+            get_snapshot = getattr(memory, "get_profile_prompt_snapshot", None)
+            if callable(get_snapshot):
+                profile_task = asyncio.create_task(get_snapshot(chat_id))
+            else:
+                profile_task = asyncio.create_task(memory.get_user_profile(chat_id))
 
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+        context_result = await self._resolve_context_task(
+            context_task,
+            step_name="recent_context",
+            started=started,
+            skipped_context_steps=skipped_context_steps,
+            warning_message=f"短期记忆加载失败 [{chat_id}]",
+        )
+        if context_result:
+            memory_context = list(context_result or [])
+            short_term_preview = [
+                str(item.get("content") or "").strip()
+                for item in memory_context[:3]
+                if isinstance(item, dict) and str(item.get("content") or "").strip()
+            ]
 
-        if context_task is not None and not context_task.cancelled():
-            try:
-                memory_context = list(context_task.result() or [])
-                short_term_preview = [
-                    str(item.get("content") or "").strip()
-                    for item in memory_context[:3]
-                    if isinstance(item, dict) and str(item.get("content") or "").strip()
-                ]
-            except Exception as exc:
-                logger.warning("短期记忆加载失败 [%s]: %s", chat_id, exc)
-        if profile_task is not None and not profile_task.cancelled():
-            try:
-                user_profile = profile_task.result()
-            except Exception as exc:
-                logger.warning("用户画像加载失败 [%s]: %s", chat_id, exc)
-        if export_task is not None and not export_task.cancelled():
-            try:
-                export_results = export_task.result() or []
-            except Exception as exc:
-                logger.warning("导出语料检索失败 [%s]: %s", chat_id, exc)
-                export_results = []
-            export_message = export_rag.build_memory_message(export_results) if export_rag else None
-            if export_message:
-                memory_context.insert(0, export_message)
-                self._stats["retriever_hits"] += len(export_results)
-        if vector_task is not None and not vector_task.cancelled():
-            try:
-                rag_message = vector_task.result()
-            except Exception as exc:
-                logger.warning("运行记忆检索失败 [%s]: %s", chat_id, exc)
-                rag_message = None
-            if rag_message:
-                memory_context.insert(0, rag_message)
-                runtime_memory_snippets = list(rag_message.get("trace_snippets") or [])
-        if emotion_task is not None and not emotion_task.cancelled():
-            try:
-                current_emotion = emotion_task.result()
-            except Exception as exc:
-                logger.warning("情绪分析失败 [%s]: %s", chat_id, exc)
+        user_profile = await self._resolve_context_task(
+            profile_task,
+            step_name="user_profile",
+            started=started,
+            skipped_context_steps=skipped_context_steps,
+            warning_message=f"用户画像加载失败 [{chat_id}]",
+            timeout_sec=self.prepare_optional_timeout_sec,
+        )
 
         timings = dict(state.get("timings") or {})
+        timings["load_context_budget_sec"] = round(self.prepare_soft_budget_sec, 4)
         timings["load_context_sec"] = round(time.perf_counter() - started, 4)
         trace = {
             "context_summary": {
                 "short_term_messages": len(memory_context),
                 "short_term_preview": short_term_preview,
-                "export_rag_hits": len(export_results),
-                "export_rag_snippets": [
-                    str(item.get("text") or "").strip()
-                    for item in export_results[:3]
-                    if isinstance(item, dict) and str(item.get("text") or "").strip()
-                ],
-                "runtime_memory_hits": len(runtime_memory_snippets),
-                "runtime_memory_snippets": runtime_memory_snippets[:3],
+                "skipped_context_steps": list(skipped_context_steps),
+                "growth_mode": "background_only",
             },
-            "emotion": self._serialize_emotion(current_emotion),
             "profile": self._serialize_profile(user_profile),
         }
         return {
             "memory_context": memory_context,
             "user_profile": user_profile,
-            "current_emotion": current_emotion,
+            "current_emotion": None,
             "timings": timings,
             "trace": trace,
             "event": event,
@@ -640,6 +1034,7 @@ class AgentRuntime:
             "user_text": user_text,
             "dependencies": dependencies,
             "image_path": state.get("image_path"),
+            "skipped_context_steps": skipped_context_steps,
         }
 
     async def _build_prompt_node(self, state: Dict[str, Any]) -> Dict[str, Any]:
@@ -729,14 +1124,6 @@ class AgentRuntime:
 
         messages.append(human_message(content=final_user_text))
         return messages
-
-    def _should_use_reasoning_fallback(self, chat_id: str) -> bool:
-        normalized_chat_id = str(chat_id or "").strip()
-        if normalized_chat_id.startswith("__"):
-            return True
-        if self.provider_id == "ollama":
-            return True
-        return "127.0.0.1:11434" in self.base_url or "localhost:11434" in self.base_url
 
     def _should_refresh_profile(self, profile: Any) -> bool:
         frequency = as_int(self.bot_cfg.get("profile_update_frequency", 10), 10, min_value=1)
@@ -931,28 +1318,6 @@ class AgentRuntime:
             return detect_emotion_keywords(text)
 
         prompt = get_emotion_analysis_prompt(text)
-        response = await self.generate_reply(
-            f"__emotion__{chat_id}",
-            prompt,
-            system_prompt="你是一个情感分析助手，只返回 JSON 格式的分析结果。",
-        )
-        if not response:
-            return detect_emotion_keywords(text)
-
-        parsed = parse_emotion_ai_response(response)
-        return parsed or detect_emotion_keywords(text)
-
-    async def _analyze_emotion(self, chat_id: str, text: str) -> Optional[EmotionResult]:
-        if self.emotion_fast_path_enabled:
-            fast_result = detect_emotion_keywords(text)
-            if fast_result and fast_result.emotion != "neutral":
-                return fast_result
-
-        mode = str(self.bot_cfg.get("emotion_detection_mode", "keywords")).lower()
-        if mode != "ai":
-            return detect_emotion_keywords(text)
-
-        prompt = get_emotion_analysis_prompt(text)
         try:
             response = await self.generate_reply(
                 f"__emotion__{chat_id}",
@@ -1027,25 +1392,185 @@ class AgentRuntime:
     def _serialize_profile(profile: Any) -> Optional[Dict[str, Any]]:
         if profile is None:
             return None
-        return {
+        serialized = {
             "nickname": str(getattr(profile, "nickname", "") or ""),
             "relationship": str(getattr(profile, "relationship", "unknown") or "unknown"),
             "message_count": int(getattr(profile, "message_count", 0) or 0),
         }
+        summary = str(getattr(profile, "profile_summary", "") or "").strip()
+        if not summary and isinstance(profile, dict):
+            summary = str(profile.get("profile_summary") or "").strip()
+        if summary:
+            serialized["profile_summary"] = summary
+        contact_prompt_source = str(getattr(profile, "contact_prompt_source", "") or "").strip()
+        if not contact_prompt_source and isinstance(profile, dict):
+            contact_prompt_source = str(profile.get("contact_prompt_source") or "").strip()
+        if contact_prompt_source:
+            serialized["contact_prompt_source"] = contact_prompt_source
+        return serialized
+
+    def _should_refresh_contact_prompt(self, profile: Any) -> bool:
+        if profile is None:
+            return False
+        cadence = as_int(
+            self.bot_cfg.get(
+                "contact_prompt_update_frequency",
+                self.bot_cfg.get("profile_update_frequency", 10),
+            ),
+            10,
+            min_value=1,
+        )
+        message_count_raw = (
+            profile.get("message_count", 0)
+            if isinstance(profile, dict)
+            else getattr(profile, "message_count", 0)
+        )
+        message_count = int(message_count_raw or 0)
+        if message_count < cadence:
+            return False
+        existing_prompt_raw = (
+            profile.get("contact_prompt", "")
+            if isinstance(profile, dict)
+            else getattr(profile, "contact_prompt", "")
+        )
+        existing_prompt = str(existing_prompt_raw or "").strip()
+        last_count_raw = (
+            profile.get("contact_prompt_last_message_count", 0)
+            if isinstance(profile, dict)
+            else getattr(profile, "contact_prompt_last_message_count", 0)
+        )
+        last_count = int(last_count_raw or 0)
+        if not existing_prompt:
+            return True
+        return (message_count - last_count) >= cadence
+
+    def _resolve_contact_prompt_base(self, event: Any, user_profile: Any) -> str:
+        overrides = self.bot_cfg.get("system_prompt_overrides") or {}
+        chat_name = str(getattr(event, "chat_name", "") or "").strip()
+        base_prompt = str(self.bot_cfg.get("system_prompt") or "").strip()
+        if chat_name and chat_name in overrides:
+            base_prompt = str(overrides.get(chat_name) or "").strip()
+        existing_prompt = str(
+            getattr(user_profile, "contact_prompt", "")
+            if not isinstance(user_profile, dict)
+            else user_profile.get("contact_prompt", "")
+            or ""
+        ).strip()
+        return existing_prompt or base_prompt
+
+    @staticmethod
+    def _strip_prompt_response(text: str) -> str:
+        cleaned = str(text or "").strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.strip("`").strip()
+            if "\n" in cleaned:
+                _, _, cleaned = cleaned.partition("\n")
+                cleaned = cleaned.strip()
+        cleaned = cleaned.replace("\r\n", "\n").strip()
+        return cleaned
+
+    async def _refresh_contact_prompt_background(
+        self,
+        *,
+        prepared: AgentPreparedRequest,
+        user_profile: Any,
+        memory: Any,
+        export_rag: Any,
+        reply_text: str,
+    ) -> Optional[Dict[str, Any]]:
+        chat_id = prepared.chat_id
+        recent_context = await memory.get_recent_context(chat_id, limit=12)
+        export_results: List[Dict[str, Any]] = []
+        if export_rag is not None and self.bot_cfg.get("export_rag_enabled", False):
+            export_results = await export_rag.search(
+                self,
+                chat_id,
+                prepared.user_text or reply_text,
+            )
+
+        base_prompt = self._resolve_contact_prompt_base(prepared.event, user_profile)
+        existing_prompt = str(getattr(user_profile, "contact_prompt", "") or "").strip()
+        profile_summary = str(getattr(user_profile, "profile_summary", "") or "").strip()
+        context_facts = list(getattr(user_profile, "context_facts", []) or [])
+        last_emotion = str(getattr(user_profile, "last_emotion", "") or "").strip()
+
+        history_lines: List[str] = []
+        for item in recent_context[-12:]:
+            if not isinstance(item, dict):
+                continue
+            role = "用户" if str(item.get("role") or "").strip().lower() == "user" else "我方"
+            content = str(item.get("content") or "").strip()
+            if content:
+                history_lines.append(f"{role}: {content[:180]}")
+
+        export_lines = [
+            str(item.get("text") or "").strip()
+            for item in export_results[:4]
+            if isinstance(item, dict) and str(item.get("text") or "").strip()
+        ]
+        source = "recent_chat"
+        if export_lines and history_lines:
+            source = "hybrid"
+        elif export_lines:
+            source = "export_chat"
+
+        prompt_request = "\n\n".join(
+            part
+            for part in [
+                "请为这个联系人生成一份可直接作为 system prompt 使用的专属提示词。",
+                "要求：保留“像主人本人在微信回复”的设定，不要写解释，不要写分析，只输出最终 prompt 正文。",
+                f"当前全局/覆盖基底 Prompt：\n{base_prompt}",
+                f"当前联系人已有 Prompt（如为空表示首次生成）：\n{existing_prompt or '（首次生成）'}",
+                f"联系人轻量画像摘要：\n{profile_summary or '（暂无）'}",
+                f"最近情绪趋势：\n{last_emotion or 'neutral'}",
+                "高置信事实：\n" + ("\n".join(f"- {fact}" for fact in context_facts[:8]) if context_facts else "（暂无）"),
+                "近期真实对话：\n" + ("\n".join(history_lines) if history_lines else "（暂无）"),
+                "导出聊天记录中的风格片段：\n" + ("\n".join(f"- {item}" for item in export_lines) if export_lines else "（暂无）"),
+                "生成要求：\n"
+                "1. 在当前 prompt 基础上增量更新，不要丢掉已有稳定规则。\n"
+                "2. 明确该联系人适合的称呼、语气、边界、话题偏好和表达节奏。\n"
+                "3. 如果已有人工编辑内容，要尽量保留其意图。\n"
+                "4. 不要伪造事实，不要输出 markdown 标题，不要返回 JSON。",
+            ]
+            if part
+        )
+        generated = await self.generate_reply(
+            f"__contact_prompt__{chat_id}",
+            prompt_request,
+            system_prompt="你是联系人专属 Prompt 生成器。你只输出可直接保存的最终 prompt 文本。",
+        )
+        cleaned = self._strip_prompt_response(generated or "")
+        if not cleaned:
+            return None
+
+        message_count = int(getattr(user_profile, "message_count", 0) or 0)
+        return await memory.save_contact_prompt(
+            chat_id,
+            cleaned,
+            source=source,
+            last_message_count=message_count,
+        )
 
     @staticmethod
     def _build_user_message_metadata(prepared: AgentPreparedRequest) -> Dict[str, Any]:
         event = prepared.event
         if event is None:
             return {}
-        return {
+        raw_message_type = getattr(event, "msg_type", 0)
+        message_type = str(raw_message_type or "").strip() or "0"
+        metadata = {
             "kind": "incoming_message",
             "chat_name": str(getattr(event, "chat_name", "") or ""),
             "sender": str(getattr(event, "sender", "") or ""),
             "is_group": bool(getattr(event, "is_group", False)),
-            "message_type": int(getattr(event, "msg_type", 0) or 0),
+            "message_type": message_type,
             "emotion": dict(prepared.trace.get("emotion") or {}) or None,
         }
+        try:
+            metadata["message_type_code"] = int(raw_message_type)
+        except (TypeError, ValueError):
+            pass
+        return metadata
 
     async def _extract_facts_background(
         self,

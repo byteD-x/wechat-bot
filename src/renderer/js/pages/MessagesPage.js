@@ -24,6 +24,24 @@ const TEXT = {
     linesSuffix: '\u6761',
     keywordLabel: '\u5173\u952e\u5b57',
     chatLabel: '\u4f1a\u8bdd',
+    profileTitle: '\u8054\u7cfb\u4eba\u6210\u957f\u753b\u50cf',
+    profileSummary: '\u753b\u50cf\u6458\u8981',
+    contactPrompt: '\u4e13\u5c5e Prompt',
+    contactPromptEmpty: '\u5f53\u524d\u8fd8\u6ca1\u6709\u751f\u6210\u8054\u7cfb\u4eba\u4e13\u5c5e Prompt\uff0c\u7ee7\u7eed\u804a\u5929\u540e\u7cfb\u7edf\u4f1a\u5728\u540e\u53f0\u9010\u6b65\u751f\u6210\u3002',
+    contactPromptLoading: '\u6b63\u5728\u52a0\u8f7d\u8054\u7cfb\u4eba\u753b\u50cf\u4e0e Prompt...',
+    contactPromptLoadFailed: '\u52a0\u8f7d\u8054\u7cfb\u4eba\u753b\u50cf\u5931\u8d25',
+    contactPromptSave: '\u4fdd\u5b58 Prompt',
+    contactPromptSaveSuccess: '\u8054\u7cfb\u4eba Prompt \u5df2\u4fdd\u5b58',
+    contactPromptSaveFailed: '\u4fdd\u5b58\u8054\u7cfb\u4eba Prompt \u5931\u8d25',
+    fieldRelationship: '\u5173\u7cfb',
+    fieldMessageCount: '\u6d88\u606f\u6570',
+    fieldEmotion: '\u6700\u8fd1\u60c5\u7eea',
+    fieldUpdatedAt: '\u66f4\u65b0\u65f6\u95f4',
+    sourceRecentChat: '\u8fd1\u671f\u5bf9\u8bdd\u6210\u957f',
+    sourceExportChat: '\u5bfc\u51fa\u804a\u5929\u589e\u5f3a',
+    sourceHybrid: '\u8fd1\u671f\u5bf9\u8bdd + \u5bfc\u51fa\u589e\u5f3a',
+    sourceUserEdit: '\u4eba\u5de5\u7f16\u8f91',
+    sourceUnknown: '\u7cfb\u7edf\u751f\u6210',
 };
 
 function createStateBlock(text, className = 'loading-state') {
@@ -55,6 +73,7 @@ export class MessagesPage extends PageController {
         this._searchKeyword = '';
         this._selectedChatId = '';
         this._searchTimer = null;
+        this._detailRequestToken = 0;
     }
 
     async onInit() {
@@ -318,7 +337,9 @@ export class MessagesPage extends PageController {
             body.appendChild(chat);
             item.appendChild(avatar);
             item.appendChild(body);
-            item.addEventListener('click', () => this._openDetailModal(message));
+            item.addEventListener('click', () => {
+                void this._openDetailModal(message);
+            });
             fragment.appendChild(item);
         });
 
@@ -334,19 +355,43 @@ export class MessagesPage extends PageController {
         button.disabled = !this._hasMore;
     }
 
-    _openDetailModal(message) {
+    async _openDetailModal(message) {
         const modal = document.getElementById('message-detail-modal');
         const body = document.getElementById('message-detail-body');
         if (!modal || !body) {
             return;
         }
 
+        const requestToken = ++this._detailRequestToken;
         body.textContent = '';
         body.appendChild(this._buildMessageDetail(message));
+        body.appendChild(createStateBlock(TEXT.contactPromptLoading));
         modal.classList.add('active');
+
+        try {
+            const result = await apiService.getContactProfile(message.wx_id || '');
+            if (requestToken !== this._detailRequestToken) {
+                return;
+            }
+            if (!result?.success) {
+                throw new Error(result?.message || TEXT.contactPromptLoadFailed);
+            }
+            body.textContent = '';
+            body.appendChild(this._buildMessageDetail(message));
+            body.appendChild(this._buildContactProfileDetail(message, result.profile || {}));
+        } catch (error) {
+            if (requestToken !== this._detailRequestToken) {
+                return;
+            }
+            console.error('[MessagesPage] contact profile load failed:', error);
+            body.textContent = '';
+            body.appendChild(this._buildMessageDetail(message));
+            body.appendChild(this._buildContactProfileError(error));
+        }
     }
 
     _closeDetailModal() {
+        this._detailRequestToken += 1;
         document.getElementById('message-detail-modal')?.classList.remove('active');
     }
 
@@ -399,6 +444,139 @@ export class MessagesPage extends PageController {
         root.appendChild(contentWrap);
 
         return root;
+    }
+
+    _buildContactProfileError(error) {
+        const root = document.createElement('div');
+        root.className = 'detail-group';
+
+        const title = document.createElement('div');
+        title.className = 'detail-group-title';
+        title.textContent = TEXT.profileTitle;
+        root.appendChild(title);
+
+        root.appendChild(
+            createStateBlock(
+                toast.getErrorMessage(error, TEXT.contactPromptLoadFailed),
+                'empty-state'
+            )
+        );
+        return root;
+    }
+
+    _buildContactProfileDetail(message, profile) {
+        const root = document.createElement('div');
+        root.className = 'detail-group';
+
+        const title = document.createElement('div');
+        title.className = 'detail-group-title';
+        title.textContent = TEXT.profileTitle;
+
+        const badge = document.createElement('span');
+        badge.className = 'message-detail-badge';
+        badge.textContent = this._formatPromptSource(profile.contact_prompt_source);
+        title.appendChild(badge);
+        root.appendChild(title);
+
+        const grid = document.createElement('div');
+        grid.className = 'detail-grid';
+        const fields = [
+            [TEXT.fieldRelationship, profile.relationship || '--'],
+            [TEXT.fieldMessageCount, String(profile.message_count ?? '--')],
+            [TEXT.fieldEmotion, profile.last_emotion || '--'],
+            [TEXT.fieldUpdatedAt, this._formatTime(profile.contact_prompt_updated_at || profile.updated_at) || '--'],
+        ];
+        for (const [label, value] of fields) {
+            const wrap = document.createElement('div');
+            const span = document.createElement('span');
+            span.textContent = label;
+            const strong = document.createElement('strong');
+            strong.textContent = String(value);
+            wrap.appendChild(span);
+            wrap.appendChild(strong);
+            grid.appendChild(wrap);
+        }
+        root.appendChild(grid);
+
+        const summaryWrap = document.createElement('div');
+        summaryWrap.className = 'form-group full-width';
+        const summaryLabel = document.createElement('label');
+        summaryLabel.className = 'form-label';
+        summaryLabel.textContent = TEXT.profileSummary;
+        const summaryContent = document.createElement('pre');
+        summaryContent.className = 'prompt-preview-output';
+        summaryContent.textContent = String(profile.profile_summary || '--');
+        summaryWrap.appendChild(summaryLabel);
+        summaryWrap.appendChild(summaryContent);
+        root.appendChild(summaryWrap);
+
+        const promptWrap = document.createElement('div');
+        promptWrap.className = 'form-group full-width';
+        const promptLabel = document.createElement('label');
+        promptLabel.className = 'form-label';
+        promptLabel.textContent = TEXT.contactPrompt;
+
+        const promptInput = document.createElement('textarea');
+        promptInput.className = 'detail-textarea';
+        promptInput.rows = 12;
+        promptInput.value = String(profile.contact_prompt || '');
+        promptInput.placeholder = TEXT.contactPromptEmpty;
+
+        const hint = document.createElement('div');
+        hint.className = 'detail-help';
+        hint.textContent = '你可以直接编辑这份联系人专属 Prompt，后续系统会以当前保存版本为基础继续渐进式更新。';
+
+        const actions = document.createElement('div');
+        actions.className = 'detail-actions';
+        const saveButton = document.createElement('button');
+        saveButton.type = 'button';
+        saveButton.className = 'btn btn-primary btn-sm';
+        saveButton.textContent = TEXT.contactPromptSave;
+        saveButton.addEventListener('click', async () => {
+            const nextPrompt = String(promptInput.value || '').trim();
+            if (!nextPrompt) {
+                toast.error(TEXT.contactPromptEmpty);
+                return;
+            }
+            saveButton.disabled = true;
+            try {
+                const result = await apiService.saveContactPrompt(message.wx_id || '', nextPrompt);
+                if (!result?.success) {
+                    throw new Error(result?.message || TEXT.contactPromptSaveFailed);
+                }
+                const nextSection = this._buildContactProfileDetail(message, result.profile || profile);
+                root.replaceWith(nextSection);
+                toast.success(TEXT.contactPromptSaveSuccess);
+            } catch (error) {
+                toast.error(toast.getErrorMessage(error, TEXT.contactPromptSaveFailed));
+            } finally {
+                saveButton.disabled = false;
+            }
+        });
+        actions.appendChild(saveButton);
+
+        promptWrap.appendChild(promptLabel);
+        promptWrap.appendChild(promptInput);
+        promptWrap.appendChild(hint);
+        promptWrap.appendChild(actions);
+        root.appendChild(promptWrap);
+
+        return root;
+    }
+
+    _formatPromptSource(source) {
+        switch (String(source || '').trim()) {
+        case 'recent_chat':
+            return TEXT.sourceRecentChat;
+        case 'export_chat':
+            return TEXT.sourceExportChat;
+        case 'hybrid':
+            return TEXT.sourceHybrid;
+        case 'user_edit':
+            return TEXT.sourceUserEdit;
+        default:
+            return TEXT.sourceUnknown;
+        }
     }
 
     _truncateText(text, maxLength) {

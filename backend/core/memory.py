@@ -1,4 +1,4 @@
-"""
+﻿"""
 聊天记忆管理模块 - 基于 aiosqlite 的异步持久化存储。
 
 本模块提供了轻量级的聊天历史和用户画像管理功能：
@@ -24,6 +24,8 @@ import os
 import time
 import copy
 import asyncio
+import importlib
+import sys
 import aiosqlite
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from ..schemas import UserProfile
@@ -46,9 +48,25 @@ DEFAULT_USER_PROFILE = {
     "preferences": {},  # {"topics": [], "style": "", "likes": [], "dislikes": []}
     "context_facts": [],  # ["生日是5月1日", "喜欢猫", ...]
     "last_emotion": "neutral",
+    "profile_summary": "",
+    "contact_prompt": "",
+    "contact_prompt_updated_at": 0,
+    "contact_prompt_source": "",
+    "contact_prompt_last_message_count": 0,
     "emotion_history": [],  # 最近 N 次情绪记录
     "message_count": 0,
 }
+
+
+def _resolve_aiosqlite_module():
+    module = aiosqlite
+    if hasattr(module, "connect") and hasattr(module, "Row"):
+        return module
+
+    sys.modules.pop("aiosqlite", None)
+    resolved = importlib.import_module("aiosqlite")
+    globals()["aiosqlite"] = resolved
+    return resolved
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -68,7 +86,9 @@ class MemoryManager:
     # 允许更新的用户画像字段（使用 frozenset 加速查找）
     _ALLOWED_PROFILE_FIELDS: frozenset = frozenset({
         "nickname", "relationship", "personality", "preferences",
-        "context_facts", "last_emotion", "emotion_history", "message_count"
+        "context_facts", "last_emotion", "emotion_history", "profile_summary",
+        "contact_prompt", "contact_prompt_updated_at", "contact_prompt_source",
+        "contact_prompt_last_message_count", "message_count"
     })
 
     def __init__(
@@ -106,8 +126,9 @@ class MemoryManager:
             if db_dir:
                 os.makedirs(db_dir, exist_ok=True)
                 
-            self._conn = await aiosqlite.connect(self.db_path, check_same_thread=False)
-            self._conn.row_factory = aiosqlite.Row
+            sqlite_module = _resolve_aiosqlite_module()
+            self._conn = await sqlite_module.connect(self.db_path, check_same_thread=False)
+            self._conn.row_factory = sqlite_module.Row
             await self._init_tables()
             return self._conn
 
@@ -152,6 +173,11 @@ class MemoryManager:
             "context_facts TEXT DEFAULT '[]',"
             "last_emotion TEXT DEFAULT 'neutral',"
             "emotion_history TEXT DEFAULT '[]',"
+            "profile_summary TEXT DEFAULT '',"
+            "contact_prompt TEXT DEFAULT '',"
+            "contact_prompt_updated_at INTEGER DEFAULT 0,"
+            "contact_prompt_source TEXT DEFAULT '',"
+            "contact_prompt_last_message_count INTEGER DEFAULT 0,"
             "message_count INTEGER DEFAULT 0,"
             "updated_at INTEGER NOT NULL"
             ")"
@@ -170,6 +196,11 @@ class MemoryManager:
         # 启用内存映射 I/O 提升读取性能
         await self._conn.execute("PRAGMA mmap_size=268435456")
         await self._ensure_column("chat_history", "metadata", "TEXT DEFAULT '{}'")
+        await self._ensure_column("user_profiles", "profile_summary", "TEXT DEFAULT ''")
+        await self._ensure_column("user_profiles", "contact_prompt", "TEXT DEFAULT ''")
+        await self._ensure_column("user_profiles", "contact_prompt_updated_at", "INTEGER DEFAULT 0")
+        await self._ensure_column("user_profiles", "contact_prompt_source", "TEXT DEFAULT ''")
+        await self._ensure_column("user_profiles", "contact_prompt_last_message_count", "INTEGER DEFAULT 0")
         await self._conn.commit()
 
     async def _ensure_column(self, table: str, column: str, definition: str) -> None:
@@ -224,6 +255,52 @@ class MemoryManager:
         except (TypeError, ValueError):
             return 0.0
         return max(0.0, val)
+
+    @staticmethod
+    def _build_profile_summary(profile: Dict[str, Any]) -> str:
+        summary_parts: List[str] = []
+
+        relationship = str(profile.get("relationship") or "").strip()
+        if relationship and relationship != "unknown":
+            summary_parts.append(f"关系: {relationship}")
+
+        personality = str(profile.get("personality") or "").strip()
+        if personality:
+            summary_parts.append(f"风格: {personality}")
+
+        preferences = profile.get("preferences") or {}
+        if isinstance(preferences, dict):
+            topics = preferences.get("topics") or []
+            likes = preferences.get("likes") or []
+            dislikes = preferences.get("dislikes") or []
+            style = str(preferences.get("style") or "").strip()
+
+            topic_text = "、".join(str(item).strip() for item in topics if str(item).strip())
+            like_text = "、".join(str(item).strip() for item in likes if str(item).strip())
+            dislike_text = "、".join(str(item).strip() for item in dislikes if str(item).strip())
+
+            if topic_text:
+                summary_parts.append(f"常聊: {topic_text}")
+            if like_text:
+                summary_parts.append(f"偏好: {like_text}")
+            if dislike_text:
+                summary_parts.append(f"避开: {dislike_text}")
+            if style:
+                summary_parts.append(f"语气: {style}")
+
+        facts = [
+            str(item).strip()
+            for item in (profile.get("context_facts") or [])[:5]
+            if str(item).strip()
+        ]
+        if facts:
+            summary_parts.append("已知事实: " + "；".join(facts))
+
+        last_emotion = str(profile.get("last_emotion") or "").strip().lower()
+        if last_emotion and last_emotion != "neutral":
+            summary_parts.append(f"近期情绪: {last_emotion}")
+
+        return " | ".join(part for part in summary_parts if part).strip()
 
     async def update_retention(
         self,
@@ -616,6 +693,11 @@ class MemoryManager:
         data["relationship"] = row["relationship"] or "unknown"
         data["personality"] = row["personality"] or ""
         data["last_emotion"] = row["last_emotion"] or "neutral"
+        data["profile_summary"] = row["profile_summary"] or ""
+        data["contact_prompt"] = row["contact_prompt"] or ""
+        data["contact_prompt_updated_at"] = int(row["contact_prompt_updated_at"] or 0)
+        data["contact_prompt_source"] = row["contact_prompt_source"] or ""
+        data["contact_prompt_last_message_count"] = int(row["contact_prompt_last_message_count"] or 0)
         data["message_count"] = row["message_count"] or 0
         data["updated_at"] = row["updated_at"] or 0
 
@@ -632,7 +714,9 @@ class MemoryManager:
             data["emotion_history"] = json.loads(row["emotion_history"] or "[]")
         except (json.JSONDecodeError, TypeError):
             data["emotion_history"] = []
-            
+        if not data["profile_summary"]:
+            data["profile_summary"] = self._build_profile_summary(data)
+
         return UserProfile(**data)
 
     async def _ensure_user_profile(self, wx_id: str) -> None:
@@ -652,22 +736,34 @@ class MemoryManager:
         if not wx_id:
             return
         await self._ensure_user_profile(wx_id)
-        
-        updates: List[str] = []
-        values: List[Any] = []
-        
+
+        current_profile = await self.get_user_profile(wx_id)
+        next_profile = current_profile.model_dump(mode="json")
+
         for key, value in fields.items():
             if key not in self._ALLOWED_PROFILE_FIELDS:
                 continue
-            # JSON 字段需要序列化
+            next_profile[key] = value
+
+        changed_fields = {
+            key: next_profile[key]
+            for key in self._ALLOWED_PROFILE_FIELDS
+            if key in fields
+        }
+        if not changed_fields:
+            return
+
+        next_profile["profile_summary"] = self._build_profile_summary(next_profile)
+        changed_fields["profile_summary"] = next_profile["profile_summary"]
+
+        updates: List[str] = []
+        values: List[Any] = []
+        for key, value in changed_fields.items():
             if key in _JSON_FIELDS:
                 value = json.dumps(value, ensure_ascii=False)
             updates.append(f"{key} = ?")
             values.append(value)
-        
-        if not updates:
-            return
-        
+
         updates.append("updated_at = ?")
         values.append(int(time.time()))
         values.append(wx_id)
@@ -676,6 +772,65 @@ class MemoryManager:
         db = await self._get_db()
         await db.execute(sql, values)
         await db.commit()
+
+    async def get_profile_prompt_snapshot(self, wx_id: str) -> Dict[str, Any]:
+        profile = await self.get_user_profile(wx_id)
+        return {
+            "wx_id": profile.wx_id,
+            "nickname": profile.nickname,
+            "relationship": profile.relationship,
+            "message_count": profile.message_count,
+            "last_emotion": profile.last_emotion,
+            "profile_summary": profile.profile_summary or self._build_profile_summary(
+                profile.model_dump(mode="json")
+            ),
+            "contact_prompt": profile.contact_prompt or "",
+            "contact_prompt_updated_at": int(profile.contact_prompt_updated_at or 0),
+            "contact_prompt_source": profile.contact_prompt_source or "",
+            "contact_prompt_last_message_count": int(profile.contact_prompt_last_message_count or 0),
+        }
+
+    async def get_contact_profile(self, wx_id: str) -> Dict[str, Any]:
+        profile = await self.get_user_profile(wx_id)
+        return {
+            "chat_id": profile.wx_id,
+            "nickname": profile.nickname,
+            "relationship": profile.relationship,
+            "message_count": int(profile.message_count or 0),
+            "last_emotion": profile.last_emotion,
+            "profile_summary": profile.profile_summary or self._build_profile_summary(
+                profile.model_dump(mode="json")
+            ),
+            "context_facts": list(profile.context_facts or []),
+            "contact_prompt": profile.contact_prompt or "",
+            "contact_prompt_updated_at": int(profile.contact_prompt_updated_at or 0),
+            "contact_prompt_source": profile.contact_prompt_source or "",
+            "contact_prompt_last_message_count": int(profile.contact_prompt_last_message_count or 0),
+            "updated_at": int(profile.updated_at or 0),
+        }
+
+    async def save_contact_prompt(
+        self,
+        wx_id: str,
+        contact_prompt: str,
+        *,
+        source: str = "user_edit",
+        last_message_count: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        profile = await self.get_user_profile(wx_id)
+        next_message_count = (
+            int(last_message_count)
+            if last_message_count is not None
+            else int(profile.message_count or 0)
+        )
+        await self.update_user_profile(
+            wx_id,
+            contact_prompt=str(contact_prompt or "").strip(),
+            contact_prompt_source=str(source or "").strip(),
+            contact_prompt_updated_at=int(time.time()),
+            contact_prompt_last_message_count=next_message_count,
+        )
+        return await self.get_contact_profile(wx_id)
 
     async def add_context_fact(self, wx_id: str, fact: str, max_facts: int = 20) -> None:
         """添加一条事实信息到用户画像"""
@@ -719,22 +874,10 @@ class MemoryManager:
         wx_id = str(wx_id).strip()
         if not wx_id:
             return 0
-        await self._ensure_user_profile(wx_id)
-        
-        db = await self._get_db()
-        await db.execute(
-            "UPDATE user_profiles SET message_count = message_count + 1, "
-            "updated_at = ? WHERE wx_id = ?",
-            (int(time.time()), wx_id),
-        )
-        await db.commit()
-        
-        async with db.execute(
-            "SELECT message_count FROM user_profiles WHERE wx_id = ?",
-            (wx_id,),
-        ) as cursor:
-            row = await cursor.fetchone()
-        return row["message_count"] if row else 0
+        profile = await self.get_user_profile(wx_id)
+        next_count = int(profile.message_count or 0) + 1
+        await self.update_user_profile(wx_id, message_count=next_count)
+        return next_count
 
     async def close(self) -> None:
         if self._conn:

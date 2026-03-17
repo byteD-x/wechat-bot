@@ -45,13 +45,6 @@ class BotConfig(BaseModel):
     emoji_policy: Literal['wechat', 'strip', 'keep', 'mixed'] = 'mixed'
     emoji_replacements: Dict[str, str] = Field(default_factory=dict)
     
-    # Quoting
-    reply_quote_mode: Literal['wechat', 'text', 'none'] = "wechat"
-    reply_quote_template: str = "引用：{content}\n"
-    reply_quote_max_chars: int = 120
-    reply_quote_timeout_sec: float = 5.0
-    reply_quote_fallback_to_text: bool = True
-
     # Transport
     transport_backend: Literal['hook_wcferry'] = 'hook_wcferry'
     silent_mode_required: bool = False
@@ -94,11 +87,7 @@ class BotConfig(BaseModel):
     natural_split_max_chars: int = 120
     natural_split_max_segments: int = 3
     natural_split_delay_sec: List[float] = Field(default_factory=lambda: [0.3, 0.8])
-
-    # Stream reply
-    stream_reply: bool = True
-    stream_buffer_chars: int = 30
-    stream_chunk_max_chars: int = 200
+    reply_deadline_sec: float = Field(default=0.0, ge=0.0)
     
     # Concurrency
     max_concurrency: int = 5
@@ -108,6 +97,7 @@ class BotConfig(BaseModel):
     filter_mute: bool = False
     ignore_official: bool = True
     ignore_service: bool = True
+    allow_filehelper_self_message: bool = True
     ignore_names: List[str] = Field(default_factory=list)
     ignore_keywords: List[str] = Field(default_factory=list)
 
@@ -137,6 +127,7 @@ class BotConfig(BaseModel):
     # Personalization
     personalization_enabled: bool = True
     profile_update_frequency: int = 10
+    contact_prompt_update_frequency: int = 10
     remember_facts_enabled: bool = True
     max_context_facts: int = 20
     profile_inject_in_prompt: bool = True
@@ -194,7 +185,6 @@ class LoggingConfig(BaseModel):
 class AgentConfig(BaseModel):
     enabled: bool = True
     graph_mode: str = "state_graph"
-    streaming_enabled: bool = True
     langsmith_enabled: bool = False
     langsmith_project: str = "wechat-chat"
     langsmith_endpoint: Optional[str] = None

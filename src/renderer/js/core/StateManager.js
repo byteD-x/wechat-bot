@@ -31,7 +31,8 @@ class StateManager {
             currentPage: 'dashboard',
             logs: {
                 autoScroll: true,
-                autoRefresh: true
+                autoRefresh: true,
+                wrap: true
             },
             intervals: {
                 status: null,

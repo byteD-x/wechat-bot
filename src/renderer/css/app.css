@@ -418,6 +418,27 @@ a:hover {
     background: var(--bg-base);
 }
 
+.main-content::-webkit-scrollbar {
+    width: 12px;
+}
+
+.main-content::-webkit-scrollbar-track {
+    background: rgba(148, 163, 184, 0.12);
+    border-radius: 999px;
+}
+
+.main-content::-webkit-scrollbar-thumb {
+    background: rgba(15, 23, 42, 0.28);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+}
+
+.main-content::-webkit-scrollbar-thumb:hover {
+    background: rgba(15, 23, 42, 0.42);
+    background-clip: padding-box;
+}
+
 /* 页面切换 */
 .page {
     display: none;
@@ -1843,6 +1864,9 @@ input[type="checkbox"]:checked::after {
     font-weight: 600;
     color: var(--text-primary);
     margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
 }
 
 .detail-grid {
@@ -1898,6 +1922,28 @@ input[type="checkbox"]:checked::after {
     border: 1px solid var(--border-color);
     color: var(--text-muted);
     font-size: 12px;
+}
+
+.detail-textarea {
+    min-height: 220px;
+    margin-top: 14px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.7;
+}
+
+.detail-help {
+    margin-top: 10px;
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 1.6;
+}
+
+.detail-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 14px;
 }
 
 /* Modal 下拉分组样式 */
@@ -2259,6 +2305,28 @@ option {
     margin-left: 16px;
 }
 
+.settings-card-header-actions .btn.is-loading {
+    cursor: progress;
+}
+
+.settings-scroll-top {
+    position: fixed;
+    right: 32px;
+    bottom: 28px;
+    z-index: 30;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(12px);
+    box-shadow: var(--shadow-md);
+    transition: opacity var(--transition-normal), transform var(--transition-normal);
+}
+
+.settings-scroll-top.visible {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0);
+}
+
 .settings-card-body {
     padding: 0 24px 24px;
 }
@@ -2301,6 +2369,11 @@ option {
 
     .settings-card-header-actions {
         margin-left: 0;
+    }
+
+    .settings-scroll-top {
+        right: 20px;
+        bottom: 20px;
     }
 }
 

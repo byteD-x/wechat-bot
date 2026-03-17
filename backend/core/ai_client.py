@@ -36,6 +36,11 @@ from typing import AsyncIterator, Deque, Dict, Iterable, List, Optional, Tuple
 import httpx
 from tenacity import AsyncRetrying, stop_after_attempt, wait_exponential, retry_if_exception_type, RetryError
 
+from .provider_compat import (
+    build_openai_chat_payload,
+    normalize_chat_result,
+    normalize_provider_error,
+)
 from ..utils.common import as_optional_int, as_optional_str
 
 try:
@@ -203,8 +208,8 @@ class AIClient:
     """
     OpenAI 兼容聊天接口的轻量封装。
     
-    该类管理会话历史、构建 API 请求、处理重试、
-    并提供同步/流式两种响应方式。
+    该类管理会话历史、构建 API 请求、处理重试，
+    并统一兼容不同 OpenAI-compatible 提供方的响应结构。
     
     Attributes:
         base_url (str): API 接口基础 URL
@@ -411,18 +416,15 @@ class AIClient:
                 messages = self._build_messages(
                     chat_id, user_text, system_prompt, memory_context, image_path
                 )
-                payload = {
-                    "model": self.model,
-                    "messages": messages,
-                }
-                if self.temperature is not None:
-                    payload["temperature"] = self.temperature
-                if self.max_completion_tokens is not None:
-                    payload["max_completion_tokens"] = self.max_completion_tokens
-                elif self.max_tokens is not None:
-                    payload["max_tokens"] = self.max_tokens
-                if self.reasoning_effort:
-                    payload["reasoning_effort"] = self.reasoning_effort
+                payload = build_openai_chat_payload(
+                    model=self.model,
+                    messages=messages,
+                    stream=False,
+                    temperature=self.temperature,
+                    max_tokens=self.max_tokens,
+                    max_completion_tokens=self.max_completion_tokens,
+                    reasoning_effort=self.reasoning_effort,
+                )
 
                 url = f"{self.base_url}/chat/completions"
                 headers = self._build_headers()
@@ -441,32 +443,25 @@ class AIClient:
                                     url, headers=headers, json=payload, timeout=self.timeout_sec
                                 )
                                 if resp.status_code >= 400:
-                                    raise RuntimeError(
-                                        f"HTTP {resp.status_code}：{resp.text[:200]}"
-                                    )
+                                    normalized_error = normalize_provider_error(response=resp)
+                                    raise RuntimeError(normalized_error.message)
 
                                 try:
                                     data = resp.json()
                                 except ValueError as exc:
-                                    raise RuntimeError(
-                                        f"响应不是 JSON：{resp.text[:200]}"
-                                    ) from exc
-                                if data.get("error"):
-                                    raise RuntimeError(f"接口错误：{data.get('error')}")
-                                choices = data.get("choices") or []
-                                choice = choices[0] if choices else {}
-                                message = choice.get("message") or {}
-                                reply = _extract_text(message.get("content"))
-                                if not reply and _is_internal_task_chat_id(chat_id):
-                                    reply = _extract_text(
-                                        message.get("reasoning_content")
-                                        or message.get("reasoning")
-                                        or choice.get("reasoning_content")
-                                        or choice.get("reasoning")
+                                    normalized_error = normalize_provider_error(
+                                        exc=exc,
+                                        response=resp,
+                                        payload=resp.text[:200],
                                     )
+                                    raise RuntimeError(normalized_error.message) from exc
+                                normalized = normalize_chat_result(data)
+                                reply = normalized.text
+                                if not reply and _is_internal_task_chat_id(chat_id):
+                                    reply = normalized.reasoning
                                     if reply:
                                         logging.info(
-                                            "AI content empty; using reasoning_content for internal task (%s, len=%s)",
+                                            "AI content empty; using normalized reasoning for internal task (%s, len=%s)",
                                             chat_id,
                                             len(reply),
                                         )
@@ -502,117 +497,17 @@ class AIClient:
         system_prompt: Optional[str] = None,
         memory_context: Optional[Iterable[dict]] = None,
     ) -> Optional[AsyncIterator[str]]:
-        """流式调用模型，返回分段内容迭代器，失败返回 None。"""
-        lock = self._get_chat_lock(chat_id)
-        url = f"{self.base_url}/chat/completions"
-        headers = self._build_headers()
-        client = self._get_http_client()
+        """兼容旧接口：内部退化为单次调用并只产出一个分段。"""
 
         async def _stream() -> AsyncIterator[str]:
-            async with lock:
-                messages = self._build_messages(
-                    chat_id, user_text, system_prompt, memory_context
-                )
-                payload = {
-                    "model": self.model,
-                    "messages": messages,
-                    "stream": True,
-                }
-                if self.temperature is not None:
-                    payload["temperature"] = self.temperature
-                if self.max_completion_tokens is not None:
-                    payload["max_completion_tokens"] = self.max_completion_tokens
-                elif self.max_tokens is not None:
-                    payload["max_tokens"] = self.max_tokens
-                if self.reasoning_effort:
-                    payload["reasoning_effort"] = self.reasoning_effort
-
-                sent_any = False
-                try:
-                    async for attempt in AsyncRetrying(
-                        stop=stop_after_attempt(self.max_retries + 1),
-                        wait=wait_exponential(multiplier=0.6, max=10),
-                        retry=retry_if_exception_type(Exception),
-                        reraise=True,
-                    ):
-                        with attempt:
-                            reply_parts: List[str] = []
-                            try:
-                                async with client.stream(
-                                    "POST",
-                                    url,
-                                    headers=headers,
-                                    json=payload,
-                                    timeout=self.timeout_sec,
-                                ) as resp:
-                                    if resp.status_code >= 400:
-                                        error_text = (await resp.aread())[:200]
-                                        raise RuntimeError(
-                                            f"HTTP {resp.status_code}：{error_text}"
-                                        )
-                                    async for raw_line in resp.aiter_lines():
-                                        if not raw_line:
-                                            continue
-                                        line = raw_line.strip()
-                                        if not line.startswith("data:"):
-                                            continue
-                                        data_text = line[5:].strip()
-                                        if data_text == "[DONE]":
-                                            break
-                                        try:
-                                            data = json.loads(data_text)
-                                        except ValueError:
-                                            continue
-                                        delta = data.get("choices", [{}])[0].get("delta", {})
-                                        chunk = delta.get("content")
-                                        if chunk is None:
-                                            chunk = (
-                                                data.get("choices", [{}])[0]
-                                                .get("message", {})
-                                                .get("content")
-                                            )
-                                        if not chunk and _is_internal_task_chat_id(chat_id):
-                                            chunk = (
-                                                delta.get("reasoning_content")
-                                                or delta.get("reasoning")
-                                                or data.get("choices", [{}])[0]
-                                                .get("message", {})
-                                                .get("reasoning_content")
-                                                or data.get("choices", [{}])[0]
-                                                .get("message", {})
-                                                .get("reasoning")
-                                            )
-                                        chunk = _extract_text(chunk)
-                                        if not chunk:
-                                            continue
-                                        reply_parts.append(chunk)
-                                        sent_any = True
-                                        yield chunk
-
-                                reply = "".join(reply_parts).strip()
-                                if not reply:
-                                    raise RuntimeError("AI 返回内容为空。")
-                                self._append_history(chat_id, user_text, reply)
-                                return
-                            except Exception as exc:
-                                if sent_any:
-                                    partial_reply = "".join(reply_parts).strip()
-                                    if partial_reply:
-                                        self._append_history(chat_id, user_text, partial_reply)
-                                    logging.warning(
-                                        "AI 流式请求中断，已输出部分内容，停止重试：%s", exc
-                                    )
-                                    return
-                                logging.warning(
-                                    "AI 流式请求失败（第 %s 次）：%s",
-                                    attempt.retry_state.attempt_number,
-                                    exc,
-                                )
-                                raise exc
-
-                except Exception as last_error:
-                    logging.error("AI 流式请求多次失败：%s", last_error)
-                    return
+            reply = await self.generate_reply(
+                chat_id,
+                user_text,
+                system_prompt=system_prompt,
+                memory_context=memory_context,
+            )
+            if reply:
+                yield reply
 
         return _stream()
 

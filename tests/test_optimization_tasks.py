@@ -18,6 +18,8 @@ from backend.transports import BaseTransport, WcferryWeChatClient
 from backend.transports.wcferry_adapter import (
     TransportUnavailableError,
     _best_effort_wcf_call,
+    _build_local_wcferry_recovery_hint,
+    _cleanup_stale_wcferry_ports,
     _extract_supported_wechat_versions,
 )
 from backend.wechat_versions import OFFICIAL_SUPPORTED_WECHAT_VERSION
@@ -216,6 +218,10 @@ def test_bot_schema_defaults_to_official_wechat_version():
     assert BotConfig().required_wechat_version == OFFICIAL_SUPPORTED_WECHAT_VERSION
 
 
+def test_bot_schema_allows_zero_reply_deadline():
+    assert BotConfig(reply_deadline_sec=0).reply_deadline_sec == 0
+
+
 @pytest.mark.asyncio
 async def test_memory_manager_initialize_opens_connection(tmp_path):
     manager = MemoryManager(str(tmp_path / "chat_memory.db"))
@@ -256,6 +262,7 @@ def test_best_effort_wcf_call_times_out_quickly():
 
 def test_wcferry_close_uses_best_effort_cleanup(monkeypatch):
     client = object.__new__(WcferryWeChatClient)
+    client._uses_local_wcf_sdk = True
     client._wcf = SimpleNamespace(
         _is_receiving_msg=True,
         disable_recv_msg=lambda: None,
@@ -271,11 +278,53 @@ def test_wcferry_close_uses_best_effort_cleanup(monkeypatch):
         "backend.transports.wcferry_adapter.relocate_known_root_artifacts",
         lambda: calls.append("relocate"),
     )
+    monkeypatch.setattr(
+        "backend.transports.wcferry_adapter._destroy_stale_local_wcf_session",
+        lambda: calls.append("destroy") or True,
+    )
 
     client.close()
 
     assert client._wcf._is_receiving_msg is False
-    assert calls == ["disable_recv_msg", "cleanup", "relocate"]
+    assert calls == ["disable_recv_msg", "cleanup", "destroy", "relocate"]
+
+
+def test_cleanup_stale_wcferry_ports_destroys_existing_sdk(monkeypatch):
+    state = {"active": True, "destroyed": 0}
+
+    monkeypatch.setattr(
+        "backend.transports.wcferry_adapter._is_tcp_port_open",
+        lambda host, port, timeout_sec=0.25: state["active"],
+    )
+
+    def _fake_destroy():
+        state["destroyed"] += 1
+        state["active"] = False
+        return True
+
+    monkeypatch.setattr(
+        "backend.transports.wcferry_adapter._destroy_stale_local_wcf_session",
+        _fake_destroy,
+    )
+
+    assert _cleanup_stale_wcferry_ports(wait_timeout_sec=0.2) is True
+    assert state["destroyed"] == 1
+
+
+def test_build_local_wcferry_recovery_hint_reports_conflicts(monkeypatch):
+    monkeypatch.setattr(
+        "backend.transports.wcferry_adapter._is_tcp_port_open",
+        lambda host, port, timeout_sec=0.25: True,
+    )
+    monkeypatch.setattr(
+        "backend.transports.wcferry_adapter._count_running_wechat_processes",
+        lambda: 2,
+    )
+
+    hint = _build_local_wcferry_recovery_hint()
+
+    assert "10086/10087" in hint
+    assert "2 个 WeChat.exe" in hint
 
 
 def test_relocate_known_root_artifacts_moves_files(tmp_path, monkeypatch):
@@ -331,8 +380,8 @@ def test_agent_runtime_allow_empty_key_uses_dummy_runtime_key(monkeypatch):
         agent_cfg={"enabled": True},
     )
 
-    assert runtime._chat_model.kwargs["api_key"] == "ollama"
-    assert runtime._embedding_client.kwargs["api_key"] == "ollama"
+    assert runtime._chat_model.kwargs["api_key"] == "wechat-chat-allow-empty-key"
+    assert runtime._embedding_client.kwargs["api_key"] == "wechat-chat-allow-empty-key"
 
 
 @pytest.mark.asyncio

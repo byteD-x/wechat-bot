@@ -22,6 +22,11 @@ class UserProfile(BaseModel):
     context_facts: List[str] = Field(default_factory=list)
     last_emotion: str = "neutral"
     emotion_history: List[Dict[str, Any]] = Field(default_factory=list)
+    profile_summary: str = ""
+    contact_prompt: str = ""
+    contact_prompt_updated_at: int = 0
+    contact_prompt_source: str = ""
+    contact_prompt_last_message_count: int = 0
     message_count: int = 0
     updated_at: int = 0
 

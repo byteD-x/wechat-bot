@@ -57,6 +57,11 @@ _EXACT_EFFECTS: Dict[str, Dict[str, str]] = {
         "component": "agent_runtime",
         "note": "下次用户画像后台更新时立即生效",
     },
+    "bot.contact_prompt_update_frequency": {
+        "mode": "live",
+        "component": "agent_runtime",
+        "note": "下次联系人专属 Prompt 后台更新时立即生效",
+    },
     "bot.daily_token_limit": {
         "mode": "live",
         "component": "usage_guard",

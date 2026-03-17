@@ -5,6 +5,7 @@
 import logging
 import os
 import json
+import re
 import traceback
 from logging.handlers import RotatingFileHandler
 from typing import Dict, List, Optional, Tuple, Any, Literal
@@ -17,7 +18,11 @@ __all__ = [
     "get_logging_settings",
     "get_log_behavior",
     "format_log_text",
+    "format_log_fields",
+    "build_stage_log_message",
     "JSONFormatter",
+    "HealthcheckAccessLogFilter",
+    "configure_http_access_log_filters",
 ]
 
 
@@ -43,6 +48,35 @@ class JSONFormatter(logging.Formatter):
             log_obj.update(record.extra_data)
             
         return json.dumps(log_obj, ensure_ascii=False)
+
+
+class HealthcheckAccessLogFilter(logging.Filter):
+    """Hide high-frequency local polling access logs from the shared log stream."""
+
+    _NOISY_PATH_PATTERN = re.compile(
+        r"\bGET\s+/(api/(status|logs|messages))\b",
+        re.IGNORECASE,
+    )
+    _LOCAL_HOST_PATTERN = re.compile(r"\b(127\.0\.0\.1|::1|localhost)\b", re.IGNORECASE)
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            message = record.getMessage()
+        except Exception:
+            return True
+        text = str(message or "")
+        if not self._NOISY_PATH_PATTERN.search(text):
+            return True
+        return not self._LOCAL_HOST_PATTERN.search(text)
+
+
+def configure_http_access_log_filters() -> None:
+    filter_type = HealthcheckAccessLogFilter
+    for logger_name in ("hypercorn.access", "quart.serving", "werkzeug"):
+        target_logger = logging.getLogger(logger_name)
+        if any(isinstance(item, filter_type) for item in target_logger.filters):
+            continue
+        target_logger.addFilter(filter_type())
 
 
 def setup_logging(
@@ -124,3 +158,33 @@ def format_log_text(text: str, enabled: bool, max_len: int = 120) -> str:
     if not enabled:
         return "[hidden]"
     return truncate_text(text, max_len=max_len)
+
+
+def format_log_fields(fields: Dict[str, Any], max_len: int = 160) -> str:
+    """Format structured log fields as a compact key-value string."""
+    from .common import truncate_text
+
+    parts: List[str] = []
+    for key, value in fields.items():
+        if value is None:
+            continue
+        if isinstance(value, bool):
+            text = "true" if value else "false"
+        elif isinstance(value, (dict, list, tuple, set)):
+            try:
+                text = json.dumps(value, ensure_ascii=False)
+            except Exception:
+                text = str(value)
+        else:
+            text = str(value)
+
+        normalized = " ".join(text.split())
+        parts.append(f"{key}={truncate_text(normalized, max_len=max_len)}")
+    return " | ".join(parts)
+
+
+def build_stage_log_message(stage: str, **fields: Any) -> str:
+    """Build a human-readable stage log message."""
+    prefix = f"[{str(stage or '').strip() or 'stage'}]"
+    detail = format_log_fields(fields)
+    return prefix if not detail else f"{prefix} {detail}"

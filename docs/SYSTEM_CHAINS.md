@@ -109,7 +109,13 @@
      - 历史消息走共享 `MemoryManager`。
      - 主动发送走 `BotManager.send_message()`，最终调用 `WeChatBot.send_text_message()`。
 
-7. `/api/preview_prompt`
+7. `/api/contact_profile` `/api/contact_prompt`
+   - 功能：读取联系人画像与专属 Prompt，并支持人工保存修订版本。
+   - 实现：
+     - 画像读取走 `MemoryManager.get_contact_profile()`。
+     - 手工编辑走 `MemoryManager.save_contact_prompt()`，保存后继续作为后台成长链的增量基础。
+
+8. `/api/preview_prompt`
    - 功能：预览系统提示词。
    - 实现：构造一个示例事件对象，调用 `resolve_system_prompt()` 生成预览。
 
@@ -255,7 +261,7 @@
    - 实现：
      - 生成 `chat_id`。
      - 调用 AI 运行时准备上下文。
-     - 根据配置选择流式或非流式回复。
+     - 根据 `reply_deadline_sec` 和 provider 超时预算组织同步真实回复。
      - 在发送成功后写入日志、广播 outgoing、记录 token 统计。
 
 ## 8. 语音消息处理链
@@ -347,24 +353,18 @@
      - 群聊可按 `group_include_sender` 注入 `[sender]` 前缀。
 
 4. `invoke`
-   - 功能：非流式模型调用。
-   - 实现：
-     - 调用 `ChatOpenAI.ainvoke()`。
-     - 当 `content` 为空时，可对内部任务和 Ollama 使用 `reasoning_content` 回退。
+    - 功能：非流式模型调用。
+    - 实现：
+      - 调用 `ChatOpenAI.ainvoke()`。
+      - 响应统一经过兼容层标准化，收敛正文、推理、工具调用与 finish reason。
+      - 当正文为空时，仅内部任务可回退到推理文本；普通聊天不再发送兜底文案。
 
-5. `stream_reply`
-   - 功能：流式模型调用。
-   - 实现：
-     - 调用 `astream()`。
-     - 逐块提取文本。
-     - 对内部任务和 Ollama 同样支持 `reasoning_content` 回退。
-
-6. `finalize_request`
+5. `finalize_request`
    - 功能：请求收尾。
    - 实现：
-     - 写回 SQLite 记忆。
-     - 更新情绪。
-     - 异步写入向量记忆。
+      - 写回 SQLite 记忆。
+      - 更新情绪。
+      - 异步写入向量记忆。
      - 异步做事实提取和画像演化。
 
 ## 11. 记忆与 RAG 链
@@ -428,25 +428,23 @@
 5. `backend/bot.py::_send_smart_reply`
    - 功能：统一处理非流式回复发送。
    - 实现：
-     - 引用模式：`wechat/text/none`
      - 自然分段：按配置拆段
      - 每段调用 `send_reply_chunks()`
      - 任一发送失败立即抛错，不再误记成功
 
-6. `backend/bot.py::_stream_smart_reply`
-   - 功能：统一处理流式回复发送。
+6. `backend/bot.py::_process_and_reply`
+   - 功能：统一处理同步调用、deadline 控制与预算内真实回复。
    - 实现：
-     - 按缓冲阈值累积 chunk
-     - 支持首段引用
-     - 支持后缀单独补发
-     - 发送失败立即中断主链
+     - 根据 `reply_deadline_sec` 计算剩余预算
+     - 超出预算时转入延后发送真实回复，不再生成兜底文本
+     - 统一走 `_send_smart_reply()` 和 `finalize_request()`
+     - 保证“接收消息 → 发送消息 → 完成落盘”闭环不断裂
 
 7. `backend/handlers/sender.py::send_reply_chunks`
    - 功能：底层分块发送器。
    - 实现：
      - 控制 chunk 间延迟
      - 控制最小回复间隔
-     - 支持原生引用失败后降级文本引用
 
 ## 13. 配置保存与热更新链
 

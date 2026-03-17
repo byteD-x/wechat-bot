@@ -56,3 +56,23 @@ def test_resolve_system_prompt_appends_profile_and_emotion_when_no_placeholders(
     assert "[User Profile]" in rendered
     assert "[Current Emotion]" in rendered
 
+
+def test_resolve_system_prompt_prefers_contact_prompt_over_base_and_override():
+    bot_cfg = {
+        "system_prompt": "base prompt",
+        "system_prompt_overrides": {"Alice": "override prompt"},
+        "profile_inject_in_prompt": True,
+        "emotion_inject_in_prompt": False,
+    }
+    event = SimpleNamespace(chat_name="Alice")
+    user_profile = {
+        "nickname": "Bob",
+        "profile_summary": "关系：老朋友",
+        "contact_prompt": "contact prompt",
+    }
+
+    rendered = resolve_system_prompt(event, bot_cfg, user_profile, None, [])
+
+    assert rendered.startswith("contact prompt")
+    assert "override prompt" not in rendered
+    assert "base prompt" not in rendered

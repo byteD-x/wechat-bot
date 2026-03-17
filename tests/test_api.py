@@ -3,6 +3,9 @@ import pytest
 import asyncio
 from datetime import datetime
 from unittest.mock import MagicMock, AsyncMock, patch
+
+pytest.importorskip("quart")
+
 from quart import Quart
 
 # Mock wxauto before importing api
@@ -56,8 +59,34 @@ def mock_manager():
         }
     async def async_list_chat_summaries(*args, **kwargs):
         return []
+    async def async_get_contact_profile(chat_id):
+        return {
+            "chat_id": chat_id,
+            "profile_summary": "关系：普通朋友",
+            "contact_prompt": "",
+            "contact_prompt_source": "",
+            "message_count": 0,
+        }
+    async def async_save_contact_prompt(chat_id, contact_prompt, *, source="user_edit", last_message_count=None):
+        return {
+            "chat_id": chat_id,
+            "profile_summary": "关系：普通朋友",
+            "contact_prompt": contact_prompt,
+            "contact_prompt_source": source,
+            "contact_prompt_last_message_count": int(last_message_count or 0),
+        }
+    async def async_get_profile_prompt_snapshot(chat_id):
+        return {
+            "wx_id": chat_id,
+            "profile_summary": "关系：普通朋友",
+            "contact_prompt": "数据库中的联系人 Prompt",
+            "contact_prompt_source": "user_edit",
+        }
     mem_mgr.get_message_page = MagicMock(side_effect=async_get_message_page)
     mem_mgr.list_chat_summaries = MagicMock(side_effect=async_list_chat_summaries)
+    mem_mgr.get_contact_profile = MagicMock(side_effect=async_get_contact_profile)
+    mem_mgr.save_contact_prompt = MagicMock(side_effect=async_save_contact_prompt)
+    mem_mgr.get_profile_prompt_snapshot = MagicMock(side_effect=async_get_profile_prompt_snapshot)
     manager.get_memory_manager.return_value = mem_mgr
     
     # Replace the manager in the api module
@@ -99,6 +128,35 @@ async def test_api_messages(client, mock_manager):
         keyword='',
     )
     mock_manager.get_memory_manager().list_chat_summaries.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_api_contact_profile(client, mock_manager):
+    response = await client.get('/api/contact_profile?chat_id=friend:alice')
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["success"] is True
+    assert data["profile"]["chat_id"] == "friend:alice"
+    mock_manager.get_memory_manager().get_contact_profile.assert_called_once_with("friend:alice")
+
+
+@pytest.mark.asyncio
+async def test_api_contact_prompt_save(client, mock_manager):
+    response = await client.post(
+        '/api/contact_prompt',
+        json={"chat_id": "friend:alice", "contact_prompt": "新的联系人 Prompt"},
+    )
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["success"] is True
+    assert data["profile"]["contact_prompt"] == "新的联系人 Prompt"
+    mock_manager.get_memory_manager().save_contact_prompt.assert_called_once_with(
+        "friend:alice",
+        "新的联系人 Prompt",
+        source="user_edit",
+    )
 
 @pytest.mark.asyncio
 async def test_api_send(client, mock_manager):
@@ -249,6 +307,35 @@ async def test_api_config_masks_langsmith_key(client):
 
 
 @pytest.mark.asyncio
+async def test_api_config_does_not_expose_removed_reply_or_stream_fields(client):
+    test_config = {
+        "api": {"presets": []},
+        "bot": {
+            "reply_deadline_sec": 2.0,
+            "stream_reply": True,
+            "stream_buffer_chars": 30,
+            "stream_chunk_max_chars": 200,
+            "reply_timeout_fallback_text": "timeout fallback",
+        },
+        "logging": {},
+        "agent": {
+            "enabled": True,
+            "streaming_enabled": True,
+        },
+    }
+
+    with patch.object(api_module.config_service, "get_snapshot", return_value=_build_snapshot(test_config)):
+        response = await client.get("/api/config")
+
+    data = await response.get_json()
+    assert "stream_reply" not in data["bot"]
+    assert "stream_buffer_chars" not in data["bot"]
+    assert "stream_chunk_max_chars" not in data["bot"]
+    assert "reply_timeout_fallback_text" not in data["bot"]
+    assert "streaming_enabled" not in data["agent"]
+
+
+@pytest.mark.asyncio
 async def test_api_config_audit_reports_unknown_override_paths(client):
     test_config = {
         "api": {"presets": []},
@@ -332,6 +419,36 @@ async def test_api_preview_prompt_applies_overrides_and_injections(client):
 
 
 @pytest.mark.asyncio
+async def test_api_preview_prompt_uses_contact_prompt_when_chat_id_is_provided(client, mock_manager):
+    preview_config = {
+        "bot": {
+            "system_prompt": "基础提示",
+            "system_prompt_overrides": {
+                "Alice": "覆盖提示"
+            },
+            "profile_inject_in_prompt": True,
+            "emotion_inject_in_prompt": False,
+        }
+    }
+
+    with patch.object(api_module.config_service, "get_snapshot", return_value=_build_snapshot(preview_config)):
+        response = await client.post('/api/preview_prompt', json={
+            "sample": {
+                "chat_id": "friend:alice",
+                "chat_name": "Alice",
+                "sender": "Alice",
+                "message": "你好",
+            }
+        })
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["success"] is True
+    assert "数据库中的联系人 Prompt" in data["prompt"]
+    assert data["summary"]["contact_prompt_applied"] is True
+
+
+@pytest.mark.asyncio
 async def test_api_save_config_triggers_runtime_reload(client, mock_manager):
     test_config = {
         "api": {
@@ -367,11 +484,11 @@ async def test_api_save_config_triggers_runtime_reload(client, mock_manager):
         return func(*args, **kwargs)
 
     async_to_thread = AsyncMock(side_effect=_fake_to_thread)
-    update_override = MagicMock(return_value=snapshot)
+    save_effective_config = MagicMock(return_value=snapshot)
     with (
         patch("backend.api.asyncio.to_thread", async_to_thread),
         patch.object(api_module.config_service, "get_snapshot", return_value=snapshot),
-        patch.object(api_module.config_service, "update_override", update_override),
+        patch.object(api_module.config_service, "save_effective_config", save_effective_config),
     ):
         response = await client.post("/api/config", json={"api": {"active_preset": "DeepSeek"}})
 
@@ -382,8 +499,9 @@ async def test_api_save_config_triggers_runtime_reload(client, mock_manager):
     assert data["changed_paths"] == []
     assert isinstance(data["reload_plan"], list)
     assert data["runtime_apply"]["success"] is True
+    assert data["default_config_synced"] is True
     mock_manager.reload_runtime_config.assert_awaited_once()
-    update_override.assert_called_once()
+    save_effective_config.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -422,7 +540,7 @@ async def test_api_save_config_forces_ai_reload_for_agent_changes(client, mock_m
     with (
         patch("backend.api.asyncio.to_thread", AsyncMock(side_effect=_fake_to_thread)),
         patch.object(api_module.config_service, "get_snapshot", return_value=current_snapshot),
-        patch.object(api_module.config_service, "update_override", return_value=updated_snapshot),
+        patch.object(api_module.config_service, "save_effective_config", return_value=updated_snapshot),
     ):
         response = await client.post("/api/config", json={"agent": {"langsmith_enabled": True}})
 
