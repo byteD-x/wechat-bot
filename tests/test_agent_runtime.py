@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
@@ -100,6 +101,8 @@ class _DummyMemory:
         self.saved_contact_prompt_source = ""
         self.saved_contact_prompt_updated_at = 0
         self.saved_contact_prompt_last_message_count = 0
+        self.background_backlog = {}
+        self._backlog_updated_at = 0
 
     async def get_recent_context(self, chat_id, limit):
         return [{"role": "assistant", "content": "history reply"}]
@@ -165,8 +168,39 @@ class _DummyMemory:
         }
 
 
+    async def upsert_background_backlog(self, chat_id, task_type, payload=None):
+        self._backlog_updated_at += 1
+        self.background_backlog[(chat_id, task_type)] = {
+            "chat_id": chat_id,
+            "task_type": task_type,
+            "payload": dict(payload or {}),
+            "updated_at": self._backlog_updated_at,
+        }
+
+    async def list_background_backlog(self, limit=None):
+        items = sorted(self.background_backlog.values(), key=lambda item: int(item["updated_at"]))
+        if limit is not None:
+            items = items[:limit]
+        return [dict(item) for item in items]
+
+    async def delete_background_backlog(self, chat_id, task_type):
+        self.background_backlog.pop((chat_id, task_type), None)
+
+    async def get_background_backlog_stats(self):
+        by_task_type = {}
+        latest_updated_at = 0
+        for item in self.background_backlog.values():
+            by_task_type[item["task_type"]] = by_task_type.get(item["task_type"], 0) + 1
+            latest_updated_at = max(latest_updated_at, int(item["updated_at"]))
+        return {
+            "total": len(self.background_backlog),
+            "by_task_type": by_task_type,
+            "latest_updated_at": latest_updated_at,
+        }
+
+
 class _DummyExportRag:
-    async def search(self, ai_client, chat_id, query_text):
+    async def search(self, ai_client, chat_id, query_text, *, priority="foreground"):
         return [{"text": "style snippet"}]
 
     def build_memory_message(self, results):
@@ -175,9 +209,9 @@ class _DummyExportRag:
     def __init__(self):
         self.sync_calls = 0
 
-    async def sync(self, ai_client, force=False):
+    async def sync(self, ai_client, force=False, *, priority="foreground"):
         self.sync_calls += 1
-        return {"synced": True, "force": force}
+        return {"success": True, "synced": True, "force": force, "priority": priority}
 
 
 class _SlowProfileMemory(_DummyMemory):
@@ -187,9 +221,9 @@ class _SlowProfileMemory(_DummyMemory):
 
 
 class _SlowExportRag(_DummyExportRag):
-    async def search(self, ai_client, chat_id, query_text):
+    async def search(self, ai_client, chat_id, query_text, *, priority="foreground"):
         await asyncio.sleep(0.2)
-        return await super().search(ai_client, chat_id, query_text)
+        return await super().search(ai_client, chat_id, query_text, priority=priority)
 
 
 class _DummyVectorMemory:
@@ -287,7 +321,7 @@ async def test_agent_runtime_prepare_request_aggregates_context(monkeypatch):
     assert "base prompt" in prepared.system_prompt
     assert "关系：普通朋友；偏好：直接一点；事实：喜欢猫" in prepared.system_prompt
     assert prepared.memory_context == [{"role": "assistant", "content": "history reply"}]
-    assert prepared.trace["context_summary"]["growth_mode"] == "background_only"
+    assert prepared.trace["context_summary"]["growth_mode"] == "deferred_until_batch"
     assert len(prepared.prompt_messages) >= 2
 
 
@@ -975,19 +1009,20 @@ async def test_agent_runtime_finalize_request_persists_messages(monkeypatch):
     assert memory.saved_messages[0][0] == "friend:bob"
     saved_roles = [item["role"] for item in memory.saved_messages[0][1]]
     assert saved_roles == ["user", "assistant"]
-    assert memory.updated_emotion == ("friend:bob", "happy")
-    assert len(vector_memory.inserted) == 2
-    assert export_rag.sync_calls == 1
     assert prepared.response_metadata["growth_message_count"] == 4
-    assert memory.saved_contact_prompt == "这是联系人专属 Prompt"
-    assert memory.saved_contact_prompt_source == "hybrid"
+    assert len(memory.background_backlog) == 4
+    assert ("friend:bob", "emotion") in memory.background_backlog
+    assert ("friend:bob", "contact_prompt") in memory.background_backlog
+    assert ("friend:bob", "vector_memory") in memory.background_backlog
+    assert ("__global__", "export_rag_sync") in memory.background_backlog
     status = runtime.get_status()
-    assert status["growth_mode"] == "background_only"
+    assert status["growth_mode"] == "deferred_until_batch"
     assert status["growth_tasks_pending"] == 0
+    assert status["background_backlog_count"] == 4
 
 
 @pytest.mark.asyncio
-async def test_agent_runtime_growth_failures_do_not_block_followup_steps(monkeypatch):
+async def test_agent_runtime_background_batch_executes_deferred_tasks(monkeypatch):
     monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
 
     memory = _DummyMemory()
@@ -1004,6 +1039,7 @@ async def test_agent_runtime_growth_failures_do_not_block_followup_steps(monkeyp
             "personalization_enabled": True,
             "profile_update_frequency": 4,
             "emotion_detection_enabled": True,
+            "emotion_detection_mode": "ai",
             "rag_enabled": True,
             "remember_facts_enabled": True,
             "export_rag_enabled": True,
@@ -1011,16 +1047,23 @@ async def test_agent_runtime_growth_failures_do_not_block_followup_steps(monkeyp
         agent_cfg={"enabled": True},
     )
 
-    async def _emotion_boom(chat_id, text):
-        raise RuntimeError("emotion step boom")
+    async def _fake_generate_reply(
+        chat_id,
+        user_text,
+        system_prompt=None,
+        memory_context=None,
+        image_path=None,
+        priority="foreground",
+    ):
+        if str(chat_id).startswith("__emotion__"):
+            return '{"emotion":"happy","confidence":0.9,"intensity":4,"keywords_matched":[],"suggested_tone":"warm"}'
+        if str(chat_id).startswith("__contact_prompt__"):
+            return "这是联系人专属 Prompt"
+        if str(chat_id).startswith("__facts__"):
+            return '{"new_facts":["喜欢科技"],"relationship_hint":"friend","personality_traits":["direct"]}'
+        return "ignored"
 
-    fact_calls = []
-
-    async def _fake_extract_facts(chat_id, user_text, assistant_reply, user_profile, memory_obj):
-        fact_calls.append((chat_id, assistant_reply))
-
-    monkeypatch.setattr(runtime, "_analyze_emotion", _emotion_boom)
-    monkeypatch.setattr(runtime, "_extract_facts_background", _fake_extract_facts)
+    monkeypatch.setattr(runtime, "generate_reply", _fake_generate_reply)
 
     prepared = await runtime.prepare_request(
         event=SimpleNamespace(chat_name="Bob", sender="User", content="hi"),
@@ -1039,13 +1082,17 @@ async def test_agent_runtime_growth_failures_do_not_block_followup_steps(monkeyp
         {"memory": memory, "export_rag": export_rag, "vector_memory": vector_memory},
     )
     await asyncio.sleep(0)
+    await runtime._run_background_batch_once()
     await runtime.close()
 
     assert prepared.response_metadata["growth_message_count"] == 4
+    assert memory.updated_emotion == ("friend:bob", "happy")
     assert len(vector_memory.inserted) == 2
-    assert fact_calls == [("friend:bob", "received")]
+    assert memory.context_facts == [("friend:bob", "喜欢科技", 20)]
     assert export_rag.sync_calls == 1
-    assert runtime.get_status()["last_growth_error"] == "emotion step boom"
+    assert memory.saved_contact_prompt == "这是联系人专属 Prompt"
+    assert memory.saved_contact_prompt_source == "hybrid"
+    assert memory.background_backlog == {}
 
 
 @pytest.mark.asyncio
@@ -1171,6 +1218,20 @@ def test_agent_runtime_contact_prompt_update_frequency_uses_dedicated_config(mon
     assert runtime._should_refresh_contact_prompt(
         SimpleNamespace(message_count=3, contact_prompt="", contact_prompt_last_message_count=0)
     ) is False
+
+
+def test_agent_runtime_next_background_batch_skips_missed_today(monkeypatch):
+    monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
+
+    runtime = AgentRuntime(
+        settings={"base_url": "https://example.com/v1", "api_key": "sk-test", "model": "test-model"},
+        bot_cfg={},
+        agent_cfg={"enabled": True, "background_ai_batch_time": "04:00"},
+    )
+
+    next_run = runtime._compute_next_background_batch_at(datetime(2026, 3, 17, 5, 30, 0))
+
+    assert next_run == datetime(2026, 3, 18, 4, 0, 0)
 
 
 def test_agent_runtime_build_user_message_metadata_accepts_string_msg_type():

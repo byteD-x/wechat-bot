@@ -1,0 +1,94 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing git tag to release, e.g. v1.2.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    env:
+      CI: "true"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release tag
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $tag = "${{ inputs.release_tag }}"
+          } else {
+            $tag = "${{ github.ref_name }}"
+          }
+          if (-not $tag) {
+            throw "Release tag is required."
+          }
+          git fetch --tags --force
+          git rev-parse "refs/tags/$tag" | Out-Null
+          git checkout "refs/tags/$tag"
+          "RELEASE_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install Python dependencies
+        shell: pwsh
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+
+      - name: Install Node dependencies
+        shell: pwsh
+        run: npm ci
+
+      - name: Build release artifacts
+        shell: cmd
+        run: build.bat
+
+      - name: Generate release notes
+        shell: pwsh
+        run: python scripts/generate_release_notes.py --current-tag "$env:RELEASE_TAG" --output release-notes.md
+
+      - name: Generate SHA256 checksums
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem release\*.exe | Sort-Object Name
+          if (-not $files) {
+            throw "No release executables found."
+          }
+          $lines = foreach ($file in $files) {
+            $hash = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLower()
+            "$hash  $($file.Name)"
+          }
+          Set-Content -Path release\SHA256SUMS.txt -Value $lines -Encoding utf8
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          body_path: release-notes.md
+          files: |
+            release/wechat-ai-assistant-portable-*.exe
+            release/wechat-ai-assistant-setup-*.exe
+            release/SHA256SUMS.txt
+          fail_on_unmatched_files: true

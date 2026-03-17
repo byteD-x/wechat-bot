@@ -12,6 +12,11 @@ export class DashboardPage extends PageController {
         super('DashboardPage', 'page-dashboard');
         this._lastStats = null;
         this._recentMessages = [];
+        this._lastCostFetchAt = 0;
+        this._dashboardCost = {
+            today: null,
+            recent: null,
+        };
     }
 
     async onInit() {
@@ -31,7 +36,10 @@ export class DashboardPage extends PageController {
             this.updateStats(status);
         }
 
-        await this._loadRecentMessages();
+        await Promise.all([
+            this._loadRecentMessages(),
+            this._refreshDashboardCost(true),
+        ]);
     }
 
     _bindEvents() {
@@ -39,12 +47,14 @@ export class DashboardPage extends PageController {
         this.bindEvent('#btn-pause', 'click', () => this._togglePause());
         this.bindEvent('#btn-restart', 'click', () => this._restartBot());
         this.bindEvent('#btn-recover-bot', 'click', () => this._recoverBot());
+        this.bindEvent('#btn-open-costs', 'click', () => this.emit(Events.PAGE_CHANGE, 'costs'));
         this.bindEvent('#btn-view-logs', 'click', () => this.emit(Events.PAGE_CHANGE, 'logs'));
         this.bindEvent('#btn-view-all-messages', 'click', () => this.emit(Events.PAGE_CHANGE, 'messages'));
 
         this.bindEvent('#btn-refresh-status', 'click', () => {
             this.emit(Events.BOT_STATUS_CHANGE, {});
             toast.success('已触发状态刷新');
+            void this._refreshDashboardCost(true);
         });
 
         this.bindEvent('#btn-minimize-tray', 'click', () => {
@@ -457,8 +467,139 @@ export class DashboardPage extends PageController {
             nextStats.runtime_timings,
             nextStats.export_rag
         );
+        void this._refreshDashboardCost();
 
         this._lastStats = nextStats;
+    }
+
+    async _refreshDashboardCost(force = false) {
+        const now = Date.now();
+        if (!force && now - this._lastCostFetchAt < 15000) {
+            return;
+        }
+        this._lastCostFetchAt = now;
+
+        try {
+            const [today, recent] = await Promise.all([
+                apiService.getCostSummary({
+                    period: 'today',
+                    include_estimated: true,
+                }),
+                apiService.getCostSummary({
+                    period: '30d',
+                    include_estimated: true,
+                }),
+            ]);
+
+            if (today?.success) {
+                this._dashboardCost.today = today;
+            }
+            if (recent?.success) {
+                this._dashboardCost.recent = recent;
+            }
+
+            this._renderDashboardCost();
+        } catch (error) {
+            console.error('[DashboardPage] 加载成本概览失败:', error);
+        }
+    }
+
+    _renderDashboardCost() {
+        const todayElem = this.$('#stat-today-cost');
+        const summaryElem = this.$('#dashboard-cost-summary');
+        const modelsElem = this.$('#dashboard-cost-top-models');
+        if (!todayElem || !summaryElem || !modelsElem) {
+            return;
+        }
+
+        const todayOverview = this._dashboardCost.today?.overview || {};
+        const recentOverview = this._dashboardCost.recent?.overview || {};
+        const recentModels = Array.isArray(this._dashboardCost.recent?.models)
+            ? [...this._dashboardCost.recent.models]
+                .sort((left, right) => Number(right.total_tokens || 0) - Number(left.total_tokens || 0))
+                .slice(0, 3)
+            : [];
+
+        todayElem.textContent = this._formatCurrencyGroups(todayOverview.currency_groups) || '--';
+
+        const summaryItems = [
+            {
+                label: '近 30 天总金额',
+                value: this._formatCurrencyGroups(recentOverview.currency_groups) || '待定价',
+            },
+            {
+                label: '近 30 天总 Token',
+                value: this._formatNumber(recentOverview.total_tokens || 0),
+            },
+            {
+                label: '已定价回复',
+                value: this._formatNumber(recentOverview.priced_reply_count || 0),
+            },
+        ];
+
+        summaryElem.textContent = '';
+        const summaryFragment = document.createDocumentFragment();
+        summaryItems.forEach((item) => {
+            const block = document.createElement('div');
+            block.className = 'dashboard-cost-stat';
+
+            const label = document.createElement('span');
+            label.className = 'dashboard-cost-label';
+            label.textContent = item.label;
+
+            const value = document.createElement('strong');
+            value.className = 'dashboard-cost-value';
+            value.textContent = item.value;
+
+            block.appendChild(label);
+            block.appendChild(value);
+            summaryFragment.appendChild(block);
+        });
+        summaryElem.appendChild(summaryFragment);
+
+        modelsElem.textContent = '';
+        if (recentModels.length === 0) {
+            modelsElem.appendChild(this._createCompactEmpty('暂无成本模型数据'));
+            return;
+        }
+
+        const listFragment = document.createDocumentFragment();
+        recentModels.forEach((item) => {
+            const row = document.createElement('div');
+            row.className = 'dashboard-model-item';
+
+            const main = document.createElement('div');
+            main.className = 'dashboard-model-main';
+
+            const title = document.createElement('strong');
+            title.textContent = item.model || '--';
+
+            const meta = document.createElement('span');
+            meta.textContent = `${item.provider_id || '--'} · ${this._formatTokens(item.total_tokens || 0)}`;
+
+            const cost = document.createElement('span');
+            cost.className = 'dashboard-model-cost';
+            cost.textContent = this._formatCurrencyGroups(item.currency_groups) || '待定价';
+
+            main.appendChild(title);
+            main.appendChild(meta);
+            row.appendChild(main);
+            row.appendChild(cost);
+            listFragment.appendChild(row);
+        });
+        modelsElem.appendChild(listFragment);
+    }
+
+    _createCompactEmpty(text) {
+        const wrap = document.createElement('div');
+        wrap.className = 'empty-state compact-empty';
+
+        const label = document.createElement('span');
+        label.className = 'empty-state-text';
+        label.textContent = text;
+
+        wrap.appendChild(label);
+        return wrap;
     }
 
     _renderStartupState(startup) {
@@ -799,6 +940,32 @@ export class DashboardPage extends PageController {
             return `${(num / 1000).toFixed(1)}K`;
         }
         return `${(num / 1000000).toFixed(1)}M`;
+    }
+
+    _formatCurrencyGroups(groups) {
+        if (!Array.isArray(groups) || groups.length === 0) {
+            return '';
+        }
+        return groups
+            .map((item) => this._formatCurrencyValue(item.currency, item.total_cost))
+            .join(' / ');
+    }
+
+    _formatCurrencyValue(currency, amount) {
+        const value = Number(amount || 0);
+        if (!Number.isFinite(value)) {
+            return '--';
+        }
+
+        const digits = value >= 100 ? 2 : value >= 1 ? 4 : 6;
+        const fixed = value.toFixed(digits);
+        if (currency === 'CNY') {
+            return `¥${fixed}`;
+        }
+        if (currency === 'LOCAL') {
+            return `本地 ${fixed}`;
+        }
+        return `$${fixed}`;
     }
 }
 

@@ -1,6 +1,6 @@
 {
   "name": "wechat-ai-assistant",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "WeChat AI Assistant Desktop",
   "main": "src/main/index.js",
   "homepage": "https://github.com/byteD-x/wechat-bot",
@@ -15,12 +15,13 @@
     "start": "electron .",
     "dev": "chcp 65001 && electron . --dev",
     "build": "electron-builder --config electron-builder.yml",
-    "build:win": "electron-builder --config electron-builder.yml --win portable nsis msi --publish never",
+    "build:win": "electron-builder --config electron-builder.yml --win portable nsis --publish never",
     "build:portable": "electron-builder --config electron-builder.yml --win portable --publish never",
     "build:installer": "electron-builder --config electron-builder.yml --win nsis --publish never",
     "build:msi": "electron-builder --config electron-builder.yml --win msi --publish never",
-    "build:release": "electron-builder --config electron-builder.yml --win portable nsis msi --publish never",
-    "publish:github": "electron-builder --config electron-builder.yml --win portable nsis msi --publish always",
+    "build:release": "electron-builder --config electron-builder.yml --win portable nsis --publish never",
+    "release:local": "electron-builder --config electron-builder.yml --win portable nsis --publish never",
+    "release:notes": "python scripts/generate_release_notes.py",
     "pack": "electron-builder --config electron-builder.yml --dir"
   },
   "author": "Dxj",
@@ -31,7 +32,6 @@
   },
   "dependencies": {
     "electron-store": "^8.1.0",
-    "electron-updater": "^6.8.3",
     "iconv-lite": "^0.7.2"
   }
 }

@@ -192,10 +192,19 @@ python run.py web
     "retriever_rerank_mode": "lightweight",  # lightweight / auto / cross_encoder
     "retriever_cross_encoder_model": "",     # 本地模型目录
     "retriever_cross_encoder_device": "",    # cpu / cuda
+    "llm_foreground_max_concurrency": 1,
+    "background_ai_batch_time": "04:00",
+    "background_ai_missed_window_policy": "wait_until_next_day",
+    "background_ai_defer_mode": "defer_all",
 }
 ```
 
 详细字段说明、覆盖优先级和修改方式见 [配置说明](docs/USER_GUIDE.md#8-配置说明)。
+
+当前默认运行模式会把后台 AI 成长任务延后到凌晨批处理：
+- 主回复独占前台 LLM 槽位，默认全局并发 `1`
+- 白天产生的情绪分析、事实提取、联系人 prompt 刷新、运行期向量写入和导出 RAG 同步会进入持久化 backlog
+- 每天本地时间 `04:00` 才会开始批处理；如果程序错过当天 `04:00`，会等下一次窗口，不做补跑
 
 运行时输出目录约定：
 - 应用日志默认写入 `data/logs/`
@@ -227,6 +236,60 @@ python -m py_compile backend\\core\\agent_runtime.py backend\\bot.py backend\\bo
 # 重点测试
 python -m pytest tests\\test_runtime_observability.py -q
 ```
+
+## Release
+
+Windows 正式发布现在默认只生成两种产物：
+
+- `wechat-ai-assistant-setup-<version>.exe`
+- `wechat-ai-assistant-portable-<version>-x64.exe`
+
+补充说明：
+
+- `MSI` 不再参与日常发版，只保留 `npm run build:msi` 作为按需构建入口
+- 应用内自动更新已停用，桌面端只保留“打开 GitHub Releases 页面”的下载入口
+- 正式 Release 通过 GitHub Actions 构建并上传，不再建议在本地直接上传大文件
+- 每次 Release 的更新说明会自动基于“上一个正式 tag 到当前 tag”的 commit 区间生成
+
+本地仅构建产物：
+
+```bash
+npm run build:release
+```
+
+或：
+
+```bash
+.\build.bat
+```
+
+## Cost Management
+
+桌面端新增了独立的“成本管理”页面，用来查看 AI 回复的 token 与金额消耗。
+
+- 支持按 `today / 7d / 30d / all` 筛选
+- 支持按 `provider`、`model`、`仅已定价`、`是否包含估算数据` 过滤
+- 按会话分组展示 AI 回复消耗，展开后可查看每条回复的模型、输入 token、输出 token、总 token、金额、时间和摘要
+- 首页仪表盘新增“今日成本”卡片，并补充最近 30 天成本概览和高消耗模型入口
+
+当前成本统计以 `chat_history` 中 assistant 消息的 `metadata` 为主数据源。新消息会在 metadata 中补充 `provider_id`、`pricing`、`cost`、`estimated`、`source_url`、`price_verified_at` 等字段；历史消息缺少 token 时会按文本长度估算，若能估 token 但无法可靠定价，则只展示 token 并标记为“待定价”。
+
+### Cost APIs
+
+新增接口如下：
+
+- `GET /api/pricing`
+- `POST /api/pricing/refresh`
+- `GET /api/costs/summary`
+- `GET /api/costs/sessions`
+- `GET /api/costs/session_details`
+
+说明：
+
+- 金额按官方“每 1M tokens 单价”换算，不做汇率换算；混合币种会分币种展示
+- `Ollama` 本地模型默认按 `0` 成本处理
+- 自动刷新当前只覆盖较稳定来源：`DeepSeek`、`Groq`、`OpenRouter`
+- `OpenAI`、`Qwen`、`Doubao` 首版以内置官方快照和手动覆盖为主
 
 ## Security
 

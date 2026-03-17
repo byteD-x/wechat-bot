@@ -176,6 +176,147 @@ async def test_api_usage(client, mock_manager):
     assert data["success"] is True
     assert data["stats"]["total_tokens"] == 100
 
+
+@pytest.mark.asyncio
+async def test_api_pricing(client):
+    snapshot = {
+        "version": "2026-03-17",
+        "providers": {
+            "openai": {
+                "label": "OpenAI",
+            }
+        },
+        "updated_at": "2026-03-17T00:00:00+00:00",
+    }
+
+    with patch.object(api_module.cost_service, "get_pricing_snapshot", AsyncMock(return_value=snapshot)):
+        response = await client.get('/api/pricing')
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["success"] is True
+    assert data["version"] == "2026-03-17"
+    assert "openai" in data["providers"]
+
+
+@pytest.mark.asyncio
+async def test_api_pricing_refresh(client):
+    payload = {
+        "success": True,
+        "results": {
+            "deepseek": {"success": True, "models": 2},
+        },
+        "updated_at": "2026-03-17T08:00:00+00:00",
+    }
+
+    refresh_mock = AsyncMock(return_value=payload)
+    with patch.object(api_module.cost_service, "refresh_pricing", refresh_mock):
+        response = await client.post('/api/pricing/refresh', json={"providers": ["deepseek"]})
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["success"] is True
+    assert data["results"]["deepseek"]["models"] == 2
+    refresh_mock.assert_awaited_once_with(providers=["deepseek"])
+
+
+@pytest.mark.asyncio
+async def test_api_costs_summary(client, mock_manager):
+    summary_payload = {
+        "success": True,
+        "filters": {"period": "30d"},
+        "overview": {
+            "reply_count": 2,
+            "total_tokens": 300,
+            "currency_groups": [{"currency": "USD", "total_cost": 0.12}],
+        },
+        "models": [
+            {"provider_id": "openai", "model": "gpt-5-mini", "total_tokens": 300},
+        ],
+        "options": {"providers": ["openai"], "models": ["gpt-5-mini"]},
+    }
+    config_snapshot = _build_snapshot({"api": {"presets": []}, "bot": {}, "logging": {}})
+
+    with (
+        patch.object(api_module.cost_service, "get_summary", AsyncMock(return_value=summary_payload)) as get_summary_mock,
+        patch.object(api_module.config_service, "get_snapshot", return_value=config_snapshot),
+    ):
+        response = await client.get('/api/costs/summary?period=30d&include_estimated=true')
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["success"] is True
+    assert data["overview"]["total_tokens"] == 300
+    get_summary_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_api_costs_sessions(client, mock_manager):
+    sessions_payload = {
+        "success": True,
+        "filters": {"period": "today"},
+        "total": 1,
+        "sessions": [
+            {
+                "chat_id": "friend:alice",
+                "display_name": "Alice",
+                "reply_count": 3,
+                "currency_groups": [{"currency": "USD", "total_cost": 0.08}],
+            }
+        ],
+    }
+    config_snapshot = _build_snapshot({"api": {"presets": []}, "bot": {}, "logging": {}})
+
+    with (
+        patch.object(api_module.cost_service, "get_sessions", AsyncMock(return_value=sessions_payload)) as get_sessions_mock,
+        patch.object(api_module.config_service, "get_snapshot", return_value=config_snapshot),
+    ):
+        response = await client.get('/api/costs/sessions?period=today')
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["success"] is True
+    assert data["sessions"][0]["chat_id"] == "friend:alice"
+    get_sessions_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_api_costs_session_details(client, mock_manager):
+    details_payload = {
+        "success": True,
+        "chat_id": "friend:alice",
+        "total": 1,
+        "records": [
+            {
+                "id": 1,
+                "model": "gpt-5-mini",
+                "provider_id": "openai",
+                "pricing_available": True,
+            }
+        ],
+    }
+    config_snapshot = _build_snapshot({"api": {"presets": []}, "bot": {}, "logging": {}})
+
+    with (
+        patch.object(api_module.cost_service, "get_session_details", AsyncMock(return_value=details_payload)) as details_mock,
+        patch.object(api_module.config_service, "get_snapshot", return_value=config_snapshot),
+    ):
+        response = await client.get('/api/costs/session_details?chat_id=friend:alice&period=7d')
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["success"] is True
+    assert data["records"][0]["model"] == "gpt-5-mini"
+    details_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_api_costs_session_details_requires_chat_id(client):
+    response = await client.get('/api/costs/session_details')
+    assert response.status_code == 400
+    data = await response.get_json()
+    assert data["success"] is False
+
 @pytest.mark.asyncio
 async def test_api_messages_error(client, mock_manager):
     mock_manager.get_memory_manager().get_message_page.side_effect = Exception("DB Error")

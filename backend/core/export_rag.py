@@ -98,7 +98,13 @@ class ExportChatRAG:
             "last_scan_summary": dict(self.last_scan_summary),
         }
 
-    async def sync(self, ai_client: Any, *, force: bool = False) -> Dict[str, Any]:
+    async def sync(
+        self,
+        ai_client: Any,
+        *,
+        force: bool = False,
+        priority: str = "foreground",
+    ) -> Dict[str, Any]:
         started_at = time.time()
         summary = {
             "success": True,
@@ -155,7 +161,7 @@ class ExportChatRAG:
                     self.vector_memory.delete,
                     {"chat_id": chat_id, "source": "export_chat"},
                 )
-                indexed_count = await self._index_chunks(ai_client, chunks)
+                indexed_count = await self._index_chunks(ai_client, chunks, priority=priority)
                 next_manifest[manifest_key] = {
                     "signature": signature,
                     "chat_id": chat_id,
@@ -194,7 +200,14 @@ class ExportChatRAG:
         )
         return self._finish_scan(summary, started_at)
 
-    async def search(self, ai_client: Any, chat_id: str, query_text: str) -> List[Dict[str, Any]]:
+    async def search(
+        self,
+        ai_client: Any,
+        chat_id: str,
+        query_text: str,
+        *,
+        priority: str = "foreground",
+    ) -> List[Dict[str, Any]]:
         if not self.enabled or not self.vector_memory or not ai_client:
             return []
         if not chat_id.startswith("friend:"):
@@ -203,7 +216,7 @@ class ExportChatRAG:
         if not query:
             return []
 
-        embedding = await ai_client.get_embedding(query)
+        embedding = await ai_client.get_embedding(query, priority=priority)
         if not embedding:
             return []
 
@@ -299,12 +312,18 @@ class ExportChatRAG:
             })
         return targets
 
-    async def _index_chunks(self, ai_client: Any, chunks: Sequence[ExportChunk]) -> int:
+    async def _index_chunks(
+        self,
+        ai_client: Any,
+        chunks: Sequence[ExportChunk],
+        *,
+        priority: str = "foreground",
+    ) -> int:
         semaphore = asyncio.Semaphore(self.max_parallel_embeddings)
 
         async def _index_one(chunk: ExportChunk) -> int:
             async with semaphore:
-                embedding = await ai_client.get_embedding(chunk.text)
+                embedding = await ai_client.get_embedding(chunk.text, priority=priority)
                 if not embedding:
                     return 0
                 metadata = {

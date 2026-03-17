@@ -81,6 +81,24 @@ async def test_bot_apply_config(mock_config):
         assert bot.api_cfg == mock_config["api"]
         mock_setup_logging.assert_called()
 
+
+@pytest.mark.asyncio
+async def test_schedule_export_rag_sync_uses_runtime_backlog_when_available():
+    bot = WeChatBot("config.yaml")
+    bot.bot_manager = _build_mock_bot_manager()
+    bot.export_rag = SimpleNamespace(enabled=True, auto_ingest=True)
+    bot.ai_client = SimpleNamespace(
+        update_runtime_dependencies=MagicMock(),
+        schedule_export_rag_sync=AsyncMock(),
+    )
+
+    await bot._schedule_export_rag_sync(force=True)
+
+    bot.ai_client.update_runtime_dependencies.assert_called_once()
+    bot.ai_client.schedule_export_rag_sync.assert_awaited_once_with(force=True)
+    await asyncio.sleep(0)
+    bot.bot_manager.notify_status_change.assert_awaited_once()
+
 @pytest.mark.asyncio
 async def test_bot_initialization_config_error(mock_config):
     # Test config load failure

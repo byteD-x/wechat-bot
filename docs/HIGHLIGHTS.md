@@ -77,6 +77,9 @@
 - `/api/status`：启动进度、诊断、健康检查、系统指标、检索统计
 - `/api/metrics`：Prometheus 风格导出
 - Electron 仪表盘：CPU、内存、任务积压、AI 延迟、RAG 状态、组件健康
+- 成本管理页：按会话分组查看模型消耗、输入输出 token、金额、估算与未定价状态
+- `/api/pricing` 与 `/api/costs/*`：把价格目录、模型聚合和会话级成本分析暴露为可复用接口
+- Windows 发布链路：默认只发 `setup + portable`，通过 GitHub Actions 自动构建并生成“相对上个版本”的 Release Notes
 - `/api/config/audit`：排查未知配置、未消费字段和预计生效策略
 
 这意味着项目不是“出了问题只能翻日志”，而是能直接告诉使用者现在卡在哪、退化到了什么模式、哪些配置已经生效。

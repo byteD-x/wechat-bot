@@ -7,6 +7,7 @@ import os
 import re
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from typing import Any, AsyncIterator, Dict, Iterable, List, Optional
 import httpx
 
@@ -34,6 +35,20 @@ from .emotion import (
 logger = logging.getLogger(__name__)
 _ALLOW_EMPTY_KEY_PLACEHOLDER = "wechat-chat-allow-empty-key"
 _QWEN_RUNTIME_MIN_TIMEOUT_SEC = 15.0
+_BACKGROUND_GLOBAL_CHAT_ID = "__global__"
+_TASK_EMOTION = "emotion"
+_TASK_CONTACT_PROMPT = "contact_prompt"
+_TASK_VECTOR_MEMORY = "vector_memory"
+_TASK_FACTS = "facts"
+_TASK_EXPORT_RAG_SYNC = "export_rag_sync"
+_BACKGROUND_TASK_ORDER = {
+    _TASK_EXPORT_RAG_SYNC: 10,
+    _TASK_EMOTION: 20,
+    _TASK_FACTS: 30,
+    _TASK_VECTOR_MEMORY: 40,
+    _TASK_CONTACT_PROMPT: 50,
+}
+_BACKGROUND_TASK_TYPES = frozenset(_BACKGROUND_TASK_ORDER)
 
 
 @dataclass(slots=True)
@@ -192,11 +207,34 @@ class AgentRuntime:
         self.background_fact_extraction_enabled = bool(
             self.agent_cfg.get("background_fact_extraction_enabled", True)
         )
+        self.llm_foreground_max_concurrency = as_int(
+            self.agent_cfg.get("llm_foreground_max_concurrency", 1),
+            1,
+            min_value=1,
+        )
+        self.background_ai_batch_time = str(
+            self.agent_cfg.get("background_ai_batch_time") or "04:00"
+        ).strip() or "04:00"
+        self.background_ai_missed_window_policy = str(
+            self.agent_cfg.get("background_ai_missed_window_policy")
+            or "wait_until_next_day"
+        ).strip() or "wait_until_next_day"
+        self.background_ai_defer_mode = str(
+            self.agent_cfg.get("background_ai_defer_mode") or "defer_all"
+        ).strip() or "defer_all"
 
         self._chat_locks: Dict[str, asyncio.Lock] = {}
         self._embedding_cache: Dict[str, tuple[float, List[float]]] = {}
         self._embedding_pending: Dict[str, asyncio.Future] = {}
         self._background_tasks: set[asyncio.Task] = set()
+        self._runtime_dependencies: Dict[str, Any] = {}
+        self._llm_condition: Optional[asyncio.Condition] = None
+        self._foreground_active = 0
+        self._foreground_waiters = 0
+        self._background_active = 0
+        self._batch_scheduler_task: Optional[asyncio.Task] = None
+        self._batch_runner_task: Optional[asyncio.Task] = None
+        self._batch_lock = asyncio.Lock()
 
         self._stats = {
             "requests": 0,
@@ -207,8 +245,15 @@ class AgentRuntime:
             "retriever_hits": 0,
             "retriever_rerank_fallbacks": 0,
             "last_timings": {},
-            "growth_mode": "background_only",
+            "growth_mode": "deferred_until_batch",
             "last_growth_error": "",
+            "foreground_active": 0,
+            "foreground_waiters": 0,
+            "background_active": 0,
+            "background_backlog_count": 0,
+            "background_backlog_by_task": {},
+            "next_background_batch_at": None,
+            "last_background_batch": {},
         }
 
         self._imports = self._load_integrations()
@@ -351,6 +396,227 @@ class AgentRuntime:
             lock = asyncio.Lock()
             self._chat_locks[chat_id] = lock
         return lock
+
+    def update_runtime_dependencies(self, dependencies: Optional[Dict[str, Any]]) -> None:
+        self._runtime_dependencies = dict(dependencies or {})
+        self._ensure_background_scheduler()
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        loop.create_task(self._refresh_background_backlog_stats())
+
+    def _get_llm_condition(self) -> asyncio.Condition:
+        if self._llm_condition is None:
+            self._llm_condition = asyncio.Condition()
+        return self._llm_condition
+
+    def _update_llm_stats_locked(self) -> None:
+        self._stats["foreground_active"] = self._foreground_active
+        self._stats["foreground_waiters"] = self._foreground_waiters
+        self._stats["background_active"] = self._background_active
+
+    async def _acquire_llm_slot(self, priority: str) -> None:
+        condition = self._get_llm_condition()
+        normalized = "background" if str(priority or "").strip().lower() == "background" else "foreground"
+        if normalized == "foreground":
+            async with condition:
+                self._foreground_waiters += 1
+                self._update_llm_stats_locked()
+                try:
+                    await condition.wait_for(
+                        lambda: self._background_active == 0
+                        and self._foreground_active < self.llm_foreground_max_concurrency
+                    )
+                except Exception:
+                    self._foreground_waiters = max(0, self._foreground_waiters - 1)
+                    self._update_llm_stats_locked()
+                    condition.notify_all()
+                    raise
+                self._foreground_waiters = max(0, self._foreground_waiters - 1)
+                self._foreground_active += 1
+                self._update_llm_stats_locked()
+                condition.notify_all()
+            return
+
+        async with condition:
+            await condition.wait_for(
+                lambda: self._background_active == 0
+                and self._foreground_active == 0
+                and self._foreground_waiters == 0
+            )
+            self._background_active += 1
+            self._update_llm_stats_locked()
+            condition.notify_all()
+
+    async def _release_llm_slot(self, priority: str) -> None:
+        condition = self._get_llm_condition()
+        normalized = "background" if str(priority or "").strip().lower() == "background" else "foreground"
+        async with condition:
+            if normalized == "foreground":
+                self._foreground_active = max(0, self._foreground_active - 1)
+            else:
+                self._background_active = max(0, self._background_active - 1)
+            self._update_llm_stats_locked()
+            condition.notify_all()
+
+    @staticmethod
+    def _parse_batch_time(value: str) -> tuple[int, int]:
+        text = str(value or "").strip()
+        try:
+            hour_text, minute_text = text.split(":", 1)
+            hour = max(0, min(23, int(hour_text)))
+            minute = max(0, min(59, int(minute_text)))
+            return hour, minute
+        except (TypeError, ValueError):
+            return 4, 0
+
+    def _compute_next_background_batch_at(self, now: Optional[datetime] = None) -> datetime:
+        current = now or datetime.now()
+        hour, minute = self._parse_batch_time(self.background_ai_batch_time)
+        candidate = current.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if candidate <= current:
+            candidate += timedelta(days=1)
+        return candidate
+
+    def _ensure_background_scheduler(self) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        if self._batch_scheduler_task is not None and not self._batch_scheduler_task.done():
+            return
+        self._batch_scheduler_task = loop.create_task(self._background_batch_scheduler_loop())
+
+    async def _background_batch_scheduler_loop(self) -> None:
+        try:
+            while True:
+                next_run_at = self._compute_next_background_batch_at()
+                self._stats["next_background_batch_at"] = next_run_at.timestamp()
+                delay_sec = max(0.1, (next_run_at - datetime.now()).total_seconds())
+                await asyncio.sleep(delay_sec)
+                await self._run_background_batch_once()
+        except asyncio.CancelledError:
+            raise
+
+    async def _refresh_background_backlog_stats(self) -> None:
+        memory = self._runtime_dependencies.get("memory")
+        if memory is None or not hasattr(memory, "get_background_backlog_stats"):
+            self._stats["background_backlog_count"] = 0
+            self._stats["background_backlog_by_task"] = {}
+            return
+        try:
+            stats = await memory.get_background_backlog_stats()
+        except Exception as exc:
+            logger.warning("Failed to load background backlog stats: %s", exc)
+            return
+        self._stats["background_backlog_count"] = int(stats.get("total", 0) or 0)
+        self._stats["background_backlog_by_task"] = dict(stats.get("by_task_type") or {})
+
+    async def _enqueue_background_backlog(
+        self,
+        *,
+        chat_id: str,
+        task_type: str,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        if task_type not in _BACKGROUND_TASK_TYPES:
+            return False
+        memory = self._runtime_dependencies.get("memory")
+        if memory is None or not hasattr(memory, "upsert_background_backlog"):
+            logger.warning("Background backlog skipped [%s]: memory unavailable", task_type)
+            return False
+        await memory.upsert_background_backlog(chat_id, task_type, payload or {})
+        await self._refresh_background_backlog_stats()
+        return True
+
+    async def schedule_export_rag_sync(self, *, force: bool = False) -> bool:
+        return await self._enqueue_background_backlog(
+            chat_id=_BACKGROUND_GLOBAL_CHAT_ID,
+            task_type=_TASK_EXPORT_RAG_SYNC,
+            payload={"force": bool(force)},
+        )
+
+    def _sort_background_backlog_items(self, items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return sorted(
+            items,
+            key=lambda item: (
+                _BACKGROUND_TASK_ORDER.get(str(item.get("task_type") or "").strip(), 999),
+                int(item.get("updated_at") or 0),
+                str(item.get("chat_id") or ""),
+            ),
+        )
+
+    async def _run_background_batch_once(self) -> None:
+        async with self._batch_lock:
+            memory = self._runtime_dependencies.get("memory")
+            if memory is None or not hasattr(memory, "list_background_backlog"):
+                self._stats["last_background_batch"] = {
+                    "success": False,
+                    "reason": "memory_unavailable",
+                    "completed": 0,
+                    "failed": 0,
+                    "started_at": time.time(),
+                }
+                return
+            started_at = time.time()
+            completed = 0
+            failed = 0
+            attempted: set[tuple[str, str]] = set()
+            while True:
+                items = await memory.list_background_backlog()
+                pending = [
+                    item
+                    for item in self._sort_background_backlog_items(list(items or []))
+                    if (
+                        str(item.get("chat_id") or ""),
+                        str(item.get("task_type") or ""),
+                    ) not in attempted
+                ]
+                if not pending:
+                    break
+                for item in pending:
+                    key = (
+                        str(item.get("chat_id") or ""),
+                        str(item.get("task_type") or ""),
+                    )
+                    attempted.add(key)
+                    try:
+                        should_delete = await self._execute_background_backlog_item(item)
+                    except Exception as exc:
+                        failed += 1
+                        logger.warning("Background backlog task failed [%s]: %s", key, exc)
+                        continue
+                    if should_delete:
+                        await memory.delete_background_backlog(*key)
+                        completed += 1
+                        await self._refresh_background_backlog_stats()
+                    else:
+                        failed += 1
+            self._stats["last_background_batch"] = {
+                "success": failed == 0,
+                "completed": completed,
+                "failed": failed,
+                "started_at": started_at,
+                "finished_at": time.time(),
+            }
+            await self._refresh_background_backlog_stats()
+
+    async def _execute_background_backlog_item(self, item: Dict[str, Any]) -> bool:
+        task_type = str(item.get("task_type") or "").strip()
+        chat_id = str(item.get("chat_id") or "").strip()
+        payload = item.get("payload") or {}
+        if task_type == _TASK_EMOTION:
+            return await self._execute_emotion_backlog(chat_id, payload)
+        if task_type == _TASK_CONTACT_PROMPT:
+            return await self._execute_contact_prompt_backlog(chat_id, payload)
+        if task_type == _TASK_VECTOR_MEMORY:
+            return await self._execute_vector_memory_backlog(chat_id, payload)
+        if task_type == _TASK_FACTS:
+            return await self._execute_facts_backlog(chat_id, payload)
+        if task_type == _TASK_EXPORT_RAG_SYNC:
+            return await self._execute_export_rag_sync_backlog(payload)
+        return True
 
     @staticmethod
     def _should_use_reasoning_as_reply(chat_id: str) -> bool:
@@ -529,6 +795,7 @@ class AgentRuntime:
         dependencies: Dict[str, Any],
         image_path: Optional[str] = None,
     ) -> AgentPreparedRequest:
+        self.update_runtime_dependencies(dependencies)
         start_ts = time.perf_counter()
         state = {
             "event": event,
@@ -567,8 +834,17 @@ class AgentRuntime:
         return prepared
 
     async def invoke(self, prepared: AgentPreparedRequest) -> str:
+        return await self._invoke_prepared(prepared, priority="foreground")
+
+    async def _invoke_prepared(
+        self,
+        prepared: AgentPreparedRequest,
+        *,
+        priority: str,
+    ) -> str:
         self._stats["requests"] += 1
         started = time.perf_counter()
+        await self._acquire_llm_slot(priority)
         try:
             response = await self._chat_model.ainvoke(
                 prepared.prompt_messages,
@@ -633,6 +909,8 @@ class AgentRuntime:
         except Exception:
             self._stats["failures"] += 1
             raise
+        finally:
+            await self._release_llm_slot(priority)
 
     async def stream_reply(self, prepared: AgentPreparedRequest) -> AsyncIterator[str]:
         reply_text = await self.invoke(prepared)
@@ -645,6 +923,7 @@ class AgentRuntime:
         reply_text: str,
         dependencies: Dict[str, Any],
     ) -> None:
+        self.update_runtime_dependencies(dependencies)
         memory = dependencies.get("memory")
         if memory:
             user_metadata = self._build_user_message_metadata(prepared)
@@ -710,16 +989,12 @@ class AgentRuntime:
 
         if memory and self.bot_cfg.get("emotion_detection_enabled", False):
             try:
-                emotion = await self._analyze_emotion(chat_id, prepared.user_text)
-                if emotion is not None:
-                    await memory.update_emotion(chat_id, emotion.emotion)
-                    logger.info(
-                        build_stage_log_message(
-                            "GROWTH.EMOTION_DONE",
-                            chat_id=chat_id,
-                            emotion=emotion.emotion,
-                        )
-                    )
+                await self._enqueue_background_backlog(
+                    chat_id=chat_id,
+                    task_type=_TASK_EMOTION,
+                    payload={"user_text": prepared.user_text},
+                )
+                logger.info(build_stage_log_message("GROWTH.EMOTION_DEFERRED", chat_id=chat_id))
             except Exception as exc:
                 self._stats["last_growth_error"] = str(exc)
                 logger.warning(
@@ -736,24 +1011,21 @@ class AgentRuntime:
                 if refreshed_profile is None or self._should_refresh_contact_prompt(refreshed_profile):
                     refreshed_profile = await memory.get_user_profile(chat_id)
                 if self._should_refresh_contact_prompt(refreshed_profile):
-                    asset = await self._refresh_contact_prompt_background(
-                        prepared=prepared,
-                        user_profile=refreshed_profile,
-                        memory=memory,
-                        export_rag=export_rag,
-                        reply_text=reply_text,
+                    await self._enqueue_background_backlog(
+                        chat_id=chat_id,
+                        task_type=_TASK_CONTACT_PROMPT,
+                        payload={
+                            "user_text": prepared.user_text,
+                            "reply_text": reply_text,
+                            "base_prompt": self._resolve_contact_prompt_base(
+                                prepared.event,
+                                refreshed_profile,
+                            ),
+                        },
                     )
-                    if asset:
-                        prepared.response_metadata["contact_prompt_source"] = asset.get("contact_prompt_source", "")
-                        prepared.response_metadata["contact_prompt_updated_at"] = asset.get("contact_prompt_updated_at", 0)
-                        logger.info(
-                            build_stage_log_message(
-                                "GROWTH.CONTACT_PROMPT_DONE",
-                                chat_id=chat_id,
-                                source=asset.get("contact_prompt_source", ""),
-                                updated_at=asset.get("contact_prompt_updated_at", 0),
-                            )
-                        )
+                    logger.info(
+                        build_stage_log_message("GROWTH.CONTACT_PROMPT_DEFERRED", chat_id=chat_id)
+                    )
             except Exception as exc:
                 self._stats["last_growth_error"] = str(exc)
                 logger.warning(
@@ -766,13 +1038,15 @@ class AgentRuntime:
 
         if vector_memory is not None and self.bot_cfg.get("rag_enabled", False):
             try:
-                await self._update_vector_memory(
-                    prepared.chat_id,
-                    prepared.user_text,
-                    reply_text,
-                    vector_memory,
+                await self._enqueue_background_backlog(
+                    chat_id=chat_id,
+                    task_type=_TASK_VECTOR_MEMORY,
+                    payload={
+                        "user_text": prepared.user_text,
+                        "reply_text": reply_text,
+                    },
                 )
-                logger.info(build_stage_log_message("GROWTH.VECTOR_DONE", chat_id=chat_id))
+                logger.info(build_stage_log_message("GROWTH.VECTOR_DEFERRED", chat_id=chat_id))
             except Exception as exc:
                 self._stats["last_growth_error"] = str(exc)
                 logger.warning(
@@ -790,14 +1064,15 @@ class AgentRuntime:
             and self.background_fact_extraction_enabled
         ):
             try:
-                await self._extract_facts_background(
-                    prepared.chat_id,
-                    prepared.user_text,
-                    reply_text,
-                    user_profile,
-                    memory,
+                await self._enqueue_background_backlog(
+                    chat_id=chat_id,
+                    task_type=_TASK_FACTS,
+                    payload={
+                        "user_text": prepared.user_text,
+                        "assistant_reply": reply_text,
+                    },
                 )
-                logger.info(build_stage_log_message("GROWTH.FACTS_DONE", chat_id=chat_id))
+                logger.info(build_stage_log_message("GROWTH.FACTS_DEFERRED", chat_id=chat_id))
             except Exception as exc:
                 self._stats["last_growth_error"] = str(exc)
                 logger.warning(
@@ -810,8 +1085,12 @@ class AgentRuntime:
 
         if export_rag is not None and self.bot_cfg.get("export_rag_enabled", False):
             try:
-                await export_rag.sync(self, force=False)
-                logger.info(build_stage_log_message("GROWTH.EXPORT_RAG_DONE", chat_id=chat_id))
+                await self._enqueue_background_backlog(
+                    chat_id=_BACKGROUND_GLOBAL_CHAT_ID,
+                    task_type=_TASK_EXPORT_RAG_SYNC,
+                    payload={"force": False},
+                )
+                logger.info(build_stage_log_message("GROWTH.EXPORT_RAG_DEFERRED", chat_id=chat_id))
             except Exception as exc:
                 self._stats["last_growth_error"] = str(exc)
                 logger.warning(
@@ -822,7 +1101,221 @@ class AgentRuntime:
                     )
                 )
 
-    async def get_embedding(self, text: str) -> Optional[List[float]]:
+    async def _execute_emotion_backlog(self, chat_id: str, payload: Dict[str, Any]) -> bool:
+        memory = self._runtime_dependencies.get("memory")
+        if memory is None or not self.bot_cfg.get("emotion_detection_enabled", False):
+            return True
+        text = str(payload.get("user_text") or "").strip()
+        if not chat_id or not text:
+            return True
+        if self.emotion_fast_path_enabled:
+            fast_result = detect_emotion_keywords(text)
+            if fast_result and fast_result.emotion != "neutral":
+                await memory.update_emotion(chat_id, fast_result.emotion)
+                return True
+        mode = str(self.bot_cfg.get("emotion_detection_mode", "keywords")).lower()
+        if mode != "ai":
+            emotion = detect_emotion_keywords(text)
+        else:
+            prompt = get_emotion_analysis_prompt(text)
+            try:
+                response = await self.generate_reply(
+                    f"__emotion__{chat_id}",
+                    prompt,
+                    system_prompt="你是一个情感分析助手，只返回 JSON 格式的分析结果。",
+                    priority="background",
+                )
+            except Exception as exc:
+                logger.warning(
+                    "emotion AI analysis failed; falling back to keyword mode [%s]: %s",
+                    chat_id,
+                    exc,
+                )
+                response = ""
+            emotion = parse_emotion_ai_response(response) if response else None
+            if emotion is None:
+                emotion = detect_emotion_keywords(text)
+        if emotion is not None:
+            await memory.update_emotion(chat_id, emotion.emotion)
+        return True
+
+    async def _execute_contact_prompt_backlog(self, chat_id: str, payload: Dict[str, Any]) -> bool:
+        memory = self._runtime_dependencies.get("memory")
+        export_rag = self._runtime_dependencies.get("export_rag")
+        if memory is None or not self.bot_cfg.get("personalization_enabled", False):
+            return True
+        if not chat_id:
+            return True
+        user_profile = await memory.get_user_profile(chat_id)
+        if not self._should_refresh_contact_prompt(user_profile):
+            return True
+        user_text = str(payload.get("user_text") or "")
+        reply_text = str(payload.get("reply_text") or "")
+        base_prompt = str(payload.get("base_prompt") or "").strip()
+        recent_context = await memory.get_recent_context(chat_id, limit=12)
+        export_results: List[Dict[str, Any]] = []
+        if export_rag is not None and self.bot_cfg.get("export_rag_enabled", False):
+            export_results = await export_rag.search(
+                self,
+                chat_id,
+                user_text or reply_text,
+                priority="background",
+            )
+        existing_prompt = str(getattr(user_profile, "contact_prompt", "") or "").strip()
+        profile_summary = str(getattr(user_profile, "profile_summary", "") or "").strip()
+        context_facts = list(getattr(user_profile, "context_facts", []) or [])
+        last_emotion = str(getattr(user_profile, "last_emotion", "") or "").strip()
+        history_lines: List[str] = []
+        for item in recent_context[-12:]:
+            if not isinstance(item, dict):
+                continue
+            role = "用户" if str(item.get("role") or "").strip().lower() == "user" else "我方"
+            content = str(item.get("content") or "").strip()
+            if content:
+                history_lines.append(f"{role}: {content[:180]}")
+        export_lines = [
+            str(item.get("text") or "").strip()
+            for item in export_results[:4]
+            if isinstance(item, dict) and str(item.get("text") or "").strip()
+        ]
+        source = "recent_chat"
+        if export_lines and history_lines:
+            source = "hybrid"
+        elif export_lines:
+            source = "export_chat"
+        prompt_request = "\n\n".join(
+            part
+            for part in [
+                "请为这个联系人生成一份可直接作为 system prompt 使用的专属提示词。",
+                "要求：保留“像主人本人在微信回复”的设定，不要写解释，不要写分析，只输出最终 prompt 正文。",
+                f"当前全局/覆盖基底 Prompt：\n{base_prompt}",
+                f"当前联系人已有 Prompt（如为空表示首次生成）：\n{existing_prompt or '（首次生成）'}",
+                f"联系人画像摘要：\n{profile_summary or '（暂无）'}",
+                f"最近情绪趋势：\n{last_emotion or 'neutral'}",
+                "高置信事实：\n" + ("\n".join(f"- {fact}" for fact in context_facts[:8]) if context_facts else "（暂无）"),
+                "近期真实对话：\n" + ("\n".join(history_lines) if history_lines else "（暂无）"),
+                "导出聊天记录中的风格片段：\n" + ("\n".join(f"- {item}" for item in export_lines) if export_lines else "（暂无）"),
+                "生成要求：\n"
+                "1. 在当前 prompt 基础上增量更新，不要丢掉已有稳定规则。\n"
+                "2. 明确该联系人的称呼、语气、边界、话题偏好和表达节奏。\n"
+                "3. 如果已有人工编辑内容，要尽量保留其意图。\n"
+                "4. 不要伪造事实，不要输出 markdown 标题，不要返回 JSON。",
+            ]
+            if part
+        )
+        generated = await self.generate_reply(
+            f"__contact_prompt__{chat_id}",
+            prompt_request,
+            system_prompt="你是联系人专属 Prompt 生成器。你只输出可直接保存的最终 prompt 文本。",
+            priority="background",
+        )
+        cleaned = self._strip_prompt_response(generated or "")
+        if not cleaned:
+            return True
+        message_count = int(getattr(user_profile, "message_count", 0) or 0)
+        await memory.save_contact_prompt(
+            chat_id,
+            cleaned,
+            source=source,
+            last_message_count=message_count,
+        )
+        return True
+
+    async def _execute_vector_memory_backlog(self, chat_id: str, payload: Dict[str, Any]) -> bool:
+        vector_memory = self._runtime_dependencies.get("vector_memory")
+        if vector_memory is None or not self.bot_cfg.get("rag_enabled", False):
+            return True
+        user_text = str(payload.get("user_text") or "").strip()
+        reply_text = str(payload.get("reply_text") or "").strip()
+        if not chat_id or not user_text or not reply_text:
+            return True
+        user_embedding = await self.get_embedding(user_text, priority="background")
+        reply_embedding = await self.get_embedding(reply_text, priority="background")
+        timestamp = time.time()
+        await asyncio.to_thread(
+            vector_memory.add_text,
+            user_text,
+            {
+                "chat_id": chat_id,
+                "role": "user",
+                "timestamp": timestamp,
+                "source": "runtime_chat",
+            },
+            f"{chat_id}_u_{timestamp}",
+            user_embedding,
+        )
+        await asyncio.to_thread(
+            vector_memory.add_text,
+            reply_text,
+            {
+                "chat_id": chat_id,
+                "role": "assistant",
+                "timestamp": timestamp,
+                "source": "runtime_chat",
+            },
+            f"{chat_id}_a_{timestamp}",
+            reply_embedding,
+        )
+        return True
+
+    async def _execute_facts_backlog(self, chat_id: str, payload: Dict[str, Any]) -> bool:
+        memory = self._runtime_dependencies.get("memory")
+        if (
+            memory is None
+            or not self.bot_cfg.get("remember_facts_enabled", False)
+            or not self.background_fact_extraction_enabled
+        ):
+            return True
+        if not chat_id:
+            return True
+        user_profile = await memory.get_user_profile(chat_id)
+        user_text = str(payload.get("user_text") or "")
+        assistant_reply = str(payload.get("assistant_reply") or "")
+        existing_facts = list(getattr(user_profile, "context_facts", []) or [])
+        prompt = get_fact_extraction_prompt(user_text, assistant_reply, existing_facts)
+        response = await self.generate_reply(
+            f"__facts__{chat_id}",
+            prompt,
+            system_prompt="你是一个信息提取助手，只返回 JSON 格式的结果。",
+            priority="background",
+        )
+        if not response:
+            return True
+        new_facts, relationship_hint, traits = parse_fact_extraction_response(response)
+        if new_facts:
+            max_facts = as_int(self.bot_cfg.get("max_context_facts", 20), 20, min_value=1)
+            for fact in new_facts:
+                await memory.add_context_fact(chat_id, fact, max_facts=max_facts)
+        if traits:
+            current_traits = str(getattr(user_profile, "personality", "") or "").strip()
+            updated_traits = f"{current_traits} {','.join(traits)}".strip()
+            if len(updated_traits) > 200:
+                updated_traits = updated_traits[-200:]
+            await memory.update_user_profile(chat_id, personality=updated_traits)
+        msg_count = int(getattr(user_profile, "message_count", 0) or 0)
+        current_rel = str(getattr(user_profile, "relationship", "unknown") or "unknown")
+        new_rel = relationship_hint or get_relationship_evolution_hint(msg_count, current_rel)
+        if new_rel and new_rel != current_rel:
+            await memory.update_user_profile(chat_id, relationship=new_rel)
+        return True
+
+    async def _execute_export_rag_sync_backlog(self, payload: Dict[str, Any]) -> bool:
+        export_rag = self._runtime_dependencies.get("export_rag")
+        if export_rag is None or not self.bot_cfg.get("export_rag_enabled", False):
+            return True
+        result = await export_rag.sync(
+            self,
+            force=bool(payload.get("force", False)),
+            priority="background",
+        )
+        return bool(result.get("success", True))
+
+    async def get_embedding(
+        self,
+        text: str,
+        *,
+        priority: str = "foreground",
+    ) -> Optional[List[float]]:
         query = str(text or "").strip()
         if not query or self._embedding_client is None:
             return None
@@ -845,7 +1338,11 @@ class AgentRuntime:
         future = loop.create_future()
         self._embedding_pending[query] = future
         try:
-            vector = await self._embedding_client.aembed_query(query)
+            await self._acquire_llm_slot(priority)
+            try:
+                vector = await self._embedding_client.aembed_query(query)
+            finally:
+                await self._release_llm_slot(priority)
             self._embedding_cache[query] = (now, list(vector))
             future.set_result(list(vector))
             return list(vector)
@@ -863,6 +1360,8 @@ class AgentRuntime:
         system_prompt: Optional[str] = None,
         memory_context: Optional[Iterable[dict]] = None,
         image_path: Optional[str] = None,
+        *,
+        priority: str = "foreground",
     ) -> Optional[str]:
         prompt_messages = self._build_prompt_messages(
             system_prompt=system_prompt or "",
@@ -879,9 +1378,15 @@ class AgentRuntime:
             memory_context=list(memory_context or []),
             image_path=image_path,
         )
-        return await self.invoke(prepared)
+        return await self._invoke_prepared(prepared, priority=priority)
 
     async def close(self) -> None:
+        if self._batch_runner_task and not self._batch_runner_task.done():
+            self._batch_runner_task.cancel()
+            await asyncio.gather(self._batch_runner_task, return_exceptions=True)
+        if self._batch_scheduler_task and not self._batch_scheduler_task.done():
+            self._batch_scheduler_task.cancel()
+            await asyncio.gather(self._batch_scheduler_task, return_exceptions=True)
         if self._background_tasks:
             tasks = list(self._background_tasks)
             done, pending = await asyncio.wait(tasks, timeout=2.0)
@@ -902,6 +1407,13 @@ class AgentRuntime:
             "growth_mode": self._stats["growth_mode"],
             "growth_tasks_pending": len(self._background_tasks),
             "last_growth_error": self._stats["last_growth_error"],
+            "foreground_active": self._stats["foreground_active"],
+            "foreground_waiters": self._stats["foreground_waiters"],
+            "background_active": self._stats["background_active"],
+            "background_backlog_count": self._stats["background_backlog_count"],
+            "background_backlog_by_task": dict(self._stats["background_backlog_by_task"]),
+            "next_background_batch_at": self._stats["next_background_batch_at"],
+            "last_background_batch": dict(self._stats["last_background_batch"]),
             "retriever_stats": {
                 "top_k": self.retriever_top_k,
                 "fetch_k": self.retriever_fetch_k,
@@ -1019,7 +1531,7 @@ class AgentRuntime:
                 "short_term_messages": len(memory_context),
                 "short_term_preview": short_term_preview,
                 "skipped_context_steps": list(skipped_context_steps),
-                "growth_mode": "background_only",
+                "growth_mode": "deferred_until_batch",
             },
             "profile": self._serialize_profile(user_profile),
         }

@@ -1,0 +1,386 @@
+{
+  "version": "2026-03-17",
+  "updated_at": "2026-03-17T15:30:00+00:00",
+  "providers": {
+    "openai": {
+      "label": "OpenAI",
+      "currency": "USD",
+      "source_url": "https://openai.com/api/pricing/",
+      "refresh_supported": true,
+      "notes": "优先读取 OpenAI 官方定价页；未解析到的模型保留本地快照。",
+      "models": {
+        "gpt-5": {
+          "input_price_per_1m": 1.25,
+          "output_price_per_1m": 10.0,
+          "source_url": "https://openai.com/api/pricing/",
+          "price_verified_at": "2026-03-17"
+        },
+        "gpt-5-mini": {
+          "input_price_per_1m": 0.25,
+          "output_price_per_1m": 2.0,
+          "source_url": "https://openai.com/api/pricing/",
+          "price_verified_at": "2026-03-17"
+        },
+        "gpt-5-nano": {
+          "input_price_per_1m": 0.05,
+          "output_price_per_1m": 0.4,
+          "source_url": "https://openai.com/api/pricing/",
+          "price_verified_at": "2026-03-17"
+        },
+        "gpt-4.1": {
+          "input_price_per_1m": 2.0,
+          "output_price_per_1m": 8.0,
+          "source_url": "https://openai.com/api/pricing/",
+          "price_verified_at": "2026-03-17"
+        },
+        "gpt-4.1-mini": {
+          "input_price_per_1m": 0.4,
+          "output_price_per_1m": 1.6,
+          "source_url": "https://openai.com/api/pricing/",
+          "price_verified_at": "2026-03-17"
+        },
+        "gpt-4o": {
+          "input_price_per_1m": 2.5,
+          "output_price_per_1m": 10.0,
+          "source_url": "https://platform.openai.com/docs/pricing#gpt-4o",
+          "price_verified_at": "2026-03-17"
+        },
+        "gpt-4o-mini": {
+          "input_price_per_1m": 0.15,
+          "output_price_per_1m": 0.6,
+          "source_url": "https://platform.openai.com/docs/pricing#gpt-4o-mini",
+          "price_verified_at": "2026-03-17"
+        }
+      }
+    },
+    "deepseek": {
+      "label": "DeepSeek",
+      "currency": "USD",
+      "source_url": "https://api-docs.deepseek.com/quick_start/pricing-details-usd",
+      "refresh_supported": true,
+      "models": {
+        "deepseek-chat": {
+          "input_price_per_1m": 0.27,
+          "output_price_per_1m": 1.1,
+          "source_url": "https://api-docs.deepseek.com/quick_start/pricing-details-usd",
+          "price_verified_at": "2026-03-17T13:48:56+00:00"
+        },
+        "deepseek-reasoner": {
+          "input_price_per_1m": 0.55,
+          "output_price_per_1m": 2.19,
+          "source_url": "https://api-docs.deepseek.com/quick_start/pricing-details-usd",
+          "price_verified_at": "2026-03-17T13:48:56+00:00"
+        }
+      },
+      "updated_at": "2026-03-17T13:48:56+00:00"
+    },
+    "groq": {
+      "label": "Groq",
+      "currency": "USD",
+      "source_url": "https://console.groq.com/docs/models",
+      "refresh_supported": true,
+      "notes": "仅补入当前官方模型页能直接提取到价格的条目。",
+      "models": {
+        "qwen/qwen3-32b": {
+          "input_price_per_1m": 0.29,
+          "output_price_per_1m": 0.59,
+          "source_url": "https://console.groq.com/docs/model/qwen/qwen3-32b",
+          "price_verified_at": "2026-03-17T13:48:54+00:00"
+        },
+        "openai/gpt-oss-120b": {
+          "input_price_per_1m": 0.15,
+          "output_price_per_1m": 0.6,
+          "source_url": "https://console.groq.com/docs/model/openai/gpt-oss-120b",
+          "price_verified_at": "2026-03-17T13:48:54+00:00"
+        },
+        "openai/gpt-oss-20b": {
+          "input_price_per_1m": 0.075,
+          "output_price_per_1m": 0.3,
+          "source_url": "https://console.groq.com/docs/model/openai/gpt-oss-20b",
+          "price_verified_at": "2026-03-17T13:48:54+00:00"
+        },
+        "meta-llama/llama-4-scout-17b-16e-instruct": {
+          "input_price_per_1m": 0.11,
+          "output_price_per_1m": 0.34,
+          "source_url": "https://console.groq.com/docs/model/meta-llama/llama-4-scout-17b-16e-instruct",
+          "price_verified_at": "2026-03-17T15:30:00+00:00"
+        }
+      },
+      "updated_at": "2026-03-17T15:30:00+00:00"
+    },
+    "openrouter": {
+      "label": "OpenRouter",
+      "currency": "USD",
+      "source_url": "https://openrouter.ai/docs/faq",
+      "refresh_supported": true,
+      "notes": "OpenRouter 官方 FAQ 说明平台不额外加价，实际价格以模型页为准。",
+      "models": {
+        "openai/gpt-5-mini": {
+          "input_price_per_1m": 0.25,
+          "output_price_per_1m": 2.0,
+          "source_url": "https://openrouter.ai/openai/gpt-5-mini/pricing",
+          "price_verified_at": "2026-03-17T12:24:14+00:00"
+        }
+      },
+      "updated_at": "2026-03-17T12:24:14+00:00"
+    },
+    "ollama": {
+      "label": "Ollama",
+      "currency": "LOCAL",
+      "source_url": "https://ollama.com/",
+      "refresh_supported": false,
+      "notes": "本地模型默认按 0 成本处理。",
+      "models": {
+        "*": {
+          "input_price_per_1m": 0.0,
+          "output_price_per_1m": 0.0,
+          "source_url": "https://ollama.com/",
+          "price_verified_at": "2026-03-17"
+        }
+      }
+    },
+    "qwen": {
+      "label": "Qwen",
+      "currency": "CNY",
+      "source_url": "https://help.aliyun.com/zh/model-studio/billing/",
+      "refresh_supported": false,
+      "notes": "采用阿里云百炼官方计费页中的公开价格快照，复杂模式统一按当前常规输入/输出口径落库。",
+      "models": {
+        "qwen-max-latest": {
+          "input_price_per_1m": 2.4,
+          "output_price_per_1m": 9.6,
+          "source_url": "https://help.aliyun.com/zh/model-studio/billing/",
+          "price_verified_at": "2026-03-17T15:30:00+00:00"
+        },
+        "qwen-plus-latest": {
+          "tiers": [
+            {
+              "max_input_tokens": 128000,
+              "input_price_per_1m": 0.8,
+              "output_price_per_1m": 4.8
+            },
+            {
+              "max_input_tokens": 1000000,
+              "input_price_per_1m": 2.0,
+              "output_price_per_1m": 12.0
+            },
+            {
+              "max_input_tokens": 8000000,
+              "input_price_per_1m": 4.0,
+              "output_price_per_1m": 24.0
+            }
+          ],
+          "source_url": "https://help.aliyun.com/zh/model-studio/billing/",
+          "price_verified_at": "2026-03-17"
+        },
+        "qwen-flash-latest": {
+          "tiers": [
+            {
+              "max_input_tokens": 128000,
+              "input_price_per_1m": 0.15,
+              "output_price_per_1m": 1.5
+            },
+            {
+              "max_input_tokens": 256000,
+              "input_price_per_1m": 0.6,
+              "output_price_per_1m": 6.0
+            },
+            {
+              "max_input_tokens": 1000000,
+              "input_price_per_1m": 1.2,
+              "output_price_per_1m": 12.0
+            }
+          ],
+          "source_url": "https://help.aliyun.com/zh/model-studio/billing/",
+          "price_verified_at": "2026-03-17T15:30:00+00:00"
+        },
+        "qwen3-max": {
+          "tiers": [
+            {
+              "max_input_tokens": 32000,
+              "input_price_per_1m": 2.5,
+              "output_price_per_1m": 10.0
+            },
+            {
+              "max_input_tokens": 128000,
+              "input_price_per_1m": 4.0,
+              "output_price_per_1m": 16.0
+            },
+            {
+              "max_input_tokens": 1000000,
+              "input_price_per_1m": 7.0,
+              "output_price_per_1m": 28.0
+            }
+          ],
+          "source_url": "https://help.aliyun.com/zh/model-studio/billing/",
+          "price_verified_at": "2026-03-17"
+        },
+        "qwen3.5-plus": {
+          "tiers": [
+            {
+              "max_input_tokens": 128000,
+              "input_price_per_1m": 0.8,
+              "output_price_per_1m": 4.8
+            },
+            {
+              "max_input_tokens": 1000000,
+              "input_price_per_1m": 2.0,
+              "output_price_per_1m": 12.0
+            },
+            {
+              "max_input_tokens": 8000000,
+              "input_price_per_1m": 4.0,
+              "output_price_per_1m": 24.0
+            }
+          ],
+          "source_url": "https://help.aliyun.com/zh/model-studio/billing/",
+          "price_verified_at": "2026-03-17"
+        },
+        "qwen3.5-flash": {
+          "tiers": [
+            {
+              "max_input_tokens": 128000,
+              "input_price_per_1m": 0.2,
+              "output_price_per_1m": 2.0
+            },
+            {
+              "max_input_tokens": 256000,
+              "input_price_per_1m": 0.8,
+              "output_price_per_1m": 8.0
+            },
+            {
+              "max_input_tokens": 1000000,
+              "input_price_per_1m": 1.2,
+              "output_price_per_1m": 12.0
+            }
+          ],
+          "source_url": "https://help.aliyun.com/zh/model-studio/billing/",
+          "price_verified_at": "2026-03-17T15:30:00+00:00"
+        },
+        "qwen3-coder-plus": {
+          "tiers": [
+            {
+              "max_input_tokens": 32000,
+              "input_price_per_1m": 4.0,
+              "output_price_per_1m": 16.0
+            },
+            {
+              "max_input_tokens": 128000,
+              "input_price_per_1m": 6.0,
+              "output_price_per_1m": 24.0
+            },
+            {
+              "max_input_tokens": 256000,
+              "input_price_per_1m": 10.0,
+              "output_price_per_1m": 40.0
+            },
+            {
+              "max_input_tokens": 1000000,
+              "input_price_per_1m": 20.0,
+              "output_price_per_1m": 200.0
+            }
+          ],
+          "source_url": "https://help.aliyun.com/zh/model-studio/billing/",
+          "price_verified_at": "2026-03-17T15:30:00+00:00"
+        },
+        "qwen3-coder-flash": {
+          "tiers": [
+            {
+              "max_input_tokens": 32000,
+              "input_price_per_1m": 1.0,
+              "output_price_per_1m": 4.0
+            },
+            {
+              "max_input_tokens": 128000,
+              "input_price_per_1m": 1.5,
+              "output_price_per_1m": 6.0
+            },
+            {
+              "max_input_tokens": 1000000,
+              "input_price_per_1m": 2.5,
+              "output_price_per_1m": 10.0
+            },
+            {
+              "max_input_tokens": 8000000,
+              "input_price_per_1m": 5.0,
+              "output_price_per_1m": 25.0
+            }
+          ],
+          "source_url": "https://help.aliyun.com/zh/model-studio/billing/",
+          "price_verified_at": "2026-03-17"
+        }
+      }
+    },
+    "doubao": {
+      "label": "Doubao",
+      "currency": "CNY",
+      "source_url": "https://www.volcengine.com/docs/84458/1585097",
+      "refresh_supported": false,
+      "notes": "官方模型价格分档复杂，当前版本仍保留手工覆盖入口但不内置默认定价。",
+      "models": {}
+    },
+    "perplexity": {
+      "label": "Perplexity",
+      "currency": "USD",
+      "source_url": "https://docs.perplexity.ai/getting-started/pricing",
+      "refresh_supported": false,
+      "notes": "仅补入官方公开价格表中可直接核实的 Sonar 系列模型。",
+      "models": {
+        "sonar": {
+          "input_price_per_1m": 1.0,
+          "output_price_per_1m": 1.0,
+          "source_url": "https://docs.perplexity.ai/getting-started/pricing",
+          "price_verified_at": "2026-03-17T15:30:00+00:00"
+        },
+        "sonar-pro": {
+          "input_price_per_1m": 3.0,
+          "output_price_per_1m": 15.0,
+          "source_url": "https://docs.perplexity.ai/getting-started/pricing",
+          "price_verified_at": "2026-03-17T15:30:00+00:00"
+        },
+        "sonar-reasoning-pro": {
+          "input_price_per_1m": 2.0,
+          "output_price_per_1m": 8.0,
+          "source_url": "https://docs.perplexity.ai/getting-started/pricing",
+          "price_verified_at": "2026-03-17T15:30:00+00:00"
+        }
+      }
+    },
+    "together": {
+      "label": "Together",
+      "currency": "USD",
+      "source_url": "https://www.together.ai/pricing",
+      "refresh_supported": false,
+      "notes": "仅补入 Together 公开价格页中能直接匹配到的模型。",
+      "models": {
+        "deepseek-ai/DeepSeek-V3.1": {
+          "input_price_per_1m": 0.6,
+          "output_price_per_1m": 1.7,
+          "source_url": "https://www.together.ai/pricing",
+          "price_verified_at": "2026-03-17T15:30:00+00:00"
+        },
+        "meta-llama/Llama-3.3-70B-Instruct-Turbo": {
+          "input_price_per_1m": 0.88,
+          "output_price_per_1m": 0.88,
+          "source_url": "https://www.together.ai/pricing",
+          "price_verified_at": "2026-03-17T15:30:00+00:00"
+        }
+      }
+    },
+    "fireworks": {
+      "label": "Fireworks",
+      "currency": "USD",
+      "source_url": "https://fireworks.ai/pricing",
+      "refresh_supported": false,
+      "notes": "仅补入 Fireworks 公开价格页中能直接对应到当前配置模型族的条目。",
+      "models": {
+        "accounts/fireworks/models/deepseek-v3p1": {
+          "input_price_per_1m": 0.56,
+          "output_price_per_1m": 1.68,
+          "source_url": "https://fireworks.ai/pricing",
+          "price_verified_at": "2026-03-17T15:30:00+00:00"
+        }
+      }
+    }
+  }
+}

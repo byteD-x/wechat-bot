@@ -507,3 +507,32 @@ async def test_reconnect_wechat_retries_hook_transport(monkeypatch):
 
     assert client is not None
     assert attempts["count"] == 3
+
+
+@pytest.mark.asyncio
+async def test_memory_manager_background_backlog_persists_across_reopen(tmp_path):
+    db_path = tmp_path / "chat_memory.db"
+    manager = MemoryManager(str(db_path))
+    await manager.initialize()
+    await manager.upsert_background_backlog(
+        "friend:bob",
+        "facts",
+        {"user_text": "hi", "assistant_reply": "hello"},
+    )
+    await manager.close()
+
+    reopened = MemoryManager(str(db_path))
+    await reopened.initialize()
+    items = await reopened.list_background_backlog()
+    stats = await reopened.get_background_backlog_stats()
+    await reopened.delete_background_backlog("friend:bob", "facts")
+    remaining = await reopened.list_background_backlog()
+    await reopened.close()
+
+    assert len(items) == 1
+    assert items[0]["chat_id"] == "friend:bob"
+    assert items[0]["task_type"] == "facts"
+    assert items[0]["payload"] == {"user_text": "hi", "assistant_reply": "hello"}
+    assert stats["total"] == 1
+    assert stats["by_task_type"] == {"facts": 1}
+    assert remaining == []

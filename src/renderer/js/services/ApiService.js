@@ -222,23 +222,25 @@ class ApiService {
         return eventSource;
     }
 
-    async getMessages(params = {}) {
+    _buildQueryString(params = {}) {
         const searchParams = new URLSearchParams();
-        if (params.limit !== undefined && params.limit !== null) {
-            searchParams.set('limit', String(params.limit));
-        }
-        if (params.offset !== undefined && params.offset !== null) {
-            searchParams.set('offset', String(params.offset));
-        }
-        if (params.chatId) {
-            searchParams.set('chat_id', params.chatId);
-        }
-        if (params.keyword) {
-            searchParams.set('keyword', params.keyword);
-        }
-
+        Object.entries(params || {}).forEach(([key, value]) => {
+            if (value === undefined || value === null || value === '') {
+                return;
+            }
+            searchParams.set(key, String(value));
+        });
         const query = searchParams.toString();
-        return this.request(query ? `/api/messages?${query}` : '/api/messages');
+        return query ? `?${query}` : '';
+    }
+
+    async getMessages(params = {}) {
+        return this.request(`/api/messages${this._buildQueryString({
+            limit: params.limit,
+            offset: params.offset,
+            chat_id: params.chatId,
+            keyword: params.keyword,
+        })}`);
     }
 
     async getContactProfile(chatId) {
@@ -301,6 +303,32 @@ class ApiService {
 
     async getUsage() {
         return this.request('/api/usage');
+    }
+
+    async getPricing() {
+        return this.request('/api/pricing');
+    }
+
+    async refreshPricing(providers = []) {
+        return this.request('/api/pricing/refresh', {
+            method: 'POST',
+            body: { providers }
+        });
+    }
+
+    async getCostSummary(params = {}) {
+        return this.request(`/api/costs/summary${this._buildQueryString(params)}`);
+    }
+
+    async getCostSessions(params = {}) {
+        return this.request(`/api/costs/sessions${this._buildQueryString(params)}`);
+    }
+
+    async getCostSessionDetails(chatId, params = {}) {
+        return this.request(`/api/costs/session_details${this._buildQueryString({
+            chat_id: chatId,
+            ...params,
+        })}`);
     }
 }
 

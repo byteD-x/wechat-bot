@@ -50,6 +50,11 @@
             <line x1="18" y1="20" x2="18" y2="4" />
             <line x1="6" y1="20" x2="6" y2="16" />
         </symbol>
+        <symbol id="icon-coins" viewBox="0 0 24 24">
+            <ellipse cx="12" cy="5" rx="7" ry="3" />
+            <path d="M5 5v6c0 1.7 3.1 3 7 3s7-1.3 7-3V5" />
+            <path d="M5 11v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6" />
+        </symbol>
         <symbol id="icon-activity" viewBox="0 0 24 24">
             <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
         </symbol>
@@ -174,6 +179,12 @@
                     </svg>
                     <span class="nav-label">仪表盘</span>
                 </a>
+                <a href="#" class="nav-item" data-page="costs">
+                    <svg class="icon">
+                        <use href="#icon-coins" />
+                    </svg>
+                    <span class="nav-label">成本管理</span>
+                </a>
                 <a href="#" class="nav-item" data-page="messages">
                     <svg class="icon">
                         <use href="#icon-message" />
@@ -200,7 +211,7 @@
                     <span class="status-label">未连接</span>
                 </div>
                 <button class="update-badge" id="update-badge" hidden>发现新版本</button>
-                <div class="version-text" id="version-text">v1.1.0</div>
+                <div class="version-text" id="version-text">v1.1.1</div>
             </div>
         </nav>
 
@@ -255,6 +266,17 @@
                             <div class="stat-label">今日Token</div>
                         </div>
                     </div>
+                    <div class="stat-card stat-card-accent">
+                        <div class="stat-icon">
+                            <svg class="icon">
+                                <use href="#icon-coins" />
+                            </svg>
+                        </div>
+                        <div class="stat-content">
+                            <div class="stat-value" id="stat-today-cost">--</div>
+                            <div class="stat-label">今日成本</div>
+                        </div>
+                    </div>
                     <div class="stat-card">
                         <div class="stat-icon">
                             <svg class="icon">
@@ -268,7 +290,6 @@
                     </div>
                 </div>
 
-                <!-- 卡片网格 -->
                 <div class="card-grid dashboard-grid">
                     <!-- 机器人状态 -->
                     <div class="card">
@@ -373,7 +394,45 @@
                         </div>
                     </div>
 
-                    <!-- 快捷操作 -->
+                </div>
+
+                <div class="dashboard-secondary-grid">
+                    <div class="card dashboard-cost-card">
+                        <div class="card-header">
+                            <h2 class="card-title">成本概览</h2>
+                            <button class="btn btn-secondary btn-sm" id="btn-open-costs">
+                                <svg class="icon icon-sm">
+                                    <use href="#icon-coins" />
+                                </svg>
+                                <span>查看明细</span>
+                            </button>
+                        </div>
+                        <div class="card-body">
+                            <div class="dashboard-cost-summary" id="dashboard-cost-summary">
+                                <div class="dashboard-cost-stat">
+                                    <span class="dashboard-cost-label">近 30 天总金额</span>
+                                    <strong class="dashboard-cost-value">--</strong>
+                                </div>
+                                <div class="dashboard-cost-stat">
+                                    <span class="dashboard-cost-label">近 30 天总 Token</span>
+                                    <strong class="dashboard-cost-value">--</strong>
+                                </div>
+                                <div class="dashboard-cost-stat">
+                                    <span class="dashboard-cost-label">已定价回复</span>
+                                    <strong class="dashboard-cost-value">--</strong>
+                                </div>
+                            </div>
+                            <div class="dashboard-subsection">
+                                <div class="dashboard-subsection-title">近 30 天主要模型消耗</div>
+                                <div class="dashboard-model-list" id="dashboard-cost-top-models">
+                                    <div class="empty-state compact-empty">
+                                        <span class="empty-state-text">暂无成本数据</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="card">
                         <div class="card-header">
                             <h2 class="card-title">快捷操作</h2>
@@ -409,8 +468,7 @@
                     </div>
                 </div>
 
-                <!-- 最近消息 -->
-                <div class="card full-width" hidden>
+                <div class="card full-width dashboard-recent-card">
                     <div class="card-header">
                         <h2 class="card-title">最近消息</h2>
                         <button class="btn btn-ghost btn-sm" id="btn-view-all-messages">查看全部</button>
@@ -430,6 +488,93 @@
 
 
 
+            </section>
+            <!-- 成本页面 -->
+            <section class="page" id="page-costs">
+                <div class="page-header">
+                    <h1 class="page-title">成本管理</h1>
+                    <div class="page-actions">
+                        <button class="btn btn-secondary btn-sm" id="btn-refresh-pricing">
+                            <svg class="icon icon-sm">
+                                <use href="#icon-refresh" />
+                            </svg>
+                            <span>刷新价格目录</span>
+                        </button>
+                        <button class="btn btn-primary btn-sm" id="btn-refresh-costs">
+                            <svg class="icon icon-sm">
+                                <use href="#icon-bar-chart" />
+                            </svg>
+                            <span>刷新数据</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="cost-filter-bar">
+                    <div class="cost-filter-group">
+                        <label class="form-label" for="cost-period">时间范围</label>
+                        <select class="form-input" id="cost-period">
+                            <option value="today">今天</option>
+                            <option value="7d">近 7 天</option>
+                            <option value="30d" selected>近 30 天</option>
+                            <option value="all">全部</option>
+                        </select>
+                    </div>
+                    <div class="cost-filter-group">
+                        <label class="form-label" for="cost-provider">Provider</label>
+                        <select class="form-input" id="cost-provider">
+                            <option value="">全部 Provider</option>
+                        </select>
+                    </div>
+                    <div class="cost-filter-group">
+                        <label class="form-label" for="cost-model">模型</label>
+                        <select class="form-input" id="cost-model">
+                            <option value="">全部模型</option>
+                        </select>
+                    </div>
+                    <label class="cost-toggle-row" for="cost-only-priced">
+                        <input type="checkbox" id="cost-only-priced">
+                        <span>仅已定价</span>
+                    </label>
+                    <label class="cost-toggle-row" for="cost-include-estimated">
+                        <input type="checkbox" id="cost-include-estimated" checked>
+                        <span>包含估算数据</span>
+                    </label>
+                </div>
+
+                <div class="cost-kpi-grid" id="cost-overview">
+                    <div class="loading-state">
+                        <div class="spinner"></div>
+                        <span>加载中...</span>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <h2 class="card-title">模型汇总</h2>
+                    </div>
+                    <div class="card-body">
+                        <div id="cost-models">
+                            <div class="loading-state">
+                                <div class="spinner"></div>
+                                <span>加载中...</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card cost-session-card">
+                    <div class="card-header">
+                        <h2 class="card-title">会话明细</h2>
+                    </div>
+                    <div class="card-body">
+                        <div id="cost-sessions">
+                            <div class="loading-state">
+                                <div class="spinner"></div>
+                                <span>加载中...</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </section>
             <!-- 消息页面 -->
             <section class="page" id="page-messages">
@@ -1178,7 +1323,7 @@
                         <div class="update-panel">
                             <div class="update-panel-content">
                                 <div class="update-status-text" id="update-status-text">未检查更新</div>
-                                <div class="update-status-meta" id="update-status-meta">当前版本：v1.1.0</div>
+                                <div class="update-status-meta" id="update-status-meta">当前版本：v1.1.1</div>
                             </div>
                             <div class="update-panel-actions">
                                 <button class="btn btn-secondary btn-sm" id="btn-check-updates">检查更新</button>

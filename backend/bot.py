@@ -27,6 +27,7 @@ from .core.factory import (
 )
 from .core.config_service import get_config_service
 from .core.config_audit import diff_config_paths
+from .core.pricing_catalog import get_pricing_catalog
 
 from .types import MessageEvent
 from .handlers.filter import should_reply, should_reply_with_reason
@@ -57,6 +58,7 @@ from .utils.ipc import IPCManager
 
 from .bot_manager import get_bot_manager
 from .wechat_versions import OFFICIAL_SUPPORTED_WECHAT_VERSION
+from .model_catalog import infer_provider_id
 
 _FILEHELPER_CHAT_NAMES = {"filehelper", "文件传输助手"}
 _RECENT_SELF_MESSAGE_ECHO_TTL_SEC = 8.0
@@ -300,6 +302,7 @@ class WeChatBot:
                 {"api": self.api_cfg, "agent": self.agent_cfg}
             )
             self.runtime_preset_name = preset_name or ""
+            self._sync_ai_runtime_dependencies()
             self._set_ai_health(
                 "healthy",
                 f"AI preset {self.runtime_preset_name or 'unknown'} passed startup probe",
@@ -389,6 +392,7 @@ class WeChatBot:
 
         if self.export_rag:
             self.export_rag.update_config(self.bot_cfg)
+        self._sync_ai_runtime_dependencies()
 
     def _ensure_vector_memory(self) -> None:
         if not self._vector_memory_requested():
@@ -408,6 +412,7 @@ class WeChatBot:
             if self.export_rag is None:
                 self.export_rag = ExportChatRAG(self.vector_memory)
             self.export_rag.update_config(self.bot_cfg)
+        self._sync_ai_runtime_dependencies()
 
     def _vector_memory_requested(self) -> bool:
         if not bool(self.bot_cfg.get("vector_memory_enabled", True)):
@@ -763,6 +768,7 @@ class WeChatBot:
                         self.ai_client = new_client
                         self.api_signature = new_signature
                         self.runtime_preset_name = new_preset or ""
+                        self._sync_ai_runtime_dependencies()
                         self._set_ai_health(
                             "healthy",
                             f"AI preset {self.runtime_preset_name or 'unknown'} reloaded successfully",
@@ -868,6 +874,7 @@ class WeChatBot:
             self.ai_client = new_client
             self.api_signature = new_signature
             self.runtime_preset_name = new_preset or active_preset
+            self._sync_ai_runtime_dependencies()
             self._set_ai_health(
                 "healthy",
                 f"AI preset {self.runtime_preset_name or 'unknown'} hot-switched successfully",
@@ -911,6 +918,11 @@ class WeChatBot:
             or not self.export_rag.auto_ingest
             or not self.ai_client
         ):
+            return
+        self._sync_ai_runtime_dependencies()
+        if hasattr(self.ai_client, "schedule_export_rag_sync"):
+            await self.ai_client.schedule_export_rag_sync(force=force)
+            asyncio.create_task(self.bot_manager.notify_status_change())
             return
         if self.export_rag_sync_task and not self.export_rag_sync_task.done():
             if not force:
@@ -968,9 +980,16 @@ class WeChatBot:
             "engine": "legacy",
             "graph_mode": "disabled",
             "langsmith_enabled": False,
-            "growth_mode": "background_only",
+            "growth_mode": "deferred_until_batch",
             "growth_tasks_pending": 0,
             "last_growth_error": "",
+            "foreground_active": 0,
+            "foreground_waiters": 0,
+            "background_active": 0,
+            "background_backlog_count": 0,
+            "background_backlog_by_task": {},
+            "next_background_batch_at": None,
+            "last_background_batch": {},
             "retriever_stats": {},
             "cache_stats": {},
             "runtime_timings": {},
@@ -1796,6 +1815,16 @@ class WeChatBot:
             "export_rag": self.export_rag,
         }
 
+    def _sync_ai_runtime_dependencies(self) -> None:
+        if self.ai_client and hasattr(self.ai_client, "update_runtime_dependencies"):
+            result = self.ai_client.update_runtime_dependencies(self._runtime_dependencies())
+            if asyncio.iscoroutine(result):
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    return
+                loop.create_task(result)
+
     def _get_chat_lock(self, chat_id: str) -> asyncio.Lock:
         lock = self.chat_locks.get(chat_id)
         if lock is None:
@@ -2028,12 +2057,49 @@ class WeChatBot:
                 engine = "unknown"
 
         metadata = dict(getattr(prepared, "response_metadata", {}) or {})
+        provider_id = str(getattr(self.ai_client, "provider_id", "") or "").strip().lower()
+        if not provider_id:
+            provider_id = infer_provider_id(
+                provider_id=None,
+                preset_name=self.runtime_preset_name,
+                base_url=getattr(self.ai_client, "base_url", ""),
+                model=str(getattr(self.ai_client, "model", "") or ""),
+            ) or ""
+
+        pricing_snapshot = None
+        cost_snapshot = None
+        source_url = ""
+        price_verified_at = ""
+        if provider_id and total_tokens > 0:
+            pricing_snapshot = get_pricing_catalog().resolve_price(
+                provider_id,
+                str(getattr(self.ai_client, "model", "") or ""),
+                prompt_tokens=user_tokens,
+            )
+            if pricing_snapshot:
+                input_cost = round(
+                    (user_tokens / 1_000_000) * float(pricing_snapshot.get("input_price_per_1m") or 0.0),
+                    8,
+                )
+                output_cost = round(
+                    (reply_tokens / 1_000_000) * float(pricing_snapshot.get("output_price_per_1m") or 0.0),
+                    8,
+                )
+                cost_snapshot = {
+                    "input_cost": input_cost,
+                    "output_cost": output_cost,
+                    "total_cost": round(input_cost + output_cost, 8),
+                }
+                source_url = str(pricing_snapshot.get("source_url") or "")
+                price_verified_at = str(pricing_snapshot.get("price_verified_at") or "")
+
         metadata.update({
             "kind": "assistant_reply",
             "chat_id": chat_id,
             "chat_name": event.chat_name,
             "sender": event.sender,
             "preset": self.runtime_preset_name,
+            "provider_id": provider_id,
             "model": str(getattr(self.ai_client, "model", "") or ""),
             "model_alias": get_model_alias(self.ai_client),
             "engine": engine,
@@ -2044,6 +2110,14 @@ class WeChatBot:
                 "reply": reply_tokens,
                 "total": total_tokens,
             },
+            "pricing": pricing_snapshot,
+            "cost": cost_snapshot,
+            "estimated": {
+                "tokens": False,
+                "pricing": False,
+            },
+            "source_url": source_url,
+            "price_verified_at": price_verified_at,
             "emotion": dict(getattr(prepared, "trace", {}).get("emotion") or {}) or None,
             "context_summary": dict(getattr(prepared, "trace", {}).get("context_summary") or {}),
             "profile": dict(getattr(prepared, "trace", {}).get("profile") or {}) or None,

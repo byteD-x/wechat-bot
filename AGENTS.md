@@ -50,11 +50,12 @@
 - 涉及用户数据、权限或支付链路时，先写 1 到 3 条威胁模型，再改代码。
 
 ## 5. 开发与验证命令
+- 需要使用项目内的`.venv`环境
 - 安装依赖：
   - `pip install -r requirements.txt`
   - `npm install`
 - 本地运行：
-  - `npm run dev`
+  - `npm run dev`S
   - `python run.py start`
   - `python run.py web`
   - `python run.py check`
@@ -69,7 +70,6 @@
     - `npm run build`
 
 说明：
-- 若环境缺少 `aiosqlite`、`quart` 或可选的 `sentence-transformers`，要在结论里明确说明影响范围。
 - 不要声称验证通过，除非命令已经实际执行。
 
 ## 6. 配置与运行时约束

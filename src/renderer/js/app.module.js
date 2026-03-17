@@ -8,12 +8,13 @@ if (typeof window.dragEvent === 'undefined') {
 
 import { stateManager, eventBus, Events } from './core/index.js';
 import { apiService, notificationService } from './services/index.js';
-import { DashboardPage, MessagesPage, SettingsPage, LogsPage } from './pages/index.js';
+import { DashboardPage, CostsPage, MessagesPage, SettingsPage, LogsPage } from './pages/index.js';
 
 class App {
     constructor() {
         this.pages = {
             dashboard: new DashboardPage(),
+            costs: new CostsPage(),
             messages: new MessagesPage(),
             settings: new SettingsPage(),
             logs: new LogsPage()
@@ -311,15 +312,20 @@ class App {
             }
             if (key === '2') {
                 event.preventDefault();
-                this._switchPage('messages');
+                this._switchPage('costs');
                 return;
             }
             if (key === '3') {
                 event.preventDefault();
-                this._switchPage('settings');
+                this._switchPage('messages');
                 return;
             }
             if (key === '4') {
+                event.preventDefault();
+                this._switchPage('settings');
+                return;
+            }
+            if (key === '5') {
                 event.preventDefault();
                 this._switchPage('logs');
                 return;

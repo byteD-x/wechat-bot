@@ -15,7 +15,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [1/5] Checking Node.js...
+echo [1/6] Checking Node.js...
 where node >nul 2>&1
 if errorlevel 1 (
     echo Node.js was not found. Install Node.js first.
@@ -25,7 +25,7 @@ if errorlevel 1 (
 for /f "tokens=*" %%i in ('node -v') do set "NODE_VERSION=%%i"
 echo     Node.js !NODE_VERSION!
 
-echo [2/5] Checking Python...
+echo [2/6] Checking Python...
 if exist ".venv\Scripts\python.exe" (
     set "PYTHON_EXE=.venv\Scripts\python.exe"
 ) else (
@@ -39,7 +39,7 @@ if exist ".venv\Scripts\python.exe" (
 for /f "tokens=*" %%i in ('"!PYTHON_EXE!" --version') do set "PY_VERSION=%%i"
 echo     !PY_VERSION!
 
-echo [3/5] Checking Node dependencies...
+echo [3/6] Checking Node dependencies...
 if not exist "node_modules" (
     call npm install
     if errorlevel 1 (
@@ -49,20 +49,41 @@ if not exist "node_modules" (
 )
 echo     Node dependencies are ready.
 
-echo [4/5] Building Python backend...
+echo [4/6] Building Python backend...
 if not exist "backend-dist" mkdir backend-dist
 
-"!PYTHON_EXE!" -m PyInstaller --name wechat-bot-backend --distpath "%PROJECT_ROOT%backend-dist" --workpath "%PROJECT_ROOT%build" --specpath "%PROJECT_ROOT%build" --noconfirm --clean --console --add-data "%PROJECT_ROOT%data;data" --hidden-import wxauto --hidden-import quart --hidden-import hypercorn --hidden-import openai --hidden-import httpx --collect-all wxauto "%PROJECT_ROOT%run.py"
+"!PYTHON_EXE!" -m PyInstaller --name wechat-bot-backend --distpath "%PROJECT_ROOT%backend-dist" --workpath "%PROJECT_ROOT%build" --specpath "%PROJECT_ROOT%build" --noconfirm --clean --console --hidden-import wxauto --hidden-import quart --hidden-import hypercorn --hidden-import openai --hidden-import httpx --collect-all wxauto "%PROJECT_ROOT%run.py"
 if errorlevel 1 (
     echo PyInstaller build failed.
     exit /b 1
 )
 echo     Python backend build complete.
 
-echo [5/5] Building Electron release packages (portable + setup + msi)...
+echo [5/6] Auditing backend artifacts...
+"!PYTHON_EXE!" "%PROJECT_ROOT%scripts\audit_release_artifacts.py" "%PROJECT_ROOT%backend-dist\wechat-bot-backend"
+if errorlevel 1 (
+    echo Backend artifact audit failed.
+    exit /b 1
+)
+echo     Backend artifact audit complete.
+
+echo [6/6] Building Electron release packages (portable + setup)...
 call npm run build:release
 if errorlevel 1 (
     echo Electron release build failed.
+    exit /b 1
+)
+
+if exist "%PROJECT_ROOT%release\win-unpacked" rmdir /s /q "%PROJECT_ROOT%release\win-unpacked"
+if exist "%PROJECT_ROOT%release\builder-debug.yml" del /f /q "%PROJECT_ROOT%release\builder-debug.yml"
+if exist "%PROJECT_ROOT%release\latest.yml" del /f /q "%PROJECT_ROOT%release\latest.yml"
+if exist "%PROJECT_ROOT%release\app-update.yml" del /f /q "%PROJECT_ROOT%release\app-update.yml"
+del /f /q "%PROJECT_ROOT%release\*.blockmap" >nul 2>&1
+del /f /q "%PROJECT_ROOT%release\*.msi" >nul 2>&1
+
+"!PYTHON_EXE!" "%PROJECT_ROOT%scripts\audit_release_artifacts.py" "%PROJECT_ROOT%release"
+if errorlevel 1 (
+    echo Electron artifact audit failed.
     exit /b 1
 )
 
@@ -74,4 +95,4 @@ echo.
 echo Output: %PROJECT_ROOT%release\
 echo.
 
-if exist release explorer release
+if not defined CI if exist release start "" explorer release >nul 2>&1

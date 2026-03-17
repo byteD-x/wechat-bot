@@ -6,38 +6,44 @@
 - `owner`: `byteD-x`
 - `repo`: `wechat-bot`
 
-Electron 打包配置位于 `electron-builder.yml`，自动更新使用 `electron-updater`，读取构建产物中的 `app-update.yml` 与 `latest.yml`。
+当前发布策略：
+- 正式发布走 GitHub Actions，不再在本地直接上传 Release 附件
+- 默认只构建 `portable + NSIS setup`
+- `MSI` 仅保留为按需手工构建产物
+- 应用内自动更新已停用，桌面端只保留“打开 GitHub Releases 页面”的入口
 
-## 构建产物
+## 默认构建产物
 
-执行 `npm run build:release` 或 `.\build.bat` 后，会在 `release/` 目录生成以下产物：
+执行 `npm run build:release` 或 `.\build.bat` 后，默认会在 `release/` 目录生成：
 - `wechat-ai-assistant-portable-<version>-x64.exe`
 - `wechat-ai-assistant-setup-<version>.exe`
-- `wechat-ai-assistant-installer-<version>-x64.msi`
-- `latest.yml`
-- `*.blockmap`
+
+按需构建：
+- `npm run build:msi`
 
 说明：
-- `portable` 适合免安装分发。
-- `setup` 是 NSIS 安装包，也是应用内自动更新的主要目标。
-- `msi` 适合企业或手动分发场景。
-- `latest.yml` 与 `blockmap` 由 `electron-builder` 自动生成，自动更新依赖它们。
+- `portable` 适合免安装分发
+- `setup` 是默认安装包
+- `MSI` 适合企业或特殊分发场景，但不进入日常发版链路
 
-## 应用内更新行为
+## 发布说明生成规则
 
-桌面端支持以下更新流程：
-- 启动后自动检查更新。
-- 运行期间按策略轮询更新。
-- 发现新版本时展示系统通知。
-- 在“设置 -> 应用更新”中支持手动检查和跳转下载。
+每次正式 Release 都必须自动生成“与上一个正式版本相比”的更新说明：
+- 当前版本：本次发布 tag，例如 `v1.2.0`
+- 上一个版本：按 `git tag --sort=-creatordate` 解析，排除当前 tag 后取最近一个正式 tag
+- 说明区间：`previous_tag..current_tag`
+- 说明结构固定包含：
+  - 标题
+  - compare 区间
+  - GitHub compare 链接
+  - 按 Conventional Commits 分组的变更摘要
+  - 原始提交列表
 
-注意：
-- `NSIS` 是 Windows 自动更新的主路径。
-- `MSI` 安装用户也会收到新版本提醒，但当前动作是打开 GitHub Releases 页面，不做应用内静默升级。
+若没有上一个正式 tag，则回退为“从仓库起点到当前 tag”的首版发布说明。
 
 ## 本地构建
 
-仅构建，不发布：
+仅构建产物，不负责正式发布：
 
 ```powershell
 npm run build:release
@@ -49,26 +55,34 @@ npm run build:release
 .\build.bat
 ```
 
-## 发布到 GitHub Releases
+本地构建主要用于调试和兜底。正式 Release 以 GitHub Actions 产物为准。
 
-先准备 `GH_TOKEN`：
+## GitHub Actions 发版
 
-```powershell
-$env:GH_TOKEN="你的 GitHub Token"
-```
+正式发布入口：
+- 推送 `v*` tag
+- 或在 Actions 中手动触发 `release` workflow，并指定已有 tag
 
-再执行：
+工作流固定步骤：
+1. 解析当前 tag
+2. 定位上一个正式 tag
+3. 构建 Python 后端
+4. 构建 Electron 默认安装产物
+5. 生成 Release Notes
+6. 上传附件到 GitHub Release
 
-```powershell
-npm run publish:github
-```
+默认上传附件：
+- `setup.exe`
+- `portable.exe`
+- `SHA256SUMS.txt`
 
 ## 构建与发布验证
 
-1. 执行 `npm run build:release`，确认 `release/` 下已生成 `setup`、`msi`、`latest.yml`。
-2. 执行 `npm run publish:github`，确认对应 Release 附件上传完成。
-3. 安装应用后进入“设置 -> 应用更新”，点击“检查更新”。
-4. 发布更高版本后再次启动应用，确认能收到新版本提示。
+1. 执行 `npm run build:release`，确认 `release/` 下仅生成 `setup` 和 `portable`。
+2. 执行 `npm run build:msi`，确认仍可单独生成 `msi`。
+3. 确认产物中不包含 `data/chat_exports`、日志、数据库、`api_keys.py`、`config_override.json` 等运行数据。
+4. 推送新 tag 后，确认 GitHub Actions 成功创建或更新 Release。
+5. 确认 Release 正文包含 `previous_tag...current_tag` 对比说明与 commit 分组摘要。
 
 ## 2026-03-15 优化计划落地
 
@@ -179,3 +193,18 @@ npm run publish:github
 2. 在桌面端验证导航切换、设置保存、提示词预览、更新检查。
 3. 点击“启动机器人”，确认状态变更和日志输出正常。
 4. 用真实微信发送文本、语音、带 emoji 的消息各一条，确认机器人真实回复到微信客户端。
+
+## 2026-03-17 成本定价默认快照补齐
+
+本批补齐了成本页默认价格目录中已能从官方公开页面直接核实的模型价格，优先覆盖当前实际可配置且已经接入成本统计的主流供应商。
+
+- 补入 Qwen 的 `qwen-flash-latest`、`qwen3.5-flash`，并按最新官方计费页更新 `qwen-max-latest` 与 `qwen3-coder-plus`
+- 补入 Perplexity 的 `sonar`、`sonar-pro`、`sonar-reasoning-pro`
+- 补入 Together 的 `deepseek-ai/DeepSeek-V3.1` 与 `meta-llama/Llama-3.3-70B-Instruct-Turbo`
+- 补入 Fireworks 的 `accounts/fireworks/models/deepseek-v3p1`
+- 补入 Groq 的 `meta-llama/llama-4-scout-17b-16e-instruct`
+
+说明：
+
+- 本轮仅填入能从官方公开页直接确认数值的模型；Doubao、Zhipu、Moonshot、SiliconFlow 等仍保留为空或部分为空，避免误填导致成本核算失真
+- Ollama 继续按本地模型 `0` 成本口径处理

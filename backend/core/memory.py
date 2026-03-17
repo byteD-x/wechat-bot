@@ -187,6 +187,19 @@ class MemoryManager:
             "CREATE INDEX IF NOT EXISTS idx_user_profiles_updated_at "
             "ON user_profiles (updated_at)"
         )
+        await self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS background_backlog ("
+            "chat_id TEXT NOT NULL,"
+            "task_type TEXT NOT NULL,"
+            "payload TEXT DEFAULT '{}',"
+            "updated_at INTEGER NOT NULL,"
+            "PRIMARY KEY (chat_id, task_type)"
+            ")"
+        )
+        await self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_background_backlog_updated_at "
+            "ON background_backlog (updated_at)"
+        )
         # 启用 WAL 模式提升并发性能
         await self._conn.execute("PRAGMA journal_mode=WAL")
         # 启用 synchronous = NORMAL (WAL模式下安全且更快)
@@ -332,6 +345,90 @@ class MemoryManager:
         )
         await db.commit()
         self._last_cleanup_ts = now
+
+    async def upsert_background_backlog(
+        self,
+        chat_id: str,
+        task_type: str,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        chat_id = str(chat_id).strip()
+        task_type = str(task_type).strip()
+        if not chat_id or not task_type:
+            return
+        db = await self._get_db()
+        await db.execute(
+            "INSERT INTO background_backlog (chat_id, task_type, payload, updated_at) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(chat_id, task_type) DO UPDATE SET "
+            "payload = excluded.payload, "
+            "updated_at = excluded.updated_at",
+            (
+                chat_id,
+                task_type,
+                self._serialize_metadata(payload),
+                int(time.time()),
+            ),
+        )
+        await db.commit()
+
+    async def list_background_backlog(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        query = (
+            "SELECT chat_id, task_type, payload, updated_at "
+            "FROM background_backlog "
+            "ORDER BY updated_at ASC"
+        )
+        params: Tuple[Any, ...] = ()
+        if limit is not None:
+            query += " LIMIT ?"
+            params = (max(1, int(limit)),)
+        db = await self._get_db()
+        async with db.execute(query, params) as cursor:
+            rows = await cursor.fetchall()
+        return [
+            {
+                "chat_id": str(row["chat_id"] or ""),
+                "task_type": str(row["task_type"] or ""),
+                "payload": self._deserialize_metadata(row["payload"]),
+                "updated_at": int(row["updated_at"] or 0),
+            }
+            for row in rows
+        ]
+
+    async def delete_background_backlog(self, chat_id: str, task_type: str) -> None:
+        chat_id = str(chat_id).strip()
+        task_type = str(task_type).strip()
+        if not chat_id or not task_type:
+            return
+        db = await self._get_db()
+        await db.execute(
+            "DELETE FROM background_backlog WHERE chat_id = ? AND task_type = ?",
+            (chat_id, task_type),
+        )
+        await db.commit()
+
+    async def get_background_backlog_stats(self) -> Dict[str, Any]:
+        db = await self._get_db()
+        async with db.execute(
+            "SELECT task_type, COUNT(*) AS total, MAX(updated_at) AS latest_updated_at "
+            "FROM background_backlog GROUP BY task_type"
+        ) as cursor:
+            rows = await cursor.fetchall()
+        total = 0
+        latest_updated_at = 0
+        by_task_type: Dict[str, int] = {}
+        for row in rows:
+            task_type = str(row["task_type"] or "").strip()
+            count = int(row["total"] or 0)
+            total += count
+            if task_type:
+                by_task_type[task_type] = count
+            latest_updated_at = max(latest_updated_at, int(row["latest_updated_at"] or 0))
+        return {
+            "total": total,
+            "by_task_type": by_task_type,
+            "latest_updated_at": latest_updated_at,
+        }
 
     async def has_messages(self, wx_id: str) -> bool:
         wx_id = str(wx_id).strip()
@@ -667,6 +764,67 @@ class MemoryManager:
                 "last_timestamp": row["last_timestamp"],
             })
         return chats
+
+    async def list_messages_for_analysis(
+        self,
+        *,
+        chat_id: str = "",
+        start_timestamp: Optional[int] = None,
+        end_timestamp: Optional[int] = None,
+        limit: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """按时间范围读取原始消息，用于成本/分析类只读聚合。"""
+        await self._maybe_cleanup()
+
+        where_clauses: List[str] = []
+        params: List[Any] = []
+
+        chat_id_val = str(chat_id or "").strip()
+        if chat_id_val:
+            where_clauses.append("h.wx_id = ?")
+            params.append(chat_id_val)
+
+        if start_timestamp is not None:
+            where_clauses.append("h.created_at >= ?")
+            params.append(int(start_timestamp))
+
+        if end_timestamp is not None:
+            where_clauses.append("h.created_at <= ?")
+            params.append(int(end_timestamp))
+
+        where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+        limit_sql = ""
+        if limit is not None:
+            limit_sql = " LIMIT ?"
+            params.append(max(1, int(limit)))
+
+        query_sql = (
+            "SELECT "
+            "h.id, h.wx_id, h.role, h.content, h.created_at, h.metadata, "
+            "COALESCE(u.nickname, h.wx_id) AS display_name "
+            "FROM chat_history h "
+            "LEFT JOIN user_profiles u ON h.wx_id = u.wx_id "
+            f"{where_sql} "
+            "ORDER BY h.wx_id ASC, h.id ASC"
+            f"{limit_sql}"
+        )
+
+        db = await self._get_db()
+        async with db.execute(query_sql, tuple(params)) as cursor:
+            rows = await cursor.fetchall()
+
+        messages: List[Dict[str, Any]] = []
+        for row in rows:
+            messages.append({
+                "id": int(row["id"] or 0),
+                "wx_id": str(row["wx_id"] or ""),
+                "role": str(row["role"] or ""),
+                "content": str(row["content"] or ""),
+                "created_at": int(row["created_at"] or 0),
+                "display_name": str(row["display_name"] or ""),
+                "metadata": self._deserialize_metadata(row["metadata"]),
+            })
+        return messages
 
     # ==================== 用户画像方法 ====================
 

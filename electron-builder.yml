@@ -24,9 +24,6 @@ win:
     - target: nsis
       arch:
         - x64
-    - target: msi
-      arch:
-        - x64
   icon: src/assets/icon.ico
   publisherName: Dxj
 
@@ -39,6 +36,7 @@ nsis:
   perMachine: false
   createDesktopShortcut: true
   createStartMenuShortcut: true
+  differentialPackage: false
   shortcutName: 微信AI助手
   installerLanguages:
     - zh_CN
@@ -47,10 +45,4 @@ nsis:
 msi:
   artifactName: "wechat-ai-assistant-installer-${version}-${arch}.${ext}"
 
-compression: maximum
-
-publish:
-  provider: github
-  owner: byteD-x
-  repo: wechat-bot
-  releaseType: release
+compression: normal

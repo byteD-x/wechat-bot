@@ -255,10 +255,28 @@ Invoke-RestMethod -Headers @{ "X-Api-Token" = "your_token" } http://127.0.0.1:50
     "embedding_cache_ttl_sec": 300.0,
     "background_fact_extraction_enabled": True,
     "emotion_fast_path_enabled": True,
+    "llm_foreground_max_concurrency": 1,
+    "background_ai_batch_time": "04:00",
+    "background_ai_missed_window_policy": "wait_until_next_day",
+    "background_ai_defer_mode": "defer_all",
     "langsmith_enabled": False,
     "langsmith_project": "wechat-chat",
 }
 ```
+
+新增的后台 AI 调度字段说明：
+
+- `llm_foreground_max_concurrency`: 主回复共享的全局 LLM 并发上限，默认 `1`
+- `background_ai_batch_time`: 后台 AI 任务统一批处理时间，默认每天 `04:00`
+- `background_ai_missed_window_policy`: 错过当天批处理窗口后的策略，当前默认 `wait_until_next_day`
+- `background_ai_defer_mode`: 白天后台 AI 的处理模式，当前默认 `defer_all`
+
+当前默认行为：
+
+- 主回复与 delayed reply 统一走前台通道，并发固定为 `1`
+- 白天所有会触发 `chat/completions` 或 `embeddings` 的后台任务都会进入持久化 backlog
+- backlog 会按 `chat_id + task_type` 聚合覆盖，只保留下一次重算所需的最新快照
+- 后台 backlog 只在凌晨批处理窗口执行；如果程序错过当天 `04:00`，不会补跑，直接等待下一次窗口
 
 建议：
 
@@ -427,6 +445,13 @@ python -m tools.prompt_gen.generator
 - `growth_mode`
 - `growth_tasks_pending`
 - `last_growth_error`
+- `foreground_active`
+- `foreground_waiters`
+- `background_active`
+- `background_backlog_count`
+- `background_backlog_by_task`
+- `next_background_batch_at`
+- `last_background_batch`
 
 消息页里的“消息详情”面板现在会展示当前联系人的画像摘要和专属 Prompt，并允许直接编辑；人工编辑后的版本会继续作为后台渐进式更新的基础。
 设置页支持“保存本模块”；日志页默认启用自动换行，并会把成长任务、发送链和 API 请求整理成更容易扫描的摘要行。
@@ -556,6 +581,58 @@ python -m unittest discover -s tests
 python -m pytest tests\test_runtime_observability.py -q
 python -m py_compile backend\core\agent_runtime.py backend\bot.py backend\bot_manager.py backend\api.py
 ```
+
+### 10.3 Windows 发布说明
+
+当前 Windows 发布策略已经调整为：
+
+- 日常发布默认只生成 `setup.exe` 和 `portable.exe`
+- `MSI` 仅保留为按需构建产物，可通过 `npm run build:msi` 单独生成
+- 应用内自动更新已停用，桌面端只保留“打开 GitHub Releases 页面”的入口
+- 正式 Release 通过 GitHub Actions 构建并上传，不再依赖本地手工上传大文件
+
+Release Notes 规则：
+
+- 每次正式发版都会自动对比“上一个正式 tag 到当前 tag”的提交范围
+- 发布说明会自动包含 compare 区间、Compare 链接、按 Conventional Commits 分组的摘要，以及原始提交列表
+- 如果当前是首个正式版本，则会回退为“从仓库起点到当前 tag”的首版说明
+
+## 11. 成本管理
+
+桌面端新增了“成本管理”页面，用于查看 AI 回复的 token 与金额消耗。
+
+页面能力：
+
+- 顶部总览卡展示总金额、总 Token、已定价回复数、未定价回复数、最高消耗模型
+- 支持按 `today / 7d / 30d / all` 切换时间范围
+- 支持按 `Provider`、`模型`、`仅看已定价`、`包含估算数据` 筛选
+- 会话列表按 `chat_id` 分组，展开后可查看每条 AI 回复的模型、输入 Token、输出 Token、总 Token、金额、时间和回复摘要
+
+定价与估算规则：
+
+- 优先读取 assistant 消息 `metadata` 中已经落库的 `pricing` 与 `cost`
+- 若旧消息缺少 token，会按文本长度估算 token
+- 若能估 token 但无法可靠解析 provider 或价格，则只展示 token，不显示金额，并标记为“待定价”
+- 金额按官方“每 1M tokens 单价”换算，不做汇率折算；多币种会拆分展示
+- `Ollama` 本地模型默认按 `0` 成本处理
+
+### 11.1 成本相关 API
+
+新增接口：
+
+- `GET /api/pricing`
+- `POST /api/pricing/refresh`
+- `GET /api/costs/summary`
+- `GET /api/costs/sessions`
+- `GET /api/costs/session_details`
+
+说明：
+
+- `/api/pricing` 返回当前价格目录、来源链接、最近校验时间和是否支持刷新
+- `/api/pricing/refresh` 用于手动刷新可自动抓取的价格来源
+- `/api/costs/summary` 返回总览和模型聚合
+- `/api/costs/sessions` 返回会话级摘要
+- `/api/costs/session_details` 返回单个会话的 AI 回复成本明细，需要传 `chat_id`
 
 当前测试覆盖重点包括：
 
