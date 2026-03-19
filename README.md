@@ -314,19 +314,31 @@ npm run build:release
 
 MIT
 
-## Legacy Config Cleanup
+## 配置精简
 
-- Removed from defaults and GUI saves: `bot.memory_seed_*`, `bot.history_log_interval_sec`, `bot.poll_interval_sec`, `agent.history_strategy`.
-## Growth Task Controls
+清理了一批早已废弃的配置项，减少干扰：
+- `bot.memory_seed_*`、`bot.history_log_interval_sec`、`bot.poll_interval_sec`、`agent.history_strategy` 已从默认配置和 GUI 保存中移除。
 
-- Dashboard 的“成长任务”面板支持按任务类型执行 `立即执行 / 暂停或恢复 / 清空队列`。
-- 任务级 API：
-  - `GET /api/growth/tasks`
-  - `POST /api/growth/tasks/<task_type>/run`
-  - `POST /api/growth/tasks/<task_type>/pause`
-  - `POST /api/growth/tasks/<task_type>/resume`
-  - `POST /api/growth/tasks/<task_type>/clear`
+## 成长任务管理
 
-## Release Privilege
+Dashboard 新增「成长任务」面板，现在可以按任务类型手动控制：
 
-- Windows Release 产物默认嵌入管理员权限清单，启动 `setup.exe` 或 `portable.exe` 时会请求 UAC 提权。
+| 操作 | 说明 |
+|------|------|
+| 立即执行 | 立刻触发一次任务 |
+| 暂停 / 恢复 | 中断或继续任务队列 |
+| 清空队列 | 清掉所有待执行的任务 |
+
+同时开放了对应的 API，方便集成：
+
+```
+GET  /api/growth/tasks
+POST /api/growth/tasks/<task_type>/run
+POST /api/growth/tasks/<task_type>/pause
+POST /api/growth/tasks/<task_type>/resume
+POST /api/growth/tasks/<task_type>/clear
+```
+
+## Windows 权限升级
+
+ Release 安装包（`setup.exe` / `portable.exe`）现在默认带管理员权限清单，首次运行时会请求 UAC 提权，确保需要系统级操作的功能正常工作。
