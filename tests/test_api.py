@@ -8,10 +8,6 @@ pytest.importorskip("quart")
 
 from quart import Quart
 
-# Mock wxauto before importing api
-import sys
-sys.modules["wxauto"] = MagicMock()
-
 # Import app
 from backend.api import app
 import backend.api as api_module

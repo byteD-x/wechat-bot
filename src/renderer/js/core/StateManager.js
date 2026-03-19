@@ -15,6 +15,15 @@ class StateManager {
                 connected: false,
                 status: null
             },
+            backend: {
+                idle: {
+                    state: 'active',
+                    delayMs: 15 * 60 * 1000,
+                    remainingMs: 15 * 60 * 1000,
+                    reason: '',
+                    updatedAt: 0,
+                }
+            },
             updater: {
                 enabled: false,
                 checking: false,

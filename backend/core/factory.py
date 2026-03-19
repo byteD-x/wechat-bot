@@ -414,7 +414,7 @@ async def reconnect_wechat(
     bot_cfg: Optional[Dict[str, Any]] = None,
     ai_client: Optional[Any] = None,
 ) -> Optional[Any]:
-    """Reconnect the supported hook transport with bounded retries."""
+    """Reconnect the supported WCFerry transport with bounded retries."""
     if bot_cfg is None:
         config_path = None
         try:
@@ -429,34 +429,28 @@ async def reconnect_wechat(
             bot_cfg = {}
 
     bot_cfg = dict(bot_cfg or {})
-    preferred_backend = str(bot_cfg.get("transport_backend") or "hook_wcferry").strip().lower()
-    if preferred_backend and preferred_backend != "hook_wcferry":
-        detail = f"unsupported transport backend: {preferred_backend}"
-        _set_last_transport_error(detail)
-        logging.error(detail)
-        return None
 
-    from ..transports import TransportUnavailableError, WcferryWeChatClient
+    from ..transports import TransportUnavailableError, WcferryTransport
 
     logging.warning("Preparing WeChat reconnect: %s", reason)
     for attempt in range(policy.max_retries + 1):
         try:
             client = await asyncio.to_thread(
-                WcferryWeChatClient,
+                WcferryTransport,
                 bot_cfg,
                 ai_client=ai_client,
             )
             _set_last_transport_error("")
-            logging.info("Hook transport initialized: %s", client.backend_name)
+            logging.info("WCFerry transport initialized: %s", client.backend_name)
             return client
         except TransportUnavailableError as exc:
             _set_last_transport_error(str(exc))
             if attempt >= policy.max_retries:
-                logging.error("Hook transport unavailable: %s", exc)
+                logging.error("WCFerry transport unavailable: %s", exc)
                 break
             wait = min(policy.max_delay_sec, policy.base_delay_sec * (1.5**attempt))
             logging.warning(
-                "Hook transport unavailable (attempt %s): %s; retrying in %s seconds",
+                "WCFerry transport unavailable (attempt %s): %s; retrying in %s seconds",
                 attempt + 1,
                 exc,
                 round(wait, 2),
@@ -465,11 +459,11 @@ async def reconnect_wechat(
         except Exception as exc:
             _set_last_transport_error(str(exc))
             if attempt >= policy.max_retries:
-                logging.exception("Hook transport failed: %s", exc)
+                logging.exception("WCFerry transport failed: %s", exc)
                 break
             wait = min(policy.max_delay_sec, policy.base_delay_sec * (1.5**attempt))
             logging.warning(
-                "Hook transport failed (attempt %s): %s; retrying in %s seconds",
+                "WCFerry transport failed (attempt %s): %s; retrying in %s seconds",
                 attempt + 1,
                 exc,
                 round(wait, 2),

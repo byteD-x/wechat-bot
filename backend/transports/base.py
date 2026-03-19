@@ -20,11 +20,11 @@ class BaseTransport(ABC):
         """Return runtime health and capability information."""
 
     @abstractmethod
-    def GetNextNewMessage(self, filter_mute: bool = False) -> Any:
-        """Poll transport messages using the wxauto-compatible shape."""
+    def poll_new_messages(self, filter_mute: bool = False) -> Any:
+        """Poll transport messages using the shared runtime shape."""
 
     @abstractmethod
-    def SendMsg(
+    def send_text(
         self,
         msg: str,
         who: Optional[str] = None,
@@ -35,7 +35,7 @@ class BaseTransport(ABC):
         """Send a text message."""
 
     @abstractmethod
-    def SendFiles(
+    def send_files(
         self,
         filepath: str,
         who: Optional[str] = None,

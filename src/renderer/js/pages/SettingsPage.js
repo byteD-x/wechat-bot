@@ -38,7 +38,7 @@ FIELD_DEFS.push(
     ['setting-max-concurrency', 'bot', 'max_concurrency', 'number'],
     ['setting-natural-split-enabled', 'bot', 'natural_split_enabled', 'checkbox'], ['setting-natural-split-min-chars', 'bot', 'natural_split_min_chars', 'number'],
     ['setting-natural-split-max-chars', 'bot', 'natural_split_max_chars', 'number'], ['setting-natural-split-max-segments', 'bot', 'natural_split_max_segments', 'number'],
-    ['setting-transport-backend', 'bot', 'transport_backend', 'text'], ['setting-required-wechat-version', 'bot', 'required_wechat_version', 'text'],
+    ['setting-required-wechat-version', 'bot', 'required_wechat_version', 'text'],
     ['setting-silent-mode-required', 'bot', 'silent_mode_required', 'checkbox'], ['setting-config-reload-sec', 'bot', 'config_reload_sec', 'number'],
     ['setting-reload-ai-client-on-change', 'bot', 'reload_ai_client_on_change', 'checkbox'], ['setting-reload-ai-client-module', 'bot', 'reload_ai_client_module', 'checkbox'],
     ['setting-keepalive-idle-sec', 'bot', 'keepalive_idle_sec', 'number'], ['setting-reconnect-max-retries', 'bot', 'reconnect_max_retries', 'number'],

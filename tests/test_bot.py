@@ -144,7 +144,6 @@ def test_bot_vector_memory_master_switch_disables_rag(mock_config):
 def test_bot_transport_status_preserves_preferred_backend_when_disconnected():
     bot = WeChatBot("config.yaml")
     bot.bot_cfg = {
-        "transport_backend": "hook_wcferry",
         "required_wechat_version": "",
     }
 
@@ -154,7 +153,7 @@ def test_bot_transport_status_preserves_preferred_backend_when_disconnected():
     ):
         status = bot.get_transport_status()
 
-    assert status["transport_backend"] == "hook_wcferry"
+    assert status["transport_backend"] == "wcferry"
     assert status["transport_status"] == "disconnected"
     assert status["silent_mode"] is True
     assert "3.9.12.51" in status["transport_warning"]
@@ -184,7 +183,7 @@ async def test_bot_run_loop(mock_config):
             
         with patch("asyncio.sleep", side_effect=mock_sleep):
              with patch("backend.bot.IPCManager"):
-                 # Mock to_thread for GetNextNewMessage
+                 # Mock to_thread for poll_new_messages
                  with patch("asyncio.to_thread", return_value={}):
                      print("DEBUG: Starting run loop")
                      try:
@@ -478,7 +477,7 @@ async def test_handle_event_voice_transcription_failure_sends_configured_reply()
     wx = MagicMock()
 
     with patch("backend.bot.should_respond", return_value=(True, "")), \
-         patch("backend.bot.should_reply", return_value=True), \
+         patch("backend.bot.should_reply_with_reason", return_value=(True, "ok")), \
          patch("backend.bot.transcribe_voice_message", new=AsyncMock(return_value=(None, "bad audio"))), \
          patch("backend.bot.send_message", return_value=(True, None)) as mock_send:
         await bot.handle_event(wx, event)

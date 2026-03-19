@@ -14,7 +14,7 @@ from backend.config_schemas import BotConfig
 from backend.core.agent_runtime import AgentRuntime
 from backend.core.ai_client import AIClient
 from backend.core.memory import MemoryManager
-from backend.transports import BaseTransport, WcferryWeChatClient
+from backend.transports import BaseTransport, WcferryTransport
 from backend.transports.wcferry_adapter import (
     TransportUnavailableError,
     _best_effort_wcf_call,
@@ -211,7 +211,7 @@ async def test_agent_runtime_reranks_runtime_memory_results(monkeypatch):
 
 
 def test_wcferry_transport_implements_base_transport():
-    assert issubclass(WcferryWeChatClient, BaseTransport)
+    assert issubclass(WcferryTransport, BaseTransport)
 
 
 def test_bot_schema_defaults_to_official_wechat_version():
@@ -240,7 +240,7 @@ def test_extract_supported_wechat_versions_from_binary(tmp_path):
 
 
 def test_wcferry_version_gate_blocks_unsupported_runtime_version():
-    client = object.__new__(WcferryWeChatClient)
+    client = object.__new__(WcferryTransport)
     client.bot_cfg = {"silent_mode_required": False}
     client.configured_required_version = ""
     client.supported_wechat_versions = ["3.9.12.51"]
@@ -261,7 +261,7 @@ def test_best_effort_wcf_call_times_out_quickly():
 
 
 def test_wcferry_close_uses_best_effort_cleanup(monkeypatch):
-    client = object.__new__(WcferryWeChatClient)
+    client = object.__new__(WcferryTransport)
     client._uses_local_wcf_sdk = True
     client._wcf = SimpleNamespace(
         _is_receiving_msg=True,
@@ -573,14 +573,14 @@ async def test_select_specific_ai_client_allows_ollama_cloud_model(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_reconnect_wechat_retries_hook_transport(monkeypatch):
+async def test_reconnect_wechat_retries_wcferry_transport(monkeypatch):
     attempts = {"count": 0}
 
     class _FakeTransportUnavailableError(RuntimeError):
         pass
 
     class _FakeTransport:
-        backend_name = "hook_wcferry"
+        backend_name = "wcferry"
 
         def __init__(self, bot_cfg, ai_client=None):
             attempts["count"] += 1
@@ -597,7 +597,7 @@ async def test_reconnect_wechat_retries_hook_transport(monkeypatch):
 
     monkeypatch.setattr(factory_module.asyncio, "to_thread", _fake_to_thread)
     monkeypatch.setattr(factory_module.asyncio, "sleep", _fake_sleep)
-    monkeypatch.setattr(transports_module, "WcferryWeChatClient", _FakeTransport)
+    monkeypatch.setattr(transports_module, "WcferryTransport", _FakeTransport)
     monkeypatch.setattr(transports_module, "TransportUnavailableError", _FakeTransportUnavailableError)
 
     client = await factory_module.reconnect_wechat(
@@ -607,7 +607,6 @@ async def test_reconnect_wechat_retries_hook_transport(monkeypatch):
             base_delay_sec=0.1,
             max_delay_sec=0.2,
         ),
-        bot_cfg={"transport_backend": "hook_wcferry"},
     )
 
     assert client is not None

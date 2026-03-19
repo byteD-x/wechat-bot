@@ -1,4 +1,4 @@
-"""wxauto-compatible silent backend powered by wcferry."""
+"""Silent transport backend powered by wcferry."""
 
 from __future__ import annotations
 
@@ -335,7 +335,7 @@ class WcfMessageItem:
 
     def __init__(
         self,
-        adapter: "WcferryWeChatClient",
+        adapter: "WcferryTransport",
         raw: Any,
         *,
         chat_id: str,
@@ -372,7 +372,7 @@ class WcfMessageItem:
             return content or "[文件]"
         return content
 
-    def SaveFile(self, path: str) -> str:
+    def save_file(self, path: str) -> str:
         return self._adapter.save_media(self, path)
 
     def to_text(self) -> Any:
@@ -384,10 +384,10 @@ class WcfMessageItem:
         return False
 
 
-class WcferryWeChatClient(BaseTransport):
-    """Silent WeChat backend that mimics the wxauto methods used by the bot."""
+class WcferryTransport(BaseTransport):
+    """Silent WeChat backend backed by wcferry."""
 
-    backend_name = "hook_wcferry"
+    backend_name = "wcferry"
 
     def __init__(self, bot_cfg: Dict[str, Any], ai_client: Optional[Any] = None) -> None:
         self.bot_cfg = dict(bot_cfg or {})
@@ -674,7 +674,7 @@ class WcferryWeChatClient(BaseTransport):
             return target
 
         # 允许直接传入 wxid / chatroom id（即使未出现在联系人列表中也尝试发送）。
-        # 这能提高 hook_wcferry 在“群名未收录/联系人缓存未刷新”场景下的可用性。
+        # 这能提高 wcferry 在“群名未收录/联系人缓存未刷新”场景下的可用性。
         if lowered == "filehelper" or lowered.startswith("wxid_") or lowered.startswith("gh_") or lowered.endswith("@chatroom"):
             return target
 
@@ -710,7 +710,7 @@ class WcferryWeChatClient(BaseTransport):
         }
         return mapping.get(int(getattr(msg, "type", 0) or 0), "text")
 
-    def GetNextNewMessage(self, filter_mute: bool = False) -> Any:
+    def poll_new_messages(self, filter_mute: bool = False) -> Any:
         grouped: Dict[str, Dict[str, Any]] = {}
         while True:
             try:
@@ -742,7 +742,7 @@ class WcferryWeChatClient(BaseTransport):
             bucket["msg"].append(item)
         return list(grouped.values())
 
-    def SendMsg(
+    def send_text(
         self,
         msg: str,
         who: Optional[str] = None,
@@ -766,7 +766,7 @@ class WcferryWeChatClient(BaseTransport):
             "receiver": receiver,
         }
 
-    def SendFiles(self, filepath: str, who: Optional[str] = None, exact: bool = True) -> Dict[str, Any]:
+    def send_files(self, filepath: str, who: Optional[str] = None, exact: bool = True) -> Dict[str, Any]:
         receiver = self._resolve_receiver(who or "", exact=exact)
         status = self._wcf_call("send_file", self._wcf.send_file, filepath, receiver)
         return {

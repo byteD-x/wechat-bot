@@ -9,14 +9,14 @@ from __future__ import annotations
 
 from .base import BaseTransport
 
-__all__ = ["BaseTransport", "TransportUnavailableError", "WcferryWeChatClient"]
+__all__ = ["BaseTransport", "TransportUnavailableError", "WcferryTransport"]
 
 
 def __getattr__(name: str):  # type: ignore[no-untyped-def]
-    if name in {"TransportUnavailableError", "WcferryWeChatClient"}:
-        from .wcferry_adapter import TransportUnavailableError, WcferryWeChatClient
+    if name in {"TransportUnavailableError", "WcferryTransport"}:
+        from .wcferry_adapter import TransportUnavailableError, WcferryTransport
 
-        return TransportUnavailableError if name == "TransportUnavailableError" else WcferryWeChatClient
+        return TransportUnavailableError if name == "TransportUnavailableError" else WcferryTransport
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 

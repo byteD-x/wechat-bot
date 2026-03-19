@@ -37,6 +37,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     runtimeStopBot: () => ipcRenderer.invoke('runtime:stop-bot'),
     runtimeStartGrowth: () => ipcRenderer.invoke('runtime:start-growth'),
     runtimeStopGrowth: () => ipcRenderer.invoke('runtime:stop-growth'),
+    getRuntimeIdleState: () => ipcRenderer.invoke('runtime:get-idle-state'),
+    runtimeReportStatus: (summary) => ipcRenderer.invoke('runtime:report-status', summary),
+    runtimeCancelIdleShutdown: () => ipcRenderer.invoke('runtime:cancel-idle-shutdown'),
     getGrowthPromptState: () => ipcRenderer.invoke('growth:get-prompt-state'),
     markGrowthPromptSeen: (kind) => ipcRenderer.invoke('growth:mark-prompt-seen', kind),
 
@@ -114,8 +117,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
         return () => ipcRenderer.removeListener('config:changed', handler);
     },
 
+    onRuntimeIdleStateChanged: (callback) => {
+        const handler = (_, payload) => callback(payload);
+        ipcRenderer.on('runtime:idle-state-changed', handler);
+        return () => ipcRenderer.removeListener('runtime:idle-state-changed', handler);
+    },
+
     removeConfigChangedListener: () => {
         ipcRenderer.removeAllListeners('config:changed');
+    },
+
+    removeRuntimeIdleStateListener: () => {
+        ipcRenderer.removeAllListeners('runtime:idle-state-changed');
     },
 
     confirmCloseAction: (action, remember) => ipcRenderer.invoke('confirm-close-action', { action, remember }),

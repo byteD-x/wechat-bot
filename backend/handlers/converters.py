@@ -28,7 +28,7 @@ def normalize_new_messages(raw: Any, self_name: str) -> List[MessageEvent]:
     """
     标准化新消息列表。
     
-    支持处理 wxauto 返回的不同格式的消息结构。
+    支持处理传输层返回的不同格式的消息结构。
     """
     events: List[MessageEvent] = []
     if not raw:
@@ -57,7 +57,7 @@ def normalize_new_messages(raw: Any, self_name: str) -> List[MessageEvent]:
     # 部分版本会返回消息字典列表。
     if isinstance(raw, list):
         for item in raw:
-            # hook_wcferry 当前返回结构：[{ "chat_name": "...", "chat_type": "...", "msg": [...] }, ...]
+            # wcferry 当前返回结构：[{ "chat_name": "...", "chat_type": "...", "msg": [...] }, ...]
             if isinstance(item, dict) and "chat_name" in item and "msg" in item:
                 chat_name = str(item.get("chat_name", "")).strip()
                 chat_type = str(item.get("chat_type", "")).strip()

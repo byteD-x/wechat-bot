@@ -52,7 +52,7 @@ echo     Node dependencies are ready.
 echo [4/6] Building Python backend...
 if not exist "backend-dist" mkdir backend-dist
 
-"!PYTHON_EXE!" -m PyInstaller --name wechat-bot-backend --distpath "%PROJECT_ROOT%backend-dist" --workpath "%PROJECT_ROOT%build" --specpath "%PROJECT_ROOT%build" --noconfirm --clean --console --hidden-import wxauto --hidden-import quart --hidden-import hypercorn --hidden-import openai --hidden-import httpx --collect-all wxauto "%PROJECT_ROOT%run.py"
+"!PYTHON_EXE!" -m PyInstaller --name wechat-bot-backend --distpath "%PROJECT_ROOT%backend-dist" --workpath "%PROJECT_ROOT%build" --specpath "%PROJECT_ROOT%build" --noconfirm --clean --console --hidden-import wcferry --hidden-import quart --hidden-import hypercorn --hidden-import openai --hidden-import httpx "%PROJECT_ROOT%run.py"
 if errorlevel 1 (
     echo PyInstaller build failed.
     exit /b 1

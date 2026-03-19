@@ -31,7 +31,7 @@ from .core.config_audit import diff_config_paths
 from .core.pricing_catalog import get_pricing_catalog
 
 from .types import MessageEvent
-from .handlers.filter import should_reply, should_reply_with_reason
+from .handlers.filter import should_reply_with_reason
 from .handlers.sender import send_message, send_reply_chunks
 from .handlers.converters import normalize_new_messages
 from .utils.common import as_float, as_int, get_file_mtime, iter_items
@@ -55,11 +55,10 @@ from .utils.message import (
 )
 from .utils.tools import transcribe_voice_message, estimate_exchange_tokens
 from .utils.ipc import IPCManager
-
-
 from .bot_manager import get_bot_manager
 from .wechat_versions import OFFICIAL_SUPPORTED_WECHAT_VERSION
 from .model_catalog import infer_provider_id
+from .transports import BaseTransport
 
 _FILEHELPER_CHAT_NAMES = {"filehelper", "文件传输助手"}
 _RECENT_SELF_MESSAGE_ECHO_TTL_SEC = 8.0
@@ -74,7 +73,7 @@ class WeChatBot:
         self.api_cfg: Dict[str, Any] = {}
         self.agent_cfg: Dict[str, Any] = {}
         self.ai_client: Optional[Any] = None
-        self.wx: Optional[Any] = None
+        self.wx: Optional[BaseTransport] = None
         self.memory: Optional[MemoryManager] = memory_manager
         self.vector_memory: Optional[VectorMemory] = None
         self.export_rag: Optional[ExportChatRAG] = None
@@ -200,7 +199,6 @@ class WeChatBot:
     @staticmethod
     def _transport_reconnect_required(changed_paths: List[str]) -> bool:
         transport_paths = {
-            "bot.transport_backend",
             "bot.required_wechat_version",
             "bot.silent_mode_required",
         }
@@ -232,7 +230,7 @@ class WeChatBot:
             "message": "微信传输层已自动重连并生效",
         }
 
-    async def initialize(self) -> Optional["WeChat"]:
+    async def initialize(self) -> Optional[BaseTransport]:
         try:
             await self.bot_manager.update_startup_state(
                 "loading_config",
@@ -512,8 +510,6 @@ class WeChatBot:
         return "accepted_self_filehelper"
 
     async def run(self) -> None:
-        from wxauto import WeChat  # 延迟导入以避免顶层依赖问题
-        
         wx = await self.initialize()
         if not wx:
             return
@@ -589,7 +585,7 @@ class WeChatBot:
                         if filter_mute and self._wx_supports_filter_mute is not False:
                             try:
                                 raw = await asyncio.to_thread(
-                                    wx.GetNextNewMessage,
+                                    wx.poll_new_messages,
                                     filter_mute=True,
                                 )
                                 self._wx_supports_filter_mute = True
@@ -597,16 +593,16 @@ class WeChatBot:
                                 if "filter_mute" not in str(exc):
                                     raise
                                 self._wx_supports_filter_mute = False
-                                logging.warning("当前 wxauto 版本不支持 filter_mute，已回退为无参轮询。")
-                                raw = await asyncio.to_thread(wx.GetNextNewMessage)
+                                logging.warning("transport filter_mute unsupported; fallback to unfiltered polling")
+                                raw = await asyncio.to_thread(wx.poll_new_messages)
                         else:
-                            raw = await asyncio.to_thread(wx.GetNextNewMessage)
+                            raw = await asyncio.to_thread(wx.poll_new_messages)
                     last_poll_ok_ts = time.time()
                 except Exception as exc:
                     logging.exception("获取消息异常：%s", exc)
                     reconnect_policy = get_reconnect_policy(self.bot_cfg)
                     wx = await reconnect_wechat(
-                        "GetNextNewMessage 异常",
+                        "poll_new_messages 异常",
                         reconnect_policy,
                         bot_cfg=self.bot_cfg,
                         ai_client=self.ai_client,
@@ -1006,7 +1002,7 @@ class WeChatBot:
         self.ai_health = next_state
         self._notify_runtime_status_changed()
 
-    async def schedule_merged_reply(self, wx: "WeChat", event: MessageEvent) -> None:
+    async def schedule_merged_reply(self, wx: BaseTransport, event: MessageEvent) -> None:
         self._ensure_event_defaults(event)
         if is_voice_message(event.msg_type):
             await self.handle_event(wx, event)
@@ -1080,7 +1076,7 @@ class WeChatBot:
             task.add_done_callback(self.pending_tasks.discard)
             self._notify_runtime_status_changed()
 
-    async def wait_and_reply(self, wx: "WeChat", chat_id: str, delay: float) -> None:
+    async def wait_and_reply(self, wx: BaseTransport, chat_id: str, delay: float) -> None:
         try:
             await asyncio.sleep(delay)
         except asyncio.CancelledError:
@@ -1122,7 +1118,7 @@ class WeChatBot:
 
     async def handle_event(
         self,
-        wx: "WeChat",
+        wx: BaseTransport,
         event: MessageEvent,
         user_text_override: Optional[str] = None,
         message_log_override: Optional[str] = None
@@ -1162,7 +1158,7 @@ class WeChatBot:
                         if event.raw_item:
                             filename = f"{int(time.time())}_{hash(event.sender)}.jpg"
                             save_path = os.path.join(save_dir, filename)
-                            await asyncio.to_thread(event.raw_item.SaveFile, save_path)
+                            await asyncio.to_thread(event.raw_item.save_file, save_path)
                             self._log_flow(
                                 logging.INFO,
                                 "EVENT.IMAGE_SAVED",
@@ -1299,7 +1295,7 @@ class WeChatBot:
 
     async def _handle_control_command(
         self,
-        wx: "WeChat",
+        wx: BaseTransport,
         event: MessageEvent,
         trace_id: Optional[str] = None,
     ) -> bool:
@@ -1350,7 +1346,7 @@ class WeChatBot:
 
     async def _process_and_reply(
         self,
-        wx: "WeChat",
+        wx: BaseTransport,
         event: MessageEvent,
         user_text: str,
         message_log: str,
@@ -1581,7 +1577,7 @@ class WeChatBot:
     def _schedule_delayed_reply(
         self,
         *,
-        wx: "WeChat",
+        wx: BaseTransport,
         event: MessageEvent,
         prepared: Any,
         user_text: str,
@@ -1608,7 +1604,7 @@ class WeChatBot:
     async def _complete_delayed_reply(
         self,
         *,
-        wx: "WeChat",
+        wx: BaseTransport,
         event: MessageEvent,
         prepared: Any,
         user_text: str,
@@ -1818,7 +1814,7 @@ class WeChatBot:
 
     async def _send_smart_reply(
         self,
-        wx: "WeChat",
+        wx: BaseTransport,
         event: MessageEvent,
         reply_text: str,
         trace_id: Optional[str] = None,
@@ -2140,7 +2136,7 @@ class WeChatBot:
         self.bot_manager._invalidate_status_cache()
         asyncio.create_task(self.bot_manager.notify_status_change())
 
-    async def _execute_ipc_command(self, wx: "WeChat", cmd: Dict) -> None:
+    async def _execute_ipc_command(self, wx: BaseTransport, cmd: Dict) -> None:
         """执行来自 Web 的 IPC 命令"""
         try:
             c_type = cmd.get("type")
@@ -2244,7 +2240,7 @@ class WeChatBot:
                 logging.debug("获取 transport 状态失败: %s", exc)
         if self.wx:
             return {
-                "transport_backend": "hook_wcferry",
+                "transport_backend": "wcferry",
                 "silent_mode": True,
                 "wechat_version": "",
                 "required_wechat_version": "",
@@ -2254,7 +2250,7 @@ class WeChatBot:
                 "transport_warning": "",
             }
         return {
-            "transport_backend": "hook_wcferry",
+            "transport_backend": "wcferry",
             "silent_mode": True,
             "wechat_version": "",
             "required_wechat_version": str(

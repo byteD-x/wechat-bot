@@ -27,7 +27,7 @@
    - `WeChatBot`
 4. 传输层
    - `BaseTransport`
-   - `WcferryWeChatClient`
+   - `WcferryTransport`
 5. AI 运行时层
    - `AIClient`
    - `AgentRuntime`
@@ -152,8 +152,8 @@
 4. `backend/core/factory.py::reconnect_wechat`
    - 功能：连接或重连微信传输层。
    - 实现：
-     - 仅支持 `hook_wcferry`。
-     - 按重试策略构造 `WcferryWeChatClient`。
+     - 仅支持 `wcferry`。
+     - 按重试策略构造 `WcferryTransport`。
      - 记录最近一次传输层错误，供状态接口和诊断面板使用。
 
 5. `backend/bot_manager.py::_run_bot`
@@ -171,9 +171,9 @@
 
 1. `backend/transports/base.py::BaseTransport`
    - 功能：定义统一传输接口。
-   - 实现：约束 `close/get_transport_status/GetNextNewMessage/SendMsg/SendFiles`。
+   - 实现：约束 `close/get_transport_status/poll_new_messages/send_text/send_files`。
 
-2. `backend/transports/wcferry_adapter.py::WcferryWeChatClient.__init__`
+2. `backend/transports/wcferry_adapter.py::WcferryTransport.__init__`
    - 功能：初始化 WCFerry 传输层。
    - 实现：
      - 检测管理员权限、微信路径和版本。
@@ -189,14 +189,14 @@
      - 自己维护消息 socket 连接与重连。
      - 等待消息通道 ready，再宣布 transport connected。
 
-4. `GetNextNewMessage`
+4. `poll_new_messages`
    - 功能：拉取消息并适配为兼容结构。
    - 实现：
      - 从 WCFerry 消息队列取消息。
      - 按会话分组。
      - 包装成 `{"chat_name","chat_type","msg":[...]}`。
 
-5. `SendMsg`
+5. `send_text`
    - 功能：发送文本消息。
    - 实现：
      - 解析目标联系人或群聊。

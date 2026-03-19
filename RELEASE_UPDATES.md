@@ -1,5 +1,7 @@
 # Windows 发布与更新说明
 
+> 注：下文历史条目已按当前命名回写；涉及传输类、兼容模式和状态值时，均以当前实现与文档名称为准。
+
 ## 当前发布方式
 
 项目通过 GitHub Releases 分发 Windows 桌面端，仓库信息如下：
@@ -115,11 +117,11 @@ npm run build:release
 本批完成了底层稳定性、RAG 精排和运行监控补齐：
 - `AIClient` 改为带引用计数的共享 `httpx.AsyncClient` 连接池。
 - `MemoryManager` 新增 `get_recent_context_batch()` 批量上下文读取接口。
-- 传输层补齐 `BaseTransport` 抽象，`WcferryWeChatClient` 已接入。
+- 传输层补齐 `BaseTransport` 抽象，`WcferryTransport` 已接入。
 - 配置热重载优先使用 `watchdog` 事件监听，缺失依赖时自动回退轮询，并带防抖。
 - 新增 `/api/metrics` Prometheus 风格指标导出接口。
 - 运行期 RAG 先做轻量重排，并支持可选本地 `Cross-Encoder` 精排；缺失依赖或本地模型目录时自动回退。
-- 统一项目的微信版本基线为 `3.9.12.51`，并将 `compat_ui` 明确为遗留兼容链路。
+- 统一项目的微信版本基线为 `3.9.12.51`，并将兼容模式明确为遗留兼容链路。
 
 ### 第五批（安全与稳定性补丁）
 
@@ -170,7 +172,7 @@ npm run build:release
 - `backend/api.py`、`backend/bot_manager.py` 与 `backend/bot.py` 之间补齐配置保存、热应用、状态广播和运行时反馈闭环。
 - `AgentRuntime` 补强 `reasoning_content` 回退、情绪分析降级、群聊发送者注入和画像刷新频率控制，减少 OpenAI-compatible 差异导致的空回复或脏状态。
 - `sender.py`、`bot.py` 与音频转写模块统一了发送成功判定、错误上抛和转写结果解析，避免底层异常被误吞。
-- `WcferryWeChatClient` 补充限时 best-effort 清理与版本校验相关修复，减少 stop/reconnect 时的拖尾超时和运行时产物污染。
+- `WcferryTransport` 补充限时 best-effort 清理与版本校验相关修复，减少 stop/reconnect 时的拖尾超时和运行时产物污染。
 - Electron 主进程、preload 和 renderer 重新梳理初始化链路，增加渲染日志回传、启动页收口和页面容错，避免单页脚本异常拖死整窗口。
 - 运行产物统一收口到 `data/runtime/`，并通过 `.gitignore` 忽略 `data/runtime/` 与 `*.log.*`，降低测试缓存和日志误入仓库的概率。
 

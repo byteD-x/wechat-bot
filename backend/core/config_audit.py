@@ -26,13 +26,7 @@ _EXACT_EFFECTS: Dict[str, Dict[str, str]] = {
         "mode": "live",
         "component": "config_watcher",
         "note": "立即更新轮询检查间隔",
-    },
-    "bot.transport_backend": {
-        "mode": "reinit",
-        "component": "wechat_transport",
-        "note": "需要重建微信传输层",
-    },
-    "bot.required_wechat_version": {
+    },    "bot.required_wechat_version": {
         "mode": "reinit",
         "component": "wechat_transport",
         "note": "需要重新校验微信版本",

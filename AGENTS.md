@@ -14,7 +14,7 @@
   - `src/`
   - `tests/`
 - 当前主要后端能力：
-  - `BaseTransport` 传输层抽象，内置 `hook_wcferry` 与 `compat_ui`
+  - `BaseTransport` 传输层抽象，内置 `wcferry` 传输实现
   - LangGraph 运行时、SQLite 记忆、运行期 RAG、导出语料 RAG
   - `/api/status` 结构化状态与 `/api/metrics` 指标导出
   - 配置热重载优先使用 `watchdog`，缺失依赖时回退轮询

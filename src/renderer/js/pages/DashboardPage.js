@@ -27,6 +27,7 @@ export class DashboardPage extends PageController {
         this._lastStats = null;
         this._recentMessages = [];
         this._lastCostFetchAt = 0;
+        this._idleRenderTimer = null;
         this._dashboardCost = {
             today: null,
             recent: null,
@@ -43,6 +44,7 @@ export class DashboardPage extends PageController {
 
     async onEnter() {
         await super.onEnter();
+        this._startIdleTimer();
         this._updateBotUI();
 
         const status = this.getState('bot.status');
@@ -61,6 +63,16 @@ export class DashboardPage extends PageController {
         ]);
     }
 
+    async onLeave() {
+        this._stopIdleTimer();
+        await super.onLeave();
+    }
+
+    async onDestroy() {
+        this._stopIdleTimer();
+        await super.onDestroy();
+    }
+
     _bindEvents() {
         this.bindEvent('#btn-toggle-bot', 'click', () => this._toggleBot());
         this.bindEvent('#btn-toggle-growth', 'click', () => this._toggleGrowth());
@@ -71,8 +83,13 @@ export class DashboardPage extends PageController {
         this.bindEvent('#btn-open-costs', 'click', () => this.emit(Events.PAGE_CHANGE, 'costs'));
         this.bindEvent('#btn-view-logs', 'click', () => this.emit(Events.PAGE_CHANGE, 'logs'));
         this.bindEvent('#btn-view-all-messages', 'click', () => this.emit(Events.PAGE_CHANGE, 'messages'));
+        this.bindEvent('#backend-idle-panel', 'click', (event) => this._handleIdleActionClick(event));
 
         this.bindEvent('#btn-refresh-status', 'click', () => {
+            if (this._getIdleState().state === 'stopped_by_idle') {
+                void this._wakeBackend();
+                return;
+            }
             this.emit(Events.BOT_STATUS_CHANGE, {});
             toast.success('已触发状态刷新');
             void this._refreshDashboardCost(true);
@@ -108,6 +125,7 @@ export class DashboardPage extends PageController {
         this.watchState('bot.status', updateIfActive);
         this.watchState('bot.running', updateIfActive);
         this.watchState('bot.paused', updateIfActive);
+        this.watchState('backend.idle', updateIfActive);
         this.watchState('bot.connected', (connected) => {
             if (!this.isActive()) {
                 return;
@@ -120,6 +138,33 @@ export class DashboardPage extends PageController {
             void this._loadRecentMessages();
             void this._refreshDashboardCost(true);
         });
+    }
+
+    _handleIdleActionClick(event) {
+        const target = event?.target;
+        if (!(target instanceof Element)) {
+            return;
+        }
+
+        const button = target.closest('button');
+        if (!button || button.disabled || button.hidden) {
+            return;
+        }
+
+        if (button.id === 'btn-cancel-idle-shutdown') {
+            event.preventDefault();
+            event.stopPropagation();
+            toast.info('正在处理自动停机设置...');
+            void this._cancelIdleShutdown();
+            return;
+        }
+
+        if (button.id === 'btn-wake-backend') {
+            event.preventDefault();
+            event.stopPropagation();
+            toast.info('正在尝试唤醒后端服务...');
+            void this._wakeBackend();
+        }
     }
 
     async _toggleBot() {
@@ -145,9 +190,6 @@ export class DashboardPage extends PageController {
                     result?.message || (result?.success ? '机器人已停止' : '停止机器人失败'),
                     result?.success ? 'success' : 'error'
                 );
-                if (result?.service_stopped) {
-                    this._applyStoppedRuntimeState();
-                }
             } else {
                 const accepted = await this._ensureGrowthEnablePrompt();
                 if (!accepted) {
@@ -214,9 +256,6 @@ export class DashboardPage extends PageController {
                     result?.message || (result?.success ? '成长任务已停止' : '停止成长任务失败'),
                     result?.success ? 'success' : 'error'
                 );
-                if (result?.service_stopped) {
-                    this._applyStoppedRuntimeState();
-                }
             } else {
                 if (buttonText) {
                     buttonText.textContent = '启动中...';
@@ -334,25 +373,137 @@ export class DashboardPage extends PageController {
         return true;
     }
 
-    _applyStoppedRuntimeState() {
-        this.setState('bot.connected', false);
-        this.setState('bot.running', false);
-        this.setState('bot.paused', false);
-        this.setState('bot.status', {
-            ...(this.getState('bot.status') || {}),
-            running: false,
-            bot_running: false,
-            growth_running: false,
-            growth_enabled: false,
-            is_paused: false,
-            startup: {
-                stage: 'stopped',
-                message: '服务未启动',
-                progress: 0,
-                active: false,
-                updated_at: Date.now() / 1000,
-            },
-        });
+    _startIdleTimer() {
+        if (this._idleRenderTimer) {
+            return;
+        }
+        this._idleRenderTimer = setInterval(() => {
+            if (this.isActive()) {
+                this._renderIdlePanel();
+            }
+        }, 1000);
+    }
+
+    _stopIdleTimer() {
+        if (!this._idleRenderTimer) {
+            return;
+        }
+        clearInterval(this._idleRenderTimer);
+        this._idleRenderTimer = null;
+    }
+
+    _getIdleState() {
+        return this.getState('backend.idle') || {
+            state: 'active',
+            delayMs: 15 * 60 * 1000,
+            remainingMs: 15 * 60 * 1000,
+            reason: '',
+            updatedAt: Date.now(),
+        };
+    }
+
+    _getIdleRemainingMs(idleState = this._getIdleState()) {
+        if (!idleState || idleState.state !== 'countdown') {
+            return Math.max(0, Number(idleState?.remainingMs || 0));
+        }
+        const updatedAt = Number(idleState.updatedAt || Date.now());
+        const elapsed = Math.max(0, Date.now() - updatedAt);
+        return Math.max(0, Number(idleState.remainingMs || 0) - elapsed);
+    }
+
+    _formatDurationMs(value) {
+        const totalSeconds = Math.max(0, Math.ceil(Number(value || 0) / 1000));
+        const minutes = Math.floor(totalSeconds / 60);
+        const seconds = totalSeconds % 60;
+        if (minutes <= 0) {
+            return `${seconds} 秒`;
+        }
+        if (seconds <= 0) {
+            return `${minutes} 分钟`;
+        }
+        return `${minutes} 分 ${seconds} 秒`;
+    }
+
+    async _cancelIdleShutdown() {
+        const currentIdleState = this._getIdleState();
+        if (currentIdleState.state === 'active') {
+            toast.info('当前没有进行中的自动停机计时');
+            return;
+        }
+        if (currentIdleState.state === 'stopped_by_idle') {
+            toast.info('后端已经休眠，可以直接点击立即唤醒');
+            return;
+        }
+        if (!window.electronAPI?.runtimeCancelIdleShutdown) {
+            toast.warning('当前版本不支持取消自动停机，请重启应用后重试');
+            return;
+        }
+        try {
+            const result = await window.electronAPI.runtimeCancelIdleShutdown();
+            const idleState = result?.idle_state || (
+                window.electronAPI?.getRuntimeIdleState
+                    ? await window.electronAPI.getRuntimeIdleState()
+                    : null
+            );
+            if (idleState) {
+                this.setState('backend.idle', idleState);
+            }
+            this._renderIdlePanel();
+            this.emit(Events.BOT_STATUS_CHANGE, { force: true });
+            toast.success('已重置本轮后端休眠计时');
+        } catch (error) {
+            toast.error(toast.getErrorMessage(error, '取消自动停机失败'));
+        }
+    }
+
+    async _wakeBackend() {
+        const currentIdleState = this._getIdleState();
+        if (this.getState('bot.connected') && currentIdleState.state === 'active') {
+            toast.info('后端当前已经在线，无需额外唤醒');
+            return;
+        }
+        try {
+            if (window.electronAPI?.runtimeEnsureService) {
+                await window.electronAPI.runtimeEnsureService();
+            } else if (window.electronAPI?.startBackend) {
+                await window.electronAPI.startBackend();
+            } else {
+                toast.warning('当前版本不支持立即唤醒，请重启应用后重试');
+                return;
+            }
+
+            if (window.electronAPI?.getRuntimeIdleState) {
+                const idleState = await window.electronAPI.getRuntimeIdleState();
+                this.setState('backend.idle', idleState);
+            }
+
+            try {
+                const status = await apiService.getStatus();
+                this._applyStatusSnapshot(status);
+            } catch (error) {
+                console.warn('[DashboardPage] wake backend status refresh failed:', error);
+            }
+
+            this.emit(Events.BOT_STATUS_CHANGE, { force: true });
+            setTimeout(() => this.emit(Events.BOT_STATUS_CHANGE, { force: true }), 600);
+            this.emit(Events.BOT_STATUS_CHANGE, {});
+            setTimeout(() => this.emit(Events.BOT_STATUS_CHANGE, {}), 600);
+            toast.success('后端已唤醒');
+        } catch (error) {
+            toast.error(toast.getErrorMessage(error, '唤醒后端失败'));
+        }
+    }
+
+    _applyStatusSnapshot(status) {
+        if (!status || typeof status !== 'object') {
+            return;
+        }
+
+        this.setState('bot.connected', true);
+        this.setState('bot.running', !!status.running);
+        this.setState('bot.paused', !!status.is_paused);
+        this.setState('bot.status', status);
+        this._updateBotUI();
     }
 
     async _togglePause() {
@@ -407,7 +558,11 @@ export class DashboardPage extends PageController {
         const isRunning = !!this.getState('bot.running');
         const isPaused = !!this.getState('bot.paused');
         const status = this.getState('bot.status') || {};
+        const idleState = this._getIdleState();
         const startupActive = !!status?.startup?.active;
+        const growthRunning = !!status?.growth_running;
+        const isIdleStandby = idleState.state === 'standby' || idleState.state === 'countdown';
+        const isIdleStopped = idleState.state === 'stopped_by_idle';
 
         const stateElem = this.$('#bot-state');
         if (stateElem) {
@@ -416,7 +571,10 @@ export class DashboardPage extends PageController {
             let stateText = '机器人未启动';
             let dotClass = 'bot-state-dot ready';
 
-            if (!connected) {
+            if (!connected && isIdleStopped) {
+                stateText = '后端已休眠';
+                dotClass = 'bot-state-dot sleeping';
+            } else if (!connected) {
                 stateText = '服务未连接';
                 dotClass = 'bot-state-dot offline';
             } else if (isRunning && isPaused) {
@@ -428,6 +586,9 @@ export class DashboardPage extends PageController {
             } else if (startupActive) {
                 stateText = '启动中';
                 dotClass = 'bot-state-dot starting';
+            } else if (isIdleStandby) {
+                stateText = '后端待机中';
+                dotClass = 'bot-state-dot standby';
             }
 
             if (dot) {
@@ -474,7 +635,6 @@ export class DashboardPage extends PageController {
             }
         }
 
-        const growthRunning = !!status?.growth_running;
         const growthEnabled = !!status?.growth_enabled;
         const backlogCount = Number(status?.background_backlog_count || 0);
         const growthStatus = this.$('#growth-task-status');
@@ -486,7 +646,9 @@ export class DashboardPage extends PageController {
         const growthButton = this.$('#btn-toggle-growth');
         const growthButtonText = growthButton?.querySelector('span') || growthButton;
         if (growthStatus) {
-            if (!connected) {
+            if (!connected && isIdleStopped) {
+                growthStatus.textContent = '后端已休眠';
+            } else if (!connected) {
                 growthStatus.textContent = '服务未连接';
             } else {
                 growthStatus.textContent = growthRunning
@@ -509,9 +671,81 @@ export class DashboardPage extends PageController {
             growthButtonText.textContent = growthRunning ? '停止成长任务' : '启动成长任务';
         }
 
+        this._renderIdlePanel({
+            connected,
+            isRunning,
+            growthRunning,
+            startupActive,
+            idleState,
+        });
         this._renderStartupState(status.startup);
         this._syncStartupMeta(status.startup);
         this._renderDiagnostics(status.diagnostics);
+    }
+
+    _renderIdlePanel(context = {}) {
+        const panel = this.$('#backend-idle-panel');
+        const title = this.$('#backend-idle-title');
+        const detail = this.$('#backend-idle-detail');
+        const meta = this.$('#backend-idle-meta');
+        const cancelButton = this.$('#btn-cancel-idle-shutdown');
+        const wakeButton = this.$('#btn-wake-backend');
+        if (!panel || !title || !detail || !meta || !cancelButton || !wakeButton) {
+            return;
+        }
+
+        const {
+            connected = !!this.getState('bot.connected'),
+            isRunning = !!this.getState('bot.running'),
+            growthRunning = !!((this.getState('bot.status') || {}).growth_running),
+            startupActive = !!((this.getState('bot.status') || {}).startup?.active),
+            idleState = this._getIdleState(),
+        } = context;
+
+        const shouldShow = (
+            idleState.state === 'standby'
+            || idleState.state === 'countdown'
+            || idleState.state === 'stopped_by_idle'
+        ) && !isRunning && !growthRunning && !startupActive;
+
+        panel.hidden = !shouldShow;
+        cancelButton.hidden = true;
+        wakeButton.hidden = true;
+        if (!shouldShow) {
+            return;
+        }
+
+        const delayMs = Number(idleState.delayMs || 15 * 60 * 1000);
+        const remainingMs = this._getIdleRemainingMs(idleState);
+        const countdownPaused = idleState.state === 'standby' && remainingMs > 0 && remainingMs < delayMs;
+
+        if (idleState.state === 'stopped_by_idle') {
+            title.textContent = '后端已休眠';
+            detail.textContent = '后端已因空闲自动停止。切换到消息、日志、成本页，或点击下方按钮即可按需唤醒。';
+            meta.textContent = '当前不会自动重连，需由页面切换或显式操作恢复。';
+            wakeButton.hidden = false;
+            return;
+        }
+
+        if (idleState.state === 'countdown') {
+            title.textContent = '后端休眠倒计时中';
+            detail.textContent = `主窗口当前不可见，后端将在 ${this._formatDurationMs(remainingMs)} 后自动休眠。`;
+            meta.textContent = '点击“取消自动停机”会把本轮倒计时重置为 15 分钟。';
+            cancelButton.hidden = false;
+            return;
+        }
+
+        if (countdownPaused) {
+            title.textContent = '休眠倒计时已暂停';
+            detail.textContent = `主窗口当前可见，自动休眠已暂停，剩余 ${this._formatDurationMs(remainingMs)}。再次隐藏到托盘后将继续计时。`;
+            meta.textContent = '点击“取消自动停机”会重置本轮 15 分钟计时。';
+            cancelButton.hidden = false;
+            return;
+        }
+
+        title.textContent = connected ? '后端待机中' : '等待后端恢复';
+        detail.textContent = '机器人和成长任务都已停止。隐藏到托盘后，将开始 15 分钟自动休眠倒计时。';
+        meta.textContent = `自动休眠时长：${this._formatDurationMs(delayMs)}`;
     }
 
     _clearOfflineData() {

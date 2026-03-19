@@ -26,7 +26,7 @@ class SenderHandlersTest(unittest.TestCase):
     def test_parse_send_result_does_not_treat_false_as_success(self):
         self.assertEqual(
             parse_send_result(False),
-            (False, "SendMsg returned False"),
+            (False, "send_text returned False"),
         )
 
     def test_parse_send_result_accepts_success_status_text(self):

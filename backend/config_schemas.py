@@ -1,5 +1,5 @@
 from typing import List, Dict, Optional, Any, Union, Literal
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 from backend.wechat_versions import OFFICIAL_SUPPORTED_WECHAT_VERSION
 
 class PresetConfig(BaseModel):
@@ -46,7 +46,6 @@ class BotConfig(BaseModel):
     emoji_replacements: Dict[str, str] = Field(default_factory=dict)
     
     # Transport
-    transport_backend: Literal['hook_wcferry'] = 'hook_wcferry'
     silent_mode_required: bool = False
     required_wechat_version: str = OFFICIAL_SUPPORTED_WECHAT_VERSION
     # Voice
@@ -164,14 +163,6 @@ class BotConfig(BaseModel):
     emotion_detection_mode: str = "ai"
     emotion_inject_in_prompt: bool = True
     emotion_log_enabled: bool = True
-
-    @field_validator("transport_backend", mode="before")
-    @classmethod
-    def _normalize_transport_backend(cls, value):
-        backend = str(value or "hook_wcferry").strip().lower()
-        if backend == "compat_ui":
-            return "hook_wcferry"
-        return "hook_wcferry" if not backend else backend
 
 class LoggingConfig(BaseModel):
     level: str = "INFO"

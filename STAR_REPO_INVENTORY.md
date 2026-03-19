@@ -71,7 +71,6 @@ Total size: 461.9 MB
 - backend-dist\wechat-bot-backend\_internal\pyreadline3-3.5.4.dist-info\LICENSE.md
 - backend-dist\wechat-bot-backend\_internal\websockets-16.0.dist-info\licenses\LICENSE
 - backend-dist\wechat-bot-backend\_internal\werkzeug-3.1.4.dist-info\licenses\LICENSE.txt
-- backend-dist\wechat-bot-backend\_internal\wxauto-39.2.1.dist-info\licenses\LICENSE
 - LICENSE
 - package.json
 - README.md
@@ -105,14 +104,11 @@ Total size: 461.9 MB
 - release\win-unpacked\resources\backend\_internal\pyreadline3-3.5.4.dist-info\LICENSE.md
 - release\win-unpacked\resources\backend\_internal\websockets-16.0.dist-info\licenses\LICENSE
 - release\win-unpacked\resources\backend\_internal\werkzeug-3.1.4.dist-info\licenses\LICENSE.txt
-- release\win-unpacked\resources\backend\_internal\wxauto-39.2.1.dist-info\licenses\LICENSE
 - requirements.txt
 - tools\wx_db\parser\util\protocbuf\readme.md
 
 ## Entry Points
 - backend\main.py
-- backend-dist\wechat-bot-backend\_internal\wxauto\ui\main.py
-- release\win-unpacked\resources\backend\_internal\wxauto\ui\main.py
 - run.py
 - src\main\index.js
 - src\preload\index.js

@@ -4,14 +4,12 @@ import asyncio
 import logging
 import random
 import time
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
+from ..transports import BaseTransport
 from ..utils.common import as_float
 from ..utils.logging import build_stage_log_message
 from ..utils.message import split_reply_chunks
-
-if TYPE_CHECKING:
-    from wxauto import WeChat
 
 __all__ = [
     "parse_send_result",
@@ -25,7 +23,7 @@ def parse_send_result(result: Any) -> Tuple[bool, Optional[str]]:
     if isinstance(result, bool):
         if result:
             return True, None
-        return False, "SendMsg returned False"
+        return False, "send_text returned False"
     if isinstance(result, (int, float)):
         if int(result) == 0:
             return True, None
@@ -47,11 +45,11 @@ def parse_send_result(result: Any) -> Tuple[bool, Optional[str]]:
         return True, result.get("message")
     if result:
         return True, None
-    return False, "SendMsg returned falsy result"
+    return False, "send_text returned falsy result"
 
 
 def send_message(
-    wx: "WeChat", chat_name: str, text: str, bot_cfg: Dict[str, Any]
+    wx: BaseTransport, chat_name: str, text: str, bot_cfg: Dict[str, Any]
 ) -> Tuple[bool, Optional[str]]:
     """Send a plain text message with retry and current-chat fallback."""
     retry_count = 2
@@ -74,7 +72,7 @@ def send_message(
                 total=retry_count,
             )
         )
-        result = wx.SendMsg(
+        result = wx.send_text(
             text,
             chat_name,
             exact=bool(bot_cfg.get("send_exact_match", False)),
@@ -114,7 +112,7 @@ def send_message(
                 error=last_error,
             )
         )
-        result = wx.SendMsg(text)
+        result = wx.send_text(text)
         ok, err_msg = parse_send_result(result)
         if ok:
             logging.info(build_stage_log_message("SEND.FALLBACK_SUCCESS", target=chat_name))
@@ -138,7 +136,7 @@ def send_message(
     return False, last_error
 
 async def send_reply_chunks(
-    wx: "WeChat",
+    wx: BaseTransport,
     chat_name: str,
     text: str,
     bot_cfg: Dict[str, Any],

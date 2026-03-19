@@ -25,7 +25,7 @@ class MessageEvent:
         msg_type (str): 消息类型（text/voice/image 等）
         is_self (bool): 是否为自己（机器人）发送
         chat_type (str | None): 会话类型（friend/group/official 等）
-        raw_item (Any): 原始消息对象（wxauto 返回的）
+        raw_item (Any): 原始消息对象（传输层返回的）
     """
     chat_name: str
     sender: str

@@ -1,10 +1,10 @@
 from types import SimpleNamespace
 
-from backend.transports.wcferry_adapter import WcferryWeChatClient
+from backend.transports.wcferry_adapter import WcferryTransport
 
 
 def _build_adapter():
-    adapter = object.__new__(WcferryWeChatClient)
+    adapter = object.__new__(WcferryTransport)
     adapter._by_wxid = {}
     adapter._name_map = {}
     return adapter
@@ -40,7 +40,7 @@ def test_send_msg_normalizes_filehelper_display_name():
 
     adapter._wcf_call = _fake_wcf_call
 
-    result = adapter.SendMsg("你好", "文件传输助手")
+    result = adapter.send_text("你好", "文件传输助手")
 
     assert result["success"] is True
     assert result["receiver"] == "filehelper"

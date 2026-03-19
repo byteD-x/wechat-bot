@@ -1,288 +1,236 @@
 #!/usr/bin/env python3
-"""
-微信机器人环境自检脚本。
+"""项目环境自检脚本。"""
 
-运行方式:
-    python check.py
+from __future__ import annotations
 
-功能:
-    - 检测 Python 版本
-    - 检测依赖安装
-    - 检测 API 配置
-    - 检测微信连接
-    - 提供修复建议
-"""
-
+import json
 import os
+import subprocess
 import sys
-from typing import List, Tuple
+from pathlib import Path
+from typing import List, Optional, Tuple
 
-# 项目根目录（bot 目录的父目录）
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# 添加到 Python 路径
-sys.path.insert(0, PROJECT_ROOT)
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT))
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#                               检测项
-# ═══════════════════════════════════════════════════════════════════════════════
+from backend.shared_config import get_app_config_path
+from backend.transports.wcferry_adapter import (
+    _is_windows_admin,
+    detect_wcferry_supported_versions,
+    detect_wechat_path,
+    detect_wechat_version,
+)
+from backend.wechat_versions import OFFICIAL_SUPPORTED_WECHAT_VERSION
 
 
 def check_python_version() -> Tuple[bool, str]:
-    """检查 Python 版本"""
     version = sys.version_info
     version_str = f"{version.major}.{version.minor}.{version.micro}"
-    if version >= (3, 8):
+    if version >= (3, 9):
         return True, f"Python {version_str}"
-    return False, f"Python {version_str}（需要 3.8+）"
+    return False, f"Python {version_str}，需要 3.9+"
 
 
 def check_dependencies() -> Tuple[bool, str, List[str]]:
-    """检查依赖安装"""
-    required = ["httpx", "openai"]
-    optional = ["wxauto"]
-    missing = []
-    installed = []
-
-    for pkg in required:
+    required = ["httpx", "openai", "quart", "wcferry"]
+    missing: List[str] = []
+    installed: List[str] = []
+    for package in required:
         try:
-            __import__(pkg)
-            installed.append(pkg)
+            __import__(package)
+            installed.append(package)
         except ImportError:
-            missing.append(pkg)
-
-    for pkg in optional:
-        try:
-            __import__(pkg)
-            installed.append(pkg)
-        except ImportError:
-            pass  # 可选依赖不算缺失
-
+            missing.append(package)
     if missing:
         return False, f"缺少: {', '.join(missing)}", missing
     return True, f"已安装: {', '.join(installed)}", []
 
 
-def check_wxauto() -> Tuple[bool, str]:
-    """检查 wxauto 模块"""
+def check_admin_permission() -> Tuple[Optional[bool], str]:
+    if os.name != "nt":
+        return None, "非 Windows 环境，跳过管理员权限检查"
+    return _is_windows_admin(), "已具备管理员权限" if _is_windows_admin() else "未以管理员身份运行"
+
+
+def _count_wechat_processes() -> Optional[int]:
+    if os.name != "nt":
+        return None
+    completed = subprocess.run(
+        [
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            "((Get-Process WeChat,Weixin -ErrorAction SilentlyContinue) | Measure-Object).Count",
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="ignore",
+        check=False,
+    )
+    raw = (completed.stdout or "").strip()
+    if not raw:
+        return 0
     try:
-        from wxauto import WeChat
-
-        return True, "wxauto 可用"
-    except ImportError:
-        return False, "wxauto 未安装"
-    except Exception as e:
-        return False, f"wxauto 导入失败: {e}"
+        return int(raw)
+    except ValueError:
+        return None
 
 
-def check_wechat_connection() -> Tuple[bool, str]:
-    """检查微信连接"""
+def check_wechat_process() -> Tuple[Optional[bool], str]:
+    count = _count_wechat_processes()
+    if count is None:
+        return None, "无法识别微信进程数量"
+    if count > 0:
+        return True, f"检测到 {count} 个微信进程"
+    return False, "未检测到已启动的微信进程"
+
+
+def check_wechat_installation() -> Tuple[Optional[bool], str, str]:
+    path = detect_wechat_path()
+    if not path:
+        return False, "未找到 WeChat.exe 安装路径", ""
+    return True, f"检测到微信路径: {path}", path
+
+
+def check_wcferry_compatibility(wechat_path: str) -> Tuple[Optional[bool], str]:
+    supported_versions = detect_wcferry_supported_versions()
+    current_version = detect_wechat_version(wechat_path)
+
+    if not current_version:
+        return None, "未读取到微信版本"
+    if not supported_versions:
+        return None, f"当前微信版本 {current_version}；未读取到本地 wcferry 支持版本"
+    if current_version in supported_versions:
+        return True, f"当前微信版本 {current_version} 与 wcferry 兼容"
+
+    supported_text = ", ".join(supported_versions)
+    return False, f"当前微信版本 {current_version}，本地 wcferry 支持: {supported_text}"
+
+
+def _load_current_config() -> dict:
+    config_path = Path(get_app_config_path())
+    if not config_path.exists():
+        return {}
     try:
-        from wxauto import WeChat
-
-        wx = WeChat()
-        return True, "微信连接正常"
-    except ImportError:
-        return None, "跳过（wxauto 未安装）"
-    except Exception as e:
-        error_msg = str(e)
-        if "找不到微信" in error_msg or "WeChat" in error_msg:
-            return False, "未检测到微信客户端"
-        return False, f"连接失败: {error_msg[:50]}"
+        return json.loads(config_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
 
 
 def check_api_config() -> Tuple[bool, str, int]:
-    """检查 API 配置"""
-    config_path = os.path.join(PROJECT_ROOT, "backend", "config.py")
-    if not os.path.exists(config_path):
-        # Fallback to check app/config.py just in case
-        config_path = os.path.join(PROJECT_ROOT, "app", "config.py")
-        if not os.path.exists(config_path):
-            return False, "config.py 不存在", 0
+    config = _load_current_config()
+    api_cfg = config.get("api", {}) if isinstance(config, dict) else {}
+    presets = api_cfg.get("presets", []) if isinstance(api_cfg, dict) else []
 
-    try:
-        import importlib.util
-
-        spec = importlib.util.spec_from_file_location("config", config_path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        config = getattr(module, "CONFIG", {})
-
-        # 尝试应用 override（若存在）以匹配运行时行为
-        override_path = os.path.join(PROJECT_ROOT, "data", "config_override.json")
-        if os.path.exists(override_path):
-            try:
-                from backend.config import _apply_config_overrides
-
-                cfg = dict(config) if isinstance(config, dict) else {}
-                _apply_config_overrides(cfg)
-                config = cfg
-            except Exception:
-                pass
-    except Exception as e:
-        return False, f"配置加载失败: {e}", 0
-
-    api_cfg = config.get("api", {})
-    presets = api_cfg.get("presets", [])
-
-    # 统计有效预设数量
     valid_count = 0
     for preset in presets:
         if not isinstance(preset, dict):
             continue
-        api_key = preset.get("api_key", "")
-        if api_key and not api_key.upper().startswith("YOUR_"):
+        api_key = str(preset.get("api_key") or "").strip()
+        allow_empty_key = bool(preset.get("allow_empty_key", False))
+        if allow_empty_key or (api_key and not api_key.upper().startswith("YOUR_")):
             valid_count += 1
 
-    # 检查 data/api_keys.py 中的密钥
-    api_keys_path = os.path.join(PROJECT_ROOT, "data", "api_keys.py")
-    if os.path.exists(api_keys_path):
-        try:
-            from data.api_keys import API_KEYS
-
-            if isinstance(API_KEYS, dict):
-                default_key = API_KEYS.get("default", "")
-                if default_key and not default_key.upper().startswith("YOUR_"):
-                    valid_count = max(valid_count, 1)
-                preset_keys = API_KEYS.get("presets", {})
-                if isinstance(preset_keys, dict):
-                    for key in preset_keys.values():
-                        if key and not str(key).upper().startswith("YOUR_"):
-                            valid_count += 1
-        except Exception:
-            pass
-
     if valid_count > 0:
-        return True, f"检测到 {valid_count} 个有效预设", valid_count
-    return False, "未配置有效的 API 密钥", 0
+        return True, f"检测到 {valid_count} 个可用预设", valid_count
+    return False, "未检测到可用 API 预设", 0
 
 
-def check_whitelist() -> Tuple[bool, str]:
-    """检查白名单配置"""
-    config_path = os.path.join(PROJECT_ROOT, "backend", "config.py")
-    if not os.path.exists(config_path):
-        return None, "跳过"
-
-    try:
-        import importlib.util
-
-        spec = importlib.util.spec_from_file_location("config", config_path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        config = getattr(module, "CONFIG", {})
-
-        # 尝试应用 override（若存在）以匹配运行时行为
-        override_path = os.path.join(PROJECT_ROOT, "data", "config_override.json")
-        if os.path.exists(override_path):
-            try:
-                from backend.config import _apply_config_overrides
-
-                cfg = dict(config) if isinstance(config, dict) else {}
-                _apply_config_overrides(cfg)
-                config = cfg
-            except Exception:
-                pass
-    except Exception:
-        return None, "跳过"
-
-    bot_cfg = config.get("bot", {})
-    whitelist_enabled = bot_cfg.get("whitelist_enabled", False)
-    whitelist = bot_cfg.get("whitelist", [])
-
-    if not whitelist_enabled:
-        return None, "未启用（将回复所有消息）"
-
-    if whitelist:
-        return True, f"已配置 {len(whitelist)} 个白名单"
-    return False, "已启用但列表为空"
+def check_transport_config() -> Tuple[Optional[bool], str]:
+    config = _load_current_config()
+    bot_cfg = config.get("bot", {}) if isinstance(config, dict) else {}
+    required_version = str(bot_cfg.get("required_wechat_version") or "").strip()
+    silent_mode_required = bool(bot_cfg.get("silent_mode_required", True))
+    if not bot_cfg:
+        return None, "未检测到共享配置文件，跳过传输配置检查"
+    return True, (
+        f"required_wechat_version={required_version or OFFICIAL_SUPPORTED_WECHAT_VERSION}; "
+        f"silent_mode_required={silent_mode_required}"
+    )
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#                               主程序
-# ═══════════════════════════════════════════════════════════════════════════════
+def _print_result(label: str, result: Optional[bool], message: str) -> None:
+    if result is None:
+        icon = "⏭"
+    else:
+        icon = "✅" if result else "❌"
+    print(f"{icon} {label}: {message}")
 
 
-def main():
-    """运行自检"""
+def main() -> int:
     print()
-    print("🔍 微信机器人环境检测")
-    print("━" * 50)
+    print("微信 AI 助手环境检测")
+    print("-" * 50)
     print()
 
-    issues = []
-    suggestions = []
+    issues: List[str] = []
+    suggestions: List[str] = []
 
-    # 检查 Python 版本
-    ok, msg = check_python_version()
-    icon = "✅" if ok else "❌"
-    print(f"{icon} Python 版本: {msg}")
+    ok, message = check_python_version()
+    _print_result("Python 版本", ok, message)
     if not ok:
         issues.append("Python 版本过低")
-        suggestions.append("请升级到 Python 3.8 或更高版本")
+        suggestions.append("升级到 Python 3.9 或更高版本")
 
-    # 检查依赖
-    ok, msg, missing = check_dependencies()
-    icon = "✅" if ok else "❌"
-    print(f"{icon} 依赖安装: {msg}")
+    ok, message, missing = check_dependencies()
+    _print_result("依赖安装", ok, message)
     if not ok:
         issues.append("缺少必要依赖")
         suggestions.append(f"运行: pip install {' '.join(missing)}")
 
-    # 检查 wxauto
-    ok, msg = check_wxauto()
-    icon = "✅" if ok else "❌"
-    print(f"{icon} wxauto: {msg}")
-    if not ok:
-        issues.append("wxauto 不可用")
-        suggestions.append("运行: pip install wxauto")
+    admin_ok, message = check_admin_permission()
+    _print_result("管理员权限", admin_ok, message)
+    if admin_ok is False:
+        issues.append("未以管理员身份运行")
+        suggestions.append("请使用“以管理员身份运行”启动终端或桌面端")
 
-    # 检查微信连接
-    result, msg = check_wechat_connection()
-    if result is None:
-        icon = "⚠️"
-    else:
-        icon = "✅" if result else "❌"
-    print(f"{icon} 微信连接: {msg}")
-    if result is False:
-        issues.append("微信连接失败")
-        suggestions.append("确保微信 PC 版 3.9.x 已登录并运行")
-        suggestions.append("4.x 版本不支持，请到 https://pc.weixin.qq.com 下载 3.9.x")
+    process_ok, message = check_wechat_process()
+    _print_result("微信进程", process_ok, message)
+    if process_ok is False:
+        issues.append("微信未启动")
+        suggestions.append("请先启动并登录微信 PC 客户端")
 
-    # 检查 API 配置
-    ok, msg, count = check_api_config()
-    icon = "✅" if ok else "❌"
-    print(f"{icon} API 配置: {msg}")
+    install_ok, message, wechat_path = check_wechat_installation()
+    _print_result("微信安装", install_ok, message)
+    if install_ok is False:
+        issues.append("未找到微信安装")
+        suggestions.append("确认已安装微信 PC，并且 WeChat.exe 可被当前账户访问")
+
+    compat_ok, message = check_wcferry_compatibility(wechat_path)
+    _print_result("WCFerry 兼容性", compat_ok, message)
+    if compat_ok is False:
+        issues.append("微信版本与 wcferry 不兼容")
+        suggestions.append(f"请安装或切换到微信 {OFFICIAL_SUPPORTED_WECHAT_VERSION}")
+
+    config_ok, message = check_transport_config()
+    _print_result("传输配置", config_ok, message)
+
+    ok, message, _count = check_api_config()
+    _print_result("API 配置", ok, message)
     if not ok:
-        issues.append("API 未配置")
+        issues.append("未检测到可用 API 预设")
         suggestions.append("运行: python run.py setup")
 
-    # 检查白名单
-    result, msg = check_whitelist()
-    if result is None:
-        icon = "⚠️"
-    else:
-        icon = "✅" if result else "❌"
-    print(f"{icon} 白名单: {msg}")
-
-    # 总结
     print()
-    print("━" * 50)
+    print("-" * 50)
 
     if not issues:
-        print("🎉 所有检测通过！可以运行: python run.py")
-    else:
-        print(f"❗ 发现 {len(issues)} 个问题:")
-        for issue in issues:
-            print(f"   • {issue}")
+        print("✅ 检测通过，可以继续运行项目。")
+        return 0
 
-        if suggestions:
-            print()
-            print("📋 建议操作:")
-            for suggestion in suggestions:
-                print(f"   • {suggestion}")
+    print(f"❌ 发现 {len(issues)} 个问题:")
+    for issue in issues:
+        print(f"  - {issue}")
 
-    print()
-    return 0 if not issues else 1
+    if suggestions:
+        print()
+        print("建议操作:")
+        for suggestion in suggestions:
+            print(f"  - {suggestion}")
+
+    return 1
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())

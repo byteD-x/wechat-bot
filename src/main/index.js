@@ -17,6 +17,7 @@ const crypto = require('crypto');
 const Store = require('electron-store');
 const iconv = require('iconv-lite');
 const { UpdateManager } = require('./update-manager');
+const { BackendIdleController, DEFAULT_IDLE_SHUTDOWN_MS } = require('./backend-idle-controller');
 
 // Electron on Windows can be launched without a valid stdout/stderr (or the pipe can be closed),
 // which makes console.* throw synchronously with EPIPE and crash the main process.
@@ -108,6 +109,18 @@ function showMainWindowSafe() {
     }
 }
 
+function getMainWindowVisible() {
+    const win = getMainWindowSafe();
+    if (!win) {
+        return false;
+    }
+    try {
+        return win.isVisible() && !win.isMinimized();
+    } catch (e) {
+        return false;
+    }
+}
+
 function sendToMainWindowSafe(channel, ...args) {
     const win = getMainWindowSafe();
     if (!win) return false;
@@ -118,6 +131,21 @@ function sendToMainWindowSafe(channel, ...args) {
         return true;
     } catch (e) {
         return false;
+    }
+}
+
+function broadcastToRenderer(channel, payload) {
+    for (const win of BrowserWindow.getAllWindows()) {
+        if (!win || (typeof win.isDestroyed === 'function' && win.isDestroyed())) {
+            continue;
+        }
+        const webContents = win.webContents;
+        if (!webContents || (typeof webContents.isDestroyed === 'function' && webContents.isDestroyed())) {
+            continue;
+        }
+        try {
+            webContents.send(channel, payload);
+        } catch (_) {}
     }
 }
 
@@ -347,6 +375,8 @@ const BackendManager = {
 
     async start() {
         if (await this.checkServer()) {
+            RUNTIME_IDLE_CONTROLLER.setWindowVisible(getMainWindowVisible());
+            RUNTIME_IDLE_CONTROLLER.setServiceRunning(true);
             console.log('[Backend] 服务已在运行');
             updateSplashStatus('后端服务已就绪，正在加载界面...', 60);
             return;
@@ -378,6 +408,8 @@ const BackendManager = {
         const startedAt = Date.now();
         while ((Date.now() - startedAt) < timeoutMs) {
             if (await this.checkServer()) {
+                RUNTIME_IDLE_CONTROLLER.setWindowVisible(getMainWindowVisible());
+                RUNTIME_IDLE_CONTROLLER.setServiceRunning(true);
                 return true;
             }
             await new Promise((resolve) => setTimeout(resolve, 400));
@@ -385,7 +417,7 @@ const BackendManager = {
         throw new Error('Python 服务启动超时');
     },
 
-    stop() {
+    stop(reason = 'manual') {
         const proc = GLOBAL_STATE.pythonProcess;
         if (!proc) return Promise.resolve();
         return new Promise((resolve) => {
@@ -396,6 +428,7 @@ const BackendManager = {
                 resolve();
             };
             console.log('[Backend] 正在停止...');
+            proc.__backendStopReason = reason;
             proc.once('exit', done);
             try {
                 proc.kill('SIGTERM');
@@ -419,6 +452,7 @@ const BackendManager = {
         proc.on('error', (err) => {
             console.error(`[Backend Spawn Error] ${err.message}`);
             GLOBAL_STATE.pythonProcess = null;
+            RUNTIME_IDLE_CONTROLLER.setServiceStopped('spawn_error');
         });
 
         const decodeSafe = (data) => {
@@ -463,6 +497,7 @@ const BackendManager = {
         proc.on('exit', (code) => {
             console.log(`[Backend] 退出代码: ${code}`);
             GLOBAL_STATE.pythonProcess = null;
+            RUNTIME_IDLE_CONTROLLER.setServiceStopped(proc.__backendStopReason || 'process_exit');
         });
     },
 
@@ -513,6 +548,38 @@ const BackendManager = {
         });
     }
 };
+
+const RUNTIME_IDLE_CONTROLLER = new BackendIdleController({
+    delayMs: DEFAULT_IDLE_SHUTDOWN_MS,
+    onStateChange: (idleState) => {
+        broadcastToRenderer('runtime:idle-state-changed', idleState);
+    },
+    onStopService: async () => {
+        await BackendManager.stop('idle_timeout');
+    },
+});
+
+function getRuntimeIdleState() {
+    return RUNTIME_IDLE_CONTROLLER.getState();
+}
+
+function applyRuntimeStatusSummary(summary = {}) {
+    RUNTIME_IDLE_CONTROLLER.setWindowVisible(getMainWindowVisible());
+    return RUNTIME_IDLE_CONTROLLER.updateRuntime({
+        botRunning: !!summary.botRunning,
+        growthRunning: !!summary.growthRunning,
+    });
+}
+
+function applyRuntimeStatus(status) {
+    if (!status || typeof status !== 'object') {
+        return getRuntimeIdleState();
+    }
+    return applyRuntimeStatusSummary({
+        botRunning: !!(status.bot_running ?? status.running),
+        growthRunning: !!status.growth_running,
+    });
+}
 
 const ConfigCli = {
     async run(commandArgs, options = {}) {
@@ -766,44 +833,47 @@ const SharedConfigService = {
 const RuntimeManager = {
     async ensureService() {
         await BackendManager.ensureReady();
-        return { success: true };
+        const status = await this.safeStatus();
+        applyRuntimeStatus(status);
+        return { success: true, idle_state: getRuntimeIdleState() };
     },
 
     async startBot() {
         await BackendManager.ensureReady();
-        return BackendManager.requestJson('POST', '/api/start', null, 45000);
+        const result = await BackendManager.requestJson('POST', '/api/start', null, 45000);
+        const status = await this.safeStatus();
+        applyRuntimeStatus(status);
+        return result;
     },
 
     async stopBot() {
         const result = await BackendManager.requestJson('POST', '/api/stop');
-        const idleResult = await this.stopServiceIfIdle();
+        const status = await this.safeStatus();
+        applyRuntimeStatus(status);
         return {
             ...result,
-            service_stopped: !!idleResult?.stopped,
+            service_stopped: false,
+            idle_state: getRuntimeIdleState(),
         };
     },
 
     async startGrowth() {
         await BackendManager.ensureReady();
-        return BackendManager.requestJson('POST', '/api/growth/start', null, 45000);
+        const result = await BackendManager.requestJson('POST', '/api/growth/start', null, 45000);
+        const status = await this.safeStatus();
+        applyRuntimeStatus(status);
+        return result;
     },
 
     async stopGrowth() {
         const result = await BackendManager.requestJson('POST', '/api/growth/stop');
-        const idleResult = await this.stopServiceIfIdle();
+        const status = await this.safeStatus();
+        applyRuntimeStatus(status);
         return {
             ...result,
-            service_stopped: !!idleResult?.stopped,
+            service_stopped: false,
+            idle_state: getRuntimeIdleState(),
         };
-    },
-
-    async stopServiceIfIdle() {
-        const status = await this.safeStatus();
-        if (status && !status.bot_running && !status.growth_running) {
-            await BackendManager.stop();
-            return { success: true, stopped: true };
-        }
-        return { success: true, stopped: false };
     },
 
     async safeStatus() {
@@ -851,7 +921,7 @@ async function requestAppClose(options = {}) {
             GLOBAL_STATE.tray.destroy();
             GLOBAL_STATE.tray = null;
         }
-        await BackendManager.stop();
+        await BackendManager.stop('quit');
         app.quit();
         return { action: 'quit' };
     }
@@ -1028,6 +1098,22 @@ const WindowManager = {
             }, 50); 
         });
 
+        win.on('show', () => {
+            RUNTIME_IDLE_CONTROLLER.setWindowVisible(getMainWindowVisible());
+        });
+
+        win.on('hide', () => {
+            RUNTIME_IDLE_CONTROLLER.setWindowVisible(getMainWindowVisible());
+        });
+
+        win.on('minimize', () => {
+            RUNTIME_IDLE_CONTROLLER.setWindowVisible(getMainWindowVisible());
+        });
+
+        win.on('restore', () => {
+            RUNTIME_IDLE_CONTROLLER.setWindowVisible(getMainWindowVisible());
+        });
+
         win.on('resize', () => {
             const { width, height } = win.getBounds();
             store.set('windowBounds', { width, height });
@@ -1097,6 +1183,15 @@ function setupIPC() {
     ipcMain.handle('runtime:stop-bot', () => RuntimeManager.stopBot());
     ipcMain.handle('runtime:start-growth', () => RuntimeManager.startGrowth());
     ipcMain.handle('runtime:stop-growth', () => RuntimeManager.stopGrowth());
+    ipcMain.handle('runtime:get-idle-state', () => getRuntimeIdleState());
+    ipcMain.handle('runtime:report-status', (_, summary) => ({
+        success: true,
+        idle_state: applyRuntimeStatusSummary(summary || {}),
+    }));
+    ipcMain.handle('runtime:cancel-idle-shutdown', () => ({
+        success: true,
+        idle_state: RUNTIME_IDLE_CONTROLLER.cancelIdleShutdown(),
+    }));
 
     ipcMain.handle('growth:get-prompt-state', () => GrowthPromptStore.getState());
     ipcMain.handle('growth:mark-prompt-seen', (_, kind) => GrowthPromptStore.markSeen(kind));
@@ -1210,7 +1305,7 @@ function setupIPC() {
                 GLOBAL_STATE.tray.destroy();
                 GLOBAL_STATE.tray = null;
             }
-            await BackendManager.stop();
+            await BackendManager.stop('quit');
             app.quit();
             return { success: true };
         }
@@ -1324,7 +1419,7 @@ if (!app.requestSingleInstanceLock()) {
     app.on('before-quit', () => {
         GLOBAL_STATE.isQuitting = true;
         GLOBAL_STATE.updateManager?.dispose();
-        BackendManager.stop();
+        BackendManager.stop('quit');
     });
 
     app.on('window-all-closed', () => {

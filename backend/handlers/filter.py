@@ -2,7 +2,6 @@
 消息过滤器模块 - 负责判断是否回复消息。
 """
 
-import logging
 from typing import Any, Dict, Tuple
 
 
@@ -10,24 +9,8 @@ from typing import Any, Dict, Tuple
 from ..types import MessageEvent
 from ..utils.common import iter_items
 
-__all__ = ["should_reply", "should_reply_with_reason"]
+__all__ = ["should_reply_with_reason"]
 
-
-def should_reply(
-    event: MessageEvent,
-    config: Dict[str, Any],
-    ignore_names_set: set = None,
-    ignore_keywords_list: list = None,
-) -> bool:
-    ok, _reason = should_reply_with_reason(
-        event,
-        config,
-        ignore_names_set=ignore_names_set,
-        ignore_keywords_list=ignore_keywords_list,
-    )
-    if not ok:
-        logging.debug("跳过消息：%s（原因：%s）", event.chat_name, _reason)
-    return ok
 
 
 def should_reply_with_reason(

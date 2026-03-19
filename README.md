@@ -8,7 +8,7 @@
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)
 ![WeChat](https://img.shields.io/badge/WeChat-PC%203.9.12.51-brightgreen.svg)
 
-基于 `WCFerry + wxauto(兼容模式) + Quart + Electron + LangChain/LangGraph` 的微信 AI 自动回复机器人。  
+?? `WCFerry + Quart + Electron + LangChain/LangGraph` ??? AI ????????
 支持多 OpenAI-compatible 提供方、短期记忆、运行期 RAG、导出语料 RAG、情绪分析、Prompt 个性化和桌面/Web 控制台。
 </div>
 
@@ -42,7 +42,7 @@
 - `Memory`: SQLite 持久化短期记忆、用户画像、上下文事实和情绪历史。
 - `Contact Prompt Growth`: 每个联系人都可逐步沉淀一份专属 Prompt，支持后台生成、导出聊天增强和 UI 直接编辑。
 - `RAG`: 支持运行期对话向量记忆、导出聊天记录风格召回，以及可选本地 `Cross-Encoder` 精排；未配置本地模型或缺依赖时自动回退轻量重排。
-- `Transport Abstraction`: 传输层统一抽象为 `BaseTransport`，默认走 `hook_wcferry`，并保证“接收消息 → 发送消息 → 完成落盘”的主闭环可独立演进。
+- `Transport Abstraction`: 传输层统一抽象为 `BaseTransport`，默认走 `wcferry`，并保证“接收消息 → 发送消息 → 完成落盘”的主闭环可独立演进。
 - `Provider Compatibility`: 后端统一标准化请求字段、响应正文、工具调用、错误结构与落盘元数据，避免为单一提供方写定向分支。
 - `Desktop + Web`: Electron 桌面客户端与 Quart Web API 并存。
 - `Observability`: `/api/status` 提供启动进度、诊断、健康检查、系统指标以及成长链状态，`/api/metrics` 提供 Prometheus 风格导出。
@@ -91,11 +91,11 @@ flowchart TD
 
 说明：
 
-- 默认后端是 `hook_wcferry`，目标是在后台收发时不抢焦点、不抢键鼠。
-- `hook_wcferry` 通过 WCFerry 注入微信进程，因此在 Windows 下必须以管理员权限运行本项目。
+- 默认后端是 `wcferry`，目标是在后台收发时不抢焦点、不抢键鼠。
+- `wcferry` 通过 WCFerry 注入微信进程，因此在 Windows 下必须以管理员权限运行本项目。
 - 当前项目唯一官方支持的微信版本是 `3.9.12.51`。
 - 旧版本微信下载链接：https://github.com/tom-snow/wechat-windows-versions/releases/tag/v3.9.12.51
-- 当前需要将 `hook_wcferry` 与微信 `3.9.12.51` 版本配套使用。
+- 当前需要将 `wcferry` 与微信 `3.9.12.51` 版本配套使用。
 - `watchdog` 已纳入默认依赖，用于配置热重载事件监听。
 - 如需启用本地 `Cross-Encoder` 精排，需要额外安装 `sentence-transformers`，并在配置中提供本地模型目录；项目不会自动联网下载模型。
 

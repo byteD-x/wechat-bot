@@ -190,7 +190,7 @@ def split_group_message(text: str) -> Tuple[Optional[str], str]:
     """
     分离群消息中的发送者昵称和内容。
     
-    wxauto 在 Windows 端获取的群消息通常格式为 "昵称: 内容" 或 "昵称：\n内容"。
+    Windows 端群消息通常格式为 "昵称: 内容" 或 "昵称：\n内容"。
     """
     # 常见群聊格式是“发送者:\\n消息”或“发送者: 消息”。
     for sep in (":\n", "：\n", ": ", "： "):

@@ -14,6 +14,7 @@ from typing import Any, Dict, Iterable, Optional
 from backend.model_catalog import merge_provider_defaults
 from backend.shared_config import (
     atomic_write_json,
+    backup_shared_config_file,
     build_default_config,
     get_app_config_path,
     migrate_legacy_config,
@@ -28,6 +29,7 @@ _REMOVED_CONFIG_PATHS = {
     "agent.streaming_enabled",
     "bot.capability_strict",
     "bot.compat_ui_enabled",
+    "bot.transport_backend",
     "bot.history_log_interval_sec",
     "bot.memory_seed_group",
     "bot.memory_seed_limit",
@@ -224,7 +226,15 @@ class ConfigService:
                 migrate_legacy_config(output_path=str(resolved), force=False, backup=True)
             else:
                 atomic_write_json(resolved, build_default_config())
-        return self._validate_config_dict(load_config(str(resolved)))
+
+        loaded = load_config(str(resolved))
+        cleaned = deepcopy(loaded if isinstance(loaded, dict) else {})
+        self._prune_removed_paths(cleaned)
+        validated = self._validate_config_dict(cleaned)
+        if cleaned != loaded:
+            backup_shared_config_file(resolved)
+            atomic_write_json(resolved, validated)
+        return validated
 
     def _validate_config_dict(self, config: Dict[str, Any]) -> Dict[str, Any]:
         return validate_shared_config(config)

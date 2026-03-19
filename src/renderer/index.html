@@ -211,6 +211,12 @@
                     <span class="status-label">准备服务中</span>
                 </div>
                 <button class="update-badge" id="update-badge" hidden>发现新版本</button>
+                <a href="#" class="nav-item nav-item-footer" data-page="about">
+                    <svg class="icon">
+                        <use href="#icon-info" />
+                    </svg>
+                    <span class="nav-label">关于</span>
+                </a>
                 <div class="version-text" id="version-text">v1.1.2</div>
             </div>
         </nav>
@@ -328,6 +334,17 @@
                                         <div class="bot-diagnostics-detail" id="bot-diagnostics-detail"></div>
                                         <ul class="bot-diagnostics-list" id="bot-diagnostics-list"></ul>
                                         <button class="btn btn-cta btn-sm" id="btn-recover-bot">一键恢复</button>
+                                    </div>
+                                    <div class="backend-idle-panel" id="backend-idle-panel" hidden>
+                                        <div class="backend-idle-copy">
+                                            <div class="backend-idle-title" id="backend-idle-title">后端待机中</div>
+                                            <div class="backend-idle-detail" id="backend-idle-detail"></div>
+                                            <div class="backend-idle-meta" id="backend-idle-meta"></div>
+                                        </div>
+                                        <div class="backend-idle-actions">
+                                            <button class="btn btn-secondary btn-sm" id="btn-cancel-idle-shutdown" hidden>取消自动停机</button>
+                                            <button class="btn btn-primary btn-sm" id="btn-wake-backend" hidden>立即唤醒</button>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -928,13 +945,6 @@
                         <h2 class="settings-card-title">微信连接与传输</h2>
                         <div class="settings-grid">
                             <div class="form-group">
-                                <label class="form-label">微信接入方式</label>
-                                <select class="form-input" id="setting-transport-backend">
-                                    <option value="hook_wcferry">hook_wcferry</option>
-                                </select>
-                                <span class="form-hint">当前版本仅支持 hook_wcferry；保存后若机器人正在运行，会自动重连微信传输层。</span>
-                            </div>
-                            <div class="form-group">
                                 <label class="form-label">目标微信版本</label>
                                 <input type="text" id="setting-required-wechat-version" placeholder="例如：3.9.12.51">
                                 <span class="form-hint">用于校验当前微信客户端版本，建议保持为官方支持版本。</span>
@@ -1521,6 +1531,130 @@
 
                 <div class="log-container">
                     <pre class="log-content" id="log-content">等待日志加载...</pre>
+                </div>
+            </section>
+
+            <section class="page" id="page-about">
+                <div class="page-header about-page-header">
+                    <div>
+                        <div class="about-page-kicker">认真做一个小工具</div>
+                        <h1 class="page-title about-page-title">关于这个小助手</h1>
+                        <p class="page-subtitle about-page-subtitle">希望它能让你的日常使用，稍微顺手一点。</p>
+                    </div>
+                </div>
+
+                <div class="about-stage">
+                    <div class="card about-hero">
+                        <div class="card-body about-hero-body">
+                            <div class="about-hero-main">
+                                <div class="about-hero-brand">
+                                    <div class="about-hero-logo-shell">
+                                        <img class="about-hero-logo" src="../assets/icon.png" alt="微信AI助手图标">
+                                    </div>
+                                    <div class="about-hero-copy">
+                                        <div class="about-hero-kicker">WeChat AI Assistant</div>
+                                        <h2 class="about-hero-title">微信AI助手</h2>
+                                        <p class="about-hero-description">把常用功能放在一起，少一点折腾，多一点顺手。</p>
+                                    </div>
+                                </div>
+
+                                <div class="about-hero-tags">
+                                    <span class="about-tag">桌面控制台</span>
+                                    <span class="about-tag">开源协作</span>
+                                    <span class="about-tag">长期打磨</span>
+                                </div>
+                            </div>
+
+                            <aside class="about-hero-note">
+                                <div class="about-hero-note-label">谢谢你</div>
+                                <div class="about-hero-note-title">愿意用，也愿意提意见</div>
+                                <p class="about-hero-note-text">每一条反馈和支持，我都会认真看。</p>
+                                <div class="about-hero-sign">ByteD-x</div>
+                            </aside>
+                        </div>
+                    </div>
+
+                    <div class="card-grid about-link-grid">
+                    <button class="about-link-card" type="button" data-kind="author" data-label="作者主页" data-url="https://github.com/ByteD-x">
+                        <div class="about-link-card-top">
+                            <div class="about-link-icon">
+                                <svg class="icon">
+                                    <use href="#icon-user" />
+                                </svg>
+                            </div>
+                            <svg class="icon about-link-arrow">
+                                <use href="#icon-external" />
+                            </svg>
+                        </div>
+                        <div class="about-link-meta">作者</div>
+                        <strong class="about-link-title">ByteD-x</strong>
+                        <p class="about-link-description">项目维护者的主页。</p>
+                        <div class="about-link-footer">
+                            <span class="about-link-hint">github.com/ByteD-x</span>
+                            <span class="about-link-cta">去主页看看</span>
+                        </div>
+                    </button>
+
+                    <button class="about-link-card" type="button" data-kind="repository" data-label="开源仓库" data-url="https://github.com/byteD-x/wechat-bot">
+                        <div class="about-link-card-top">
+                            <div class="about-link-icon">
+                                <svg class="icon">
+                                    <use href="#icon-file-text" />
+                                </svg>
+                            </div>
+                            <svg class="icon about-link-arrow">
+                                <use href="#icon-external" />
+                            </svg>
+                        </div>
+                        <div class="about-link-meta">开源仓库</div>
+                        <strong class="about-link-title">源码、版本与更新</strong>
+                        <p class="about-link-description">源码和更新都在这里。</p>
+                        <div class="about-link-footer">
+                            <span class="about-link-hint">byteD-x/wechat-bot</span>
+                            <span class="about-link-cta">打开仓库</span>
+                        </div>
+                    </button>
+
+                    <button class="about-link-card" type="button" data-kind="feedback" data-label="意见反馈" data-url="https://github.com/byteD-x/wechat-bot/issues">
+                        <div class="about-link-card-top">
+                            <div class="about-link-icon">
+                                <svg class="icon">
+                                    <use href="#icon-message" />
+                                </svg>
+                            </div>
+                            <svg class="icon about-link-arrow">
+                                <use href="#icon-external" />
+                            </svg>
+                        </div>
+                        <div class="about-link-meta">意见反馈</div>
+                        <strong class="about-link-title">来提一个想法</strong>
+                        <p class="about-link-description">Bug、建议或想法，都欢迎留下。</p>
+                        <div class="about-link-footer">
+                            <span class="about-link-hint">GitHub Issues</span>
+                            <span class="about-link-cta">提交 Issue</span>
+                        </div>
+                    </button>
+
+                    <button class="about-link-card about-link-card-sponsor" type="button" data-kind="sponsor" data-label="赞助支持" data-url="https://github.com/byteD-x/wechat-bot/blob/main/docs/SPONSOR.md">
+                        <div class="about-link-card-top">
+                            <div class="about-link-icon">
+                                <svg class="icon">
+                                    <use href="#icon-coins" />
+                                </svg>
+                            </div>
+                            <svg class="icon about-link-arrow">
+                                <use href="#icon-external" />
+                            </svg>
+                        </div>
+                        <div class="about-link-meta">赞助支持</div>
+                        <strong class="about-link-title">给这个项目续一杯咖啡</strong>
+                        <p class="about-link-description">如果它对你有帮助，欢迎支持一下。</p>
+                        <div class="about-link-footer">
+                            <span class="about-link-hint">docs/SPONSOR.md</span>
+                            <span class="about-link-cta">查看支持方式</span>
+                        </div>
+                    </button>
+                    </div>
                 </div>
             </section>
         </main>

@@ -25,7 +25,7 @@
 
 直接体现为：
 
-- 微信入口抽象为 `BaseTransport`，主实现为 `hook_wcferry`
+- 微信入口抽象为 `BaseTransport`，主实现为 `wcferry`
 - AI 主链路由 `LangChain + LangGraph` 编排
 - 控制面同时覆盖 `Quart API + Electron`
 - 回复之后仍有后台事实提取和记忆写回，不阻塞首响应
@@ -104,14 +104,14 @@
 这个项目运行在 Windows 微信生态上，传输层本身就带有几个现实约束：
 
 - 需要匹配指定微信版本
-- `hook_wcferry` 依赖注入微信进程
+- `wcferry` 依赖注入微信进程
 - 在 Windows 下需要管理员权限
 - 消息接收链路不是天然稳定的，需要等待登录、处理通道初始化和失败重试
 
 对应做法：
 
 - 把接入边界抽象成 `BaseTransport`
-- 在 `WcferryWeChatClient` 内做版本门禁、管理员权限检查、消息通道就绪等待和错误包装
+- 在 `WcferryTransport` 内做版本门禁、管理员权限检查、消息通道就绪等待和错误包装
 - 通过 `get_transport_status()` 把微信版本、所需版本、能力信息和 warning 暴露给上层
 
 解决的核心不是“把微信连上”，而是“把不稳定边界关进传输层里”。

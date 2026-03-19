@@ -154,6 +154,24 @@ def backup_legacy_config_files(*, backup_root: Optional[Path] = None) -> Optiona
     return str(destination_root)
 
 
+def backup_shared_config_file(
+    path: str | Path,
+    *,
+    backup_root: Optional[Path] = None,
+) -> Optional[str]:
+    source = Path(path).expanduser().resolve()
+    if not source.exists():
+        return None
+
+    root = backup_root or get_legacy_backup_root()
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    destination_root = root / f"shared-config-{stamp}"
+    destination_root.mkdir(parents=True, exist_ok=True)
+    destination = destination_root / source.name
+    shutil.copy2(source, destination)
+    return str(destination)
+
+
 def migrate_legacy_config(
     *,
     output_path: Optional[str] = None,
