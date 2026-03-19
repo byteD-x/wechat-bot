@@ -183,7 +183,7 @@ python run.py web
 
 当前与本轮功能直接相关的关键配置：
 
-```python
+```json
 "bot": {
     "config_reload_mode": "auto",          # auto / polling / watchdog
     "config_reload_debounce_ms": 500,

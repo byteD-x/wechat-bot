@@ -55,7 +55,7 @@
   - `pip install -r requirements.txt`
   - `npm install`
 - 本地运行：
-  - `npm run dev`S
+  - `npm run dev`
   - `python run.py start`
   - `python run.py web`
   - `python run.py check`

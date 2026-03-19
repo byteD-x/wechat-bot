@@ -1,8 +1,14 @@
 # 项目亮点
 
-这份文档用于集中展示当前项目最值得对外强调的能力：差异化定位、核心亮点、技术难点与落地方案。
+> **适用场景**：产品对外宣传、项目介绍页面、技术交流展示
+>
+> 这份文档用于集中展示当前项目最值得对外强调的能力：差异化定位、核心亮点、技术难点与落地方案。
 
 如果需要查看完整调用链、模块职责与运行顺序，请继续阅读 [SYSTEM_CHAINS.md](SYSTEM_CHAINS.md)。
+
+> 想深入了解细节？推荐按需阅读：
+> - [PROJECT_HIGHLIGHTS_SUMMARY.md](PROJECT_HIGHLIGHTS_SUMMARY.md) — 技术架构与实现细节
+> - [STAR_REPO_STAR.md](STAR_REPO_STAR.md) — 简历用 STAR 案例
 
 ## 1. 项目定位
 
