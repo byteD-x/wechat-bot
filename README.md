@@ -1,5 +1,9 @@
 # WeChat Chat Bot
 
+> **如果你觉得这个项目对你有帮助，请帮我点个 Star 吧！**
+>
+> 你的支持是我继续维护下去的动力 🙏
+
 <div align="center">
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
