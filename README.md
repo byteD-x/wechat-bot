@@ -145,6 +145,10 @@ npm run dev
 ```bash
 npm run dev
 ```
+或
+```bash
+dev.bat
+```
 
 适合通过 GUI 配置和观察运行状态。
 桌面端启动后会自动轻启动 Python Web 服务，用于状态、消息、成本、日志等页面；机器人主循环和成长任务仍需手动启动。
