@@ -5,6 +5,8 @@ data/*.db-*
 data/chat_exports/
 data/chat_history.jsonl
 data/config_override.json
+data/app_config.json
+data/backups/
 data/bot_state.json
 data/vector_db/
 data/logs/

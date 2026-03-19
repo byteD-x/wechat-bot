@@ -18,6 +18,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from backend.shared_config import ensure_data_root
 from backend.utils.common import as_float, as_int
 from tools.prompt_gen.csv_loader import (
     EXCLUDED_CONTACTS,
@@ -45,7 +46,8 @@ class ExportChatRAG:
     def __init__(self, vector_memory: Any):
         self.vector_memory = vector_memory
         self.enabled = False
-        self.base_dir = os.path.join("data", "chat_exports", "聊天记录")
+        data_root = ensure_data_root()
+        self.base_dir = str(data_root / "chat_exports" / "聊天记录")
         self.auto_ingest = True
         self.max_chunks_per_chat = 500
         self.chunk_messages = 6
@@ -55,7 +57,7 @@ class ExportChatRAG:
         self.prefer_recent = True
         self.max_parallel_embeddings = 4
         self.self_name = "知有"
-        self.manifest_path = os.path.join("data", "export_rag_manifest.json")
+        self.manifest_path = str(data_root / "export_rag_manifest.json")
 
         self.last_scan_at: Optional[float] = None
         self.last_scan_summary: Dict[str, Any] = {}
@@ -64,8 +66,9 @@ class ExportChatRAG:
 
     def update_config(self, bot_cfg: Dict[str, Any]) -> None:
         self.enabled = bool(bot_cfg.get("export_rag_enabled", False))
+        data_root = ensure_data_root()
         self.base_dir = str(
-            bot_cfg.get("export_rag_dir") or os.path.join("data", "chat_exports", "聊天记录")
+            bot_cfg.get("export_rag_dir") or (data_root / "chat_exports" / "聊天记录")
         ).strip()
         self.auto_ingest = bool(bot_cfg.get("export_rag_auto_ingest", True))
         self.max_chunks_per_chat = as_int(

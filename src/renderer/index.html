@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' http://localhost:*;">
+        content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' http://localhost:* http://127.0.0.1:*;">
     <title>微信AI助手</title>
     <link rel="stylesheet" href="css/app.css">
 </head>
@@ -207,11 +207,11 @@
 
             <div class="sidebar-footer">
                 <div class="status-badge" id="status-badge">
-                    <span class="status-dot offline"></span>
-                    <span class="status-label">未连接</span>
+                    <span class="status-dot warning"></span>
+                    <span class="status-label">准备服务中</span>
                 </div>
                 <button class="update-badge" id="update-badge" hidden>发现新版本</button>
-                <div class="version-text" id="version-text">v1.1.1</div>
+                <div class="version-text" id="version-text">v1.1.2</div>
             </div>
         </nav>
 
@@ -306,8 +306,8 @@
                                 <div class="bot-info">
                                     <div class="bot-name">微信AI助手</div>
                                     <div class="bot-state" id="bot-state">
-                                        <span class="bot-state-dot offline"></span>
-                                        <span class="bot-state-text">离线</span>
+                                        <span class="bot-state-dot starting"></span>
+                                        <span class="bot-state-text">等待服务</span>
                                     </div>
                                     <div class="bot-meta" id="bot-transport-meta">
                                         <span id="bot-transport-backend">后端: --</span>
@@ -343,6 +343,22 @@
                                         <use href="#icon-refresh" />
                                     </svg>
                                     <span>重启</span>
+                                </button>
+                            </div>
+                            <div class="bot-growth-panel">
+                                <div class="bot-growth-meta">
+                                    <div class="bot-growth-title">成长任务</div>
+                                    <div class="bot-growth-text" id="growth-task-status">等待服务</div>
+                                    <div class="bot-growth-subtext" id="growth-task-backlog">待处理任务 --</div>
+                                    <div class="bot-growth-queue" id="growth-task-queue">
+                                        <span class="growth-task-empty">等待服务</span>
+                                    </div>
+                                    <div class="bot-growth-batch" id="growth-task-batch">最近批次 --</div>
+                                    <div class="bot-growth-next" id="growth-task-next">下次批处理 --</div>
+                                    <div class="bot-growth-error" id="growth-task-error" hidden></div>
+                                </div>
+                                <button class="btn btn-secondary btn-sm" id="btn-toggle-growth">
+                                    <span>启动成长任务</span>
                                 </button>
                             </div>
                         </div>
@@ -1323,7 +1339,7 @@
                         <div class="update-panel">
                             <div class="update-panel-content">
                                 <div class="update-status-text" id="update-status-text">未检查更新</div>
-                                <div class="update-status-meta" id="update-status-meta">当前版本：v1.1.1</div>
+                                <div class="update-status-meta" id="update-status-meta">当前版本：v1.1.2</div>
                             </div>
                             <div class="update-panel-actions">
                                 <button class="btn btn-secondary btn-sm" id="btn-check-updates">检查更新</button>

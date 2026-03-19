@@ -7,6 +7,20 @@ import { Events } from '../core/EventBus.js';
 import { apiService } from '../services/ApiService.js';
 import { toast } from '../services/NotificationService.js';
 
+const GROWTH_TASK_LABELS = {
+    emotion: '情绪沉淀',
+    contact_prompt: '联系人 Prompt',
+    vector_memory: '向量记忆',
+    facts: '事实提取',
+    export_rag_sync: '导出语料同步',
+};
+
+const GROWTH_MODE_LABELS = {
+    deferred_until_batch: '按批处理执行',
+    background_only: '仅后台执行',
+    immediate: '即时执行',
+};
+
 export class DashboardPage extends PageController {
     constructor() {
         super('DashboardPage', 'page-dashboard');
@@ -36,6 +50,11 @@ export class DashboardPage extends PageController {
             this.updateStats(status);
         }
 
+        if (!this.getState('bot.connected')) {
+            this._clearOfflineData();
+            return;
+        }
+
         await Promise.all([
             this._loadRecentMessages(),
             this._refreshDashboardCost(true),
@@ -44,6 +63,8 @@ export class DashboardPage extends PageController {
 
     _bindEvents() {
         this.bindEvent('#btn-toggle-bot', 'click', () => this._toggleBot());
+        this.bindEvent('#btn-toggle-growth', 'click', () => this._toggleGrowth());
+        this.bindEvent('#growth-task-queue', 'click', (event) => this._handleGrowthTaskAction(event));
         this.bindEvent('#btn-pause', 'click', () => this._togglePause());
         this.bindEvent('#btn-restart', 'click', () => this._restartBot());
         this.bindEvent('#btn-recover-bot', 'click', () => this._recoverBot());
@@ -87,7 +108,18 @@ export class DashboardPage extends PageController {
         this.watchState('bot.status', updateIfActive);
         this.watchState('bot.running', updateIfActive);
         this.watchState('bot.paused', updateIfActive);
-        this.watchState('bot.connected', updateIfActive);
+        this.watchState('bot.connected', (connected) => {
+            if (!this.isActive()) {
+                return;
+            }
+            this._updateBotUI();
+            if (!connected) {
+                this._clearOfflineData();
+                return;
+            }
+            void this._loadRecentMessages();
+            void this._refreshDashboardCost(true);
+        });
     }
 
     async _toggleBot() {
@@ -106,12 +138,21 @@ export class DashboardPage extends PageController {
                 if (btnText) {
                     btnText.textContent = '停止中...';
                 }
-                const result = await apiService.stopBot();
+                const result = window.electronAPI?.runtimeStopBot
+                    ? await window.electronAPI.runtimeStopBot()
+                    : await apiService.stopBot();
                 toast.show(
                     result?.message || (result?.success ? '机器人已停止' : '停止机器人失败'),
                     result?.success ? 'success' : 'error'
                 );
+                if (result?.service_stopped) {
+                    this._applyStoppedRuntimeState();
+                }
             } else {
+                const accepted = await this._ensureGrowthEnablePrompt();
+                if (!accepted) {
+                    return;
+                }
                 if (btnText) {
                     btnText.textContent = '启动中...';
                 }
@@ -129,7 +170,9 @@ export class DashboardPage extends PageController {
                     }
                 });
 
-                const result = await apiService.startBot();
+                const result = window.electronAPI?.runtimeStartBot
+                    ? await window.electronAPI.runtimeStartBot()
+                    : await apiService.startBot();
                 toast.show(
                     result?.message || (result?.success ? '机器人启动中' : '启动机器人失败'),
                     result?.success ? 'success' : 'error'
@@ -143,6 +186,173 @@ export class DashboardPage extends PageController {
         } finally {
             btn.disabled = false;
         }
+    }
+
+    async _toggleGrowth() {
+        const button = this.$('#btn-toggle-growth');
+        const buttonText = button?.querySelector('span') || button;
+        if (!button) {
+            return;
+        }
+
+        button.disabled = true;
+        try {
+            const status = this.getState('bot.status') || {};
+            const growthRunning = !!status.growth_running;
+            if (growthRunning) {
+                const accepted = await this._ensureGrowthDisablePrompt();
+                if (!accepted) {
+                    return;
+                }
+                if (buttonText) {
+                    buttonText.textContent = '停止中...';
+                }
+                const result = window.electronAPI?.runtimeStopGrowth
+                    ? await window.electronAPI.runtimeStopGrowth()
+                    : await apiService.request?.('/api/growth/stop', { method: 'POST' });
+                toast.show(
+                    result?.message || (result?.success ? '成长任务已停止' : '停止成长任务失败'),
+                    result?.success ? 'success' : 'error'
+                );
+                if (result?.service_stopped) {
+                    this._applyStoppedRuntimeState();
+                }
+            } else {
+                if (buttonText) {
+                    buttonText.textContent = '启动中...';
+                }
+                const result = window.electronAPI?.runtimeStartGrowth
+                    ? await window.electronAPI.runtimeStartGrowth()
+                    : await apiService.request?.('/api/growth/start', { method: 'POST' });
+                toast.show(
+                    result?.message || (result?.success ? '成长任务已启动' : '启动成长任务失败'),
+                    result?.success ? 'success' : 'error'
+                );
+            }
+
+            this.emit(Events.BOT_STATUS_CHANGE, {});
+            setTimeout(() => this.emit(Events.BOT_STATUS_CHANGE, {}), 1000);
+        } catch (error) {
+            toast.error(toast.getErrorMessage(error, '成长任务操作失败'));
+        } finally {
+            button.disabled = false;
+            this._updateBotUI();
+        }
+    }
+
+    async _handleGrowthTaskAction(event) {
+        const button = event?.target?.closest?.('[data-growth-action]');
+        if (!button) {
+            return;
+        }
+
+        const taskType = String(button.dataset.taskType || '').trim();
+        const action = String(button.dataset.growthAction || '').trim();
+        if (!taskType || !action) {
+            return;
+        }
+
+        if (action === 'clear') {
+            const accepted = window.confirm(`确认清空“${this._getGrowthTaskLabel(taskType)}”队列吗？`);
+            if (!accepted) {
+                return;
+            }
+        }
+
+        button.disabled = true;
+        try {
+            await this._runGrowthTaskAction(taskType, action);
+            this.emit(Events.BOT_STATUS_CHANGE, {});
+            setTimeout(() => this.emit(Events.BOT_STATUS_CHANGE, {}), 400);
+        } catch (error) {
+            toast.error(toast.getErrorMessage(error, '成长任务操作失败'));
+        } finally {
+            button.disabled = false;
+        }
+    }
+
+    async _runGrowthTaskAction(taskType, action) {
+        const label = this._getGrowthTaskLabel(taskType);
+        let result = null;
+
+        if (action === 'run') {
+            result = await apiService.runGrowthTaskNow(taskType);
+            toast.show(result?.message || `已触发 ${label} 立即执行`, result?.success ? 'success' : 'error');
+            return result;
+        }
+
+        if (action === 'clear') {
+            result = await apiService.clearGrowthTask(taskType);
+            toast.show(result?.message || `已清空 ${label} 队列`, result?.success ? 'success' : 'error');
+            return result;
+        }
+
+        if (action === 'pause') {
+            result = await apiService.pauseGrowthTask(taskType);
+            toast.show(result?.message || `已暂停 ${label}`, result?.success ? 'success' : 'error');
+            return result;
+        }
+
+        if (action === 'resume') {
+            result = await apiService.resumeGrowthTask(taskType);
+            toast.show(result?.message || `已恢复 ${label}`, result?.success ? 'success' : 'error');
+            return result;
+        }
+
+        throw new Error(`unsupported_growth_action:${action}`);
+    }
+
+    async _ensureGrowthEnablePrompt() {
+        if (!window.electronAPI?.getGrowthPromptState || !window.electronAPI?.markGrowthPromptSeen) {
+            return true;
+        }
+        const promptState = await window.electronAPI.getGrowthPromptState();
+        if (promptState?.enableCostSeen) {
+            return true;
+        }
+        const accepted = window.confirm('启动机器人会自动开启成长任务，并持续消耗模型额度用于后台整理记忆、画像和语料。确认继续吗？');
+        if (!accepted) {
+            return false;
+        }
+        await window.electronAPI.markGrowthPromptSeen('enable-cost');
+        return true;
+    }
+
+    async _ensureGrowthDisablePrompt() {
+        if (!window.electronAPI?.getGrowthPromptState || !window.electronAPI?.markGrowthPromptSeen) {
+            return true;
+        }
+        const promptState = await window.electronAPI.getGrowthPromptState();
+        if (promptState?.disableRiskSeen) {
+            return true;
+        }
+        const accepted = window.confirm('关闭成长任务后，后台记忆整理、画像更新和语料增量处理都会暂停，可能影响后续回复质量。确认继续吗？');
+        if (!accepted) {
+            return false;
+        }
+        await window.electronAPI.markGrowthPromptSeen('disable-risk');
+        return true;
+    }
+
+    _applyStoppedRuntimeState() {
+        this.setState('bot.connected', false);
+        this.setState('bot.running', false);
+        this.setState('bot.paused', false);
+        this.setState('bot.status', {
+            ...(this.getState('bot.status') || {}),
+            running: false,
+            bot_running: false,
+            growth_running: false,
+            growth_enabled: false,
+            is_paused: false,
+            startup: {
+                stage: 'stopped',
+                message: '服务未启动',
+                progress: 0,
+                active: false,
+                updated_at: Date.now() / 1000,
+            },
+        });
     }
 
     async _togglePause() {
@@ -193,6 +403,7 @@ export class DashboardPage extends PageController {
     }
 
     _updateBotUI() {
+        const connected = !!this.getState('bot.connected');
         const isRunning = !!this.getState('bot.running');
         const isPaused = !!this.getState('bot.paused');
         const status = this.getState('bot.status') || {};
@@ -202,10 +413,13 @@ export class DashboardPage extends PageController {
         if (stateElem) {
             const dot = stateElem.querySelector('.bot-state-dot');
             const text = stateElem.querySelector('.bot-state-text');
-            let stateText = '已停止';
-            let dotClass = 'bot-state-dot offline';
+            let stateText = '机器人未启动';
+            let dotClass = 'bot-state-dot ready';
 
-            if (isRunning && isPaused) {
+            if (!connected) {
+                stateText = '服务未连接';
+                dotClass = 'bot-state-dot offline';
+            } else if (isRunning && isPaused) {
                 stateText = '已暂停';
                 dotClass = 'bot-state-dot paused';
             } else if (isRunning) {
@@ -227,7 +441,7 @@ export class DashboardPage extends PageController {
         const pauseBtn = this.$('#btn-pause');
         const pauseText = pauseBtn?.querySelector('span');
         if (pauseBtn) {
-            pauseBtn.disabled = !isRunning;
+            pauseBtn.disabled = !connected || !isRunning;
         }
         if (pauseText) {
             pauseText.textContent = isPaused ? '继续运行' : '暂停';
@@ -235,7 +449,7 @@ export class DashboardPage extends PageController {
 
         const restartBtn = this.$('#btn-restart');
         if (restartBtn) {
-            restartBtn.disabled = !isRunning && !startupActive;
+            restartBtn.disabled = !connected || (!isRunning && !startupActive);
         }
 
         const toggleBtn = this.$('#btn-toggle-bot');
@@ -243,7 +457,7 @@ export class DashboardPage extends PageController {
             const icon = toggleBtn.querySelector('svg use');
             const text = toggleBtn.querySelector('span');
 
-            if (isRunning || startupActive) {
+            if (connected && (isRunning || startupActive)) {
                 if (text) {
                     text.textContent = startupActive && !isRunning ? '启动中...' : '停止机器人';
                 }
@@ -260,12 +474,66 @@ export class DashboardPage extends PageController {
             }
         }
 
+        const growthRunning = !!status?.growth_running;
+        const growthEnabled = !!status?.growth_enabled;
+        const backlogCount = Number(status?.background_backlog_count || 0);
+        const growthStatus = this.$('#growth-task-status');
+        const growthBacklog = this.$('#growth-task-backlog');
+        const growthQueue = this.$('#growth-task-queue');
+        const growthBatch = this.$('#growth-task-batch');
+        const growthNext = this.$('#growth-task-next');
+        const growthError = this.$('#growth-task-error');
+        const growthButton = this.$('#btn-toggle-growth');
+        const growthButtonText = growthButton?.querySelector('span') || growthButton;
+        if (growthStatus) {
+            if (!connected) {
+                growthStatus.textContent = '服务未连接';
+            } else {
+                growthStatus.textContent = growthRunning
+                    ? '运行中'
+                    : (growthEnabled ? '已启用，等待启动' : '未启动');
+            }
+        }
+        if (growthBacklog) {
+            growthBacklog.textContent = connected
+                ? `待处理任务 ${this._formatNumber(backlogCount)}`
+                : '待处理任务 --';
+        }
+        this._renderGrowthTasks(connected, status, {
+            queueElement: growthQueue,
+            batchElement: growthBatch,
+            nextElement: growthNext,
+            errorElement: growthError,
+        });
+        if (growthButtonText) {
+            growthButtonText.textContent = growthRunning ? '停止成长任务' : '启动成长任务';
+        }
+
         this._renderStartupState(status.startup);
         this._syncStartupMeta(status.startup);
         this._renderDiagnostics(status.diagnostics);
     }
 
+    _clearOfflineData() {
+        this._recentMessages = [];
+        this._dashboardCost = {
+            today: null,
+            recent: null,
+        };
+
+        const container = this.$('#recent-messages');
+        if (container) {
+            this._renderMessages(container, this._recentMessages);
+        }
+        this._renderDashboardCost();
+    }
+
     async _loadRecentMessages() {
+        if (!this.getState('bot.connected')) {
+            this._clearOfflineData();
+            return;
+        }
+
         try {
             const result = await apiService.getMessages({ limit: 5, offset: 0 });
             const container = this.$('#recent-messages');
@@ -402,6 +670,230 @@ export class DashboardPage extends PageController {
         });
     }
 
+    _getGrowthTaskLabel(taskType) {
+        const key = String(taskType || '').trim();
+        {
+            const labels = {
+                emotion: '情绪沉淀',
+                contact_prompt: '联系人 Prompt',
+                vector_memory: '向量记忆',
+                facts: '事实提取',
+                export_rag_sync: '导出语料同步',
+            };
+            return labels[key] || key || '未命名任务';
+        }
+        if (!key) {
+            return '未命名任务';
+        }
+        const labels = {
+            emotion: '情绪沉淀',
+            contact_prompt: '联系人 Prompt',
+            vector_memory: '向量记忆',
+            facts: '事实提取',
+            export_rag_sync: '导出语料同步',
+        };
+        return labels[key] || key;
+    }
+
+    _getGrowthModeLabel(mode) {
+        const key = String(mode || '').trim();
+        {
+            const labels = {
+                deferred_until_batch: '按批处理执行',
+                background_only: '仅后台执行',
+                immediate: '即时执行',
+            };
+            return labels[key] || key || '';
+        }
+        if (!key) {
+            return '';
+        }
+        const labels = {
+            deferred_until_batch: '按批处理执行',
+            background_only: '仅后台执行',
+            immediate: '即时执行',
+        };
+        return labels[key] || key;
+    }
+
+    _getGrowthBatchReason(reason) {
+        const key = String(reason || '').trim();
+        {
+            const labels = {
+                memory_unavailable: '记忆库不可用',
+            };
+            return labels[key] || key || '';
+        }
+        if (!key) {
+            return '';
+        }
+        const labels = {
+            memory_unavailable: '记忆库不可用',
+        };
+        return labels[key] || key;
+    }
+
+    _formatGrowthTimestamp(value) {
+        if (value === undefined || value === null || value === '') {
+            return '--';
+        }
+
+        const numeric = Number(value);
+        const date = Number.isFinite(numeric)
+            ? new Date(numeric > 1e12 ? numeric : numeric * 1000)
+            : new Date(value);
+
+        if (Number.isNaN(date.getTime())) {
+            return '--';
+        }
+
+        return date.toLocaleString('zh-CN', {
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+        });
+    }
+
+    _createGrowthTaskActionButton(taskType, action, label) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'btn btn-secondary btn-xs';
+        button.dataset.growthAction = String(action || '');
+        button.dataset.taskType = String(taskType || '');
+        button.textContent = String(label || '');
+        return button;
+    }
+
+    _renderGrowthTasks(connected, status, elements = {}) {
+        const {
+            queueElement,
+            batchElement,
+            nextElement,
+            errorElement,
+        } = elements;
+
+        if (queueElement) {
+            queueElement.textContent = '';
+
+            if (!connected) {
+                const empty = document.createElement('span');
+                empty.className = 'growth-task-empty';
+                empty.textContent = '服务未连接';
+                queueElement.appendChild(empty);
+            } else {
+                const pausedTaskTypes = new Set(status?.paused_growth_task_types || []);
+                const taskEntries = Object.entries(status?.background_backlog_by_task || {})
+                    .map(([taskType, count]) => [taskType, Number(count || 0)])
+                    .filter(([taskType, count]) => count > 0 || pausedTaskTypes.has(taskType))
+                    .sort((left, right) => right[1] - left[1]);
+
+                if (taskEntries.length === 0) {
+                    const pendingTasks = Number(status?.growth_tasks_pending || 0);
+                    const empty = document.createElement('span');
+                    empty.className = 'growth-task-empty';
+                    empty.textContent = pendingTasks > 0 ? '有任务正在执行，当前队列为空' : '当前没有排队任务';
+                    queueElement.appendChild(empty);
+                } else {
+                    const fragment = document.createDocumentFragment();
+                    taskEntries.forEach(([taskType, count]) => {
+                        const row = document.createElement('div');
+                        row.className = 'growth-task-row';
+
+                        const meta = document.createElement('div');
+                        meta.className = 'growth-task-row-meta';
+
+                        const title = document.createElement('div');
+                        title.className = 'growth-task-row-title';
+                        title.textContent = this._getGrowthTaskLabel(taskType);
+
+                        if (pausedTaskTypes.has(taskType)) {
+                            const badge = document.createElement('span');
+                            badge.className = 'growth-task-badge paused';
+                            badge.textContent = '已暂停';
+                            title.appendChild(badge);
+                        }
+
+                        const detail = document.createElement('div');
+                        detail.className = 'growth-task-row-detail';
+                        detail.textContent = `排队 ${this._formatNumber(count)}`;
+
+                        meta.appendChild(title);
+                        meta.appendChild(detail);
+
+                        const actions = document.createElement('div');
+                        actions.className = 'growth-task-actions';
+                        actions.appendChild(this._createGrowthTaskActionButton(taskType, 'run', '立即执行'));
+                        actions.appendChild(
+                            this._createGrowthTaskActionButton(
+                                taskType,
+                                pausedTaskTypes.has(taskType) ? 'resume' : 'pause',
+                                pausedTaskTypes.has(taskType) ? '恢复' : '暂停',
+                            )
+                        );
+                        actions.appendChild(this._createGrowthTaskActionButton(taskType, 'clear', '清空队列'));
+
+                        row.appendChild(meta);
+                        row.appendChild(actions);
+                        fragment.appendChild(row);
+                    });
+                    queueElement.appendChild(fragment);
+                }
+            }
+        }
+
+        if (batchElement) {
+            if (!connected) {
+                batchElement.textContent = '最近批次 --';
+            } else {
+                const batch = status?.last_background_batch || {};
+                const hasBatch = Object.keys(batch).length > 0;
+                if (!hasBatch) {
+                    batchElement.textContent = '最近批次：暂无执行记录';
+                } else {
+                    const completed = Number(batch.completed || 0);
+                    const failed = Number(batch.failed || 0);
+                    const batchTime = this._formatGrowthTimestamp(batch.finished_at || batch.started_at);
+                    const reason = this._getGrowthBatchReason(batch.reason);
+                    const mode = this._getGrowthModeLabel(status?.growth_mode);
+                    const trigger = batch.trigger === 'manual' ? '手动触发' : '定时批处理';
+                    const segments = [
+                        `最近批次：完成 ${this._formatNumber(completed)}`,
+                        `失败 ${this._formatNumber(failed)}`,
+                    ];
+                    segments.push(trigger);
+                    if (batchTime !== '--') {
+                        segments.push(batchTime);
+                    }
+                    if (mode) {
+                        segments.push(mode);
+                    }
+                    if (reason) {
+                        segments.push(reason);
+                    }
+                    batchElement.textContent = segments.join(' · ');
+                }
+            }
+        }
+
+        if (nextElement) {
+            if (!connected) {
+                nextElement.textContent = '下次批处理 --';
+            } else {
+                const nextBatchAt = this._formatGrowthTimestamp(status?.next_background_batch_at);
+                nextElement.textContent = nextBatchAt === '--'
+                    ? '下次批处理：等待调度'
+                    : `下次批处理：${nextBatchAt}`;
+            }
+        }
+
+        if (errorElement) {
+            const errorText = connected ? String(status?.last_growth_error || '').trim() : '';
+            errorElement.hidden = !errorText;
+            errorElement.textContent = errorText ? `最近异常：${errorText}` : '';
+        }
+    }
+
     updateStats(stats) {
         const nextStats = {
             uptime: stats.uptime || '--',
@@ -473,6 +965,15 @@ export class DashboardPage extends PageController {
     }
 
     async _refreshDashboardCost(force = false) {
+        if (!this.getState('bot.connected')) {
+            this._dashboardCost = {
+                today: null,
+                recent: null,
+            };
+            this._renderDashboardCost();
+            return;
+        }
+
         const now = Date.now();
         if (!force && now - this._lastCostFetchAt < 15000) {
             return;

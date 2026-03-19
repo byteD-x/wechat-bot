@@ -12,7 +12,10 @@ import os
 import sys
 import time
 from typing import Any, Dict, Optional, Set
+
 from .core.config_service import get_config_service
+from .growth_manager import get_growth_manager
+from .shared_config import get_app_config_path
 from .wechat_versions import OFFICIAL_SUPPORTED_WECHAT_VERSION
 
 logger = logging.getLogger(__name__)
@@ -120,9 +123,10 @@ class BotManager:
 
         # 共享组件
         self.memory_manager = None
+        self._growth_start_task: Optional[asyncio.Task] = None
 
         # 配置路径
-        self.config_path = os.path.join(os.path.dirname(__file__), "config.py")
+        self.config_path = get_app_config_path()
         self.config_service = get_config_service()
 
         logger.info("BotManager 初始化完成")
@@ -176,6 +180,11 @@ class BotManager:
 
                 # 使用提供的配置路径或默认路径
                 path = config_path or self.config_path
+                self.config_service.save_effective_config(
+                    {"services": {"growth_tasks_enabled": True}},
+                    config_path=path,
+                    source="bot_start_enable_growth",
+                )
 
                 # 重置停止事件
                 self.stop_event.clear()
@@ -204,6 +213,7 @@ class BotManager:
                 state.save()
                 self._invalidate_status_cache()
                 await self.notify_status_change()
+                self._schedule_growth_start()
 
                 logger.info("机器人启动流程已开始")
                 return {"success": True, "message": "机器人启动中，请稍候..."}
@@ -232,6 +242,38 @@ class BotManager:
                 )
                 self._invalidate_status_cache()
                 return {"success": False, "message": f"启动失败: {str(e)}"}
+
+    def _schedule_growth_start(self) -> None:
+        if self._growth_start_task and not self._growth_start_task.done():
+            return
+        self._growth_start_task = asyncio.create_task(
+            self._start_growth_in_background()
+        )
+        self._growth_start_task.add_done_callback(self._on_growth_start_done)
+
+    async def _start_growth_in_background(self) -> Dict[str, Any]:
+        return await get_growth_manager().start(
+            persist=False,
+            source="bot_start",
+        )
+
+    def _on_growth_start_done(self, task: asyncio.Task) -> None:
+        if self._growth_start_task is task:
+            self._growth_start_task = None
+        try:
+            growth_result = task.result()
+        except asyncio.CancelledError:
+            logger.info("Growth task bootstrap cancelled")
+            return
+        except Exception:
+            logger.exception("Growth task bootstrap failed unexpectedly")
+            return
+
+        if not growth_result.get("success"):
+            logger.warning(
+                "Growth task manager did not start with bot: %s",
+                growth_result.get("message"),
+            )
 
     async def _run_bot(self):
         """内部运行逻辑"""
@@ -356,6 +398,27 @@ class BotManager:
             return await self.restart()
         return await self.start()
 
+    async def start_growth(self) -> Dict[str, Any]:
+        return await get_growth_manager().start(source="api")
+
+    async def stop_growth(self) -> Dict[str, Any]:
+        return await get_growth_manager().stop(source="api")
+
+    async def list_growth_tasks(self) -> Dict[str, Any]:
+        return await get_growth_manager().list_growth_tasks()
+
+    async def clear_growth_task(self, task_type: str) -> Dict[str, Any]:
+        return await get_growth_manager().clear_growth_task(task_type)
+
+    async def run_growth_task_now(self, task_type: str) -> Dict[str, Any]:
+        return await get_growth_manager().run_growth_task_now(task_type)
+
+    async def pause_growth_task(self, task_type: str) -> Dict[str, Any]:
+        return await get_growth_manager().pause_growth_task(task_type)
+
+    async def resume_growth_task(self, task_type: str) -> Dict[str, Any]:
+        return await get_growth_manager().resume_growth_task(task_type)
+
     async def reload_runtime_config(
         self,
         *,
@@ -468,7 +531,9 @@ class BotManager:
         stats = self._get_stats()
 
         status = {
+            "service_running": True,
             "running": self.is_running,
+            "bot_running": self.is_running,
             "is_paused": self.is_paused,
             "uptime": uptime,
             "today_replies": stats.get("today_replies", 0),
@@ -493,8 +558,10 @@ class BotManager:
                 "source": str(getattr(snapshot, "source", "") or ""),
                 "valid": bool(getattr(snapshot, "valid", True)),
             }
+            status["growth_enabled"] = bool(snapshot.services.get("growth_tasks_enabled", False))
         except Exception:
             status["config_snapshot"] = None
+            status["growth_enabled"] = False
         if self.bot and hasattr(self.bot, "get_export_rag_status"):
             try:
                 status["export_rag"] = self.bot.get_export_rag_status()
@@ -521,6 +588,10 @@ class BotManager:
                 status.update(self.bot.get_agent_status())
             except Exception:
                 pass
+        try:
+            status.update(get_growth_manager().get_status())
+        except Exception:
+            pass
         if self.bot and hasattr(self.bot, "get_transport_status"):
             try:
                 status.update(self.bot.get_transport_status())

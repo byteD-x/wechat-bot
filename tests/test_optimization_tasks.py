@@ -400,6 +400,11 @@ async def test_select_specific_ai_client_ollama_does_not_inherit_root_embedding_
         return _FakeRuntimeClient(settings)
 
     monkeypatch.setattr(factory_module, "build_agent_runtime", _build_fake_runtime)
+    monkeypatch.setattr(
+        factory_module,
+        "_fetch_ollama_models",
+        lambda _base_url, timeout_sec=3.0: [{"name": "qwen3:8b", "model": "qwen3:8b"}],
+    )
 
     client, preset_name = await factory_module.select_specific_ai_client(
         {
@@ -441,6 +446,11 @@ async def test_select_specific_ai_client_prefers_vector_memory_embedding_overrid
         return _FakeRuntimeClient(settings)
 
     monkeypatch.setattr(factory_module, "build_agent_runtime", _build_fake_runtime)
+    monkeypatch.setattr(
+        factory_module,
+        "_fetch_ollama_models",
+        lambda _base_url, timeout_sec=3.0: [{"name": "qwen3", "model": "qwen3"}],
+    )
 
     client, preset_name = await factory_module.select_specific_ai_client(
         {
@@ -465,6 +475,101 @@ async def test_select_specific_ai_client_prefers_vector_memory_embedding_overrid
     assert client is not None
     assert preset_name == "Ollama"
     assert captured["embedding_model"] == "bge-m3:latest"
+
+
+@pytest.mark.asyncio
+async def test_select_ai_client_falls_back_to_other_presets(monkeypatch):
+    attempted = []
+
+    class _FakeRuntimeClient:
+        def __init__(self, settings):
+            self.settings = dict(settings)
+
+        async def probe(self):
+            attempted.append(self.settings["name"])
+            return self.settings["name"] == "Healthy"
+
+    def _build_fake_runtime(settings, bot_cfg, agent_cfg=None):
+        return _FakeRuntimeClient(settings)
+
+    monkeypatch.setattr(factory_module, "build_agent_runtime", _build_fake_runtime)
+
+    client, preset_name = await factory_module.select_ai_client(
+        {
+            "active_preset": "Broken",
+            "presets": [
+                {
+                    "name": "Broken",
+                    "base_url": "https://broken.example/v1",
+                    "api_key": "sk-broken-123456",
+                    "model": "broken-model",
+                },
+                {
+                    "name": "Healthy",
+                    "base_url": "https://healthy.example/v1",
+                    "api_key": "sk-healthy-123456",
+                    "model": "healthy-model",
+                },
+            ],
+        },
+        {},
+        {"enabled": True},
+    )
+
+    assert client is not None
+    assert preset_name == "Healthy"
+    assert attempted == ["Broken", "Healthy"]
+
+
+@pytest.mark.asyncio
+async def test_select_specific_ai_client_allows_ollama_cloud_model(monkeypatch):
+    captured = {}
+
+    class _FakeRuntimeClient:
+        def __init__(self, settings):
+            self.settings = dict(settings)
+
+        async def probe(self):
+            captured.update(self.settings)
+            return True
+
+    def _build_fake_runtime(settings, bot_cfg, agent_cfg=None):
+        return _FakeRuntimeClient(settings)
+
+    monkeypatch.setattr(factory_module, "build_agent_runtime", _build_fake_runtime)
+    monkeypatch.setattr(
+        factory_module,
+        "_fetch_ollama_models",
+        lambda _base_url, timeout_sec=3.0: [
+            {
+                "name": "deepseek-v3.2:cloud",
+                "model": "deepseek-v3.2:cloud",
+                "remote_host": "https://ollama.com:443",
+            }
+        ],
+    )
+
+    client, preset_name = await factory_module.select_specific_ai_client(
+        {
+            "presets": [
+                {
+                    "name": "Ollama",
+                    "provider_id": "ollama",
+                    "base_url": "http://127.0.0.1:11434/v1",
+                    "api_key": "",
+                    "model": "deepseek-v3.2:cloud",
+                    "allow_empty_key": True,
+                }
+            ],
+        },
+        {},
+        "Ollama",
+        {"enabled": True},
+    )
+
+    assert client is not None
+    assert preset_name == "Ollama"
+    assert captured["model"] == "deepseek-v3.2:cloud"
 
 
 @pytest.mark.asyncio

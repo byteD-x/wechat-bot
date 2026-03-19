@@ -24,6 +24,7 @@ def _build_snapshot(config):
     snapshot.bot = config.get("bot", {})
     snapshot.logging = config.get("logging", {})
     snapshot.agent = config.get("agent", {})
+    snapshot.services = config.get("services", {})
     snapshot.version = 1
     snapshot.loaded_at = datetime(2026, 3, 16, 17, 0, 0)
     snapshot.to_dict.return_value = config
@@ -43,7 +44,14 @@ def mock_manager():
     manager.pause = AsyncMock(return_value={"status": "paused"})
     manager.resume = AsyncMock(return_value={"status": "resumed"})
     manager.restart = AsyncMock(return_value={"status": "restarted"})
+    manager.start_growth = AsyncMock(return_value={"success": True, "message": "成长任务已启动"})
+    manager.stop_growth = AsyncMock(return_value={"success": True, "message": "成长任务已停止"})
     manager.reload_runtime_config = AsyncMock(return_value={"success": True, "message": "运行中的 AI 已立即切换到 DeepSeek", "runtime_preset": "DeepSeek"})
+    manager.list_growth_tasks = AsyncMock(return_value={"success": True, "tasks": [{"task_type": "emotion", "queued": 2, "paused": False}]})
+    manager.clear_growth_task = AsyncMock(return_value={"success": True, "task_type": "emotion", "cleared": 2})
+    manager.run_growth_task_now = AsyncMock(return_value={"success": True, "task_type": "emotion", "result": {"completed": 2}})
+    manager.pause_growth_task = AsyncMock(return_value={"success": True, "task_type": "emotion", "paused_growth_task_types": ["emotion"]})
+    manager.resume_growth_task = AsyncMock(return_value={"success": True, "task_type": "emotion", "paused_growth_task_types": []})
     manager.is_running = True
     manager.bot = MagicMock()
 
@@ -104,6 +112,53 @@ async def test_api_status(client, mock_manager):
     assert data["running"] is True
     mock_manager.get_status.assert_called_once()
 
+
+@pytest.mark.asyncio
+async def test_api_ping(client, mock_manager):
+    response = await client.get('/api/ping')
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data == {"success": True, "service_running": True}
+    mock_manager.get_status.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_api_test_connection_uses_patch(client, mock_manager):
+    snapshot = _build_snapshot(
+        {
+            "api": {
+                "active_preset": "OpenAI",
+                "presets": [
+                    {
+                        "name": "OpenAI",
+                        "base_url": "https://api.openai.com/v1",
+                        "api_key": "sk-test",
+                        "model": "gpt-5-mini",
+                    }
+                ],
+            },
+            "bot": {},
+            "logging": {},
+            "agent": {},
+            "services": {},
+        }
+    )
+
+    with patch.object(api_module.config_service, "get_snapshot", return_value=snapshot), \
+        patch.object(api_module.config_service, "_merge_patch", return_value={"api": {"active_preset": "Ollama"}, "bot": {}}), \
+        patch.object(api_module.config_service, "_validate_config_dict", return_value={"api": {"active_preset": "Ollama"}, "bot": {}}), \
+        patch.object(api_module, "probe_config", AsyncMock(return_value=(True, "Ollama", "连接测试成功（已验证服务可访问）"))) as probe_mock:
+        response = await client.post(
+            '/api/test_connection',
+            json={"preset_name": "Ollama", "patch": {"api": {"active_preset": "Ollama"}}},
+        )
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["success"] is True
+    assert data["preset_name"] == "Ollama"
+    probe_mock.assert_awaited_once_with({"api": {"active_preset": "Ollama"}, "bot": {}}, "Ollama")
+
 @pytest.mark.asyncio
 async def test_api_start(client, mock_manager):
     response = await client.post('/api/start')
@@ -115,6 +170,48 @@ async def test_api_stop(client, mock_manager):
     response = await client.post('/api/stop')
     assert response.status_code == 200
     mock_manager.stop.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_api_start_growth(client, mock_manager):
+    response = await client.post('/api/growth/start')
+    assert response.status_code == 200
+    mock_manager.start_growth.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_api_stop_growth(client, mock_manager):
+    response = await client.post('/api/growth/stop')
+    assert response.status_code == 200
+    mock_manager.stop_growth.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_api_list_growth_tasks(client, mock_manager):
+    response = await client.get('/api/growth/tasks')
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["success"] is True
+    assert data["tasks"][0]["task_type"] == "emotion"
+    mock_manager.list_growth_tasks.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_api_growth_task_actions(client, mock_manager):
+    clear_response = await client.post('/api/growth/tasks/emotion/clear')
+    run_response = await client.post('/api/growth/tasks/emotion/run')
+    pause_response = await client.post('/api/growth/tasks/emotion/pause')
+    resume_response = await client.post('/api/growth/tasks/emotion/resume')
+
+    assert clear_response.status_code == 200
+    assert run_response.status_code == 200
+    assert pause_response.status_code == 200
+    assert resume_response.status_code == 200
+
+    mock_manager.clear_growth_task.assert_awaited_once_with('emotion')
+    mock_manager.run_growth_task_now.assert_awaited_once_with('emotion')
+    mock_manager.pause_growth_task.assert_awaited_once_with('emotion')
+    mock_manager.resume_growth_task.assert_awaited_once_with('emotion')
 
 @pytest.mark.asyncio
 async def test_api_messages(client, mock_manager):
@@ -436,6 +533,7 @@ async def test_api_config_masks_langsmith_key(client):
             "langsmith_project": "wechat-chat",
             "langsmith_api_key": "lsv2_pt_secret_key",
         },
+        "services": {"growth_tasks_enabled": True},
     }
 
     with patch.object(api_module.config_service, "get_snapshot", return_value=_build_snapshot(test_config)):
@@ -445,6 +543,7 @@ async def test_api_config_masks_langsmith_key(client):
     assert data["agent"]["langsmith_enabled"] is True
     assert data["agent"]["langsmith_api_key_configured"] is True
     assert "langsmith_api_key" not in data["agent"]
+    assert data["services"]["growth_tasks_enabled"] is True
 
 
 @pytest.mark.asyncio

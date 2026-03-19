@@ -99,6 +99,8 @@ npm install
 npm run dev
 ```
 
+桌面端启动后会自动轻启动 Python Web 服务，便于直接查看状态、消息、成本和日志；机器人主循环与成长任务仍保持手动启动。
+
 ### 3.2 配置模型
 
 在设置页里完成：
@@ -118,22 +120,19 @@ npm run dev
 
 运行时主要读取以下配置来源：
 
-1. `data/config_override.json`
-2. `data/api_keys.py`
-3. `prompt_overrides.py`
-4. `backend/config.py`
+1. `data/app_config.json`
 
 当前实现说明：
 
-- 后端会把这些来源合并为一份“生效配置快照”后，再提供给 API 与运行中的 Bot 读取。
-- GUI 保存配置时，`/api/config` 响应会附带 `changed_paths` 与 `reload_plan`，用于说明哪些字段发生变化、预计如何生效；同时会把非敏感字段同步回写到 `backend/config.py`，并把真实 API Key 写入 `data/api_keys.py`。
-- 可通过 `/api/config/audit` 检查当前生效配置中的已知未消费字段，以及 override 文件中是否存在未知字段。
+- Electron 主进程与 Python 运行时统一读取同一份 `app_config.json`，不再依赖 `backend/config.py`、`data/config_override.json`、`data/api_keys.py`、`prompt_overrides.py` 作为运行时配置源。
+- 首次升级到当前版本时，应用会自动把旧链路迁移到 `app_config.json`，并在 `data/backups/legacy-config-*` 下保留一次性备份。
+- 设置页通过 Electron IPC 直接读写 `app_config.json`，支持自动保存、真实落盘、文件外部改动回推，以及在机器人未启动时测试 AI 联通。
+- `/api/config` 与 `/api/config/audit` 仍可用于兼容和诊断，但不再是前端设置页的主配置入口。
 
 建议：
 
-- 默认配置放在 `backend/config.py`
-- 真实密钥放在 `data/api_keys.py`
-- 界面保存产生的覆盖写入 `data/config_override.json`
+- 以 `data/app_config.json` 作为唯一真实配置文件
+- 若需要回滚旧配置，请使用迁移生成的 `data/backups/legacy-config-*`
 
 ## 4. 启动前检查
 
@@ -163,6 +162,7 @@ npm run dev
 - 在 GUI 中配置参数
 - 查看状态与日志
 - 通过仪表盘观察健康监控和启动进度
+- 启动时自动获得轻量后端服务能力，而不立即启动机器人主循环或成长任务
 
 注意：
 
@@ -651,3 +651,13 @@ Release Notes 规则：
 - `data/`
 - `data/logs/`
 - 解密后的微信数据库
+## 附录：成长任务管理与发布权限
+
+- 仪表盘中的“成长任务”面板现在支持按任务类型查看排队数量，并可执行“立即执行 / 暂停或恢复 / 清空队列”。
+- 任务级 API：
+  - `GET /api/growth/tasks`
+  - `POST /api/growth/tasks/<task_type>/run`
+  - `POST /api/growth/tasks/<task_type>/pause`
+  - `POST /api/growth/tasks/<task_type>/resume`
+  - `POST /api/growth/tasks/<task_type>/clear`
+- Windows Release 产物现在默认嵌入管理员权限清单，启动 `setup.exe` 或 `portable.exe` 时会请求 UAC 提权。

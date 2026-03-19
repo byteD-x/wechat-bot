@@ -2,6 +2,8 @@ import { PageController } from '../core/PageController.js';
 import { apiService } from '../services/ApiService.js';
 import { toast } from '../services/NotificationService.js';
 
+const OFFLINE_TEXT = '\u8bf7\u5148\u542f\u52a8 Python \u670d\u52a1\u540e\u67e5\u770b\u6210\u672c\u6570\u636e';
+
 function createStateBlock(text, className = 'loading-state') {
     const wrap = document.createElement('div');
     wrap.className = className;
@@ -63,6 +65,11 @@ export class CostsPage extends PageController {
         await super.onInit();
         this._bindEvents();
         this._syncFiltersToDom();
+        this.watchState('bot.connected', () => {
+            if (this.isActive()) {
+                void this.refresh();
+            }
+        });
     }
 
     async onEnter() {
@@ -128,6 +135,15 @@ export class CostsPage extends PageController {
             return;
         }
 
+        if (!this.getState('bot.connected')) {
+            this._summary = null;
+            this._sessions = [];
+            this._details.clear();
+            this._renderError(OFFLINE_TEXT);
+            this._syncFiltersToDom();
+            return;
+        }
+
         this._loading = true;
         this._readFiltersFromDom();
         this._renderLoading();
@@ -159,6 +175,11 @@ export class CostsPage extends PageController {
     }
 
     async _refreshPricing() {
+        if (!this.getState('bot.connected')) {
+            toast.info(OFFLINE_TEXT);
+            return;
+        }
+
         try {
             const result = await apiService.refreshPricing();
             if (!result?.success) {

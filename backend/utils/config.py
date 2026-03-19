@@ -3,6 +3,7 @@
 """
 
 import importlib.util
+import json
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -11,6 +12,7 @@ from .common import as_int, as_float, as_optional_int, as_optional_str, iter_ite
 __all__ = [
     "normalize_system_prompt",
     "load_config_py",
+    "load_config_json",
     "load_config",
     "get_setting",
     "is_placeholder_key",
@@ -44,9 +46,21 @@ def load_config_py(path: str) -> Dict[str, Any]:
     return getattr(module, "CONFIG", {})
 
 
+def load_config_json(path: str) -> Dict[str, Any]:
+    with open(path, "r", encoding="utf-8") as handle:
+        data = json.load(handle)
+    if not isinstance(data, dict):
+        raise ValueError(f"Config JSON must be an object: {path}")
+    return data
+
+
 def load_config(path: str) -> Dict[str, Any]:
     """加载配置文件（目前仅支持 .py），并使用 Pydantic 验证。"""
-    raw_config = load_config_py(path)
+    raw_config = (
+        load_config_json(path)
+        if str(path or "").strip().lower().endswith(".json")
+        else load_config_py(path)
+    )
 
     # 验证并规范化
     try:
@@ -84,8 +98,30 @@ def is_placeholder_key(key: Optional[str]) -> bool:
 
 def build_api_candidates(api_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
     """构建 API 候选列表，支持多预设。"""
-    # 按照 active_preset > presets 顺序构建候选列表
+    # 按照 active_preset > 其他 presets > root_config 顺序构建候选列表
     candidates = []
+    seen_candidates = set()
+
+    def append_candidate(candidate: Dict[str, Any], *, fallback_name: str = "") -> None:
+        if not isinstance(candidate, dict):
+            return
+        normalized = dict(candidate)
+        name = str(normalized.get("name") or fallback_name or "").strip()
+        if name:
+            normalized["name"] = name
+        dedupe_key = name or json.dumps(
+            {
+                "provider_id": normalized.get("provider_id"),
+                "base_url": normalized.get("base_url"),
+                "model": normalized.get("model"),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        if dedupe_key in seen_candidates:
+            return
+        seen_candidates.add(dedupe_key)
+        candidates.append(normalized)
 
     active_name = str(api_cfg.get("active_preset") or "").strip()
     presets_data = api_cfg.get("presets", [])
@@ -101,11 +137,13 @@ def build_api_candidates(api_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     # 1. Active Preset (只取匹配的一个)
     if active_name and active_name in presets_map:
-        candidate = dict(presets_map[active_name])
-        # 确保 name 字段存在
-        if "name" not in candidate:
-            candidate["name"] = active_name
-        candidates.append(candidate)
+        append_candidate(dict(presets_map[active_name]), fallback_name=active_name)
+
+    # 2. 其他预设，当前激活项不可用时允许自动回退
+    for name, cfg in presets_map.items():
+        if name == active_name:
+            continue
+        append_candidate(dict(cfg), fallback_name=name)
 
     # 2. 根配置 (作为后备或旧版本兼容)
     # 只有当 api_key 不是占位符时才添加，或者是 root_config 模式
@@ -123,20 +161,8 @@ def build_api_candidates(api_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
         "alias": api_cfg.get("alias"),
     }
 
-    # 防止重复：如果 active_preset 就是 root_config 并不存在(name不同)，所以通常不冲突
-    # 但如果 root config 非常不完整，可以跳过
     if root_candidate.get("base_url"):
-        candidates.append(root_candidate)
-
-    # 3. 其他预设 (仅当未指定 active_preset 或需要自动故障转移时)
-    # 目前简单逻辑：优先 active，失败后尝试 root。
-    # 如果未来支持自动故障转移到其他预设，可以在这里添加逻辑
-    # for name, cfg in presets_map.items():
-    #     if name == active_name:
-    #         continue
-    #     candidate = dict(cfg)
-    #     candidate["name"] = name
-    #     candidates.append(candidate)
+        append_candidate(root_candidate, fallback_name="root_config")
 
     return candidates
 

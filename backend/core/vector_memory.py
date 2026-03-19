@@ -9,12 +9,15 @@
 import os
 import logging
 from typing import List, Dict, Optional, Any
+from backend.shared_config import ensure_data_root
 from ..utils.runtime_artifacts import chdir_temporarily, CHROMA_DIR, relocate_known_root_artifacts
 
 logger = logging.getLogger(__name__)
 
 class VectorMemory:
-    def __init__(self, db_path: str = "data/vector_db"):
+    def __init__(self, db_path: Optional[str] = None):
+        if not db_path:
+            db_path = str(ensure_data_root() / "vector_db")
         self.db_path = os.path.abspath(db_path)
         os.makedirs(self.db_path, exist_ok=True)
 

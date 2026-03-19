@@ -28,6 +28,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
      * 启动后端服务
      */
     startBackend: () => ipcRenderer.invoke('start-backend'),
+    configGet: () => ipcRenderer.invoke('config:get'),
+    configPatch: (patch) => ipcRenderer.invoke('config:patch', patch),
+    configSubscribe: () => ipcRenderer.invoke('config:subscribe'),
+    testConfigConnection: (options) => ipcRenderer.invoke('config:test-connection', options),
+    runtimeEnsureService: () => ipcRenderer.invoke('runtime:ensure-service'),
+    runtimeStartBot: () => ipcRenderer.invoke('runtime:start-bot'),
+    runtimeStopBot: () => ipcRenderer.invoke('runtime:stop-bot'),
+    runtimeStartGrowth: () => ipcRenderer.invoke('runtime:start-growth'),
+    runtimeStopGrowth: () => ipcRenderer.invoke('runtime:stop-growth'),
+    getGrowthPromptState: () => ipcRenderer.invoke('growth:get-prompt-state'),
+    markGrowthPromptSeen: (kind) => ipcRenderer.invoke('growth:mark-prompt-seen', kind),
 
     // ═══════════════════════════════════════════════════════════════════════
     //                           窗口控制
@@ -95,6 +106,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     onAppCloseDialog: (callback) => {
         ipcRenderer.on('app-close-dialog', () => callback());
+    },
+
+    onConfigChanged: (callback) => {
+        const handler = (_, payload) => callback(payload);
+        ipcRenderer.on('config:changed', handler);
+        return () => ipcRenderer.removeListener('config:changed', handler);
+    },
+
+    removeConfigChangedListener: () => {
+        ipcRenderer.removeAllListeners('config:changed');
     },
 
     confirmCloseAction: (action, remember) => ipcRenderer.invoke('confirm-close-action', { action, remember }),

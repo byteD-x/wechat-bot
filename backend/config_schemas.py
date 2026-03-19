@@ -203,8 +203,13 @@ class AgentConfig(BaseModel):
     background_ai_missed_window_policy: str = "wait_until_next_day"
     background_ai_defer_mode: str = "defer_all"
 
+class ServicesConfig(BaseModel):
+    growth_tasks_enabled: bool = False
+
 class AppConfig(BaseModel):
     api: ApiConfig
     bot: BotConfig
     logging: LoggingConfig
     agent: AgentConfig = Field(default_factory=AgentConfig)
+    services: ServicesConfig = Field(default_factory=ServicesConfig)
+    schema_version: int = 1

@@ -57,6 +57,8 @@ const store = new Store({
         isFirstRun: true,
         closeBehavior: 'ask',
         apiToken: '',
+        growthEnableCostPromptSeen: false,
+        growthDisableRiskPromptSeen: false,
         update: {
             feedUrl: '',
             autoCheckOnLaunch: true,
@@ -156,6 +158,170 @@ const PathUtils = {
     }
 };
 
+function ensureDir(dirPath) {
+    fs.mkdirSync(dirPath, { recursive: true });
+    return dirPath;
+}
+
+function getSharedDataRoot() {
+    if (GLOBAL_STATE.isDev) {
+        return ensureDir(path.join(PathUtils.resourcePath, 'data'));
+    }
+    return ensureDir(path.join(app.getPath('userData'), 'data'));
+}
+
+function getSharedConfigPath() {
+    return path.join(getSharedDataRoot(), 'app_config.json');
+}
+
+function getSharedModelCatalogPath() {
+    return path.join(PathUtils.resourcePath, 'shared', 'model_catalog.json');
+}
+
+function getBackendSpawnOptions() {
+    const env = {
+        ...process.env,
+        WECHAT_BOT_API_TOKEN: GLOBAL_STATE.apiToken,
+        WECHAT_BOT_DATA_DIR: getSharedDataRoot(),
+        PYTHONLEGACYWINDOWSSTDIO: '1',
+    };
+    if (GLOBAL_STATE.isDev) {
+        env.PYTHONUNBUFFERED = '1';
+        env.PYTHONIOENCODING = 'utf-8';
+    }
+    return env;
+}
+
+function getBackendCommand(commandArgs = []) {
+    if (GLOBAL_STATE.isDev) {
+        const venvPython = path.join(PathUtils.resourcePath, '.venv', 'Scripts', 'python.exe');
+        return {
+            cmd: venvPython,
+            args: ['run.py', ...commandArgs],
+            options: {
+                cwd: PathUtils.resourcePath,
+                env: getBackendSpawnOptions(),
+            },
+        };
+    }
+
+    const exePath = PathUtils.backendExecutable;
+    return {
+        cmd: exePath,
+        args: commandArgs,
+        options: {
+            cwd: path.dirname(exePath),
+            env: getBackendSpawnOptions(),
+        },
+    };
+}
+
+function flattenPaths(input, prefix = '', output = {}) {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) {
+        if (prefix) {
+            output[prefix] = input;
+        }
+        return output;
+    }
+    const entries = Object.entries(input);
+    if (!entries.length && prefix) {
+        output[prefix] = input;
+        return output;
+    }
+    for (const [key, value] of entries) {
+        const nextPrefix = prefix ? `${prefix}.${key}` : key;
+        if (value && typeof value === 'object' && !Array.isArray(value)) {
+            flattenPaths(value, nextPrefix, output);
+        } else {
+            output[nextPrefix] = value;
+        }
+    }
+    return output;
+}
+
+function diffConfigPaths(before = {}, after = {}) {
+    const left = flattenPaths(before);
+    const right = flattenPaths(after);
+    const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
+    return [...keys].filter((key) => JSON.stringify(left[key]) !== JSON.stringify(right[key])).sort();
+}
+
+function inferProviderId(preset = {}) {
+    const existing = String(preset.provider_id || '').trim().toLowerCase();
+    if (existing) {
+        return existing;
+    }
+    const name = String(preset.name || '').trim().toLowerCase();
+    const baseUrl = String(preset.base_url || '').trim().toLowerCase();
+    const model = String(preset.model || '').trim().toLowerCase();
+    if (name.includes('ollama') || baseUrl.includes('11434')) return 'ollama';
+    if (name.includes('openai') || baseUrl.includes('openai.com')) return 'openai';
+    if (name.includes('deepseek') || baseUrl.includes('deepseek.com')) return 'deepseek';
+    if (name.includes('qwen') || model.includes('qwen') || baseUrl.includes('dashscope')) return 'qwen';
+    if (name.includes('claude') || model.includes('claude') || baseUrl.includes('anthropic')) return 'anthropic';
+    if (name.includes('gemini') || model.includes('gemini') || baseUrl.includes('generativelanguage')) return 'gemini';
+    return '';
+}
+
+function maskPreset(preset = {}) {
+    const nextPreset = { ...preset };
+    nextPreset.provider_id = inferProviderId(nextPreset);
+    const apiKey = String(nextPreset.api_key || '').trim();
+    const allowEmptyKey = !!nextPreset.allow_empty_key;
+    if (allowEmptyKey) {
+        nextPreset.api_key_configured = false;
+        nextPreset.api_key_masked = '';
+    } else if (apiKey && !apiKey.startsWith('YOUR_')) {
+        nextPreset.api_key_configured = true;
+        nextPreset.api_key_masked = apiKey.length > 12 ? `${apiKey.slice(0, 8)}****${apiKey.slice(-4)}` : '****';
+    } else {
+        nextPreset.api_key_configured = false;
+        nextPreset.api_key_masked = '';
+    }
+    nextPreset.api_key_required = !allowEmptyKey;
+    delete nextPreset.api_key;
+    return nextPreset;
+}
+
+function buildRendererConfigPayload(config = {}) {
+    const api = { ...(config.api || {}) };
+    api.presets = Array.isArray(api.presets) ? api.presets.map((preset) => maskPreset(preset)) : [];
+
+    const bot = { ...(config.bot || {}) };
+    delete bot.reply_timeout_fallback_text;
+    delete bot.stream_buffer_chars;
+    delete bot.stream_chunk_max_chars;
+    delete bot.stream_reply;
+
+    const agent = { ...(config.agent || {}) };
+    agent.langsmith_api_key_configured = !!String(agent.langsmith_api_key || '').trim();
+    delete agent.langsmith_api_key;
+    delete agent.streaming_enabled;
+
+    return {
+        api,
+        bot,
+        logging: { ...(config.logging || {}) },
+        agent,
+        services: { ...(config.services || {}) },
+    };
+}
+
+function readJsonFile(filePath, fallback = {}) {
+    try {
+        return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    } catch (_) {
+        return fallback;
+    }
+}
+
+function atomicWriteJson(filePath, payload) {
+    const rendered = `${JSON.stringify(payload, null, 2)}\n`;
+    const tempPath = `${filePath}.tmp`;
+    fs.writeFileSync(tempPath, rendered, 'utf8');
+    fs.renameSync(tempPath, filePath);
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 //                               Python 后端管理
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -163,12 +329,16 @@ const PathUtils = {
 const BackendManager = {
     checkServer() {
         return new Promise((resolve) => {
-            const tokenParam = GLOBAL_STATE.apiToken ? `?token=${encodeURIComponent(GLOBAL_STATE.apiToken)}` : '';
-            const req = http.get(`${GLOBAL_STATE.flaskUrl}/api/status${tokenParam}`, (res) => {
+            const req = http.get({
+                hostname: '127.0.0.1',
+                port: GLOBAL_STATE.flaskPort,
+                path: '/api/ping',
+                headers: GLOBAL_STATE.apiToken ? { 'X-Api-Token': GLOBAL_STATE.apiToken } : {},
+            }, (res) => {
                 resolve(res.statusCode === 200);
             });
             req.on('error', () => resolve(false));
-            req.setTimeout(2000, () => {
+            req.setTimeout(1000, () => {
                 req.destroy();
                 resolve(false);
             });
@@ -188,41 +358,31 @@ const BackendManager = {
             return;
         }
 
-        let cmd, args, options;
-
-        if (GLOBAL_STATE.isDev) {
-            const venvPython = path.join(PathUtils.resourcePath, '.venv', 'Scripts', 'python.exe');
-            cmd = venvPython;
-            args = ['run.py', 'web', '--host', '127.0.0.1', '--port', GLOBAL_STATE.flaskPort.toString()];
-            options = {
-                cwd: PathUtils.resourcePath,
-                env: {
-                    ...process.env,
-                    WECHAT_BOT_API_TOKEN: GLOBAL_STATE.apiToken,
-                    PYTHONUNBUFFERED: '1',
-                    PYTHONIOENCODING: 'utf-8',
-                    PYTHONLEGACYWINDOWSSTDIO: '1'
-                }
-            };
-        } else {
-            const exePath = PathUtils.backendExecutable;
-            cmd = exePath;
-            args = ['web', '--host', '127.0.0.1', '--port', GLOBAL_STATE.flaskPort.toString()];
-            options = {
-                cwd: path.dirname(exePath),
-                env: {
-                    ...process.env,
-                    WECHAT_BOT_API_TOKEN: GLOBAL_STATE.apiToken,
-                    PYTHONLEGACYWINDOWSSTDIO: '1'
-                }
-            };
-        }
+        const { cmd, args, options } = getBackendCommand([
+            'web',
+            '--host',
+            '127.0.0.1',
+            '--port',
+            GLOBAL_STATE.flaskPort.toString(),
+        ]);
 
         console.log(`[Backend] 启动: ${cmd} ${args.join(' ')}`);
         updateSplashStatus('正在启动后端服务...', 35);
         
         GLOBAL_STATE.pythonProcess = spawn(cmd, args, options);
         this._setupProcessListeners(GLOBAL_STATE.pythonProcess);
+    },
+
+    async ensureReady(timeoutMs = 20000) {
+        await this.start();
+        const startedAt = Date.now();
+        while ((Date.now() - startedAt) < timeoutMs) {
+            if (await this.checkServer()) {
+                return true;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 400));
+        }
+        throw new Error('Python 服务启动超时');
     },
 
     stop() {
@@ -304,7 +464,377 @@ const BackendManager = {
             console.log(`[Backend] 退出代码: ${code}`);
             GLOBAL_STATE.pythonProcess = null;
         });
+    },
+
+    requestJson(method, endpoint, payload = null, timeoutMs = 10000) {
+        return new Promise((resolve, reject) => {
+            const body = payload == null ? null : JSON.stringify(payload);
+            const req = http.request(
+                {
+                    hostname: '127.0.0.1',
+                    port: GLOBAL_STATE.flaskPort,
+                    path: endpoint,
+                    method,
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Api-Token': GLOBAL_STATE.apiToken,
+                        ...(body ? { 'Content-Length': Buffer.byteLength(body) } : {}),
+                    },
+                    timeout: timeoutMs,
+                },
+                (res) => {
+                    const chunks = [];
+                    res.on('data', (chunk) => chunks.push(chunk));
+                    res.on('end', () => {
+                        const raw = Buffer.concat(chunks).toString('utf8');
+                        let data = {};
+                        if (raw.trim()) {
+                            try {
+                                data = JSON.parse(raw);
+                            } catch (error) {
+                                reject(new Error(`后端返回了无效 JSON: ${raw.slice(0, 200)}`));
+                                return;
+                            }
+                        }
+                        if ((res.statusCode || 500) >= 400) {
+                            reject(new Error(data?.message || `后端请求失败 (${res.statusCode})`));
+                            return;
+                        }
+                        resolve(data);
+                    });
+                }
+            );
+            req.on('error', reject);
+            req.on('timeout', () => req.destroy(new Error('请求超时')));
+            if (body) {
+                req.write(body);
+            }
+            req.end();
+        });
     }
+};
+
+const ConfigCli = {
+    async run(commandArgs, options = {}) {
+        const {
+            stdinPayload = null,
+            timeoutMs = 20000,
+        } = options;
+        const { cmd, args, options: spawnOptions } = getBackendCommand(commandArgs);
+
+        return new Promise((resolve, reject) => {
+            const child = spawn(cmd, args, {
+                ...spawnOptions,
+                stdio: ['pipe', 'pipe', 'pipe'],
+            });
+            const stdoutChunks = [];
+            const stderrChunks = [];
+            let settled = false;
+
+            const finish = (error, value) => {
+                if (settled) {
+                    return;
+                }
+                settled = true;
+                if (timer) {
+                    clearTimeout(timer);
+                }
+                if (error) {
+                    reject(error);
+                } else {
+                    resolve(value);
+                }
+            };
+
+            const timer = setTimeout(() => {
+                try {
+                    child.kill('SIGTERM');
+                } catch (_) {}
+                finish(new Error(`配置命令执行超时: ${commandArgs.join(' ')}`));
+            }, timeoutMs);
+
+            child.stdout.on('data', (chunk) => stdoutChunks.push(Buffer.from(chunk)));
+            child.stderr.on('data', (chunk) => stderrChunks.push(Buffer.from(chunk)));
+            child.on('error', (error) => finish(error));
+            child.on('exit', (code) => {
+                const stdout = Buffer.concat(stdoutChunks).toString('utf8').trim();
+                const stderr = Buffer.concat(stderrChunks).toString('utf8').trim();
+                if (code !== 0) {
+                    finish(new Error(stderr || stdout || `配置命令退出失败 (${code})`));
+                    return;
+                }
+                const lines = stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+                const jsonLine = [...lines].reverse().find((line) => line.startsWith('{') && line.endsWith('}'));
+                if (!jsonLine) {
+                    finish(new Error(stdout || '配置命令未返回 JSON 结果'));
+                    return;
+                }
+                try {
+                    finish(null, JSON.parse(jsonLine));
+                } catch (error) {
+                    finish(new Error(`配置命令返回了不可解析 JSON: ${jsonLine}`));
+                }
+            });
+
+            if (stdinPayload != null) {
+                child.stdin.write(JSON.stringify(stdinPayload));
+            }
+            child.stdin.end();
+        });
+    },
+
+    async ensureMigrated() {
+        const configPath = getSharedConfigPath();
+        if (fs.existsSync(configPath)) {
+            return readJsonFile(configPath, {});
+        }
+        const result = await this.run(['config', 'migrate', '--output', configPath], { timeoutMs: 30000 });
+        return result.config || {};
+    },
+
+    async validate(patch = {}) {
+        await this.ensureMigrated();
+        const useStdin = !!patch && Object.keys(patch).length > 0;
+        const args = ['config', 'validate', '--base-path', getSharedConfigPath()];
+        if (useStdin) {
+            args.push('--stdin');
+        }
+        const result = await this.run(args, {
+            stdinPayload: useStdin ? patch : null,
+            timeoutMs: 30000,
+        });
+        if (!result?.success) {
+            throw new Error(result?.message || '配置校验失败');
+        }
+        return result.config || {};
+    },
+
+    async probe({ patch = null, presetName = '' } = {}) {
+        await this.ensureMigrated();
+        const useStdin = !!patch && Object.keys(patch).length > 0;
+        const args = ['config', 'probe', '--base-path', getSharedConfigPath()];
+        if (useStdin) {
+            args.push('--stdin');
+        }
+        if (presetName) {
+            args.push('--preset-name', presetName);
+        }
+        return this.run(args, {
+            stdinPayload: useStdin ? patch : null,
+            timeoutMs: 15000,
+        });
+    },
+};
+
+const SharedConfigService = {
+    _cache: null,
+    _watching: false,
+    _writeQueue: Promise.resolve(),
+    _modelCatalogCache: null,
+
+    async ensureLoaded() {
+        if (this._cache) {
+            return this._cache;
+        }
+        await ConfigCli.ensureMigrated();
+        this._cache = readJsonFile(getSharedConfigPath(), {});
+        this._ensureWatcher();
+        return this._cache;
+    },
+
+    _ensureWatcher() {
+        if (this._watching) {
+            return;
+        }
+        const configPath = getSharedConfigPath();
+        fs.watchFile(configPath, { interval: 500 }, async (current, previous) => {
+            if (current.mtimeMs === previous.mtimeMs) {
+                return;
+            }
+            try {
+                this._cache = readJsonFile(configPath, {});
+                this.broadcast('external');
+            } catch (error) {
+                console.error('[Config] reload failed:', error);
+            }
+        });
+        this._watching = true;
+    },
+
+    getModelCatalog() {
+        const catalogPath = getSharedModelCatalogPath();
+        try {
+            const stat = fs.statSync(catalogPath);
+            if (
+                this._modelCatalogCache
+                && this._modelCatalogCache.mtimeMs === stat.mtimeMs
+            ) {
+                return this._modelCatalogCache.payload;
+            }
+            const payload = readJsonFile(catalogPath, { providers: [] });
+            this._modelCatalogCache = {
+                mtimeMs: stat.mtimeMs,
+                payload,
+            };
+            return payload;
+        } catch (_) {
+            this._modelCatalogCache = null;
+            return { providers: [] };
+        }
+    },
+
+    buildPayload(config = {}) {
+        return {
+            success: true,
+            ...buildRendererConfigPayload(config),
+            modelCatalog: this.getModelCatalog(),
+            configPath: getSharedConfigPath(),
+        };
+    },
+
+    broadcast(source = 'external') {
+        const payload = {
+            ...this.buildPayload(this._cache || {}),
+            source,
+        };
+        for (const win of BrowserWindow.getAllWindows()) {
+            if (!win || win.isDestroyed()) {
+                continue;
+            }
+            try {
+                win.webContents.send('config:changed', payload);
+            } catch (_) {}
+        }
+    },
+
+    async get() {
+        const config = await this.ensureLoaded();
+        return this.buildPayload(config);
+    },
+
+    async patch(patch = {}) {
+        let response = null;
+        const task = this._writeQueue.catch(() => {}).then(async () => {
+            const previous = JSON.parse(JSON.stringify(await this.ensureLoaded()));
+            const nextConfig = await ConfigCli.validate(patch);
+            const changedPaths = diffConfigPaths(previous, nextConfig);
+            const configPath = getSharedConfigPath();
+            ensureDir(path.dirname(configPath));
+            atomicWriteJson(configPath, nextConfig);
+            this._cache = nextConfig;
+            response = {
+                ...this.buildPayload(nextConfig),
+                changed_paths: changedPaths,
+                message: changedPaths.length ? '配置已保存' : '未检测到配置变更',
+                save_state: 'saved',
+            };
+        });
+        this._writeQueue = task.then(() => null, () => null);
+        await task;
+        this.broadcast('main_write');
+        return response;
+    },
+
+    async testConnection(options = {}) {
+        const patch = options?.patch && typeof options.patch === 'object' ? options.patch : null;
+        const presetName = String(options?.presetName || '').trim();
+        if (await BackendManager.checkServer()) {
+            try {
+                return await BackendManager.requestJson(
+                    'POST',
+                    '/api/test_connection',
+                    {
+                        preset_name: presetName || null,
+                        patch,
+                    },
+                    12000,
+                );
+            } catch (error) {
+                console.warn('[SharedConfigService] live connection test failed, fallback to CLI:', error);
+            }
+        }
+        return ConfigCli.probe({ patch, presetName });
+    },
+
+    async subscribe() {
+        await this.ensureLoaded();
+        this._ensureWatcher();
+        return this.buildPayload(this._cache || {});
+    },
+};
+
+const RuntimeManager = {
+    async ensureService() {
+        await BackendManager.ensureReady();
+        return { success: true };
+    },
+
+    async startBot() {
+        await BackendManager.ensureReady();
+        return BackendManager.requestJson('POST', '/api/start', null, 45000);
+    },
+
+    async stopBot() {
+        const result = await BackendManager.requestJson('POST', '/api/stop');
+        const idleResult = await this.stopServiceIfIdle();
+        return {
+            ...result,
+            service_stopped: !!idleResult?.stopped,
+        };
+    },
+
+    async startGrowth() {
+        await BackendManager.ensureReady();
+        return BackendManager.requestJson('POST', '/api/growth/start', null, 45000);
+    },
+
+    async stopGrowth() {
+        const result = await BackendManager.requestJson('POST', '/api/growth/stop');
+        const idleResult = await this.stopServiceIfIdle();
+        return {
+            ...result,
+            service_stopped: !!idleResult?.stopped,
+        };
+    },
+
+    async stopServiceIfIdle() {
+        const status = await this.safeStatus();
+        if (status && !status.bot_running && !status.growth_running) {
+            await BackendManager.stop();
+            return { success: true, stopped: true };
+        }
+        return { success: true, stopped: false };
+    },
+
+    async safeStatus() {
+        if (!(await BackendManager.checkServer())) {
+            return null;
+        }
+        try {
+            return await BackendManager.requestJson('GET', '/api/status');
+        } catch (_) {
+            return null;
+        }
+    },
+};
+
+const GrowthPromptStore = {
+    getState() {
+        return {
+            enableCostSeen: !!store.get('growthEnableCostPromptSeen'),
+            disableRiskSeen: !!store.get('growthDisableRiskPromptSeen'),
+        };
+    },
+
+    markSeen(kind) {
+        if (kind === 'enable-cost') {
+            store.set('growthEnableCostPromptSeen', true);
+        }
+        if (kind === 'disable-risk') {
+            store.set('growthDisableRiskPromptSeen', true);
+        }
+        return this.getState();
+    },
 };
 
 async function requestAppClose(options = {}) {
@@ -550,12 +1080,26 @@ function setupIPC() {
     ipcMain.handle('check-backend', () => BackendManager.checkServer());
     ipcMain.handle('start-backend', async () => {
         try {
-            await BackendManager.start();
+            await BackendManager.ensureReady();
             return { success: true };
         } catch (err) {
             return { success: false, error: err.message };
         }
     });
+
+    ipcMain.handle('config:get', () => SharedConfigService.get());
+    ipcMain.handle('config:patch', (_, patch) => SharedConfigService.patch(patch || {}));
+    ipcMain.handle('config:test-connection', (_, options) => SharedConfigService.testConnection(options || {}));
+    ipcMain.handle('config:subscribe', () => SharedConfigService.subscribe());
+
+    ipcMain.handle('runtime:ensure-service', () => RuntimeManager.ensureService());
+    ipcMain.handle('runtime:start-bot', () => RuntimeManager.startBot());
+    ipcMain.handle('runtime:stop-bot', () => RuntimeManager.stopBot());
+    ipcMain.handle('runtime:start-growth', () => RuntimeManager.startGrowth());
+    ipcMain.handle('runtime:stop-growth', () => RuntimeManager.stopGrowth());
+
+    ipcMain.handle('growth:get-prompt-state', () => GrowthPromptStore.getState());
+    ipcMain.handle('growth:mark-prompt-seen', (_, kind) => GrowthPromptStore.markSeen(kind));
     
     ipcMain.handle('open-external', (_, url) => {
         if (!url || typeof url !== 'string') return;
@@ -756,11 +1300,11 @@ if (!app.requestSingleInstanceLock()) {
         // 1. 先显示启动画面
         WindowManager.createSplash();
 
-        // 2. 并行启动后端 (不阻塞)
-        BackendManager.start().catch(err => console.error('Backend start error:', err));
-
-        // 3. 设置 IPC
+        // 2. 设置 IPC
         safeSetupIPC();
+
+        // 3. 预热共享配置，但不自动拉起 Python 服务
+        SharedConfigService.ensureLoaded().catch(err => console.error('Config preload error:', err));
 
         // 4. 创建主窗口 (后台加载，ready-to-show 时自动切换)
         WindowManager.createMain();

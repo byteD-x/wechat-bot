@@ -10,7 +10,11 @@ import asyncio
 import importlib
 import json
 import logging
+from urllib.parse import urlsplit, urlunsplit
 from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
+
+import httpx
+
 from ..types import ReconnectPolicy
 from .config_service import get_config_service
 from ..utils.common import as_int, as_float, as_optional_int, as_optional_str
@@ -22,6 +26,7 @@ __all__ = [
     "select_ai_client",
     "select_specific_ai_client",
     "get_reconnect_policy",
+    "get_last_ai_client_error",
     "get_last_transport_error",
     "reconnect_wechat",
     "apply_ai_runtime_settings",
@@ -36,12 +41,22 @@ if TYPE_CHECKING:
 
 # 全局变量用于 reload
 _ai_module = None
+_last_ai_client_error = ""
 _last_transport_error = ""
 
 
 def _set_last_transport_error(detail: str) -> None:
     global _last_transport_error
     _last_transport_error = str(detail or "").strip()
+
+
+def _set_last_ai_client_error(detail: str) -> None:
+    global _last_ai_client_error
+    _last_ai_client_error = str(detail or "").strip()
+
+
+def get_last_ai_client_error() -> str:
+    return _last_ai_client_error
 
 
 def get_last_transport_error() -> str:
@@ -68,6 +83,97 @@ def _resolve_embedding_model(
         return None
 
     return api_cfg.get("embedding_model")
+
+
+def _is_ollama_candidate(settings: Dict[str, Any]) -> bool:
+    provider_id = str(settings.get("provider_id") or "").strip().lower()
+    name = str(settings.get("name") or "").strip().lower()
+    base_url = str(settings.get("base_url") or "").strip().lower()
+    return (
+        provider_id == "ollama"
+        or "ollama" in name
+        or "127.0.0.1:11434" in base_url
+        or "localhost:11434" in base_url
+    )
+
+
+def _normalize_ollama_tags_url(base_url: str) -> str:
+    raw = str(base_url or "http://127.0.0.1:11434/v1").strip()
+    if not raw:
+        raw = "http://127.0.0.1:11434/v1"
+
+    parsed = urlsplit(raw)
+    scheme = parsed.scheme or "http"
+    netloc = parsed.netloc or parsed.path
+    path = parsed.path if parsed.netloc else ""
+    path = path.rstrip("/")
+    if path.endswith("/v1"):
+        path = path[:-3]
+    path = f"{path}/api/tags" if path else "/api/tags"
+    return urlunsplit((scheme, netloc, path, "", ""))
+
+
+def _fetch_ollama_models(base_url: str, timeout_sec: float = 3.0) -> list[Dict[str, Any]]:
+    response = httpx.get(_normalize_ollama_tags_url(base_url), timeout=timeout_sec)
+    response.raise_for_status()
+    payload = response.json()
+    models = payload.get("models") or []
+    return [dict(item) for item in models if isinstance(item, dict)]
+
+
+def _split_ollama_models(models: list[Dict[str, Any]]) -> Tuple[list[str], list[str], list[str]]:
+    local_chat_models: list[str] = []
+    remote_models: list[str] = []
+    embedding_models: list[str] = []
+    for item in models:
+        name = str(item.get("model") or item.get("name") or "").strip()
+        if not name:
+            continue
+        lower_name = name.lower()
+        if str(item.get("remote_host") or "").strip():
+            remote_models.append(name)
+            continue
+        if "embed" in lower_name or "embedding" in lower_name:
+            embedding_models.append(name)
+            continue
+        local_chat_models.append(name)
+    return local_chat_models, remote_models, embedding_models
+
+
+def _validate_ollama_candidate(settings: Dict[str, Any]) -> str:
+    if not _is_ollama_candidate(settings):
+        return ""
+
+    base_url = str(settings.get("base_url") or "").strip()
+    model = str(settings.get("model") or "").strip()
+    if not base_url or not model:
+        return ""
+
+    try:
+        models = _fetch_ollama_models(base_url)
+    except Exception as exc:
+        logging.warning("获取 Ollama 模型列表失败，继续按原模型探测：%s", exc)
+        return ""
+
+    local_chat_models, remote_models, embedding_models = _split_ollama_models(models)
+    matched = next(
+        (
+            item
+            for item in models
+            if str(item.get("model") or item.get("name") or "").strip() == model
+        ),
+        None,
+    )
+    if matched is None:
+        available = ", ".join(local_chat_models[:5] or remote_models[:5] or embedding_models[:5]) or "无"
+        return f"Ollama 未找到模型 {model}，当前可见模型：{available}"
+
+    lower_name = model.lower()
+    if "embed" in lower_name or "embedding" in lower_name:
+        local_hint = ", ".join(local_chat_models[:5]) if local_chat_models else "未检测到本地聊天模型"
+        return f"Ollama 模型 {model} 是 embedding 模型，不能用于聊天回复；{local_hint}"
+
+    return ""
 
 
 def build_ai_client(settings: Dict[str, Any], bot_cfg: Dict[str, Any]) -> AIClient:
@@ -149,6 +255,7 @@ async def select_ai_client(
     """
     candidates = build_api_candidates(api_cfg)
     if not candidates:
+        _set_last_ai_client_error("未找到可用的 API 配置")
         logging.error("未找到可用的 API 配置。")
         return None, None
 
@@ -164,9 +271,13 @@ async def select_ai_client(
         allow_empty_key = bool(settings.get("allow_empty_key", False))
 
         if not base_url or not model:
+            reason = f"预设 {name} 缺少 base_url 或 model"
+            _set_last_ai_client_error(reason)
             logging.warning("跳过预设 %s：缺少 base_url 或 model", name)
             continue
         if is_placeholder_key(api_key) and not allow_empty_key:
+            reason = f"预设 {name} 的 api_key 未配置或为占位符"
+            _set_last_ai_client_error(reason)
             logging.warning("跳过预设 %s：api_key 未配置或为占位符", name)
             continue
 
@@ -179,6 +290,12 @@ async def select_ai_client(
         if "embedding_model" not in settings:
              settings["embedding_model"] = str(api_cfg.get("embedding_model") or "")
 
+        candidate_issue = _validate_ollama_candidate(settings)
+        if candidate_issue:
+            _set_last_ai_client_error(candidate_issue)
+            logging.warning("跳过预设 %s：%s", name, candidate_issue)
+            continue
+
         runtime_enabled = True if agent_cfg is None else bool(agent_cfg.get("enabled", True))
         client = (
             build_agent_runtime(settings, bot_cfg, agent_cfg)
@@ -187,10 +304,16 @@ async def select_ai_client(
         )
         logging.info("正在探测预设：%s", name)
         if await client.probe():
+            _set_last_ai_client_error("")
             logging.info("已选择预设：%s", name)
             return client, name
+        _set_last_ai_client_error(f"预设 {name} 探测失败")
         logging.warning("预设 %s 不可用，尝试下一个...", name)
+        if hasattr(client, "close"):
+            await client.close()
 
+    if not get_last_ai_client_error():
+        _set_last_ai_client_error("没有可用的预设，请检查 API 配置")
     logging.error("没有可用的预设，请检查 API 配置。")
     return None, None
 
@@ -207,11 +330,13 @@ async def select_specific_ai_client(
     wanted = str(preset_name or "").strip()
     presets = api_cfg.get("presets", [])
     if not wanted or not isinstance(presets, list):
+        _set_last_ai_client_error(f"未找到指定预设：{wanted or '<empty>'}")
         logging.error("未找到指定预设：%s", wanted or "<empty>")
         return None, None
 
     settings = next((p for p in presets if isinstance(p, dict) and p.get("name") == wanted), None)
     if not isinstance(settings, dict):
+        _set_last_ai_client_error(f"指定预设不存在：{wanted}")
         logging.error("指定预设不存在：%s", wanted)
         return None, None
 
@@ -225,9 +350,11 @@ async def select_specific_ai_client(
     allow_empty_key = bool(settings.get("allow_empty_key", False))
 
     if not base_url or not model:
+        _set_last_ai_client_error(f"指定预设 {wanted} 缺少 base_url 或 model")
         logging.error("指定预设 %s 缺少 base_url 或 model", wanted)
         return None, None
     if is_placeholder_key(api_key) and not allow_empty_key:
+        _set_last_ai_client_error(f"指定预设 {wanted} 的 api_key 未配置或为占位符")
         logging.error("指定预设 %s 的 api_key 未配置或为占位符", wanted)
         return None, None
 
@@ -239,6 +366,12 @@ async def select_specific_ai_client(
     if "embedding_model" not in settings:
         settings["embedding_model"] = str(api_cfg.get("embedding_model") or "")
 
+    candidate_issue = _validate_ollama_candidate(settings)
+    if candidate_issue:
+        _set_last_ai_client_error(candidate_issue)
+        logging.error("指定预设 %s 不可用：%s", wanted, candidate_issue)
+        return None, None
+
     runtime_enabled = True if agent_cfg is None else bool(agent_cfg.get("enabled", True))
     client = (
         build_agent_runtime(settings, bot_cfg, agent_cfg)
@@ -247,10 +380,14 @@ async def select_specific_ai_client(
     )
     logging.info("正在严格探测指定预设：%s", wanted)
     if await client.probe():
+        _set_last_ai_client_error("")
         logging.info("已选择指定预设：%s", wanted)
         return client, wanted
 
+    _set_last_ai_client_error(f"指定预设 {wanted} 探测失败")
     logging.error("指定预设不可用：%s", wanted)
+    if hasattr(client, "close"):
+        await client.close()
     return None, None
 
 

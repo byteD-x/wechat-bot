@@ -215,18 +215,30 @@ export class SettingsPage extends PageController {
         this._selectedPresetIndex = -1;
         this._loaded = false;
         this._loadingPromise = null;
+        this._auditPromise = null;
+        this._auditRequestId = 0;
+        this._auditStatus = 'idle';
+        this._auditMessage = '';
         this._lastConfigVersion = 0;
         this._isSaving = false;
+        this._queuedAutoSave = false;
+        this._autoSaveTimer = null;
+        this._removeConfigListener = null;
         this._mainContent = null;
         this._scrollTopButton = null;
+        this._ollamaModelCache = new Map();
+        this._ollamaModelPromise = new Map();
+        this._heroTestFeedback = null;
     }
 
     async onInit() {
         await super.onInit();
         this._bindEvents();
+        this._bindAutoSaveEvents();
         this._initModuleSaveButtons();
         this._initScrollControls();
         this._watchUpdaterState();
+        this._watchConfigChanges();
     }
 
     async onEnter() {
@@ -265,6 +277,68 @@ export class SettingsPage extends PageController {
         });
     }
 
+    _bindAutoSaveEvents() {
+        const root = document.getElementById(this.pageId);
+        if (!root) {
+            return;
+        }
+
+        const schedule = (event) => {
+            const target = event?.target;
+            if (!(target instanceof HTMLElement)) {
+                return;
+            }
+            const id = target.id || '';
+            if (!FIELD_META_BY_ID.has(id)) {
+                return;
+            }
+            const immediate = target instanceof HTMLInputElement
+                ? target.type === 'checkbox'
+                : target instanceof HTMLSelectElement;
+            this._scheduleAutoSave({ immediate });
+        };
+
+        root.addEventListener('input', schedule, true);
+        root.addEventListener('change', schedule, true);
+    }
+
+    _watchConfigChanges() {
+        if (!window.electronAPI?.onConfigChanged || this._removeConfigListener) {
+            return;
+        }
+        const subscription = window.electronAPI.configSubscribe?.();
+        if (subscription?.catch) {
+            subscription.catch(() => {});
+        }
+        this._removeConfigListener = window.electronAPI.onConfigChanged(() => {
+            if (this._isSaving) {
+                return;
+            }
+            void this.loadSettings({ silent: true, preserveFeedback: true });
+        });
+    }
+
+    _scheduleAutoSave(options = {}) {
+        if (!this._loaded) {
+            return;
+        }
+        const { immediate = false } = options;
+        if (this._autoSaveTimer) {
+            clearTimeout(this._autoSaveTimer);
+            this._autoSaveTimer = null;
+        }
+        const trigger = () => {
+            this._autoSaveTimer = null;
+            void this._saveSettings({ silentToast: true });
+        };
+        if (immediate) {
+            trigger();
+            return;
+        }
+        this._renderSaveFeedback({ success: true, save_state: 'saving', message: '保存中...' });
+        this._autoSaveTimer = setTimeout(trigger, 700);
+    }
+
     _watchUpdaterState() {
         [
             'updater.enabled', 'updater.checking', 'updater.available', 'updater.currentVersion',
@@ -282,6 +356,31 @@ export class SettingsPage extends PageController {
             }
             this._maybeRefreshForRuntimeConfigChange();
         });
+        this.watchState('bot.connected', () => {
+            if (!this._loaded) {
+                if (this.isActive()) {
+                    this._renderHero();
+                }
+                return;
+            }
+            if (!this.getState('bot.connected')) {
+                this._auditRequestId += 1;
+                this._auditPromise = null;
+                this._configAudit = null;
+                this._auditStatus = 'offline';
+                this._auditMessage = '';
+                if (this.isActive()) {
+                    this._renderHero();
+                }
+                return;
+            }
+            if (this.isActive()) {
+                this._renderHero();
+            }
+            if (this._shouldRefreshAudit()) {
+                void this._loadConfigAudit({ silent: true });
+            }
+        });
     }
 
     async loadSettings(options = {}) {
@@ -297,11 +396,9 @@ export class SettingsPage extends PageController {
 
         this._loadingPromise = (async () => {
             try {
-                const [configResult, auditResult, catalogResult] = await Promise.all([
-                    apiService.getConfig(),
-                    apiService.getConfigAudit().catch((error) => ({ success: false, message: error?.message || TEXT.noAudit })),
-                    apiService.getModelCatalog().catch(() => ({ success: false, providers: [] })),
-                ]);
+                const configResult = window.electronAPI?.configGet
+                    ? await window.electronAPI.configGet()
+                    : await apiService.getConfig();
 
                 if (!configResult?.success) {
                     throw new Error(configResult?.message || TEXT.loadFailed);
@@ -312,13 +409,23 @@ export class SettingsPage extends PageController {
                     bot: deepClone(configResult.bot || {}),
                     logging: deepClone(configResult.logging || {}),
                     agent: deepClone(configResult.agent || {}),
+                    services: deepClone(configResult.services || {}),
                 };
-                this._configAudit = auditResult?.success ? auditResult : null;
-                this._modelCatalog = catalogResult?.success ? catalogResult : { providers: [] };
+                this._modelCatalog = configResult?.modelCatalog || { providers: [] };
                 this._providersById = new Map((this._modelCatalog.providers || []).map((provider) => [provider.id, provider]));
                 this._presetDrafts = deepClone(this._config.api.presets || []);
                 this._activePreset = String(this._config.api.active_preset || '').trim();
-                this._lastConfigVersion = Number(this._configAudit?.version || this.getState('bot.status.config_snapshot.version') || 0);
+                void this._warmOllamaModels();
+                const runtimeVersion = Number(this.getState('bot.status.config_snapshot.version') || 0);
+                if (!this.getState('bot.connected')) {
+                    this._configAudit = null;
+                    this._auditStatus = 'offline';
+                    this._auditMessage = '';
+                } else if (!this._configAudit) {
+                    this._auditStatus = 'idle';
+                    this._auditMessage = '';
+                }
+                this._lastConfigVersion = Number(this._configAudit?.version || runtimeVersion || 0);
 
                 this._fillForm();
                 this._renderPresetList();
@@ -329,6 +436,9 @@ export class SettingsPage extends PageController {
                     this._hideSaveFeedback();
                 }
                 this._loaded = true;
+                if (this._shouldRefreshAudit() || !silent) {
+                    void this._loadConfigAudit({ silent: true, force: !silent });
+                }
                 if (!silent) {
                     toast.success('配置已刷新');
                 }
@@ -344,6 +454,89 @@ export class SettingsPage extends PageController {
         })();
 
         return this._loadingPromise;
+    }
+
+    _shouldRefreshAudit() {
+        if (!this._loaded || !this.getState('bot.connected')) {
+            return false;
+        }
+        if (this._auditPromise) {
+            return false;
+        }
+        const runtimeVersion = Number(this.getState('bot.status.config_snapshot.version') || 0);
+        const auditVersion = Number(this._configAudit?.version || 0);
+        return !this._configAudit
+            || this._auditStatus === 'idle'
+            || this._auditStatus === 'error'
+            || (runtimeVersion > 0 && runtimeVersion > auditVersion);
+    }
+
+    async _loadConfigAudit(options = {}) {
+        if (!this._config || !this._loaded) {
+            return null;
+        }
+        if (!this.getState('bot.connected')) {
+            this._auditRequestId += 1;
+            this._auditPromise = null;
+            this._auditStatus = 'offline';
+            this._auditMessage = '';
+            if (this.isActive()) {
+                this._renderHero();
+            }
+            return { success: false, message: TEXT.noAudit };
+        }
+
+        const { silent = true, force = false } = options;
+        if (this._auditPromise && !force) {
+            return this._auditPromise;
+        }
+
+        const requestId = ++this._auditRequestId;
+        this._auditStatus = 'loading';
+        this._auditMessage = '';
+        if (this.isActive()) {
+            this._renderHero();
+        }
+
+        this._auditPromise = (async () => {
+            try {
+                const result = await apiService.getConfigAudit();
+                if (requestId !== this._auditRequestId) {
+                    return result;
+                }
+                if (!result?.success) {
+                    throw new Error(result?.message || TEXT.noAudit);
+                }
+                this._configAudit = result;
+                this._auditStatus = 'ready';
+                this._auditMessage = '';
+                this._lastConfigVersion = Number(result.version || this._lastConfigVersion || 0);
+                if (this.isActive()) {
+                    this._renderHero();
+                }
+                return result;
+            } catch (error) {
+                if (requestId !== this._auditRequestId) {
+                    return null;
+                }
+                console.warn('[SettingsPage] audit unavailable:', error);
+                this._auditStatus = 'error';
+                this._auditMessage = toast.getErrorMessage(error, TEXT.noAudit);
+                if (this.isActive()) {
+                    this._renderHero();
+                }
+                if (!silent) {
+                    toast.warning(this._auditMessage);
+                }
+                return { success: false, message: this._auditMessage };
+            } finally {
+                if (requestId === this._auditRequestId) {
+                    this._auditPromise = null;
+                }
+            }
+        })();
+
+        return this._auditPromise;
     }
 
     _initModuleSaveButtons() {
@@ -647,7 +840,11 @@ export class SettingsPage extends PageController {
     }
 
     async _saveSettings(options = {}) {
-        const { scope = null, triggerButton = null } = options;
+        const { scope = null, triggerButton = null, silentToast = false } = options;
+        if (this._isSaving) {
+            this._queuedAutoSave = true;
+            return;
+        }
         try {
             const payload = this._collectPayload(scope);
             if (payload.api && !this._presetDrafts.length) {
@@ -658,7 +855,9 @@ export class SettingsPage extends PageController {
                 return;
             }
             this._setSavingState(true, triggerButton);
-            const result = await apiService.saveConfig(payload);
+            const result = window.electronAPI?.configPatch
+                ? await window.electronAPI.configPatch(payload)
+                : await apiService.saveConfig(payload);
             if (!result?.success) {
                 throw new Error(result?.message || TEXT.saveFailed);
             }
@@ -668,17 +867,29 @@ export class SettingsPage extends PageController {
             this._renderSaveFeedback(result);
             this._renderExportRagStatus();
             this._setSavingState(false, triggerButton);
-            toast.success(result?.runtime_apply?.message || '配置已保存');
+            if (!silentToast) {
+                toast.success(result?.runtime_apply?.message || result?.message || '配置已保存');
+            }
         } catch (error) {
             console.error('[SettingsPage] save failed:', error);
             this._renderSaveFeedback({ success: false, message: toast.getErrorMessage(error, TEXT.saveFailed) });
             this._setSavingState(false, triggerButton);
-            toast.error(toast.getErrorMessage(error, TEXT.saveFailed));
+            if (!silentToast) {
+                toast.error(toast.getErrorMessage(error, TEXT.saveFailed));
+            }
+        } finally {
+            if (this._queuedAutoSave) {
+                this._queuedAutoSave = false;
+                this._scheduleAutoSave({ immediate: true });
+            }
         }
     }
 
     async _previewPrompt() {
         try {
+            if (!this.getState('bot.connected')) {
+                throw new Error('预览 Prompt 需要先启动 Python 服务');
+            }
             const result = await apiService.previewPrompt({
                 bot: this._collectPayload().bot,
                 sample: {
@@ -754,17 +965,270 @@ export class SettingsPage extends PageController {
         }
     }
 
+    _getPresetByName(name) {
+        const wanted = String(name || '').trim();
+        if (!wanted) {
+            return null;
+        }
+        return this._presetDrafts.find((preset) => String(preset?.name || '').trim() === wanted) || null;
+    }
+
+    _getRuntimePresetDraft() {
+        return this._getPresetByName(this.getState('bot.status.runtime_preset') || '');
+    }
+
+    _getActivePresetDraft() {
+        return this._getPresetByName(this._activePreset);
+    }
+
+    _getEffectivePreset() {
+        return this._getRuntimePresetDraft() || this._getActivePresetDraft() || this._presetDrafts[0] || null;
+    }
+
+    _getProviderLabel(providerId) {
+        const provider = this._providersById.get(String(providerId || '').trim()) || null;
+        return provider?.label || providerId || '--';
+    }
+
+    _isOllamaPreset(preset) {
+        return String(preset?.provider_id || '').trim().toLowerCase() === 'ollama';
+    }
+
+    _inferOllamaModelKind(modelName) {
+        const model = String(modelName || '').trim();
+        const lower = model.toLowerCase();
+        if (!lower) {
+            return {
+                key: 'unknown',
+                label: '未设置模型',
+                className: 'is-unknown',
+                title: '当前预设还没有配置聊天模型。',
+            };
+        }
+        if (
+            lower.includes('embed')
+            || lower.includes('embedding')
+            || lower.startsWith('bge-')
+            || lower.startsWith('nomic-embed')
+        ) {
+            return {
+                key: 'embedding',
+                label: 'embedding 模型',
+                className: 'is-embedding',
+                title: '这个模型更适合向量化或检索任务，不适合作为主聊天模型。',
+            };
+        }
+        if (lower.includes(':cloud')) {
+            return {
+                key: 'cloud',
+                label: '云模型',
+                className: 'is-cloud',
+                title: '该模型通过本机 Ollama 接入远端云能力，需要稳定外网连接。',
+            };
+        }
+        return {
+            key: 'local',
+            label: '本地模型',
+            className: 'is-local',
+            title: '该模型由本机 Ollama 提供推理能力。',
+        };
+    }
+
+    _getPresetModelMeta(preset, overrideModel = '') {
+        if (!preset) {
+            return null;
+        }
+        const model = String(overrideModel || preset.model || '').trim();
+        if (this._isOllamaPreset(preset)) {
+            return this._inferOllamaModelKind(model);
+        }
+        return null;
+    }
+
+    _createModelKindBadge(meta, extraClassName = '') {
+        if (!meta) {
+            return null;
+        }
+        const className = ['model-kind-badge', meta.className, extraClassName].filter(Boolean).join(' ');
+        const badge = createElement('span', className, meta.label);
+        if (meta.title) {
+            badge.title = meta.title;
+        }
+        return badge;
+    }
+
+    _setHeroTestFeedback(presetName, state, message) {
+        this._heroTestFeedback = {
+            presetName: String(presetName || '').trim(),
+            state: String(state || 'idle').trim(),
+            message: String(message || '').trim(),
+        };
+        if (this.isActive()) {
+            this._renderHero();
+        }
+    }
+
+    _getOllamaBaseUrl(providerOrPreset) {
+        const explicitBaseUrl = String(providerOrPreset?.base_url || '').trim();
+        if (explicitBaseUrl) {
+            return explicitBaseUrl;
+        }
+        return 'http://127.0.0.1:11434/v1';
+    }
+
+    async _loadOllamaModels(baseUrl) {
+        const key = this._getOllamaBaseUrl({ base_url: baseUrl });
+        if (this._ollamaModelCache.has(key)) {
+            return this._ollamaModelCache.get(key);
+        }
+        if (this._ollamaModelPromise.has(key)) {
+            return this._ollamaModelPromise.get(key);
+        }
+        const promise = (async () => {
+            try {
+                const result = await apiService.getOllamaModels(key);
+                const models = Array.isArray(result?.models)
+                    ? Array.from(new Set(result.models.map((item) => String(item || '').trim()).filter(Boolean)))
+                    : [];
+                if (models.length) {
+                    this._ollamaModelCache.set(key, models);
+                }
+                return models;
+            } catch (error) {
+                console.warn('[SettingsPage] load ollama models failed:', error);
+                return [];
+            } finally {
+                this._ollamaModelPromise.delete(key);
+            }
+        })();
+        this._ollamaModelPromise.set(key, promise);
+        return promise;
+    }
+
+    async _warmOllamaModels() {
+        const candidates = new Set();
+        const provider = this._providersById.get('ollama');
+        if (provider) {
+            candidates.add(this._getOllamaBaseUrl(provider));
+        }
+        this._presetDrafts
+            .filter((preset) => this._isOllamaPreset(preset))
+            .forEach((preset) => candidates.add(this._getOllamaBaseUrl(preset)));
+        if (!candidates.size) {
+            return;
+        }
+        await Promise.allSettled([...candidates].map((baseUrl) => this._loadOllamaModels(baseUrl)));
+        if (this.isActive()) {
+            this._renderPresetList();
+            this._renderHero();
+        }
+    }
+
+    _formatModelOptionLabel(providerId, modelName) {
+        const model = String(modelName || '').trim();
+        if (!model) {
+            return '-- 选择模型 --';
+        }
+        if (String(providerId || '').trim().toLowerCase() !== 'ollama') {
+            return model;
+        }
+        const meta = this._inferOllamaModelKind(model);
+        return `${model} · ${meta.label}`;
+    }
+
     _renderHero(highlight = false) {
         const container = this.$('#current-config-hero');
         if (!container || !this._config) {
             return;
         }
+        {
+        const runtimePresetName = String(this.getState('bot.status.runtime_preset') || '').trim();
+        const runtimePreset = this._getRuntimePresetDraft();
+        const activePreset = this._getActivePresetDraft();
+        const effectivePreset = this._getEffectivePreset();
+        const effectivePresetName = effectivePreset?.name || '未设置激活预设';
+        const effectiveProviderLabel = effectivePreset
+            ? this._getProviderLabel(effectivePreset.provider_id)
+            : '--';
+        const effectiveModel = String(this.getState('bot.status.model') || effectivePreset?.model || '').trim() || '--';
+        const effectiveAlias = String(effectivePreset?.alias || '').trim();
+        const effectiveModelMeta = this._getPresetModelMeta(effectivePreset, effectiveModel);
+        const effectiveScopeLabel = runtimePresetName
+            ? '当前运行中'
+            : (activePreset ? '当前保存配置' : '等待配置');
+        const audit = this._configAudit?.audit || null;
+        const auditStatus = this._getAuditStatusLabel();
+        const hasAudit = !!audit;
+        const unknownCount = hasAudit ? (audit?.unknown_override_paths?.length || 0) : '--';
+        const dormantCount = hasAudit ? (audit?.dormant_paths?.length || 0) : '--';
+        const configuredPresets = this._presetDrafts.filter((preset) => preset.api_key_configured || preset.api_key_required === false).length;
+        const heroTestFeedback = this._heroTestFeedback && this._heroTestFeedback.presetName === effectivePreset?.name
+            ? this._heroTestFeedback
+            : null;
+
+        container.textContent = '';
+        const card = createElement('div', `config-hero-card${highlight ? ' highlight-pulse' : ''}`);
+        const content = createElement('div', 'hero-content');
+        const title = createElement('div', 'hero-title');
+        title.appendChild(createElement('span', 'hero-name', effectivePresetName));
+        title.appendChild(createElement('span', 'hero-live-badge', effectiveScopeLabel));
+        if (effectiveModelMeta) {
+            title.appendChild(this._createModelKindBadge(effectiveModelMeta, 'is-hero'));
+        }
+        content.appendChild(title);
+
+        const subtitleParts = [effectiveProviderLabel, effectiveAlias || '未设置别名'].filter(Boolean);
+        content.appendChild(createElement('div', 'hero-subtitle', subtitleParts.join(' · ')));
+
+        const modelWrap = createElement('div', 'hero-model-row');
+        const modelText = createElement('div', 'hero-model-main');
+        modelText.appendChild(createElement('span', 'hero-model-label', '当前生效模型'));
+        modelText.appendChild(createElement('span', 'hero-model-value', effectiveModel));
+        modelWrap.appendChild(modelText);
+        if (effectiveModelMeta) {
+            modelWrap.appendChild(createElement('div', 'hero-model-hint', effectiveModelMeta.title || effectiveModelMeta.label));
+        }
+        content.appendChild(modelWrap);
+
+        const details = createElement('div', 'hero-details');
+        details.appendChild(this._createHeroDetail('当前运行预设', runtimePreset?.name || '--'));
+        details.appendChild(this._createHeroDetail('当前保存预设', activePreset?.name || '--'));
+        details.appendChild(this._createHeroDetail('运行态审计', auditStatus));
+        details.appendChild(this._createHeroDetail('已配置预设', `${configuredPresets}/${this._presetDrafts.length}`));
+        details.appendChild(this._createHeroDetail('审计版本', String(this._configAudit?.version || '--')));
+        details.appendChild(this._createHeroDetail('最后加载', formatDateTime(this._configAudit?.loaded_at)));
+        details.appendChild(this._createHeroDetail('未知覆盖', typeof unknownCount === 'number' ? `${unknownCount} 项` : '--'));
+        details.appendChild(this._createHeroDetail('未消费配置', typeof dormantCount === 'number' ? `${dormantCount} 项` : '--'));
+        details.appendChild(this._createHeroDetail('LangSmith', this._config.agent?.langsmith_api_key_configured ? '已配置 Key' : '未配置 Key'));
+        content.appendChild(details);
+
+        const actions = createElement('div', 'hero-actions');
+        const button = createElement('button', 'btn btn-secondary', '测试当前连接');
+        button.type = 'button';
+        button.disabled = !effectivePreset?.name;
+        button.addEventListener('click', () => void this._testPresetByName(effectivePreset?.name || ''));
+        actions.appendChild(button);
+
+        const hintClassName = heroTestFeedback
+            ? `ping-result ${heroTestFeedback.state === 'success' ? 'success' : (heroTestFeedback.state === 'error' ? 'error' : 'pending')}`
+            : 'ping-result';
+        const hintText = heroTestFeedback?.message
+            || (effectivePreset?.name ? '可直接测试当前生效预设的连通性，不会启动机器人。' : '请先配置并激活一个预设。');
+        actions.appendChild(createElement('div', hintClassName, hintText));
+
+        card.appendChild(content);
+        card.appendChild(actions);
+        container.appendChild(card);
+        }
+        return;
 
         const activePreset = this._presetDrafts.find((preset) => preset.name === this._activePreset);
         const runtimePreset = this.getState('bot.status.runtime_preset') || '--';
         const audit = this._configAudit?.audit || null;
-        const unknownCount = audit?.unknown_override_paths?.length || 0;
-        const dormantCount = audit?.dormant_paths?.length || 0;
+        const auditStatus = this._getAuditStatusLabel();
+        const hasAudit = !!audit;
+        const unknownCount = hasAudit ? (audit?.unknown_override_paths?.length || 0) : '--';
+        const dormantCount = hasAudit ? (audit?.dormant_paths?.length || 0) : '--';
         const configuredPresets = this._presetDrafts.filter((preset) => preset.api_key_configured || preset.api_key_required === false).length;
 
         container.textContent = '';
@@ -776,6 +1240,7 @@ export class SettingsPage extends PageController {
         content.appendChild(createElement('div', 'detail-value', activePreset ? `${activePreset.alias || activePreset.provider_id || 'provider'} · ${activePreset.model || '--'}` : '请选择一个可用预设并保存'));
 
         const details = createElement('div', 'hero-details');
+        details.appendChild(this._createHeroDetail('运行态审计', auditStatus));
         details.appendChild(this._createHeroDetail('当前运行预设', String(runtimePreset || '--')));
         details.appendChild(this._createHeroDetail('已配置预设', `${configuredPresets}/${this._presetDrafts.length}`));
         details.appendChild(this._createHeroDetail('审计版本', String(this._configAudit?.version || '--')));
@@ -783,13 +1248,28 @@ export class SettingsPage extends PageController {
         content.appendChild(details);
 
         const extra = createElement('div', 'hero-details');
-        extra.appendChild(this._createHeroDetail('未知覆写', `${unknownCount} 项`));
-        extra.appendChild(this._createHeroDetail('未消费配置', `${dormantCount} 项`));
+        extra.appendChild(this._createHeroDetail('未知覆写', typeof unknownCount === 'number' ? `${unknownCount} 项` : '--'));
+        extra.appendChild(this._createHeroDetail('未消费配置', typeof dormantCount === 'number' ? `${dormantCount} 项` : '--'));
         extra.appendChild(this._createHeroDetail('LangSmith', this._config.agent?.langsmith_api_key_configured ? '已配置 Key' : '未配置 Key'));
 
         card.appendChild(content);
         card.appendChild(extra);
         container.appendChild(card);
+    }
+
+    _getAuditStatusLabel() {
+        switch (this._auditStatus) {
+        case 'loading':
+            return '加载中';
+        case 'ready':
+            return '已同步';
+        case 'error':
+            return '暂不可用';
+        case 'offline':
+            return '服务未连接';
+        default:
+            return this.getState('bot.connected') ? '待同步' : '服务未连接';
+        }
     }
 
     _createHeroDetail(label, value) {
@@ -814,6 +1294,7 @@ export class SettingsPage extends PageController {
         const fragment = document.createDocumentFragment();
         this._presetDrafts.forEach((preset, index) => {
             const provider = this._providersById.get(preset.provider_id) || null;
+            const modelMeta = this._getPresetModelMeta(preset);
             const card = createElement('div', `preset-card${preset.name === this._activePreset ? ' active' : ''}`);
             const header = createElement('div', 'preset-card-header');
             const info = createElement('div', 'preset-info');
@@ -828,6 +1309,9 @@ export class SettingsPage extends PageController {
             meta.appendChild(createElement('span', 'meta-item', provider?.label || preset.provider_id || '--'));
             meta.appendChild(createElement('span', 'meta-separator', '·'));
             meta.appendChild(createElement('span', 'meta-item model-name', preset.model || '--'));
+            if (modelMeta) {
+                meta.appendChild(this._createModelKindBadge(modelMeta));
+            }
             info.appendChild(meta);
 
             const detail = createElement('div', 'ping-result', preset.api_key_required === false ? '无需 API Key' : (preset.api_key_configured ? '已配置 API Key' : '未配置 API Key'));
@@ -843,6 +1327,7 @@ export class SettingsPage extends PageController {
                 this._activePreset = preset.name;
                 this._renderPresetList();
                 this._renderHero();
+                this._scheduleAutoSave({ immediate: true });
             });
 
             const testButton = createElement('button', 'btn btn-secondary btn-sm', '测试');
@@ -869,17 +1354,78 @@ export class SettingsPage extends PageController {
         list.appendChild(fragment);
     }
 
+    async _testPresetByName(presetName, detailElement = null) {
+        const preset = this._getPresetByName(presetName);
+        if (!preset?.name) {
+            toast.warning('请先选择一个有效预设');
+            return;
+        }
+        await this._runPresetConnectionTest(preset, detailElement);
+    }
+
+    async _runPresetConnectionTest(preset, detailElement) {
+        const pendingText = '连接测试中...';
+        this._setHeroTestFeedback(preset.name, 'pending', pendingText);
+        try {
+            if (detailElement) {
+                detailElement.className = 'ping-result pending';
+                detailElement.textContent = pendingText;
+            }
+            const result = window.electronAPI?.testConfigConnection
+                ? await window.electronAPI.testConfigConnection({
+                    presetName: preset.name,
+                    patch: {
+                        api: {
+                            active_preset: this._activePreset,
+                            presets: deepClone(this._presetDrafts),
+                        },
+                    },
+                })
+                : await apiService.testConnection(preset.name);
+            if (!result?.success) {
+                throw new Error(result?.message || '连接测试失败');
+            }
+            const successMessage = result.message || '连接测试成功';
+            if (detailElement) {
+                detailElement.className = 'ping-result success';
+                detailElement.textContent = successMessage;
+            }
+            this._setHeroTestFeedback(preset.name, 'success', successMessage);
+            toast.success(`${preset.name} 连接测试成功`);
+        } catch (error) {
+            const errorMessage = toast.getErrorMessage(error, '连接测试失败');
+            if (detailElement) {
+                detailElement.className = 'ping-result error';
+                detailElement.textContent = errorMessage;
+            }
+            this._setHeroTestFeedback(preset.name, 'error', errorMessage);
+            toast.error(`${preset.name}：${errorMessage}`);
+        }
+    }
+
     async _testPreset(index, detailElement) {
         const preset = this._presetDrafts[index];
         if (!preset?.name) {
             return;
         }
+        await this._runPresetConnectionTest(preset, detailElement);
+        return;
         try {
             if (detailElement) {
                 detailElement.className = 'ping-result pending';
                 detailElement.textContent = '连接测试中...';
             }
-            const result = await apiService.testConnection(preset.name);
+            const result = window.electronAPI?.testConfigConnection
+                ? await window.electronAPI.testConfigConnection({
+                    presetName: preset.name,
+                    patch: {
+                        api: {
+                            active_preset: this._activePreset,
+                            presets: deepClone(this._presetDrafts),
+                        },
+                    },
+                })
+                : await apiService.testConnection(preset.name);
             if (!result?.success) {
                 throw new Error(result?.message || '测试失败');
             }
@@ -905,7 +1451,8 @@ export class SettingsPage extends PageController {
         }
         this._renderPresetList();
         this._renderHero();
-        toast.info('预设已从草稿中移除，记得点击“保存配置”生效');
+        this._scheduleAutoSave({ immediate: true });
+        toast.info('预设已移除');
     }
 
     _openPresetModal(index = -1) {
@@ -971,11 +1518,37 @@ export class SettingsPage extends PageController {
         await this._populateModelOptions(providerId, provider.default_model || '');
     }
 
+    async _resolveProviderModels(provider) {
+        const fallbackModels = Array.isArray(provider?.models) ? [...provider.models] : [];
+        if (String(provider?.id || '').trim().toLowerCase() !== 'ollama') {
+            return fallbackModels;
+        }
+        const liveModels = await this._loadOllamaModels(this._getOllamaBaseUrl(provider));
+        return liveModels.length ? liveModels : fallbackModels;
+    }
+
     async _populateModelOptions(providerId, selectedModel) {
         const select = this.$('#edit-preset-model-select');
         if (!select) {
             return;
         }
+        const resolvedProvider = this._providersById.get(providerId) || null;
+        const resolvedModels = Array.from(
+            new Set((await this._resolveProviderModels(resolvedProvider)).map((item) => String(item || '').trim()).filter(Boolean))
+        );
+        select.textContent = '';
+        [['', '-- 选择模型 --'], ...resolvedModels.map((item) => [item, this._formatModelOptionLabel(providerId, item)]), ['__custom__', '自定义模型']].forEach(([value, label]) => {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = label;
+            select.appendChild(option);
+        });
+        select.value = selectedModel && resolvedModels.includes(selectedModel) ? selectedModel : (selectedModel ? '__custom__' : '');
+        if (this.$('#edit-preset-model-custom')) {
+            this.$('#edit-preset-model-custom').value = !resolvedModels.includes(selectedModel) ? (selectedModel || '') : '';
+        }
+        this._syncPresetModelInput();
+        return;
         const provider = this._providersById.get(providerId) || null;
         let models = Array.isArray(provider?.models) ? [...provider.models] : [];
         select.textContent = '';
@@ -1066,7 +1639,8 @@ export class SettingsPage extends PageController {
         this._renderPresetList();
         this._renderHero();
         this._closePresetModal();
-        toast.success(TEXT.presetSaveSuccess);
+        this._scheduleAutoSave({ immediate: true });
+        toast.success('预设草稿已更新');
     }
 
     _renderUpdatePanel() {
@@ -1119,6 +1693,13 @@ export class SettingsPage extends PageController {
         container.hidden = false;
         groups.textContent = '';
 
+        if (result?.save_state === 'saving') {
+            container.dataset.state = 'warning';
+            summary.textContent = result?.message || '保存中...';
+            meta.textContent = '正在将修改写入共享配置文件。';
+            return;
+        }
+
         if (!result?.success) {
             container.dataset.state = 'error';
             summary.textContent = result?.message || TEXT.saveFailed;
@@ -1129,15 +1710,13 @@ export class SettingsPage extends PageController {
         const changedPaths = Array.isArray(result.changed_paths) ? result.changed_paths : [];
         const runtimeApply = result.runtime_apply;
         const reloadPlan = Array.isArray(result.reload_plan) ? result.reload_plan : [];
-        const defaultConfigSync = result.default_config_synced
-            ? (result.default_config_sync_message || '默认配置文件已同步更新')
-            : '默认配置文件：未同步';
+        const persistenceText = result.default_config_sync_message || '共享配置文件 app_config.json 已更新';
         container.dataset.state = changedPaths.length > 0 ? 'warning' : 'success';
         summary.textContent = changedPaths.length > 0 ? '配置已保存' : '未检测到有效配置变更';
         meta.textContent = [
             `变更项：${changedPaths.length} 个`,
-            runtimeApply?.message ? `运行时反馈：${runtimeApply.message}` : '运行时反馈：无',
-            defaultConfigSync,
+            runtimeApply?.message ? `运行时反馈：${runtimeApply.message}` : '运行时反馈：等待运行中实例感知新配置',
+            persistenceText,
         ].join(' · ');
 
         reloadPlan.forEach((item) => {

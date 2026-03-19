@@ -76,6 +76,8 @@ relocate_known_root_artifacts()
 
 import argparse
 
+from backend.core.config_cli import build_config_parser
+
 
 def print_banner():
     """打印启动横幅"""
@@ -218,6 +220,7 @@ def main():
         help="开启调试模式（启用热重载）",
     )
     parser_web.set_defaults(func=cmd_web)
+    build_config_parser(subparsers)
 
     # 解析参数
     args = parser.parse_args()

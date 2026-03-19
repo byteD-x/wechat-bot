@@ -20,6 +20,7 @@ from .core.factory import (
     select_ai_client,
     select_specific_ai_client,
     get_reconnect_policy,
+    get_last_ai_client_error,
     get_last_transport_error,
     reconnect_wechat,
     compute_api_signature,
@@ -97,10 +98,6 @@ class WeChatBot:
 
         # 配置监控
         self.config_mtime: Optional[float] = None
-        self.override_path = os.path.abspath(
-            os.path.join("data", "config_override.json")
-        )
-        self.override_mtime: Optional[float] = None
         self.config_reload_watcher: Optional[ConfigReloadWatcher] = None
         self.ai_module_mtime: Optional[float] = None
         self.api_signature: str = ""
@@ -133,10 +130,6 @@ class WeChatBot:
         snapshot = self.config_service.get_snapshot(
             config_path=self.config_path,
             force_reload=force_reload,
-        )
-        self.config_service.sync_default_config_snapshot(
-            snapshot.to_dict(),
-            config_path=self.config_path,
         )
         self.config = snapshot.to_dict()
         return self.config
@@ -248,7 +241,6 @@ class WeChatBot:
                 active=True,
             )
             self.config_mtime = get_file_mtime(self.config_path)
-            self.override_mtime = get_file_mtime(self.override_path)
             self._load_effective_config()
         except Exception as exc:
             logging.error("无法加载配置文件: %s", exc)
@@ -258,7 +250,7 @@ class WeChatBot:
                 title="配置加载失败",
                 detail=str(exc),
                 suggestions=[
-                    "检查 backend/config.py 或覆盖配置文件是否存在语法错误。",
+                    "检查 app_config.json 是否存在语法错误或字段格式问题。",
                     "确认配置项中的路径和数值格式正确。",
                 ],
                 recoverable=False,
@@ -313,14 +305,25 @@ class WeChatBot:
             await self._schedule_export_rag_sync(force=False)
         else:
             logging.warning("AI 客户端初始化失败，未能选择有效预设")
+            ai_issue_detail = (
+                get_last_ai_client_error()
+                or "未能选择到可用的 AI 预设，机器人将无法正常回复。"
+            )
+            suggestions = [
+                "检查激活预设的 base_url、model 和 API Key。",
+                "在设置页使用“测试连接”验证当前预设。",
+            ]
+            if "Ollama" in ai_issue_detail:
+                suggestions = [
+                    "确认当前选择的是本地聊天模型，而不是 *:cloud 或 embedding 模型。",
+                    "如果列表里只有云模型或 embedding 模型，请先在本机拉取一个可聊天的 Ollama 模型。",
+                    "也可以先切换到其他已配置且可用的预设。",
+                ]
             self.bot_manager.set_issue(
                 code="ai_client_unavailable",
                 title="AI 客户端初始化失败",
-                detail="未能选择到可用的 AI 预设，机器人将无法正常回复。",
-                suggestions=[
-                    "检查激活预设的 base_url、model 和 API Key。",
-                    "在设置页使用“测试连接”验证当前预设。",
-                ],
+                detail=ai_issue_detail,
+                suggestions=suggestions,
                 recoverable=False,
             )
 
@@ -695,7 +698,7 @@ class WeChatBot:
             500,
             min_value=0,
         )
-        watch_paths = [self.config_path, self.override_path]
+        watch_paths = [self.config_path]
         if self.config_reload_watcher is None:
             self.config_reload_watcher = ConfigReloadWatcher(
                 watch_paths,
@@ -711,36 +714,22 @@ class WeChatBot:
         )
 
     async def _check_config_reload(self, now: float, force: bool = False) -> None:
-        # Check main config file
         new_mtime = get_file_mtime(self.config_path)
-        new_override_mtime = get_file_mtime(self.override_path)
-        
+
         should_reload = force
 
         if new_mtime and new_mtime != self.config_mtime:
             should_reload = True
             self.config_mtime = new_mtime
             
-        # Also reload if override file changed (or was created/deleted)
-        # Note: get_file_mtime returns None if file doesn't exist
-        if new_override_mtime != self.override_mtime:
-            should_reload = True
-            self.override_mtime = new_override_mtime
-
         if force:
             self.config_mtime = new_mtime
-            self.override_mtime = new_override_mtime
 
         if should_reload:
             previous_config = dict(self.config or {})
             try:
                 snapshot = self.config_service.reload(config_path=self.config_path)
                 new_config = snapshot.to_dict()
-                if self.config_service.sync_default_config_snapshot(
-                    new_config,
-                    config_path=self.config_path,
-                ):
-                    self.config_mtime = get_file_mtime(self.config_path)
             except Exception as exc:
                 logging.warning("配置重载失败: %s", exc)
                 return
@@ -804,13 +793,8 @@ class WeChatBot:
                 )
             else:
                 snapshot = self.config_service.reload(config_path=self.config_path)
-                self.config_service.sync_default_config_snapshot(
-                    snapshot.to_dict(),
-                    config_path=self.config_path,
-                )
             self.config = snapshot.to_dict()
             self.config_mtime = get_file_mtime(self.config_path)
-            self.override_mtime = get_file_mtime(self.override_path)
         except Exception as exc:
             logging.warning("立即重载配置失败: %s", exc)
             return {"success": False, "message": f"配置加载失败: {exc}", "runtime_preset": self.runtime_preset_name}

@@ -1,8 +1,11 @@
+import asyncio
 import os
 import tempfile
 import time
 from types import SimpleNamespace
 from unittest.mock import patch
+
+import pytest
 
 from backend.bot_manager import BotManager
 from backend.utils.config_watcher import ConfigReloadWatcher
@@ -207,13 +210,17 @@ def test_bot_manager_log_status_change_skips_duplicate_snapshot():
         manager._last_status_log_snapshot = original_snapshot
 
 
-def test_bot_manager_get_status_includes_growth_runtime_fields():
+def test_bot_manager_get_status_includes_growth_runtime_fields(monkeypatch):
     manager = BotManager.get_instance()
     original_bot = manager.bot
     original_running = manager.is_running
     original_status_cache = manager._status_cache
     original_status_cache_time = manager._status_cache_time
     try:
+        monkeypatch.setattr(
+            "backend.bot_manager.get_growth_manager",
+            lambda: SimpleNamespace(get_status=lambda: {"growth_running": False}),
+        )
         manager.is_running = True
         manager._status_cache = None
         manager._status_cache_time = 0.0
@@ -242,3 +249,86 @@ def test_bot_manager_get_status_includes_growth_runtime_fields():
         manager.is_running = original_running
         manager._status_cache = original_status_cache
         manager._status_cache_time = original_status_cache_time
+
+
+@pytest.mark.asyncio
+async def test_bot_manager_start_returns_before_growth_manager_finishes(monkeypatch):
+    manager = BotManager.get_instance()
+    release = asyncio.Event()
+    growth_started = asyncio.Event()
+
+    original_bot = manager.bot
+    original_task = manager.task
+    original_running = manager.is_running
+    original_paused = manager.is_paused
+    original_start_time = manager.start_time
+    original_stop_event = manager.stop_event
+    original_growth_task = getattr(manager, "_growth_start_task", None)
+
+    class _FakeBot:
+        def __init__(self, _config_path, memory_manager=None):
+            self.memory_manager = memory_manager
+
+        async def run(self):
+            await release.wait()
+
+        async def shutdown(self):
+            release.set()
+
+    class _FakeGrowthManager:
+        async def start(self, *, persist=True, source="manual"):
+            growth_started.set()
+            await release.wait()
+            return {"success": True, "message": "ok"}
+
+    state = SimpleNamespace(
+        is_paused=False,
+        start_time=None,
+        save=lambda: None,
+    )
+
+    async def _noop_async(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr("backend.bot.WeChatBot", _FakeBot)
+    monkeypatch.setattr("backend.core.bot_control.get_bot_state", lambda: state)
+    monkeypatch.setattr("backend.bot_manager.get_growth_manager", lambda: _FakeGrowthManager())
+    monkeypatch.setattr(manager, "get_memory_manager", lambda: None)
+    monkeypatch.setattr(manager, "notify_status_change", _noop_async)
+    monkeypatch.setattr(manager, "update_startup_state", _noop_async)
+    monkeypatch.setattr(manager, "_invalidate_status_cache", lambda: None)
+    monkeypatch.setattr(
+        manager.config_service,
+        "save_effective_config",
+        lambda *_args, **_kwargs: None,
+    )
+
+    try:
+        manager.bot = None
+        manager.task = None
+        manager.is_running = False
+        manager.is_paused = False
+        manager.start_time = None
+        manager.stop_event = asyncio.Event()
+        if getattr(manager, "_growth_start_task", None) is not None:
+            manager._growth_start_task = None
+
+        result = await asyncio.wait_for(manager.start(), timeout=0.2)
+
+        assert result["success"] is True
+        await asyncio.wait_for(growth_started.wait(), timeout=0.2)
+        assert manager.task is not None
+    finally:
+        release.set()
+        if manager.task is not None:
+            manager.task.cancel()
+            await asyncio.gather(manager.task, return_exceptions=True)
+        if getattr(manager, "_growth_start_task", None) is not None:
+            await asyncio.gather(manager._growth_start_task, return_exceptions=True)
+        manager.bot = original_bot
+        manager.task = original_task
+        manager.is_running = original_running
+        manager.is_paused = original_paused
+        manager.start_time = original_start_time
+        manager.stop_event = original_stop_event
+        manager._growth_start_task = original_growth_task

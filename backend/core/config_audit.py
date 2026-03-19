@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
-from backend.config_schemas import AgentConfig, ApiConfig, BotConfig, LoggingConfig
+from backend.config_schemas import AgentConfig, ApiConfig, BotConfig, LoggingConfig, ServicesConfig
 
 
 DORMANT_CONFIG_PATHS: set[str] = set()
@@ -150,8 +150,10 @@ def _declared_paths() -> set[str]:
         "bot": BotConfig,
         "logging": LoggingConfig,
         "agent": AgentConfig,
+        "services": ServicesConfig,
     }
     paths: set[str] = set()
+    paths.add("schema_version")
     for section, model in sections.items():
         for field in model.model_fields:
             paths.add(f"{section}.{field}")

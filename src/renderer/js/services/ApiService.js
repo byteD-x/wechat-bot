@@ -185,6 +185,38 @@ class ApiService {
         });
     }
 
+    async getOllamaModels(baseUrl = 'http://127.0.0.1:11434/v1') {
+        return this.request(`/api/ollama/models${this._buildQueryString({
+            base_url: baseUrl,
+        })}`, {
+            timeoutMs: 5000,
+        }, 0);
+    }
+
+    async getGrowthTasks() {
+        return this.request('/api/growth/tasks', {}, 0);
+    }
+
+    async clearGrowthTask(taskType) {
+        const encoded = encodeURIComponent(String(taskType || '').trim());
+        return this.request(`/api/growth/tasks/${encoded}/clear`, { method: 'POST' }, 0);
+    }
+
+    async runGrowthTaskNow(taskType) {
+        const encoded = encodeURIComponent(String(taskType || '').trim());
+        return this.request(`/api/growth/tasks/${encoded}/run`, { method: 'POST', timeoutMs: 20000 }, 0);
+    }
+
+    async pauseGrowthTask(taskType) {
+        const encoded = encodeURIComponent(String(taskType || '').trim());
+        return this.request(`/api/growth/tasks/${encoded}/pause`, { method: 'POST' }, 0);
+    }
+
+    async resumeGrowthTask(taskType) {
+        const encoded = encodeURIComponent(String(taskType || '').trim());
+        return this.request(`/api/growth/tasks/${encoded}/resume`, { method: 'POST' }, 0);
+    }
+
     connectSSE(onMessage, onError, onOpen) {
         const tokenParam = this.apiToken
             ? `?token=${encodeURIComponent(this.apiToken)}`

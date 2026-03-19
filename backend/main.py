@@ -10,10 +10,11 @@ if base_dir not in sys.path:
     sys.path.insert(0, base_dir)
 
 from backend.bot import WeChatBot
+from backend.shared_config import get_app_config_path
 
 
 async def main():
-    config_path = os.path.join(base_dir, "backend", "config.py")
+    config_path = get_app_config_path()
     bot = WeChatBot(config_path)
     await bot.run()
 

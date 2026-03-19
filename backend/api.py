@@ -23,6 +23,7 @@ from backend.core.config_audit import (
     diff_config_paths,
     get_effect_for_path,
 )
+from backend.core.config_probe import probe_config
 from backend.core.config_service import get_config_service
 from backend.core.cost_analytics import CostAnalyticsService
 from backend.model_catalog import (
@@ -30,6 +31,7 @@ from backend.model_catalog import (
     infer_provider_id,
     merge_provider_defaults,
 )
+from backend.shared_config import get_app_config_path
 from backend.utils.logging import (
     setup_logging,
     get_logging_settings,
@@ -171,18 +173,8 @@ def _build_config_payload(snapshot=None) -> dict:
         "bot": bot_cfg,
         "logging": config_dict.get("logging", {}),
         "agent": agent_cfg,
+        "services": config_dict.get("services", {}),
     }
-
-
-def _resolve_request_api_key(target_preset: dict, api_cfg: dict) -> str:
-    allow_empty_key = target_preset.get("allow_empty_key")
-    if allow_empty_key is None:
-        allow_empty_key = api_cfg.get("allow_empty_key", False)
-    if allow_empty_key:
-        value = target_preset.get("api_key")
-        return "" if value is None else str(value).strip()
-
-    return str(target_preset.get("api_key") or api_cfg.get("api_key") or "").strip()
 
 
 def _normalize_ollama_tags_url(base_url: str) -> str:
@@ -238,6 +230,12 @@ async def get_status():
     return jsonify(manager.get_status())
 
 
+@app.route("/api/ping", methods=["GET"])
+async def ping():
+    """轻量探活接口，仅用于确认 Web API 已就绪。"""
+    return jsonify({"success": True, "service_running": True})
+
+
 @app.route("/api/metrics", methods=["GET"])
 async def get_metrics():
     """Export Prometheus-style runtime metrics."""
@@ -274,6 +272,55 @@ async def stop_bot():
     """停止机器人"""
     result = await manager.stop()
     return jsonify(result)
+
+
+@app.route("/api/growth/start", methods=["POST"])
+async def start_growth():
+    """启动独立成长任务。"""
+    result = await manager.start_growth()
+    return jsonify(result)
+
+
+@app.route("/api/growth/stop", methods=["POST"])
+async def stop_growth():
+    """停止独立成长任务。"""
+    result = await manager.stop_growth()
+    return jsonify(result)
+
+
+@app.route("/api/growth/tasks", methods=["GET"])
+async def list_growth_tasks():
+    """获取成长任务队列摘要。"""
+    result = await manager.list_growth_tasks()
+    return jsonify(result)
+
+
+@app.route("/api/growth/tasks/<task_type>/clear", methods=["POST"])
+async def clear_growth_task(task_type: str):
+    """清空指定类型的成长任务队列。"""
+    result = await manager.clear_growth_task(task_type)
+    return jsonify(result), (200 if result.get("success") else 400)
+
+
+@app.route("/api/growth/tasks/<task_type>/run", methods=["POST"])
+async def run_growth_task(task_type: str):
+    """立即执行指定类型的成长任务。"""
+    result = await manager.run_growth_task_now(task_type)
+    return jsonify(result), (200 if result.get("success") else 400)
+
+
+@app.route("/api/growth/tasks/<task_type>/pause", methods=["POST"])
+async def pause_growth_task(task_type: str):
+    """暂停指定类型的成长任务。"""
+    result = await manager.pause_growth_task(task_type)
+    return jsonify(result), (200 if result.get("success") else 400)
+
+
+@app.route("/api/growth/tasks/<task_type>/resume", methods=["POST"])
+async def resume_growth_task(task_type: str):
+    """恢复指定类型的成长任务。"""
+    result = await manager.resume_growth_task(task_type)
+    return jsonify(result), (200 if result.get("success") else 400)
 
 
 @app.route("/api/pause", methods=["POST"])
@@ -542,7 +589,7 @@ async def get_config_audit():
             loaded_at = None
         audit = build_config_audit(
             snapshot.config,
-            override_path=os.path.join("data", "config_override.json"),
+            override_path=get_app_config_path(),
         )
         return jsonify(
             {
@@ -585,7 +632,6 @@ async def save_config():
             config_service.save_effective_config,
             data or {},
             config_path=config_path,
-            override_path=os.path.join("data", "config_override.json"),
             source="api_override",
         )
         effective_config = snapshot.to_dict()
@@ -646,54 +692,22 @@ async def save_config():
 async def test_connection():
     """测试 LLM 连接"""
     try:
-        data = await request.get_json()
-        preset_name = data.get("preset_name")
-
+        data = await request.get_json(silent=True) or {}
+        preset_name = str(data.get("preset_name") or "").strip()
+        patch = data.get("patch") if isinstance(data.get("patch"), dict) else {}
         snapshot = config_service.get_snapshot()
-        api_cfg = snapshot.api
-        presets = api_cfg.get("presets", [])
-
-        target_preset = None
-        if preset_name:
-            target_preset = next((p for p in presets if p["name"] == preset_name), None)
-        else:
-            # 如果未指定，使用当前激活的
-            active_name = api_cfg.get("active_preset")
-            target_preset = next((p for p in presets if p["name"] == active_name), None)
-
-        if not target_preset:
-            return jsonify({"success": False, "message": "未找到指定的预设配置"})
-
-        # 实例化 AIClient
-        from backend.core.ai_client import AIClient
-
-        # 构造参数，注意处理默认值
-        # 注意：AIClient 需要完整的参数，这里做一些回退处理
-        client = AIClient(
-            base_url=target_preset.get("base_url") or api_cfg.get("base_url"),
-            api_key=_resolve_request_api_key(target_preset, api_cfg),
-            model=target_preset.get("model") or api_cfg.get("model"),
-            timeout_sec=(
-                target_preset.get("timeout_sec")
-                or target_preset.get("timeout")
-                or api_cfg.get("timeout_sec")
-                or api_cfg.get("timeout", 10.0)
-            ),
-            max_retries=0,  # 测试时不重试
+        candidate_config = snapshot.to_dict()
+        if patch:
+            candidate_config = config_service._merge_patch(candidate_config, patch)
+        normalized = config_service._validate_config_dict(candidate_config)
+        success, resolved_preset, message = await probe_config(normalized, preset_name)
+        return jsonify(
+            {
+                "success": success,
+                "preset_name": resolved_preset,
+                "message": message,
+            }
         )
-
-        # 调用 probe，并在测试结束后释放共享连接引用
-        try:
-            success = await client.probe()
-        finally:
-            await client.close()
-
-        if success:
-            return jsonify({"success": True, "message": "连接测试成功"})
-        else:
-            return jsonify(
-                {"success": False, "message": "连接测试失败，请检查配置或网络"}
-            )
 
     except Exception as e:
         logger.error(f"连接测试异常: {e}")

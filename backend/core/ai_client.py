@@ -54,6 +54,7 @@ except Exception:  # pragma: no cover - 可选依赖
 # ═══════════════════════════════════════════════════════════════════════════════
 
 DEFAULT_TIMEOUT_SEC = 60.0  # 默认超时时间（秒）；本地模型/推理模型可能需要更长时间
+FAST_PROBE_TIMEOUT_SEC = 8.0
 MAX_RETRIES = 2             # 最大重试次数
 
 _tiktoken_encoder = None
@@ -347,8 +348,7 @@ class AIClient:
             self._chat_locks[chat_id] = lock
         return lock
 
-    async def probe(self) -> bool:
-        """探测接口是否可用、模型是否可调用。"""
+    async def _probe_completion(self, *, timeout_sec: Optional[float] = None) -> bool:
         url = f"{self.base_url}/chat/completions"
         payload = {
             "model": self.model,
@@ -365,7 +365,7 @@ class AIClient:
                 url,
                 headers=self._build_headers(),
                 json=payload,
-                timeout=self.timeout_sec,
+                timeout=timeout_sec or self.timeout_sec,
             )
             if resp.status_code >= 400:
                 logging.warning(
@@ -384,6 +384,45 @@ class AIClient:
         except Exception as exc:
             logging.warning("探测失败：%s", exc)
             return False
+
+    async def probe(self) -> bool:
+        """探测接口是否可用、模型是否可调用。"""
+        return await self._probe_completion()
+
+    async def probe_fast(self) -> Tuple[bool, str]:
+        """快速探测服务联通性，必要时回退到一次极小的补全请求。"""
+        client = self._get_http_client()
+        timeout_sec = min(self.timeout_sec, FAST_PROBE_TIMEOUT_SEC)
+
+        try:
+            resp = await client.get(
+                f"{self.base_url}/models",
+                headers=self._build_headers(),
+                timeout=timeout_sec,
+            )
+        except Exception as exc:
+            logging.warning("快速探测失败：%s", exc)
+            return False, "network"
+
+        if resp.status_code == 200:
+            try:
+                payload = resp.json()
+                if isinstance(payload, (dict, list)):
+                    return True, "models"
+            except ValueError:
+                logging.info("模型列表探测返回非 JSON，回退到补全探测")
+
+            ok = await self._probe_completion(timeout_sec=timeout_sec)
+            return ok, "completion"
+
+        if resp.status_code in {404, 405, 501}:
+            ok = await self._probe_completion(timeout_sec=timeout_sec)
+            return ok, "completion"
+
+        logging.warning(
+            "快速探测失败（HTTP %s）：%s", resp.status_code, resp.text[:200]
+        )
+        return False, "models"
 
     async def generate_reply(
         self,

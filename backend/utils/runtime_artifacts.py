@@ -7,9 +7,10 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
+from backend.shared_config import ensure_data_root, get_project_root
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-RUNTIME_ROOT = PROJECT_ROOT / "data" / "runtime"
+PROJECT_ROOT = get_project_root()
+RUNTIME_ROOT = ensure_data_root() / "runtime"
 WCFERRY_DIR = RUNTIME_ROOT / "wcferry"
 CHROMA_DIR = RUNTIME_ROOT / "chroma"
 LOCK_DIR = RUNTIME_ROOT / "locks"

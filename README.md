@@ -143,6 +143,7 @@ npm run dev
 ```
 
 适合通过 GUI 配置和观察运行状态。
+桌面端启动后会自动轻启动 Python Web 服务，用于状态、消息、成本、日志等页面；机器人主循环和成长任务仍需手动启动。
 
 ### Headless Bot
 
@@ -172,8 +173,9 @@ python run.py web
 配置运行机制：
 
 - 运行期优先读取后端内存中的配置快照，而不是让各模块零散读取多个来源。
-- GUI 保存配置后，`/api/config` 会返回 `changed_paths` 和 `reload_plan`，用于说明哪些字段变了、预计如何生效；同时会把非敏感字段同步回写到 `backend/config.py`，并将真实 API Key 写入 `data/api_keys.py`。
-- 可通过 `/api/config/audit` 查看当前生效配置中的已知未消费字段、未知 override 字段和生效策略摘要。
+- 现在前后端统一以 `data/app_config.json` 作为唯一真实配置源；开发环境默认落在仓库 `data/`，安装包由 Electron 主进程通过 `WECHAT_BOT_DATA_DIR` 指向可写目录。
+- 设置页会直接读写 `app_config.json`，支持自动保存、真实落盘、文件监听热更新，以及在未启动机器人时测试 AI 联通。
+- Python Web API 仍保留 `/api/config` 与 `/api/config/audit` 兼容接口，但前端设置页不再依赖它们作为配置读写入口。
 
 当前与本轮功能直接相关的关键配置：
 
@@ -311,3 +313,16 @@ MIT
 ## Legacy Config Cleanup
 
 - Removed from defaults and GUI saves: `bot.memory_seed_*`, `bot.history_log_interval_sec`, `bot.poll_interval_sec`, `agent.history_strategy`.
+## Growth Task Controls
+
+- Dashboard 的“成长任务”面板支持按任务类型执行 `立即执行 / 暂停或恢复 / 清空队列`。
+- 任务级 API：
+  - `GET /api/growth/tasks`
+  - `POST /api/growth/tasks/<task_type>/run`
+  - `POST /api/growth/tasks/<task_type>/pause`
+  - `POST /api/growth/tasks/<task_type>/resume`
+  - `POST /api/growth/tasks/<task_type>/clear`
+
+## Release Privilege
+
+- Windows Release 产物默认嵌入管理员权限清单，启动 `setup.exe` 或 `portable.exe` 时会请求 UAC 提权。

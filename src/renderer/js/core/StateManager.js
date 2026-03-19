@@ -52,7 +52,7 @@ class StateManager {
         const keys = path.split('.');
         let value = this._state;
         for (const key of keys) {
-            if (value === undefined) {
+            if (value === undefined || value === null) {
                 return undefined;
             }
             value = value[key];

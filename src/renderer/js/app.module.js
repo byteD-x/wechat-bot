@@ -52,6 +52,7 @@ class App {
             await this._runInitStep(`${pageName}.onInit`, () => page.onInit());
         }
 
+        await this._runInitStep('_ensureLightweightBackend', () => this._ensureLightweightBackend());
         await this._runInitStep('_checkBackendConnection', () => this._checkBackendConnection());
         await this._runInitStep('_refreshStatus', () => this._refreshStatus());
         await this._runInitStep('_connectSSE', () => this._connectSSE());
@@ -200,28 +201,66 @@ class App {
 
         stateManager.set('bot.connected', connected);
         this._updateConnectionStatus();
+    }
 
-        if (!connected && window.electronAPI?.startBackend && !this._backendStartAttempted) {
+    async _ensureLightweightBackend() {
+        if (this._backendStartAttempted) {
+            return;
+        }
+
+        let connected = false;
+        try {
+            if (window.electronAPI?.checkBackend) {
+                connected = await window.electronAPI.checkBackend();
+            } else {
+                await apiService.getStatus();
+                connected = true;
+            }
+        } catch {
+            connected = false;
+        }
+
+        if (connected) {
             this._backendStartAttempted = true;
-            this._startBackendWithFeedback();
+            return;
+        }
+
+        if (!window.electronAPI?.runtimeEnsureService && !window.electronAPI?.startBackend) {
+            return;
+        }
+
+        this._backendStartAttempted = true;
+
+        try {
+            if (window.electronAPI?.runtimeEnsureService) {
+                await window.electronAPI.runtimeEnsureService();
+            } else {
+                await window.electronAPI.startBackend();
+            }
+        } catch (error) {
+            console.warn('[App] lightweight backend bootstrap failed:', error);
         }
     }
 
     async _startBackendWithFeedback() {
         try {
-            notificationService.info('后端未连接，正在尝试启动...');
-            await window.electronAPI.startBackend();
-            await new Promise(resolve => setTimeout(resolve, 1200));
-            await this._checkBackendConnection();
+            notificationService.info('正在启动 Python 服务...');
+            if (window.electronAPI?.runtimeEnsureService) {
+                await window.electronAPI.runtimeEnsureService();
+            } else if (window.electronAPI?.startBackend) {
+                await window.electronAPI.startBackend();
+            }
+            await this._refreshStatus();
+            this._connectSSE();
 
             if (!stateManager.get('bot.connected')) {
-                notificationService.error('后端启动失败，请检查环境或日志');
+                notificationService.error('Python 服务启动失败，请检查环境或日志');
             } else {
-                notificationService.success('后端已连接');
+                notificationService.success('Python 服务已连接');
             }
         } catch (error) {
-            console.error('[App] 启动后端失败:', error);
-            notificationService.error('后端启动失败，请检查环境或日志');
+            console.error('[App] backend start failed:', error);
+            notificationService.error('Python 服务启动失败，请检查环境或日志');
         }
     }
 
@@ -475,13 +514,54 @@ class App {
             this._statusFailureCount = 0;
         } catch (error) {
             console.error('[App] 刷新状态失败:', error);
-            stateManager.set('bot.connected', false);
-            this._updateConnectionStatus();
+            const previousStatus = stateManager.get('bot.status');
+            this._closeSSE();
+            this._applyDisconnectedRuntimeState(previousStatus);
             this._statusFailureCount += 1;
         } finally {
             this._statusRefreshing = false;
             this._scheduleNextStatusRefresh(this._getNextStatusIntervalMs());
         }
+    }
+
+    _buildDisconnectedStatus(previousStatus = null) {
+        const baseStatus = previousStatus && typeof previousStatus === 'object'
+            ? previousStatus
+            : {};
+        const previousStartup = baseStatus.startup && typeof baseStatus.startup === 'object'
+            ? baseStatus.startup
+            : {};
+
+        return {
+            ...baseStatus,
+            service_running: false,
+            running: false,
+            bot_running: false,
+            growth_running: false,
+            growth_enabled: false,
+            is_paused: false,
+            background_backlog_count: 0,
+            last_background_batch: null,
+            diagnostics: null,
+            startup: {
+                ...previousStartup,
+                stage: 'stopped',
+                message: '服务未启动',
+                progress: 0,
+                active: false,
+                updated_at: Date.now() / 1000,
+            },
+        };
+    }
+
+    _applyDisconnectedRuntimeState(previousStatus = null) {
+        stateManager.batchUpdate({
+            'bot.connected': false,
+            'bot.running': false,
+            'bot.paused': false,
+            'bot.status': this._buildDisconnectedStatus(previousStatus),
+        });
+        this._updateConnectionStatus();
     }
 
     _applyStatus(status, options = {}) {
@@ -499,11 +579,14 @@ class App {
             this.pages.dashboard.updateStats(status);
         }
 
+        if (options.connected !== false) {
+            this._connectSSE();
+        }
         this._updateConnectionStatus();
     }
 
     _connectSSE() {
-        if (this._eventSource) {
+        if (this._eventSource || !stateManager.get('bot.connected')) {
             return;
         }
         this._eventSource = apiService.connectSSE(
@@ -522,11 +605,18 @@ class App {
 
     _handleSSEError(err) {
         console.warn('[App] SSE 连接异常，准备重连', err);
-        stateManager.set('bot.connected', false);
-        this._updateConnectionStatus();
+        const status = stateManager.get('bot.status') || {};
+        const shouldReconnect = !!(
+            status.running ||
+            status.growth_running ||
+            status?.startup?.active
+        );
 
         this._closeSSE();
-        this._scheduleSSEReconnect();
+        this._applyDisconnectedRuntimeState(status);
+        if (shouldReconnect) {
+            this._scheduleSSEReconnect();
+        }
     }
 
     _closeSSE() {
@@ -616,24 +706,41 @@ class App {
         const paused = stateManager.get('bot.paused');
         const status = stateManager.get('bot.status');
         const startupActive = !!(status && typeof status === 'object' && status?.startup?.active);
+        const growthRunning = !!(status && typeof status === 'object' && status?.growth_running);
+        const serviceRunning = !!(status && typeof status === 'object' && status?.service_running);
 
-        let labelText = '已停止';
+        let labelText = '服务已就绪';
         let dotClass = 'status-dot offline';
+        let titleText = 'Python 服务已启动，机器人未启动';
 
         if (!connected) {
-            labelText = '未连接';
+            labelText = '服务未连接';
             dotClass = 'status-dot offline';
+            titleText = (window.electronAPI?.runtimeEnsureService || window.electronAPI?.startBackend)
+                ? 'Python 服务未连接，点击启动'
+                : 'Python 服务未连接';
         } else if (!running && startupActive) {
-            labelText = '启动中';
+            labelText = '机器人启动中';
             dotClass = 'status-dot warning';
+            titleText = 'Python 服务已启动，机器人正在启动';
         } else if (running) {
             if (paused) {
-                labelText = '已暂停';
+                labelText = '机器人已暂停';
                 dotClass = 'status-dot warning';
+                titleText = 'Python 服务已启动，机器人当前处于暂停状态';
             } else {
-                labelText = '运行中';
+                labelText = '机器人运行中';
                 dotClass = 'status-dot online';
+                titleText = 'Python 服务已启动，机器人正在运行';
             }
+        } else if (growthRunning) {
+            labelText = '成长任务运行中';
+            dotClass = 'status-dot online';
+            titleText = 'Python 服务已启动，成长任务正在运行';
+        } else if (serviceRunning || connected) {
+            labelText = '服务已就绪';
+            dotClass = 'status-dot ready';
+            titleText = 'Python 服务已启动，机器人未启动';
         }
 
         if (label) {
@@ -642,6 +749,7 @@ class App {
         if (dot) {
             dot.className = dotClass;
         }
+        badge.title = titleText;
     }
 
     _startStatusRefresh() {

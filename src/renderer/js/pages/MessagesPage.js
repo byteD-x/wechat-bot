@@ -6,6 +6,7 @@ import { toast } from '../services/NotificationService.js';
 const TEXT = {
     loading: '\u52a0\u8f7d\u4e2d...',
     loadFailed: '\u52a0\u8f7d\u6d88\u606f\u5931\u8d25',
+    offline: '\u8bf7\u5148\u542f\u52a8 Python \u670d\u52a1\u540e\u67e5\u770b\u6d88\u606f',
     allChats: '\u5168\u90e8\u4f1a\u8bdd',
     unnamedChat: '\u672a\u547d\u540d\u4f1a\u8bdd',
     allMessages: '\u5168\u90e8\u6d88\u606f',
@@ -30,6 +31,7 @@ const TEXT = {
     contactPromptEmpty: '\u5f53\u524d\u8fd8\u6ca1\u6709\u751f\u6210\u8054\u7cfb\u4eba\u4e13\u5c5e Prompt\uff0c\u7ee7\u7eed\u804a\u5929\u540e\u7cfb\u7edf\u4f1a\u5728\u540e\u53f0\u9010\u6b65\u751f\u6210\u3002',
     contactPromptLoading: '\u6b63\u5728\u52a0\u8f7d\u8054\u7cfb\u4eba\u753b\u50cf\u4e0e Prompt...',
     contactPromptLoadFailed: '\u52a0\u8f7d\u8054\u7cfb\u4eba\u753b\u50cf\u5931\u8d25',
+    contactPromptOffline: '\u8bf7\u5148\u542f\u52a8 Python \u670d\u52a1\u540e\u67e5\u770b\u8054\u7cfb\u4eba\u753b\u50cf\u4e0e Prompt',
     contactPromptSave: '\u4fdd\u5b58 Prompt',
     contactPromptSaveSuccess: '\u8054\u7cfb\u4eba Prompt \u5df2\u4fdd\u5b58',
     contactPromptSaveFailed: '\u4fdd\u5b58\u8054\u7cfb\u4eba Prompt \u5931\u8d25',
@@ -79,6 +81,11 @@ export class MessagesPage extends PageController {
     async onInit() {
         await super.onInit();
         this._bindEvents();
+        this.watchState('bot.connected', () => {
+            if (this.isActive()) {
+                void this._refreshMessages();
+            }
+        });
         this.listenEvent(Events.MESSAGE_RECEIVED, (payload) => {
             this._handleRealtimeMessage(payload);
         });
@@ -86,7 +93,7 @@ export class MessagesPage extends PageController {
 
     async onEnter() {
         await super.onEnter();
-        if (this._messages.length === 0) {
+        if (!this.getState('bot.connected') || this._messages.length === 0) {
             await this._refreshMessages();
             return;
         }
@@ -134,12 +141,30 @@ export class MessagesPage extends PageController {
     }
 
     async _refreshMessages() {
+        if (!this.getState('bot.connected')) {
+            this._messages = [];
+            this._chats = [];
+            this._total = 0;
+            this._offset = 0;
+            this._hasMore = false;
+            this._renderChatFilter();
+            this._renderSummary();
+            this._renderLoadMore();
+
+            const container = this.$('#all-messages');
+            if (container) {
+                container.textContent = '';
+                container.appendChild(createStateBlock(TEXT.offline, 'empty-state'));
+            }
+            return;
+        }
+
         this._offset = 0;
         await this._fetchMessages({ append: false });
     }
 
     async _loadMore() {
-        if (!this._hasMore) {
+        if (!this.getState('bot.connected') || !this._hasMore) {
             return;
         }
         await this._fetchMessages({ append: true });
@@ -365,8 +390,14 @@ export class MessagesPage extends PageController {
         const requestToken = ++this._detailRequestToken;
         body.textContent = '';
         body.appendChild(this._buildMessageDetail(message));
-        body.appendChild(createStateBlock(TEXT.contactPromptLoading));
         modal.classList.add('active');
+
+        if (!this.getState('bot.connected')) {
+            body.appendChild(createStateBlock(TEXT.contactPromptOffline, 'empty-state'));
+            return;
+        }
+
+        body.appendChild(createStateBlock(TEXT.contactPromptLoading));
 
         try {
             const result = await apiService.getContactProfile(message.wx_id || '');

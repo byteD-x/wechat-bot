@@ -17,6 +17,8 @@ const TEXT = {
     matched: '匹配',
 };
 
+TEXT.offline = '\u8bf7\u5148\u542f\u52a8 Python \u670d\u52a1\u540e\u67e5\u770b\u65e5\u5fd7';
+
 const STAGE_SUMMARY = {
     'POLL.RECEIVED': '轮询收到新消息',
     'MERGE.QUEUE': '消息进入合并队列',
@@ -163,6 +165,13 @@ export class LogsPage extends PageController {
         await super.onInit();
         this._bindEvents();
         this._syncOptionState();
+        this.watchState('bot.connected', () => {
+            if (!this.isActive()) {
+                return;
+            }
+            this._setupAutoRefresh();
+            void this._refreshLogs({ silent: true });
+        });
     }
 
     async onEnter() {
@@ -260,6 +269,16 @@ export class LogsPage extends PageController {
         const container = this.$('#log-content');
         const { silent = false } = options;
 
+        if (!this.getState('bot.connected')) {
+            this._allLogs = [];
+            this._visibleLogs = [];
+            if (container) {
+                container.textContent = TEXT.offline;
+            }
+            this._updateMeta();
+            return;
+        }
+
         if (!silent && container) {
             container.textContent = TEXT.loading;
         }
@@ -289,6 +308,11 @@ export class LogsPage extends PageController {
     }
 
     async _clearLogs() {
+        if (!this.getState('bot.connected')) {
+            toast.info(TEXT.offline);
+            return;
+        }
+
         try {
             const result = await apiService.clearLogs();
             if (!result?.success) {
@@ -411,7 +435,11 @@ export class LogsPage extends PageController {
     _setupAutoRefresh() {
         this._clearRefreshTimer();
 
-        if (!this.isActive() || this.getState('logs.autoRefresh') === false) {
+        if (
+            !this.isActive() ||
+            this.getState('logs.autoRefresh') === false ||
+            !this.getState('bot.connected')
+        ) {
             return;
         }
 

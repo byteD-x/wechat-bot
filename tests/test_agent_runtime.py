@@ -653,6 +653,50 @@ async def test_agent_runtime_invoke_falls_back_to_openai_compatible_reply_when_l
 
 
 @pytest.mark.asyncio
+async def test_agent_runtime_invoke_falls_back_to_openai_compatible_reply_when_langchain_raises_for_ollama(monkeypatch):
+    monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
+
+    runtime = AgentRuntime(
+        settings={
+            "base_url": "http://127.0.0.1:11434/v1",
+            "api_key": "",
+            "model": "deepseek-v3.2:cloud",
+            "provider_id": "ollama",
+            "allow_empty_key": True,
+        },
+        bot_cfg={},
+        agent_cfg={"enabled": True},
+    )
+    prepared = SimpleNamespace(
+        prompt_messages=[_FakeMessage("hello")],
+        chat_id="friend:alice",
+        response_metadata={},
+        timings={},
+    )
+
+    async def _ainvoke(messages, config=None):
+        raise RuntimeError("ollama handshake timeout")
+
+    async def _fallback(prepared_request):
+        return SimpleNamespace(
+            text="fallback after exception",
+            reasoning="",
+            tool_calls=[],
+            finish_reason="stop",
+        )
+
+    runtime._chat_model.ainvoke = _ainvoke
+    monkeypatch.setattr(runtime, "_invoke_openai_compatible_reply", _fallback)
+
+    reply = await runtime.invoke(prepared)
+
+    assert reply == "fallback after exception"
+    assert prepared.response_metadata["compat_fallback"] == "openai_chat_completions"
+    assert prepared.response_metadata["compat_fallback_trigger"] == "langchain_exception"
+    assert prepared.response_metadata["langchain_invoke_error"] == "ollama handshake timeout"
+
+
+@pytest.mark.asyncio
 async def test_agent_runtime_invoke_records_tool_call_only_response(monkeypatch):
     monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
 
@@ -820,6 +864,55 @@ async def test_agent_runtime_invoke_downgrades_fallback_timeout_to_empty_reply(m
     assert reply == ""
     assert prepared.response_metadata["compat_fallback_failed"] is True
     assert prepared.response_metadata["compat_fallback_error"] == "compat timeout"
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_probe_falls_back_to_compat_for_ollama(monkeypatch):
+    monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
+
+    runtime = AgentRuntime(
+        settings={
+            "base_url": "http://127.0.0.1:11434/v1",
+            "api_key": "",
+            "model": "deepseek-v3.2:cloud",
+            "provider_id": "ollama",
+            "allow_empty_key": True,
+        },
+        bot_cfg={},
+        agent_cfg={"enabled": True},
+    )
+
+    async def _ainvoke(messages, config=None):
+        raise RuntimeError("langchain probe failed")
+
+    class _FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": {"content": ""}}]}
+
+    class _FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            return _FakeResponse()
+
+    runtime._chat_model.ainvoke = _ainvoke
+    monkeypatch.setattr("backend.core.agent_runtime.httpx.AsyncClient", _FakeAsyncClient)
+
+    ok = await runtime.probe()
+
+    assert ok is True
 
 
 @pytest.mark.asyncio
@@ -1093,6 +1186,86 @@ async def test_agent_runtime_background_batch_executes_deferred_tasks(monkeypatc
     assert memory.saved_contact_prompt == "这是联系人专属 Prompt"
     assert memory.saved_contact_prompt_source == "hybrid"
     assert memory.background_backlog == {}
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_supports_task_level_growth_controls(monkeypatch):
+    monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
+
+    memory = _DummyMemory()
+    vector_memory = _DummyVectorMemory()
+    export_rag = _DummyExportRag()
+    runtime = AgentRuntime(
+        settings={
+            "base_url": "https://example.com/v1",
+            "api_key": "sk-test",
+            "model": "test-model",
+            "embedding_model": "embed-model",
+        },
+        bot_cfg={
+            "personalization_enabled": True,
+            "profile_update_frequency": 4,
+            "emotion_detection_enabled": True,
+            "emotion_detection_mode": "ai",
+            "rag_enabled": True,
+            "export_rag_enabled": True,
+        },
+        agent_cfg={"enabled": True},
+    )
+
+    async def _fake_generate_reply(
+        chat_id,
+        user_text,
+        system_prompt=None,
+        memory_context=None,
+        image_path=None,
+        priority="foreground",
+    ):
+        if str(chat_id).startswith("__emotion__"):
+            return '{"emotion":"happy","confidence":0.9,"intensity":4,"keywords_matched":[],"suggested_tone":"warm"}'
+        if str(chat_id).startswith("__contact_prompt__"):
+            return "这是联系人专属 Prompt"
+        return "ignored"
+
+    monkeypatch.setattr(runtime, "generate_reply", _fake_generate_reply)
+
+    prepared = await runtime.prepare_request(
+        event=SimpleNamespace(chat_name="Bob", sender="User", content="hi"),
+        chat_id="friend:bob",
+        user_text="hi",
+        dependencies={
+            "memory": memory,
+            "export_rag": export_rag,
+            "vector_memory": vector_memory,
+        },
+    )
+
+    await runtime.finalize_request(
+        prepared,
+        "received",
+        {"memory": memory, "export_rag": export_rag, "vector_memory": vector_memory},
+    )
+    await asyncio.sleep(0)
+
+    cleared = await runtime.clear_background_backlog(task_type="contact_prompt")
+    assert cleared == 1
+
+    paused = runtime.pause_background_task_type("emotion")
+    assert paused == ["emotion"]
+    assert runtime.get_status()["paused_growth_task_types"] == ["emotion"]
+
+    await runtime._run_background_batch_once()
+    assert ("friend:bob", "emotion") in memory.background_backlog
+    assert ("friend:bob", "contact_prompt") not in memory.background_backlog
+
+    manual_result = await runtime.run_background_backlog_now(task_type="emotion")
+    assert manual_result["completed"] == 1
+    assert manual_result["trigger"] == "manual"
+    assert ("friend:bob", "emotion") not in memory.background_backlog
+
+    resumed = runtime.resume_background_task_type("emotion")
+    assert resumed == []
+    await runtime.close()
 
 
 @pytest.mark.asyncio

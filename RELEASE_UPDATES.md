@@ -208,3 +208,4 @@ npm run build:release
 
 - 本轮仅填入能从官方公开页直接确认数值的模型；Doubao、Zhipu、Moonshot、SiliconFlow 等仍保留为空或部分为空，避免误填导致成本核算失真
 - Ollama 继续按本地模型 `0` 成本口径处理
+- Windows Release 产物默认嵌入管理员权限清单，`setup.exe` 与 `portable.exe` 首次启动都会请求 UAC 提权。

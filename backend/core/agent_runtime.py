@@ -227,6 +227,7 @@ class AgentRuntime:
         self._embedding_cache: Dict[str, tuple[float, List[float]]] = {}
         self._embedding_pending: Dict[str, asyncio.Future] = {}
         self._background_tasks: set[asyncio.Task] = set()
+        self._paused_background_task_types: set[str] = set()
         self._runtime_dependencies: Dict[str, Any] = {}
         self._llm_condition: Optional[asyncio.Condition] = None
         self._foreground_active = 0
@@ -321,6 +322,14 @@ class AgentRuntime:
         if self.provider_id == "qwen":
             return max(float(configured_timeout_sec), _QWEN_RUNTIME_MIN_TIMEOUT_SEC)
         return float(configured_timeout_sec)
+
+    def _is_ollama_runtime(self) -> bool:
+        base_url = str(self.base_url or "").strip().lower()
+        return (
+            self.provider_id == "ollama"
+            or "127.0.0.1:11434" in base_url
+            or "localhost:11434" in base_url
+        )
 
     def _build_chat_model(self, *, streaming: bool) -> Any:
         kwargs: Dict[str, Any] = {
@@ -513,6 +522,70 @@ class AgentRuntime:
         self._stats["background_backlog_count"] = int(stats.get("total", 0) or 0)
         self._stats["background_backlog_by_task"] = dict(stats.get("by_task_type") or {})
 
+    def _normalize_background_task_type(self, task_type: str) -> str:
+        normalized = str(task_type or "").strip()
+        if normalized not in _BACKGROUND_TASK_TYPES:
+            raise ValueError(f"unsupported_task_type:{normalized or 'empty'}")
+        return normalized
+
+    async def list_background_backlog_items(
+        self,
+        *,
+        task_type: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        memory = self._runtime_dependencies.get("memory")
+        if memory is None or not hasattr(memory, "list_background_backlog"):
+            return []
+        normalized_task_type = (
+            self._normalize_background_task_type(task_type)
+            if task_type is not None
+            else None
+        )
+        items = await memory.list_background_backlog(limit=limit)
+        ordered_items = self._sort_background_backlog_items(list(items or []))
+        if normalized_task_type is None:
+            return ordered_items
+        return [
+            dict(item)
+            for item in ordered_items
+            if str(item.get("task_type") or "").strip() == normalized_task_type
+        ]
+
+    async def clear_background_backlog(self, *, task_type: str) -> int:
+        normalized_task_type = self._normalize_background_task_type(task_type)
+        memory = self._runtime_dependencies.get("memory")
+        if memory is None or not hasattr(memory, "delete_background_backlog"):
+            return 0
+        items = await self.list_background_backlog_items(task_type=normalized_task_type)
+        cleared = 0
+        for item in items:
+            await memory.delete_background_backlog(
+                str(item.get("chat_id") or "").strip(),
+                normalized_task_type,
+            )
+            cleared += 1
+        await self._refresh_background_backlog_stats()
+        return cleared
+
+    def pause_background_task_type(self, task_type: str) -> List[str]:
+        normalized_task_type = self._normalize_background_task_type(task_type)
+        self._paused_background_task_types.add(normalized_task_type)
+        return sorted(self._paused_background_task_types)
+
+    def resume_background_task_type(self, task_type: str) -> List[str]:
+        normalized_task_type = self._normalize_background_task_type(task_type)
+        self._paused_background_task_types.discard(normalized_task_type)
+        return sorted(self._paused_background_task_types)
+
+    async def run_background_backlog_now(self, *, task_type: str) -> Dict[str, Any]:
+        normalized_task_type = self._normalize_background_task_type(task_type)
+        return await self._run_background_batch_once(
+            task_types={normalized_task_type},
+            include_paused=True,
+            trigger="manual",
+        )
+
     async def _enqueue_background_backlog(
         self,
         *,
@@ -547,7 +620,13 @@ class AgentRuntime:
             ),
         )
 
-    async def _run_background_batch_once(self) -> None:
+    async def _run_background_batch_once(
+        self,
+        *,
+        task_types: Optional[set[str]] = None,
+        include_paused: bool = False,
+        trigger: str = "scheduled",
+    ) -> Dict[str, Any]:
         async with self._batch_lock:
             memory = self._runtime_dependencies.get("memory")
             if memory is None or not hasattr(memory, "list_background_backlog"):
@@ -557,12 +636,15 @@ class AgentRuntime:
                     "completed": 0,
                     "failed": 0,
                     "started_at": time.time(),
+                    "trigger": trigger,
                 }
-                return
+                return dict(self._stats["last_background_batch"])
             started_at = time.time()
             completed = 0
             failed = 0
+            skipped_paused = 0
             attempted: set[tuple[str, str]] = set()
+            allowed_task_types = set(task_types or [])
             while True:
                 items = await memory.list_background_backlog()
                 pending = [
@@ -572,7 +654,36 @@ class AgentRuntime:
                         str(item.get("chat_id") or ""),
                         str(item.get("task_type") or ""),
                     ) not in attempted
+                    and (
+                        not allowed_task_types
+                        or str(item.get("task_type") or "").strip() in allowed_task_types
+                    )
+                    and (
+                        include_paused
+                        or str(item.get("task_type") or "").strip()
+                        not in self._paused_background_task_types
+                    )
                 ]
+                if not include_paused:
+                    skipped_paused = max(
+                        0,
+                        len(
+                            [
+                                item
+                                for item in list(items or [])
+                                if (
+                                    (str(item.get("chat_id") or ""), str(item.get("task_type") or ""))
+                                    not in attempted
+                                )
+                                and (
+                                    not allowed_task_types
+                                    or str(item.get("task_type") or "").strip() in allowed_task_types
+                                )
+                                and str(item.get("task_type") or "").strip()
+                                in self._paused_background_task_types
+                            ]
+                        ),
+                    )
                 if not pending:
                     break
                 for item in pending:
@@ -593,14 +704,21 @@ class AgentRuntime:
                         await self._refresh_background_backlog_stats()
                     else:
                         failed += 1
-            self._stats["last_background_batch"] = {
+            summary = {
                 "success": failed == 0,
                 "completed": completed,
                 "failed": failed,
                 "started_at": started_at,
                 "finished_at": time.time(),
+                "trigger": trigger,
             }
+            if allowed_task_types:
+                summary["task_types"] = sorted(allowed_task_types)
+            if skipped_paused > 0:
+                summary["skipped_paused"] = skipped_paused
+            self._stats["last_background_batch"] = summary
             await self._refresh_background_backlog_stats()
+            return dict(summary)
 
     async def _execute_background_backlog_item(self, item: Dict[str, Any]) -> bool:
         task_type = str(item.get("task_type") or "").strip()
@@ -784,6 +902,26 @@ class AgentRuntime:
             return True
         except Exception as exc:
             logger.warning("LangChain runtime 探测失败: %s", exc)
+            if not self._is_ollama_runtime():
+                return False
+        try:
+            async with httpx.AsyncClient(timeout=min(self.effective_timeout_sec, 20.0)) as client:
+                response = await client.post(
+                    f"{self.base_url}/chat/completions",
+                    headers=self._build_openai_compatible_headers(),
+                    json=build_openai_chat_payload(
+                        model=self.model,
+                        messages=[{"role": "user", "content": "ping"}],
+                        stream=False,
+                        temperature=0,
+                        max_tokens=1,
+                    ),
+                )
+                response.raise_for_status()
+                payload = response.json()
+                return bool((payload.get("choices") or []))
+        except Exception as exc:
+            logger.warning("Compat fallback probe failed: %s", exc)
             return False
 
     async def prepare_request(
@@ -846,23 +984,49 @@ class AgentRuntime:
         started = time.perf_counter()
         await self._acquire_llm_slot(priority)
         try:
-            response = await self._chat_model.ainvoke(
-                prepared.prompt_messages,
-                config={
-                    "tags": ["wechat-chat", "agent-runtime", "invoke"],
-                    "metadata": {"chat_id": prepared.chat_id, "engine": "langgraph"},
-                },
-            )
-            normalized = normalize_chat_result(response)
-            final_normalized = normalized
+            final_normalized = None
             fallback_error: Optional[Exception] = None
-            reply_text, reasoning_text = self._consume_normalized_reply(
-                prepared,
-                normalized,
-                source="invoke",
-            )
-            if self._should_attempt_empty_reply_fallback(
-                normalized,
+            reply_text = ""
+            reasoning_text = ""
+            try:
+                response = await self._chat_model.ainvoke(
+                    prepared.prompt_messages,
+                    config={
+                        "tags": ["wechat-chat", "agent-runtime", "invoke"],
+                        "metadata": {"chat_id": prepared.chat_id, "engine": "langgraph"},
+                    },
+                )
+                normalized = normalize_chat_result(response)
+                final_normalized = normalized
+                reply_text, reasoning_text = self._consume_normalized_reply(
+                    prepared,
+                    normalized,
+                    source="invoke",
+                )
+            except Exception as exc:
+                prepared.response_metadata["langchain_invoke_error"] = str(exc)
+                if not self._is_ollama_runtime():
+                    raise
+                logger.warning(
+                    "LangChain invoke failed, fallback to direct compat call [%s][provider=%s]: %s",
+                    prepared.chat_id,
+                    self.provider_id or "unknown",
+                    exc,
+                )
+                fallback_normalized = await self._invoke_openai_compatible_reply(prepared)
+                fallback_reply_text, fallback_reasoning_text = self._consume_normalized_reply(
+                    prepared,
+                    fallback_normalized,
+                    source="compat_fallback",
+                )
+                prepared.response_metadata["compat_fallback"] = "openai_chat_completions"
+                prepared.response_metadata["compat_fallback_trigger"] = "langchain_exception"
+                final_normalized = fallback_normalized
+                reply_text = fallback_reply_text
+                reasoning_text = fallback_reasoning_text
+
+            if final_normalized is not None and self._should_attempt_empty_reply_fallback(
+                final_normalized,
                 reply_text=reply_text,
                 reasoning_text=reasoning_text,
             ):
@@ -1412,6 +1576,7 @@ class AgentRuntime:
             "background_active": self._stats["background_active"],
             "background_backlog_count": self._stats["background_backlog_count"],
             "background_backlog_by_task": dict(self._stats["background_backlog_by_task"]),
+            "paused_growth_task_types": sorted(self._paused_background_task_types),
             "next_background_batch_at": self._stats["next_background_batch_at"],
             "last_background_batch": dict(self._stats["last_background_batch"]),
             "retriever_stats": {
