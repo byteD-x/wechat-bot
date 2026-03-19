@@ -8,7 +8,7 @@
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)
 ![WeChat](https://img.shields.io/badge/WeChat-PC%203.9.12.51-brightgreen.svg)
 
-?? `WCFerry + Quart + Electron + LangChain/LangGraph` ??? AI ????????
+⚡️ `WCFerry + Quart + Electron + LangChain/LangGraph` ⚡️ AI 助手
 支持多 OpenAI-compatible 提供方、短期记忆、运行期 RAG、导出语料 RAG、情绪分析、Prompt 个性化和桌面/Web 控制台。
 </div>
 

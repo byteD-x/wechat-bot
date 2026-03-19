@@ -61,7 +61,7 @@ pip install -r requirements.txt
 这一阶段会安装：
 
 - Quart / Hypercorn
-- WCFerry 主链路依赖，以及 ???? 遗留兼容依赖
+- WCFerry 主链路依赖，以及旧版兼容依赖
 - ChromaDB
 - LangChain / LangGraph / LangSmith
 - `watchdog`
