@@ -96,12 +96,31 @@ jobs:
           Set-Content -Path release\SHA256SUMS.txt -Value $lines -Encoding utf8
 
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2.6.1
-        with:
-          tag_name: ${{ env.RELEASE_TAG }}
-          body_path: release-notes.md
-          files: |
-            release/wechat-ai-assistant-portable-*.exe
-            release/wechat-ai-assistant-setup-*.exe
-            release/SHA256SUMS.txt
-          fail_on_unmatched_files: true
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = $env:RELEASE_TAG
+          $assetFiles = @(
+            Get-ChildItem release\wechat-ai-assistant-portable-*.exe -ErrorAction Stop
+            Get-ChildItem release\wechat-ai-assistant-setup-*.exe -ErrorAction Stop
+            Get-Item release\SHA256SUMS.txt -ErrorAction Stop
+          ) | ForEach-Object { $_.FullName }
+
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --verify-tag --notes-file release-notes.md
+            if ($LASTEXITCODE -ne 0) {
+              throw "Failed to create release for tag $tag."
+            }
+          } else {
+            gh release edit $tag --notes-file release-notes.md
+            if ($LASTEXITCODE -ne 0) {
+              throw "Failed to update release notes for tag $tag."
+            }
+          }
+
+          gh release upload $tag @assetFiles --clobber
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to upload release assets for tag $tag."
+          }
