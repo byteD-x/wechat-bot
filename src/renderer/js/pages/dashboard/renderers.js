@@ -7,6 +7,7 @@ import {
     formatQueue,
     formatLatency,
     formatMemory,
+    formatReplyQualitySummary,
     formatStartupMeta,
     formatTime,
     formatTimingLabel,
@@ -475,7 +476,13 @@ export function renderDiagnostics(page, diagnostics) {
     action.textContent = diagnostics.action_label || '一键恢复';
 }
 
-export function renderHealthMetrics(page, metrics = {}, checks = {}, mergeFeedback = null) {
+export function renderHealthMetrics(
+    page,
+    metrics = {},
+    checks = {},
+    mergeFeedback = null,
+    replyQuality = null
+) {
     const cpuElem = page.$('#health-cpu');
     const memoryElem = page.$('#health-memory');
     const queueElem = page.$('#health-queue');
@@ -499,7 +506,16 @@ export function renderHealthMetrics(page, metrics = {}, checks = {}, mergeFeedba
     latencyElem.textContent = formatLatency(metrics.ai_latency_ms);
     warningElem.hidden = !metrics.warning;
     warningElem.textContent = metrics.warning || '';
-    mergeElem.textContent = mergeFeedback?.status_text || '消息合并状态：未激活';
+    const feedbackParts = [];
+    if (mergeFeedback?.status_text) {
+        feedbackParts.push(mergeFeedback.status_text);
+    } else {
+        feedbackParts.push('消息合并状态：未激活');
+    }
+    if (replyQuality) {
+        feedbackParts.push(formatReplyQualitySummary(replyQuality));
+    }
+    mergeElem.textContent = feedbackParts.join(' | ');
     mergeElem.dataset.active = mergeFeedback?.active ? 'true' : 'false';
 
     renderHealthCheckItem(page, 'health-ai', checks.ai);

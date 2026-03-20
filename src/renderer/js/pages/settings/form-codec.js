@@ -5,6 +5,28 @@ import {
     RANGE_FIELD_DEFS,
 } from './schema.js';
 
+const SYSTEM_PROMPT_FIXED_BLOCK = [
+    '# 系统注入上下文（固定）',
+    '以下内容由系统在运行时自动注入，请勿手动改写：',
+    '# 历史对话',
+    '{history_context}',
+    '',
+    '# 用户画像',
+    '{user_profile}',
+    '',
+    '# 当前情境',
+    '{emotion_hint}{time_hint}{style_hint}',
+].join('\n');
+
+const SYSTEM_PROMPT_RESERVED_SECTION_PATTERNS = [
+    /(?:^|\n)#\s*系统注入上下文（固定）\n以下内容由系统在运行时自动注入，请勿手动改写：\n# 历史对话\n\{history_context\}\n\n# 用户画像\n\{user_profile\}\n\n# 当前情境\n\{emotion_hint\}\{time_hint\}\{style_hint\}\s*/g,
+    /(?:^|\n)#\s*历史对话\s*\n\{history_context\}\s*/g,
+    /(?:^|\n)#\s*用户画像\s*\n\{user_profile\}\s*/g,
+    /(?:^|\n)#\s*当前情境\s*\n\{emotion_hint\}\{time_hint\}\{style_hint\}\s*/g,
+];
+
+const SYSTEM_PROMPT_PLACEHOLDER_PATTERN = /\{history_context\}|\{user_profile\}|\{emotion_hint\}|\{time_hint\}|\{style_hint\}/g;
+
 export function deepClone(value) {
     return JSON.parse(JSON.stringify(value ?? {}));
 }
@@ -104,6 +126,34 @@ function pruneEmptySections(payload) {
     return nextPayload;
 }
 
+function normalizePromptSpacing(value) {
+    return String(value || '')
+        .replace(/\r\n/g, '\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+}
+
+export function getSystemPromptFixedBlock() {
+    return SYSTEM_PROMPT_FIXED_BLOCK;
+}
+
+export function extractEditableSystemPrompt(value) {
+    let cleaned = String(value || '').replace(/\r\n/g, '\n');
+    SYSTEM_PROMPT_RESERVED_SECTION_PATTERNS.forEach((pattern) => {
+        cleaned = cleaned.replace(pattern, '\n');
+    });
+    cleaned = cleaned.replace(SYSTEM_PROMPT_PLACEHOLDER_PATTERN, '');
+    return normalizePromptSpacing(cleaned);
+}
+
+export function composeSystemPromptTemplate(value) {
+    const editable = extractEditableSystemPrompt(value);
+    if (!editable) {
+        return SYSTEM_PROMPT_FIXED_BLOCK;
+    }
+    return `${editable}\n\n${SYSTEM_PROMPT_FIXED_BLOCK}`;
+}
+
 export function fillSettingsForm(page, config, scope = null) {
     const includeIds = scope?.ids instanceof Set ? scope.ids : null;
     const includeSections = scope?.sections instanceof Set ? scope.sections : null;
@@ -124,10 +174,17 @@ export function fillSettingsForm(page, config, scope = null) {
             if (options.nullable && (value === null || value === undefined)) {
                 element.placeholder = '留空';
             }
+        } else if (id === 'setting-system-prompt-editable') {
+            element.value = extractEditableSystemPrompt(value ?? '');
         } else {
             element.value = value ?? '';
         }
     });
+
+    const fixedPrompt = page.$('#setting-system-prompt-fixed');
+    if (fixedPrompt && (!includeIds || includeIds.has('setting-system-prompt-editable'))) {
+        fixedPrompt.value = getSystemPromptFixedBlock();
+    }
 
     LIST_FIELD_DEFS.forEach(([id, section, path]) => {
         if ((includeSections && !includeSections.has(section)) || (includeIds && !includeIds.has(id))) {
@@ -200,6 +257,8 @@ export function collectSettingsPayload(page, scope = null, options = {}) {
                     return;
                 }
             }
+        } else if (id === 'setting-system-prompt-editable') {
+            value = composeSystemPromptTemplate(element.value);
         } else {
             value = element.value;
         }

@@ -4,7 +4,6 @@ import asyncio
 import json
 import logging
 import os
-import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -13,8 +12,7 @@ import httpx
 
 from ..schemas import EmotionResult
 from ..utils.common import as_float, as_int
-from ..utils.config import is_placeholder_key, resolve_system_prompt
-from ..utils.image_processing import process_image_for_api
+from ..utils.config import is_placeholder_key
 from ..utils.logging import build_stage_log_message
 from .provider_compat import (
     build_openai_chat_payload,
@@ -30,6 +28,18 @@ from .emotion import (
     get_relationship_evolution_hint,
     parse_emotion_ai_response,
     parse_fact_extraction_response,
+)
+from .agent_runtime_prepare import (
+    build_prompt_messages as prepare_build_prompt_messages,
+    build_prompt_node as prepare_build_prompt_node,
+    load_context_node as prepare_load_context_node,
+    remaining_prepare_budget as prepare_remaining_prepare_budget,
+    rerank_runtime_results as prepare_rerank_runtime_results,
+    rerank_runtime_results_cross_encoder as prepare_rerank_runtime_results_cross_encoder,
+    rerank_runtime_results_lightweight as prepare_rerank_runtime_results_lightweight,
+    resolve_context_task as prepare_resolve_context_task,
+    search_runtime_memory as prepare_search_runtime_memory,
+    tokenize_rerank_text as prepare_tokenize_rerank_text,
 )
 
 logger = logging.getLogger(__name__)
@@ -1090,6 +1100,10 @@ class AgentRuntime:
         self.update_runtime_dependencies(dependencies)
         memory = dependencies.get("memory")
         if memory:
+            event = getattr(prepared, "event", None)
+            chat_display_name = str(getattr(event, "chat_name", "") or "").strip()
+            if chat_display_name and chat_display_name != prepared.chat_id:
+                await memory.update_user_profile(prepared.chat_id, nickname=chat_display_name)
             user_metadata = self._build_user_message_metadata(prepared)
             assistant_metadata = dict(prepared.response_metadata or {})
             await memory.add_messages(
@@ -1598,7 +1612,7 @@ class AgentRuntime:
         }
 
     def _remaining_prepare_budget(self, started: float) -> float:
-        return max(0.0, self.prepare_soft_budget_sec - (time.perf_counter() - started))
+        return prepare_remaining_prepare_budget(self, started)
 
     async def _resolve_context_task(
         self,
@@ -1610,134 +1624,21 @@ class AgentRuntime:
         warning_message: str,
         timeout_sec: Optional[float] = None,
     ) -> Any:
-        if task is None:
-            return None
-
-        remaining_budget = self._remaining_prepare_budget(started)
-        if timeout_sec is not None:
-            remaining_budget = min(remaining_budget, timeout_sec)
-        if remaining_budget <= 0:
-            skipped_context_steps.append(step_name)
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-            return None
-
-        try:
-            return await asyncio.wait_for(asyncio.shield(task), timeout=remaining_budget)
-        except asyncio.TimeoutError:
-            skipped_context_steps.append(step_name)
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-            logger.info(
-                "Skipping %s for reply budget [%s] after %.0f ms",
-                step_name,
-                step_name,
-                remaining_budget * 1000,
-            )
-            return None
-        except Exception as exc:
-            logger.warning("%s [%s]: %s", warning_message, step_name, exc)
-            return None
+        return await prepare_resolve_context_task(
+            self,
+            task,
+            step_name=step_name,
+            started=started,
+            skipped_context_steps=skipped_context_steps,
+            warning_message=warning_message,
+            timeout_sec=timeout_sec,
+        )
 
     async def _load_context_node(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        event = state["event"]
-        chat_id = state["chat_id"]
-        user_text = state["user_text"]
-        dependencies = state.get("dependencies") or {}
-        memory = dependencies.get("memory")
-
-        started = time.perf_counter()
-        memory_context: List[dict] = []
-        short_term_preview: List[str] = []
-        user_profile = None
-        skipped_context_steps: List[str] = []
-        context_task: Optional[asyncio.Task] = None
-        profile_task: Optional[asyncio.Task] = None
-
-        limit = as_int(self.bot_cfg.get("memory_context_limit", 5), 5, min_value=0)
-        if memory and limit > 0:
-            context_task = asyncio.create_task(memory.get_recent_context(chat_id, limit))
-        if memory and self.bot_cfg.get("personalization_enabled", False):
-            get_snapshot = getattr(memory, "get_profile_prompt_snapshot", None)
-            if callable(get_snapshot):
-                profile_task = asyncio.create_task(get_snapshot(chat_id))
-            else:
-                profile_task = asyncio.create_task(memory.get_user_profile(chat_id))
-
-        context_result = await self._resolve_context_task(
-            context_task,
-            step_name="recent_context",
-            started=started,
-            skipped_context_steps=skipped_context_steps,
-            warning_message=f"短期记忆加载失败 [{chat_id}]",
-        )
-        if context_result:
-            memory_context = list(context_result or [])
-            short_term_preview = [
-                str(item.get("content") or "").strip()
-                for item in memory_context[:3]
-                if isinstance(item, dict) and str(item.get("content") or "").strip()
-            ]
-
-        user_profile = await self._resolve_context_task(
-            profile_task,
-            step_name="user_profile",
-            started=started,
-            skipped_context_steps=skipped_context_steps,
-            warning_message=f"用户画像加载失败 [{chat_id}]",
-            timeout_sec=self.prepare_optional_timeout_sec,
-        )
-
-        timings = dict(state.get("timings") or {})
-        timings["load_context_budget_sec"] = round(self.prepare_soft_budget_sec, 4)
-        timings["load_context_sec"] = round(time.perf_counter() - started, 4)
-        trace = {
-            "context_summary": {
-                "short_term_messages": len(memory_context),
-                "short_term_preview": short_term_preview,
-                "skipped_context_steps": list(skipped_context_steps),
-                "growth_mode": "deferred_until_batch",
-            },
-            "profile": self._serialize_profile(user_profile),
-        }
-        return {
-            "memory_context": memory_context,
-            "user_profile": user_profile,
-            "current_emotion": None,
-            "timings": timings,
-            "trace": trace,
-            "event": event,
-            "chat_id": chat_id,
-            "user_text": user_text,
-            "dependencies": dependencies,
-            "image_path": state.get("image_path"),
-            "skipped_context_steps": skipped_context_steps,
-        }
+        return await prepare_load_context_node(self, state)
 
     async def _build_prompt_node(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        started = time.perf_counter()
-        system_prompt = resolve_system_prompt(
-            state["event"],
-            self.bot_cfg,
-            state.get("user_profile"),
-            state.get("current_emotion"),
-            list(state.get("memory_context") or []),
-        )
-        prompt_messages = self._build_prompt_messages(
-            system_prompt=system_prompt,
-            memory_context=list(state.get("memory_context") or []),
-            user_text=str(state.get("user_text") or ""),
-            image_path=state.get("image_path"),
-            event=state.get("event"),
-        )
-        timings = dict(state.get("timings") or {})
-        timings["build_prompt_sec"] = round(time.perf_counter() - started, 4)
-        return {
-            **state,
-            "system_prompt": system_prompt,
-            "prompt_messages": prompt_messages,
-            "timings": timings,
-        }
+        return await prepare_build_prompt_node(self, state)
 
     def _build_prompt_messages(
         self,
@@ -1748,59 +1649,14 @@ class AgentRuntime:
         image_path: Optional[str],
         event: Any = None,
     ) -> List[Any]:
-        system_message = self._imports["SystemMessage"]
-        human_message = self._imports["HumanMessage"]
-        ai_message = self._imports["AIMessage"]
-
-        messages: List[Any] = []
-        if system_prompt:
-            messages.append(system_message(content=system_prompt))
-
-        for item in memory_context:
-            if not isinstance(item, dict):
-                continue
-            role = str(item.get("role") or "user").strip().lower()
-            content = item.get("content")
-            if content is None:
-                continue
-            text = str(content).strip()
-            if not text:
-                continue
-            if role == "assistant":
-                messages.append(ai_message(content=text))
-            elif role == "system":
-                messages.append(system_message(content=text))
-            else:
-                messages.append(human_message(content=text))
-
-        final_user_text = str(user_text or "")
-        if (
-            event is not None
-            and bool(getattr(event, "is_group", False))
-            and self.bot_cfg.get("group_include_sender", True)
-        ):
-            sender = str(getattr(event, "sender", "") or "").strip()
-            if sender:
-                final_user_text = f"[{sender}] {final_user_text}".strip()
-
-        if image_path:
-            base64_image = process_image_for_api(image_path)
-            if base64_image:
-                messages.append(
-                    human_message(
-                        content=[
-                            {"type": "text", "text": user_text or "这张图片里有什么？"},
-                            {
-                                "type": "image_url",
-                                "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"},
-                            },
-                        ]
-                    )
-                )
-                return messages
-
-        messages.append(human_message(content=final_user_text))
-        return messages
+        return prepare_build_prompt_messages(
+            self,
+            system_prompt=system_prompt,
+            memory_context=memory_context,
+            user_text=user_text,
+            image_path=image_path,
+            event=event,
+        )
 
     def _should_refresh_profile(self, profile: Any) -> bool:
         frequency = as_int(self.bot_cfg.get("profile_update_frequency", 10), 10, min_value=1)
@@ -1808,181 +1664,32 @@ class AgentRuntime:
         return message_count <= 0 or ((message_count + 1) % frequency == 0)
 
     async def _search_runtime_memory(self, chat_id: str, user_text: str, vector_memory: Any) -> Optional[dict]:
-        if not str(user_text or "").strip():
-            return None
-
-        embedding = await self.get_embedding(user_text)
-        results = await asyncio.to_thread(
-            vector_memory.search,
-            query=user_text if not embedding else None,
-            n_results=self.retriever_fetch_k,
-            filter_meta={"chat_id": chat_id, "source": "runtime_chat"},
-            query_embedding=embedding,
-        )
-        if not results:
-            return None
-
-        ranked_results = await self._rerank_runtime_results(user_text, results)
-        lines: List[str] = []
-        for item in ranked_results:
-            distance = item.get("distance")
-            if distance is not None and float(distance) > self.retriever_score_threshold:
-                continue
-            text = str(item.get("text") or "").strip()
-            if not text:
-                continue
-            lines.append(text)
-            if len(lines) >= self.retriever_top_k:
-                break
-
-        if not lines:
-            return None
-
-        self._stats["retriever_hits"] += len(lines)
-        return {
-            "role": "system",
-            "content": "Relevant past memories:\n" + "\n".join(lines),
-            "hit_count": len(lines),
-            "trace_snippets": lines[:5],
-        }
+        return await prepare_search_runtime_memory(self, chat_id, user_text, vector_memory)
 
     async def _rerank_runtime_results(
         self,
         query_text: str,
         results: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
-        if self._cross_encoder_reranker is not None:
-            try:
-                ranked = await asyncio.to_thread(
-                    self._rerank_runtime_results_cross_encoder,
-                    query_text,
-                    results,
-                )
-                self._rerank_backend = "cross_encoder"
-                return ranked
-            except Exception as exc:
-                self._stats["retriever_rerank_fallbacks"] += 1
-                self._rerank_backend = "lightweight"
-                logger.warning("Cross-Encoder 精排失败，已回退轻量重排: %s", exc)
-
-        self._rerank_backend = "lightweight"
-        return self._rerank_runtime_results_lightweight(query_text, results)
+        return await prepare_rerank_runtime_results(self, query_text, results)
 
     def _rerank_runtime_results_cross_encoder(
         self,
         query_text: str,
         results: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
-        reranker = self._cross_encoder_reranker
-        if reranker is None:
-            return self._rerank_runtime_results_lightweight(query_text, results)
-
-        pairs: List[List[str]] = []
-        candidates: List[tuple[int, Dict[str, Any]]] = []
-        for index, item in enumerate(results):
-            text = str(item.get("text") or "").strip()
-            if not text:
-                continue
-            pairs.append([query_text, text])
-            candidates.append((index, item))
-
-        if not pairs:
-            return list(results)
-
-        raw_scores = list(reranker.predict(pairs))
-        ranked: List[Dict[str, Any]] = []
-        for (index, item), raw_score in zip(candidates, raw_scores):
-            try:
-                cross_encoder_score = float(raw_score)
-            except (TypeError, ValueError):
-                cross_encoder_score = 0.0
-
-            distance = item.get("distance")
-            try:
-                semantic_score = max(0.0, 1.0 - float(distance))
-            except (TypeError, ValueError):
-                semantic_score = 0.0
-
-            ranked.append({
-                **item,
-                "cross_encoder_score": round(cross_encoder_score, 4),
-                "semantic_score": round(semantic_score, 4),
-                "rerank_score": round(cross_encoder_score, 4),
-                "_original_index": index,
-            })
-
-        ranked.sort(
-            key=lambda item: (
-                item.get("cross_encoder_score", 0.0),
-                item.get("semantic_score", 0.0),
-                -item.get("_original_index", 0),
-            ),
-            reverse=True,
-        )
-        for item in ranked:
-            item.pop("_original_index", None)
-        return ranked
+        return prepare_rerank_runtime_results_cross_encoder(self, query_text, results)
 
     def _rerank_runtime_results_lightweight(
         self,
         query_text: str,
         results: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
-        query_tokens = self._tokenize_rerank_text(query_text)
-        if not query_tokens:
-            return list(results)
-
-        ranked: List[Dict[str, Any]] = []
-        for index, item in enumerate(results):
-            text = str(item.get("text") or "").strip()
-            if not text:
-                continue
-
-            candidate_tokens = self._tokenize_rerank_text(text)
-            overlap = len(query_tokens & candidate_tokens) / max(1, len(query_tokens))
-            distance = item.get("distance")
-            try:
-                semantic_score = max(0.0, 1.0 - float(distance))
-            except (TypeError, ValueError):
-                semantic_score = 0.0
-
-            rerank_score = round((semantic_score * 0.7) + (overlap * 0.3), 4)
-            ranked.append({
-                **item,
-                "rerank_score": rerank_score,
-                "_original_index": index,
-            })
-
-        ranked.sort(
-            key=lambda item: (
-                item.get("rerank_score", 0.0),
-                -item.get("_original_index", 0),
-            ),
-            reverse=True,
-        )
-        for item in ranked:
-            item.pop("_original_index", None)
-        return ranked
+        return prepare_rerank_runtime_results_lightweight(self, query_text, results)
 
     @staticmethod
     def _tokenize_rerank_text(text: str) -> set[str]:
-        normalized = str(text or "").strip().lower()
-        if not normalized:
-            return set()
-
-        word_tokens = {
-            part
-            for part in re.findall(r"[0-9a-zA-Z\u4e00-\u9fff]+", normalized)
-            if part
-        }
-        if len(word_tokens) > 1:
-            return word_tokens
-
-        return {
-            char
-            for char in normalized
-            if char.strip() and re.match(r"[0-9a-zA-Z\u4e00-\u9fff]", char)
-        }
+        return prepare_tokenize_rerank_text(text)
 
     async def _analyze_emotion(self, chat_id: str, text: str) -> Optional[EmotionResult]:
         if self.emotion_fast_path_enabled:

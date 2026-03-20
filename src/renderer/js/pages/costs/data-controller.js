@@ -7,6 +7,7 @@ import {
     renderCostLoading,
     renderCostModelBreakdown,
     renderCostOverview,
+    renderCostReviewQueue,
     renderCostSessions,
 } from './renderers.js';
 import {
@@ -26,6 +27,11 @@ function getToast(deps = {}) {
 export function renderCostSummary(page) {
     renderCostOverview(page, page._summary?.overview || {});
     renderCostModelBreakdown(page, page._summary?.models || []);
+    renderCostReviewQueue(
+        page,
+        page._summary?.review_queue || [],
+        page._summary?.review_playbook || {},
+    );
     renderCostFilterOptions(page, page._filters, page._summary?.options || {});
 }
 
@@ -97,7 +103,7 @@ export async function refreshPricingCatalog(page, deps = {}) {
             .map(([providerId, item]) => `${providerId}: ${item?.message || COST_TEXT.refreshPricingFailed}`);
 
         if (failures.length > 0) {
-            currentToast.warning(`${COST_TEXT.refreshPricingPartial}${failures.join('；')}`);
+            currentToast.warning(`${COST_TEXT.refreshPricingPartial}${failures.join(', ')}`);
         } else {
             currentToast.success(COST_TEXT.refreshPricingSuccess);
         }
@@ -106,5 +112,54 @@ export async function refreshPricingCatalog(page, deps = {}) {
         await runRefresh(page);
     } catch (error) {
         currentToast.error(currentToast.getErrorMessage(error, COST_TEXT.refreshPricingFailed));
+    }
+}
+
+export async function exportCostReviewQueue(page, deps = {}) {
+    const currentToast = getToast(deps);
+    if (!page.getState('bot.connected')) {
+        currentToast.info(COST_TEXT.offline);
+        return;
+    }
+
+    readCostFilters(page);
+    try {
+        const params = toCostApiParams(page._filters);
+        const result = await getApiService(deps).exportCostReviewQueue(params);
+        if (!result?.success) {
+            throw new Error(result?.message || 'Export review queue failed');
+        }
+
+        const payload = JSON.stringify(result, null, 2);
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const presetSuffix = params.preset ? `-preset-${String(params.preset).replace(/[^a-zA-Z0-9_-]+/g, '_')}` : '';
+        const reasonSuffix = params.review_reason ? `-reason-${String(params.review_reason).replace(/[^a-zA-Z0-9_-]+/g, '_')}` : '';
+        const filename = `cost-review-queue${presetSuffix}${reasonSuffix}-${timestamp}.json`;
+        const urlApi = globalThis.URL;
+        if (typeof Blob === 'function' && urlApi?.createObjectURL) {
+            const blob = new Blob([payload], { type: 'application/json;charset=utf-8' });
+            const href = urlApi.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = href;
+            link.download = filename;
+            link.click();
+            if (typeof urlApi.revokeObjectURL === 'function') {
+                urlApi.revokeObjectURL(href);
+            }
+            const scopeParts = [];
+            if (params.preset) {
+                scopeParts.push(`preset ${params.preset}`);
+            }
+            if (params.review_reason) {
+                scopeParts.push(`reason ${params.review_reason}`);
+            }
+            const scopeLabel = scopeParts.length > 0 ? ` for ${scopeParts.join(', ')}` : '';
+            currentToast.success(`Exported ${result.total || 0} review items${scopeLabel}`);
+            return;
+        }
+
+        currentToast.warning(`Export returned ${result.total || 0} items, but auto download is unavailable`);
+    } catch (error) {
+        currentToast.error(currentToast.getErrorMessage(error, 'Export review queue failed'));
     }
 }

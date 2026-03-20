@@ -40,6 +40,20 @@ function findFirstMatch(root, parts, index = 0) {
     return null;
 }
 
+function findAllMatches(root, parts, index = 0, results = []) {
+    for (const child of root.children) {
+        if (matchesSelectorPart(child, parts[index])) {
+            if (index === parts.length - 1) {
+                results.push(child);
+            } else {
+                findAllMatches(child, parts, index + 1, results);
+            }
+        }
+        findAllMatches(child, parts, index, results);
+    }
+    return results;
+}
+
 class FakeNode {
     constructor(tagName, ownerDocument, nodeType = 'element') {
         this.tagName = String(tagName || '').toUpperCase();
@@ -173,6 +187,14 @@ class FakeNode {
             return null;
         }
         return findFirstMatch(this, parts);
+    }
+
+    querySelectorAll(selector) {
+        const parts = String(selector || '').trim().split(/\s+/).filter(Boolean);
+        if (parts.length === 0) {
+            return [];
+        }
+        return findAllMatches(this, parts);
     }
 
     addEventListener(type, handler) {

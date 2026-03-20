@@ -192,6 +192,61 @@ export function formatLatency(value) {
     return `${Math.round(Number(value))} ms`;
 }
 
+export function formatReplyQualitySummary(value) {
+    const attempted = Number(value?.attempted || 0);
+    const history24h = value?.history_24h || null;
+    const historyAttempted = Number(history24h?.attempted || 0);
+    const sessionAvailable = Number.isFinite(attempted) && attempted > 0;
+    const historyAvailable = Number.isFinite(historyAttempted) && historyAttempted > 0;
+
+    if (!sessionAvailable && !historyAvailable) {
+        return '回复质量：暂无样本';
+    }
+
+    const extras = [];
+    if (sessionAvailable) {
+        const successRate = Number(value?.success_rate || 0);
+        const delayed = Number(value?.delayed || 0);
+        const retrievalAugmented = Number(value?.retrieval_augmented || 0);
+        const empty = Number(value?.empty || 0);
+        const helpfulCount = Number(value?.helpful_count || 0);
+        const unhelpfulCount = Number(value?.unhelpful_count || 0);
+        const rateText = Number.isFinite(successRate) ? successRate.toFixed(1) : '0.0';
+        extras.push(`本次 ${rateText}%`);
+        if (Number.isFinite(delayed) && delayed > 0) {
+            extras.push(`超时补发 ${delayed}`);
+        }
+        if (Number.isFinite(retrievalAugmented) && retrievalAugmented > 0) {
+            extras.push(`检索增强 ${retrievalAugmented}`);
+        }
+        if (Number.isFinite(empty) && empty > 0) {
+            extras.push(`空回复 ${empty}`);
+        }
+        if (Number.isFinite(helpfulCount) && helpfulCount > 0) {
+            extras.push(`有帮助 ${helpfulCount}`);
+        }
+        if (Number.isFinite(unhelpfulCount) && unhelpfulCount > 0) {
+            extras.push(`没帮助 ${unhelpfulCount}`);
+        }
+    }
+
+    if (historyAvailable) {
+        const historyRate = Number(history24h?.success_rate || 0);
+        const historyHelpful = Number(history24h?.helpful_count || 0);
+        const historyUnhelpful = Number(history24h?.unhelpful_count || 0);
+        const historyRateText = Number.isFinite(historyRate) ? historyRate.toFixed(1) : '0.0';
+        extras.push(`近24h ${historyRateText}%`);
+        if (Number.isFinite(historyHelpful) && historyHelpful > 0) {
+            extras.push(`近24h 有帮助 ${historyHelpful}`);
+        }
+        if (Number.isFinite(historyUnhelpful) && historyUnhelpful > 0) {
+            extras.push(`近24h 没帮助 ${historyUnhelpful}`);
+        }
+    }
+
+    return `回复质量：${extras.join(' · ')}`;
+}
+
 export function formatNumber(value) {
     if (value === undefined || value === null) {
         return '0';

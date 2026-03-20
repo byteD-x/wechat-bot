@@ -6,11 +6,16 @@ import {
     formatCostGroups,
     formatCostNumber,
     formatCurrencyValue,
+    formatFeedbackLabel,
+    formatPercent,
+    formatReviewReason,
+    formatSuggestedAction,
+    formatRetrievalSummary,
     normalizeCostModelName,
 } from './formatters.js';
 
 export function renderCostLoading(page) {
-    ['#cost-overview', '#cost-models', '#cost-sessions'].forEach((selector) => {
+    ['#cost-overview', '#cost-models', '#cost-review-list', '#cost-sessions'].forEach((selector) => {
         const container = page.$(selector);
         if (!container) {
             return;
@@ -21,7 +26,7 @@ export function renderCostLoading(page) {
 }
 
 export function renderCostError(page, message) {
-    ['#cost-overview', '#cost-models', '#cost-sessions'].forEach((selector) => {
+    ['#cost-overview', '#cost-models', '#cost-review-list', '#cost-sessions'].forEach((selector) => {
         const container = page.$(selector);
         if (!container) {
             return;
@@ -38,26 +43,17 @@ export function renderCostOverview(page, overview = {}) {
     }
 
     const cards = [
-        {
-            label: COST_TEXT.totalCost,
-            value: formatCostGroups(overview.currency_groups) || '--',
-        },
-        {
-            label: COST_TEXT.totalTokens,
-            value: formatCostNumber(overview.total_tokens),
-        },
-        {
-            label: COST_TEXT.pricedReplies,
-            value: formatCostNumber(overview.priced_reply_count),
-        },
-        {
-            label: COST_TEXT.unpricedReplies,
-            value: formatCostNumber(overview.unpriced_reply_count),
-        },
+        { label: COST_TEXT.totalCost, value: formatCostGroups(overview.currency_groups) || '--' },
+        { label: COST_TEXT.totalTokens, value: formatCostNumber(overview.total_tokens) },
+        { label: COST_TEXT.pricedReplies, value: formatCostNumber(overview.priced_reply_count) },
+        { label: COST_TEXT.unpricedReplies, value: formatCostNumber(overview.unpriced_reply_count) },
+        { label: COST_TEXT.helpfulReplies, value: formatCostNumber(overview.helpful_count) },
+        { label: COST_TEXT.unhelpfulReplies, value: formatCostNumber(overview.unhelpful_count) },
+        { label: COST_TEXT.feedbackCoverage, value: formatPercent(overview.feedback_coverage) },
         {
             label: COST_TEXT.mostExpensiveModel,
             value: overview.most_expensive_model
-                ? `${normalizeCostModelName(overview.most_expensive_model.model)} \u00b7 ${formatCurrencyValue(
+                ? `${normalizeCostModelName(overview.most_expensive_model.model)} · ${formatCurrencyValue(
                     overview.most_expensive_model.currency,
                     overview.most_expensive_model.total_cost,
                 )}`
@@ -125,15 +121,33 @@ export function renderCostModelBreakdown(page, models = []) {
 export function renderCostFilterOptions(page, filters, options = {}) {
     const providerSelect = page.$('#cost-provider');
     const modelSelect = page.$('#cost-model');
-    if (!providerSelect || !modelSelect) {
+    const presetSelect = page.$('#cost-preset');
+    const reviewReasonSelect = page.$('#cost-review-reason');
+    const suggestedActionSelect = page.$('#cost-suggested-action');
+    if (!providerSelect || !modelSelect || !presetSelect || !reviewReasonSelect || !suggestedActionSelect) {
         return;
     }
 
     fillCostSelect(providerSelect, options.providers || [], COST_TEXT.allProviders);
     fillCostSelect(modelSelect, options.models || [], COST_TEXT.allModels);
+    fillCostSelect(presetSelect, options.presets || [], '全部预设');
+    fillCostSelect(
+        reviewReasonSelect,
+        (options.review_reasons || []).map((value) => ({ value, label: formatReviewReason(value) })),
+        '全部原因',
+    );
+
+    fillCostSelect(
+        suggestedActionSelect,
+        (options.suggested_actions || []).map((value) => ({ value, label: formatSuggestedAction(value) })),
+        COST_TEXT.allSuggestedActions,
+    );
 
     providerSelect.value = filters.provider_id;
     modelSelect.value = filters.model;
+    presetSelect.value = filters.preset || '';
+    reviewReasonSelect.value = filters.review_reason || '';
+    suggestedActionSelect.value = filters.suggested_action || '';
 }
 
 function fillCostSelect(select, values, allLabel) {
@@ -145,8 +159,13 @@ function fillCostSelect(select, values, allLabel) {
 
     (values || []).forEach((value) => {
         const option = document.createElement('option');
-        option.value = value;
-        option.textContent = value;
+        if (value && typeof value === 'object') {
+            option.value = value.value || '';
+            option.textContent = value.label || value.value || '';
+        } else {
+            option.value = value;
+            option.textContent = value;
+        }
         select.appendChild(option);
     });
 }
@@ -182,7 +201,7 @@ export function renderCostSessions(page, sessions = [], onToggleSession) {
             createCostElement(
                 'span',
                 'cost-session-subtitle',
-                `${formatCostDateTime(session.last_timestamp)} \u00b7 ${formatCostNumber(session.reply_count)} ${COST_TEXT.aiReplies}`,
+                `${formatCostDateTime(session.last_timestamp)} · ${formatCostNumber(session.reply_count)} ${COST_TEXT.aiReplies}`,
             ),
         );
 
@@ -200,9 +219,27 @@ export function renderCostSessions(page, sessions = [], onToggleSession) {
         if (session.estimated_reply_count > 0) {
             meta.appendChild(
                 createCostElement(
-                    'span',
+                    'button',
                     'cost-session-chip is-estimated',
                     `${COST_TEXT.estimatedLabel} ${formatCostNumber(session.estimated_reply_count)}`,
+                ),
+            );
+        }
+        if (Number(session.helpful_count) > 0) {
+            meta.appendChild(
+                createCostElement(
+                    'span',
+                    'cost-session-chip is-cost',
+                    `${COST_TEXT.helpfulReplies} ${formatCostNumber(session.helpful_count)}`,
+                ),
+            );
+        }
+        if (Number(session.unhelpful_count) > 0) {
+            meta.appendChild(
+                createCostElement(
+                    'span',
+                    'cost-session-chip is-pending',
+                    `${COST_TEXT.unhelpfulReplies} ${formatCostNumber(session.unhelpful_count)}`,
                 ),
             );
         }
@@ -229,6 +266,134 @@ export function renderCostSessionLoading(container) {
 export function renderCostSessionError(container, message) {
     container.textContent = '';
     container.appendChild(createCostStateBlock(message, 'empty-state'));
+}
+
+export function renderCostReviewQueue(page, reviewQueue = [], playbook = {}) {
+    const container = page.$('#cost-review-list');
+    if (!container) {
+        return;
+    }
+
+    container.textContent = '';
+    if (!Array.isArray(reviewQueue) || reviewQueue.length === 0) {
+        container.appendChild(createCostStateBlock(COST_TEXT.noReviewQueue, 'empty-state'));
+        return;
+    }
+
+    const actionRows = Array.isArray(playbook.actions) ? playbook.actions : [];
+    if (actionRows.length > 0) {
+        const summary = createCostElement('div', 'cost-reply-playbook');
+        summary.appendChild(createCostElement('div', 'cost-reply-playbook-title', COST_TEXT.playbookTitle));
+        const metrics = createCostElement('div', 'cost-reply-metrics');
+        actionRows.slice(0, 3).forEach((item) => {
+            const reasonText = Array.isArray(item.review_reasons) && item.review_reasons.length > 0
+                ? ` / ${item.review_reasons.map((reason) => formatReviewReason(reason)).join('、')}`
+                : '';
+            metrics.appendChild(
+                createCostElement(
+                    'span',
+                    'cost-reply-metric',
+                    `${formatSuggestedAction(item.action)} · ${COST_TEXT.affectedRepliesMetric}${formatCostNumber(item.count)}${reasonText}`,
+                ),
+            );
+            const chip = metrics.children[metrics.children.length - 1];
+            if (chip) {
+                chip.tabIndex = 0;
+                chip.setAttribute('role', 'button');
+                chip.addEventListener('click', () => {
+                    page._applySuggestedActionFilter?.(item.action);
+                });
+            }
+            const guidanceSummary = String(item?.guidance?.summary || '').trim();
+            if (guidanceSummary) {
+                summary.appendChild(
+                    createCostElement(
+                        'p',
+                        'cost-reply-preview',
+                        `${COST_TEXT.playbookGuideLabel}${guidanceSummary}`,
+                    ),
+                );
+            }
+        });
+        summary.appendChild(metrics);
+        container.appendChild(summary);
+    }
+
+    const list = createCostElement('div', 'cost-reply-list');
+    reviewQueue.forEach((record) => {
+        const item = createCostElement('article', 'cost-reply-item');
+        const top = createCostElement('div', 'cost-reply-top');
+
+        const title = createCostElement('div', 'cost-reply-title');
+        title.appendChild(
+            createCostElement(
+                'strong',
+                '',
+                `${record.display_name || record.chat_id} · ${normalizeCostModelName(record.model)}`,
+            ),
+        );
+        title.appendChild(createCostElement('span', 'cost-reply-time', formatCostDateTime(record.timestamp)));
+        top.appendChild(title);
+
+        const badges = createCostElement('div', 'cost-reply-badges');
+        badges.appendChild(createCostElement('span', 'cost-session-chip is-pending', COST_TEXT.unhelpfulReplies));
+        if (record.provider_id) {
+            badges.appendChild(createCostElement('span', 'cost-session-chip', record.provider_id));
+        }
+        if (record.cost?.total_cost !== undefined && record.cost?.total_cost !== null) {
+            badges.appendChild(
+                createCostElement(
+                    'span',
+                    'cost-session-chip is-cost',
+                    formatCurrencyValue(record.currency, record.cost?.total_cost),
+                ),
+            );
+        }
+        top.appendChild(badges);
+        item.appendChild(top);
+
+        const metrics = createCostElement('div', 'cost-reply-metrics');
+        metrics.appendChild(createCostElement('span', 'cost-reply-metric', `${COST_TEXT.presetMetric}${record.preset || '--'}`));
+        metrics.appendChild(
+            createCostElement(
+                'span',
+                'cost-reply-metric',
+                `${COST_TEXT.reviewReasonMetric}${formatReviewReason(record.review_reason)}`,
+            ),
+        );
+        metrics.appendChild(
+            createCostElement(
+                'span',
+                'cost-reply-metric',
+                `${COST_TEXT.suggestedActionMetric}${formatSuggestedAction(record.suggested_action)}`,
+            ),
+        );
+        metrics.appendChild(
+            createCostElement(
+                'span',
+                'cost-reply-metric',
+                `${COST_TEXT.retrievalMetric}${formatRetrievalSummary(record.retrieval) || '--'}`,
+            ),
+        );
+        item.appendChild(metrics);
+        item.appendChild(
+            createCostElement(
+                'p',
+                'cost-reply-preview',
+                `${COST_TEXT.reviewContextLabel}: ${record.user_preview || '--'}`,
+            ),
+        );
+        item.appendChild(
+            createCostElement(
+                'p',
+                'cost-reply-preview',
+                `${COST_TEXT.reviewReplyLabel}: ${record.reply_preview || '--'}`,
+            ),
+        );
+        list.appendChild(item);
+    });
+
+    container.appendChild(list);
 }
 
 export function renderCostSessionDetails(container, records = []) {
@@ -264,12 +429,35 @@ export function renderCostSessionDetails(container, records = []) {
         if (record.estimated?.tokens || record.estimated?.pricing) {
             badges.appendChild(createCostElement('span', 'cost-session-chip is-estimated', COST_TEXT.estimatedData));
         }
+        if (record.reply_quality?.feedback) {
+            badges.appendChild(
+                createCostElement(
+                    'span',
+                    `cost-session-chip ${record.reply_quality.feedback === 'helpful' ? 'is-cost' : 'is-pending'}`,
+                    formatFeedbackLabel(record.reply_quality.feedback),
+                ),
+            );
+        }
         top.appendChild(badges);
         item.appendChild(top);
 
         const metrics = createCostElement('div', 'cost-reply-metrics');
         metrics.appendChild(createCostElement('span', 'cost-reply-metric', `${COST_TEXT.providerMetric}${record.provider_id || '--'}`));
         metrics.appendChild(createCostElement('span', 'cost-reply-metric', `${COST_TEXT.presetMetric}${record.preset || '--'}`));
+        metrics.appendChild(
+            createCostElement(
+                'span',
+                'cost-reply-metric',
+                `${COST_TEXT.feedbackMetric}${formatFeedbackLabel(record.reply_quality?.feedback)}`,
+            ),
+        );
+        metrics.appendChild(
+            createCostElement(
+                'span',
+                'cost-reply-metric',
+                `${COST_TEXT.retrievalMetric}${formatRetrievalSummary(record.retrieval) || '--'}`,
+            ),
+        );
         metrics.appendChild(
             createCostElement(
                 'span',
@@ -285,6 +473,9 @@ export function renderCostSessionDetails(container, records = []) {
             ),
         );
         item.appendChild(metrics);
+        if (record.user_preview) {
+            item.appendChild(createCostElement('p', 'cost-reply-preview', `${COST_TEXT.reviewContextLabel}: ${record.user_preview}`));
+        }
         item.appendChild(createCostElement('p', 'cost-reply-preview', record.reply_preview || record.reply_text || ''));
         list.appendChild(item);
     });

@@ -12,6 +12,7 @@ import {
 import {
     renderCostSessionDetails,
     renderCostSessions,
+    renderCostReviewQueue,
 } from '../../src/renderer/js/pages/costs/renderers.js';
 import {
     formatLogDisplayLine,
@@ -104,12 +105,15 @@ test('cost helpers render sessions and details consistently', () => withDom(({ d
             total_tokens: 150,
             priced_reply_count: 2,
             estimated_reply_count: 1,
+            helpful_count: 1,
+            unhelpful_count: 1,
             currency_groups: [{ currency: 'CNY', total_cost: 1.2 }],
         },
     ], () => {});
 
     assert.equal(selectors['#cost-sessions'].children.length, 1);
     assert.match(selectors['#cost-sessions'].children[0].textContent, /Alice/);
+    assert.match(selectors['#cost-sessions'].children[0].textContent, /没帮助/);
 
     const detail = document.createElement('div');
     renderCostSessionDetails(detail, [
@@ -122,6 +126,9 @@ test('cost helpers render sessions and details consistently', () => withDom(({ d
             cost: { total_cost: 0.2, input_cost: 0.08, output_cost: 0.12 },
             provider_id: 'openai',
             preset: 'default',
+            reply_quality: { feedback: 'unhelpful' },
+            retrieval: { augmented: true, runtime_hit_count: 2 },
+            user_preview: '上一条用户消息',
             reply_preview: 'ok',
         },
     ]);
@@ -129,6 +136,27 @@ test('cost helpers render sessions and details consistently', () => withDom(({ d
     assert.equal(detail.children.length, 1);
     assert.match(detail.textContent, /gpt-4\.1/);
     assert.match(detail.textContent, /openai/);
+    assert.match(detail.textContent, /上一条用户消息/);
+    assert.match(detail.textContent, /没帮助/);
+
+    selectors['#cost-review-list'] = document.createElement('div');
+    renderCostReviewQueue(page, [
+        {
+            chat_id: 'wxid_123',
+            display_name: 'Alice',
+            model: 'gpt-4.1',
+            timestamp: 1_700_000_000,
+            provider_id: 'openai',
+            preset: 'default',
+            reply_preview: '需要复盘的回复',
+            user_preview: '用户原始问题',
+            retrieval: { augmented: true, runtime_hit_count: 2 },
+            cost: { total_cost: 0.2 },
+            currency: 'USD',
+        },
+    ]);
+    assert.match(selectors['#cost-review-list'].textContent, /需要复盘的回复/);
+    assert.match(selectors['#cost-review-list'].textContent, /用户原始问题/);
 }));
 
 test('log helpers summarize structured lines and update renderer meta', () => withDom(({ document, createPage }) => {

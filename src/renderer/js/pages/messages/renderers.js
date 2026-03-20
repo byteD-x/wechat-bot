@@ -2,9 +2,15 @@ import {
     createMessageStateBlock,
     formatMessageTime,
     formatPromptSource,
+    getMessageChatDisplayName,
+    getMessageSenderDisplayName,
     MESSAGE_TEXT,
     truncateMessageText,
 } from './formatters.js';
+import {
+    extractEditableSystemPrompt,
+    getSystemPromptFixedBlock,
+} from '../settings/form-codec.js';
 
 export function renderMessageChatFilter(page, chats, selectedChatId) {
     const select = page.$('#message-chat-filter');
@@ -39,14 +45,14 @@ export function renderMessageSummary(page, summaryState) {
     if (summary) {
         const parts = [];
         if (summaryState.selectedChatId) {
-            parts.push(`${MESSAGE_TEXT.chatLabel}：${summaryState.selectedChatId}`);
+            parts.push(`${MESSAGE_TEXT.chatLabel}: ${summaryState.selectedChatName || summaryState.selectedChatId}`);
         } else {
             parts.push(MESSAGE_TEXT.allMessages);
         }
         if (summaryState.searchKeyword) {
-            parts.push(`${MESSAGE_TEXT.keywordLabel}：“${summaryState.searchKeyword}”`);
+            parts.push(`${MESSAGE_TEXT.keywordLabel}: "${summaryState.searchKeyword}"`);
         }
-        summary.textContent = parts.join(' · ');
+        summary.textContent = parts.join(' / ');
     }
 
     if (totalCount) {
@@ -86,7 +92,7 @@ export function renderMessageList(page, messages, onOpenDetail) {
 
         const sender = document.createElement('span');
         sender.className = 'message-sender';
-        sender.textContent = String(message.sender || message.wx_id || MESSAGE_TEXT.user);
+        sender.textContent = getMessageSenderDisplayName(message);
 
         const time = document.createElement('span');
         time.className = 'message-time';
@@ -101,7 +107,7 @@ export function renderMessageList(page, messages, onOpenDetail) {
 
         const chat = document.createElement('div');
         chat.className = 'message-time';
-        chat.textContent = `${MESSAGE_TEXT.chatLabel}：${message.wx_id || '--'}`;
+        chat.textContent = `${MESSAGE_TEXT.chatLabel}: ${getMessageChatDisplayName(message)}`;
 
         body.appendChild(meta);
         body.appendChild(text);
@@ -126,7 +132,7 @@ export function renderMessageLoadMore(page, hasMore) {
     button.disabled = !hasMore;
 }
 
-export function buildMessageDetail(message) {
+export function buildMessageDetail(message, handlers = {}) {
     const root = document.createElement('div');
     root.className = 'detail-group';
 
@@ -139,8 +145,8 @@ export function buildMessageDetail(message) {
     grid.className = 'detail-grid';
 
     const fields = [
-        [MESSAGE_TEXT.fieldSender, message.sender || '--'],
-        [MESSAGE_TEXT.fieldChat, message.wx_id || '--'],
+        [MESSAGE_TEXT.fieldSender, getMessageSenderDisplayName(message)],
+        [MESSAGE_TEXT.fieldChat, getMessageChatDisplayName(message)],
         [MESSAGE_TEXT.fieldTime, formatMessageTime(message.timestamp) || '--'],
         [MESSAGE_TEXT.fieldDirection, message.is_self ? MESSAGE_TEXT.outgoing : MESSAGE_TEXT.incoming],
         [MESSAGE_TEXT.fieldType, String(message.msg_type || message.type || '--')],
@@ -173,6 +179,55 @@ export function buildMessageDetail(message) {
     contentWrap.appendChild(contentLabel);
     contentWrap.appendChild(content);
     root.appendChild(contentWrap);
+
+    const currentFeedback = String(
+        message?.metadata?.reply_quality?.user_feedback || ''
+    ).trim().toLowerCase();
+    const isAssistantReply = message.is_self || String(message.role || '').trim().toLowerCase() === 'assistant';
+    if (isAssistantReply && typeof handlers.onFeedback === 'function') {
+        const feedbackWrap = document.createElement('div');
+        feedbackWrap.className = 'form-group full-width';
+
+        const feedbackLabel = document.createElement('label');
+        feedbackLabel.className = 'form-label';
+        feedbackLabel.textContent = MESSAGE_TEXT.feedbackTitle;
+
+        const actions = document.createElement('div');
+        actions.className = 'detail-actions';
+
+        const buildFeedbackButton = (label, value) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = `btn ${currentFeedback === value ? 'btn-primary' : 'btn-secondary'} btn-sm`;
+            button.textContent = label;
+            button.addEventListener('click', async () => {
+                const nextFeedback = currentFeedback === value ? '' : value;
+                button.disabled = true;
+                try {
+                    const nextMessage = await handlers.onFeedback?.(message, nextFeedback, currentFeedback);
+                    if (nextMessage) {
+                        const nextSection = buildMessageDetail(nextMessage, handlers);
+                        root.replaceWith(nextSection);
+                    }
+                } finally {
+                    button.disabled = false;
+                }
+            });
+            return button;
+        };
+
+        actions.appendChild(buildFeedbackButton(MESSAGE_TEXT.feedbackHelpful, 'helpful'));
+        actions.appendChild(buildFeedbackButton(MESSAGE_TEXT.feedbackUnhelpful, 'unhelpful'));
+
+        const hint = document.createElement('div');
+        hint.className = 'detail-help';
+        hint.textContent = MESSAGE_TEXT.feedbackHint;
+
+        feedbackWrap.appendChild(feedbackLabel);
+        feedbackWrap.appendChild(actions);
+        feedbackWrap.appendChild(hint);
+        root.appendChild(feedbackWrap);
+    }
 
     return root;
 }
@@ -239,17 +294,27 @@ export function buildContactProfileDetail(message, profile, handlers = {}) {
     promptWrap.className = 'form-group full-width';
     const promptLabel = document.createElement('label');
     promptLabel.className = 'form-label';
-    promptLabel.textContent = MESSAGE_TEXT.contactPrompt;
+    promptLabel.textContent = MESSAGE_TEXT.contactPromptEditable;
 
     const promptInput = document.createElement('textarea');
     promptInput.className = 'detail-textarea';
     promptInput.rows = 12;
-    promptInput.value = String(profile.contact_prompt || '');
+    promptInput.value = extractEditableSystemPrompt(String(profile.contact_prompt || ''));
     promptInput.placeholder = MESSAGE_TEXT.contactPromptEmpty;
 
     const hint = document.createElement('div');
     hint.className = 'detail-help';
-    hint.textContent = '你可以直接编辑这份联系人专属 Prompt，后续系统会以当前保存版本为基础继续渐进式更新。';
+    hint.textContent = MESSAGE_TEXT.contactPromptFixedHint;
+
+    const fixedLabel = document.createElement('label');
+    fixedLabel.className = 'form-label';
+    fixedLabel.textContent = MESSAGE_TEXT.contactPromptFixed;
+
+    const fixedBlock = document.createElement('textarea');
+    fixedBlock.className = 'detail-textarea';
+    fixedBlock.rows = 8;
+    fixedBlock.readOnly = true;
+    fixedBlock.value = getSystemPromptFixedBlock();
 
     const actions = document.createElement('div');
     actions.className = 'detail-actions';
@@ -279,6 +344,8 @@ export function buildContactProfileDetail(message, profile, handlers = {}) {
     promptWrap.appendChild(promptLabel);
     promptWrap.appendChild(promptInput);
     promptWrap.appendChild(hint);
+    promptWrap.appendChild(fixedLabel);
+    promptWrap.appendChild(fixedBlock);
     promptWrap.appendChild(actions);
     root.appendChild(promptWrap);
 

@@ -2,7 +2,7 @@ export const FIELD_DEFS = [
     ['setting-self-name', 'bot', 'self_name', 'text'],
     ['setting-reply-suffix', 'bot', 'reply_suffix', 'text'],
     ['setting-group-at-only', 'bot', 'group_reply_only_when_at', 'checkbox'],
-    ['setting-system-prompt', 'bot', 'system_prompt', 'text'],
+    ['setting-system-prompt-editable', 'bot', 'system_prompt', 'text'],
     ['setting-emoji-policy', 'bot', 'emoji_policy', 'text'],
     ['setting-voice-to-text', 'bot', 'voice_to_text', 'checkbox'],
     ['setting-voice-to-text-fail-reply', 'bot', 'voice_to_text_fail_reply', 'text'],

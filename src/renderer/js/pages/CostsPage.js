@@ -11,6 +11,9 @@ export class CostsPage extends PageController {
             period: '30d',
             provider_id: '',
             model: '',
+            preset: '',
+            review_reason: '',
+            suggested_action: '',
             only_priced: false,
             include_estimated: true,
         };

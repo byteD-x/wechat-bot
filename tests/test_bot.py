@@ -8,6 +8,8 @@ from unittest.mock import MagicMock, patch, AsyncMock, ANY
 sys.modules.setdefault("aiosqlite", types.SimpleNamespace())
 
 from backend.bot import WeChatBot
+from backend.bot_event_flow import build_incoming_broadcast_payload
+from backend.bot_reply_flow import build_outgoing_broadcast_payload
 from backend.config_schemas import BotConfig
 
 
@@ -483,6 +485,174 @@ async def test_handle_event_voice_transcription_failure_sends_configured_reply()
         await bot.handle_event(wx, event)
 
     mock_send.assert_called_once_with(wx, "chat", "voice failed", bot.bot_cfg)
+
+
+def test_build_incoming_broadcast_payload_uses_friend_chat_id_and_bot_recipient():
+    event = SimpleNamespace(
+        chat_name="Alice",
+        sender="wxid_alice",
+        content="hello",
+        is_group=False,
+        timestamp=123.0,
+    )
+
+    payload = build_incoming_broadcast_payload(event)
+
+    assert payload["chat_id"] == "friend:Alice"
+    assert payload["recipient"] == "Bot"
+    assert payload["timestamp"] == 123.0
+
+
+def test_build_outgoing_broadcast_payload_uses_reply_metadata():
+    event = SimpleNamespace(
+        chat_name="Alice",
+        sender="wxid_alice",
+        content="hello",
+        is_group=False,
+        timestamp=123.0,
+    )
+
+    payload = build_outgoing_broadcast_payload(
+        chat_id="friend:Alice",
+        event=event,
+        reply_text="done",
+        response_metadata={"model": "test-model"},
+    )
+
+    assert payload["chat_id"] == "friend:Alice"
+    assert payload["sender"] == "Bot"
+    assert payload["recipient"] == "Alice"
+    assert payload["metadata"]["model"] == "test-model"
+
+
+def test_build_reply_metadata_includes_retrieval_summary():
+    bot = WeChatBot("config.yaml")
+    bot.bot_manager = _build_mock_bot_manager()
+    bot.reply_quality_tracker = MagicMock()
+    bot.runtime_preset_name = "Test"
+    bot.ai_client = SimpleNamespace(
+        get_status=MagicMock(return_value={"engine": "langgraph"}),
+        model="test-model",
+        provider_id="",
+        base_url="",
+    )
+
+    prepared = SimpleNamespace(
+        response_metadata={},
+        timings={},
+        trace={},
+        memory_context=[
+            {"role": "system", "content": "Relevant past memories:\n1. hello", "hit_count": 2},
+            {
+                "role": "system",
+                "content": "以下内容来自你与当前联系人的真实历史聊天，仅用于模仿你本人常用语气、措辞和节奏，\n1. hi",
+            },
+        ],
+    )
+    event = SimpleNamespace(chat_name="Alice", sender="wxid_alice")
+
+    with patch("backend.bot.estimate_exchange_tokens", return_value=(8, 12, 20)), \
+         patch("backend.bot.get_pricing_catalog") as mock_catalog:
+        mock_catalog.return_value.resolve_price.return_value = None
+        metadata = bot._build_reply_metadata(
+            prepared=prepared,
+            event=event,
+            chat_id="friend:Alice",
+            user_text="hello",
+            reply_text="done",
+            streamed=False,
+        )
+
+    assert metadata["retrieval"]["augmented"] is True
+    assert metadata["retrieval"]["runtime_hit_count"] == 2
+    assert metadata["retrieval"]["export_rag_used"] is True
+
+
+def test_reply_quality_status_summarizes_session_counters():
+    bot = WeChatBot("config.yaml")
+    bot.bot_manager = _build_mock_bot_manager()
+    bot._notify_runtime_status_changed = MagicMock()
+    bot.reply_quality_tracker = MagicMock()
+    bot.reply_quality_tracker.get_recent_summaries.return_value = {
+        "24h": {"attempted": 6, "successful": 5, "success_rate": 83.3, "helpful_count": 2},
+        "7d": {"attempted": 20, "successful": 15, "success_rate": 75.0, "unhelpful_count": 3},
+    }
+
+    bot._record_reply_attempt()
+    bot._record_reply_attempt()
+    bot._record_reply_success({
+        "delayed_reply": True,
+        "retrieval": {
+            "augmented": True,
+            "runtime_hit_count": 3,
+        },
+    })
+    bot._record_reply_empty()
+    bot._record_reply_failure()
+
+    quality = bot.get_runtime_status()["reply_quality"]
+
+    assert quality["attempted"] == 2
+    assert quality["successful"] == 1
+    assert quality["empty"] == 1
+    assert quality["failed"] == 1
+    assert quality["delayed"] == 1
+    assert quality["retrieval_augmented"] == 1
+    assert quality["retrieval_hit_count"] == 3
+    assert quality["success_rate"] == 50.0
+    assert quality["history_24h"]["success_rate"] == 83.3
+    assert quality["history_24h"]["helpful_count"] == 2
+    assert quality["history_7d"]["success_rate"] == 75.0
+    assert quality["history_7d"]["unhelpful_count"] == 3
+    assert "回复成功率 50.0%" in quality["status_text"]
+
+
+def test_apply_reply_feedback_change_updates_session_counters():
+    bot = WeChatBot("config.yaml")
+    bot.bot_manager = _build_mock_bot_manager()
+    bot._notify_runtime_status_changed = MagicMock()
+
+    bot.apply_reply_feedback_change("", "helpful")
+    bot.apply_reply_feedback_change("helpful", "unhelpful")
+    bot.apply_reply_feedback_change("unhelpful", "")
+
+    assert bot.reply_quality_stats["helpful_count"] == 0
+    assert bot.reply_quality_stats["unhelpful_count"] == 0
+    assert bot._notify_runtime_status_changed.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_handle_control_command_pause_replies_and_updates_pause_state():
+    bot = WeChatBot("config.yaml")
+    bot.bot_cfg = {
+        "control_commands_enabled": True,
+        "control_reply_visible": True,
+        "control_command_prefix": "/",
+        "control_allowed_users": [],
+    }
+    bot.wx_lock = asyncio.Lock()
+    bot.bot_manager = _build_mock_bot_manager()
+    event = SimpleNamespace(chat_name="chat", sender="owner", content="/pause lunch", is_group=False)
+    wx = MagicMock()
+
+    command_result = SimpleNamespace(
+        should_reply=True,
+        command="pause",
+        args=["lunch"],
+        response="已暂停",
+    )
+
+    with patch("backend.bot_event_flow.parse_control_command", return_value=command_result), \
+         patch("backend.bot_event_flow.send_message", return_value=(True, None)) as mock_send:
+        handled = await bot._handle_control_command(wx, event, trace_id="trace-1")
+
+    assert handled is True
+    bot.bot_manager.apply_pause_state.assert_awaited_once_with(
+        True,
+        reason="lunch",
+        propagate_to_bot=False,
+    )
+    mock_send.assert_called_once_with(wx, "chat", "已暂停", bot.bot_cfg)
 
 
 @pytest.mark.asyncio

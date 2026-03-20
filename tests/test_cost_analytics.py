@@ -35,7 +35,13 @@ class DummyMemory:
         self.messages = messages
 
     async def list_messages_for_analysis(self, **kwargs):
-        return list(self.messages)
+        chat_id = str(kwargs.get("chat_id") or "").strip()
+        filtered = []
+        for message in self.messages:
+            if chat_id and str(message.get("wx_id") or "") != chat_id:
+                continue
+            filtered.append(message)
+        return filtered
 
 
 def _assistant_message(metadata=None, *, content="助手回复", created_at=1710000001, wx_id="friend:alice"):
@@ -256,3 +262,105 @@ async def test_summary_keeps_zero_cost_currency_groups_for_priced_local_models()
     assert overview["unpriced_reply_count"] == 0
     assert overview["currency_groups"] == [{"currency": "LOCAL", "total_cost": 0.0}]
     assert payload["models"][0]["currency_groups"] == [{"currency": "LOCAL", "total_cost": 0.0}]
+
+
+@pytest.mark.asyncio
+async def test_summary_includes_feedback_distribution_and_review_queue():
+    service = CostAnalyticsService(DummyPricingCatalog())
+    memory = DummyMemory([
+        _user_message("这个答复哪里有问题？", wx_id="friend:alice"),
+        _assistant_message({
+            "provider_id": "openai",
+            "preset": "default",
+            "model": "gpt-5-mini",
+            "tokens": {"user": 100, "reply": 120, "total": 220},
+            "reply_quality": {
+                "user_feedback": "unhelpful",
+                "feedback_updated_at": "2026-03-20T10:00:00+08:00",
+            },
+            "retrieval": {
+                "augmented": True,
+                "runtime_hit_count": 2,
+                "export_rag_used": True,
+            },
+        }, content="这是一条需要复盘的回复", created_at=1710000003, wx_id="friend:alice"),
+        _user_message("这个回答不错", created_at=1710000100, wx_id="friend:bob"),
+        _assistant_message({
+            "provider_id": "openai",
+            "preset": "fallback",
+            "model": "gpt-5-mini",
+            "tokens": {"user": 80, "reply": 90, "total": 170},
+            "reply_quality": {
+                "user_feedback": "helpful",
+            },
+        }, content="这是一条有帮助的回复", created_at=1710000101, wx_id="friend:bob"),
+    ])
+
+    payload = await service.get_summary(memory, {"api": {"presets": []}}, include_estimated=True)
+
+    overview = payload["overview"]
+    assert overview["helpful_count"] == 1
+    assert overview["unhelpful_count"] == 1
+    assert overview["feedback_count"] == 2
+    assert overview["feedback_coverage"] == 100.0
+
+    sessions = await service.get_sessions(memory, {"api": {"presets": []}}, include_estimated=True)
+    session_map = {item["chat_id"]: item for item in sessions["sessions"]}
+    assert session_map["friend:alice"]["unhelpful_count"] == 1
+    assert session_map["friend:bob"]["helpful_count"] == 1
+
+    details = await service.get_session_details(
+        memory,
+        {"api": {"presets": []}},
+        chat_id="friend:alice",
+        include_estimated=True,
+    )
+    assert details["records"][0]["reply_quality"]["feedback"] == "unhelpful"
+    assert details["records"][0]["retrieval"]["runtime_hit_count"] == 2
+    assert details["records"][0]["user_preview"] == "这个答复哪里有问题？"
+
+    review_queue = payload["review_queue"]
+    assert len(review_queue) == 1
+    assert review_queue[0]["chat_id"] == "friend:alice"
+    assert payload["options"]["presets"] == ["default", "fallback"]
+    assert payload["options"]["review_reasons"] == ["reply_too_short"]
+    assert payload["options"]["suggested_actions"] == ["review_prompt_constraints"]
+    assert payload["review_playbook"]["total_items"] == 1
+    assert payload["review_playbook"]["top_action"] == "review_prompt_constraints"
+    assert payload["review_playbook"]["actions"][0]["count"] == 1
+    assert "summary" in payload["review_playbook"]["actions"][0]["guidance"]
+    assert review_queue[0]["retrieval"]["export_rag_used"] is True
+    assert review_queue[0]["review_reason"] == "reply_too_short"
+    assert review_queue[0]["suggested_action"] == "review_prompt_constraints"
+    assert "config_paths" in review_queue[0]["action_guidance"]
+    assert review_queue[0]["user_preview"] == "这个答复哪里有问题？"
+
+    filtered = await service.get_summary(
+        memory,
+        {"api": {"presets": []}},
+        preset="default",
+        review_reason="reply_too_short",
+        suggested_action="review_prompt_constraints",
+        include_estimated=True,
+    )
+    assert filtered["overview"]["reply_count"] == 1
+    assert filtered["review_queue"][0]["preset"] == "default"
+
+    export_payload = await service.export_review_queue(
+        memory,
+        {"api": {"presets": []}},
+        preset="default",
+        review_reason="reply_too_short",
+        suggested_action="review_prompt_constraints",
+        include_estimated=True,
+    )
+    assert export_payload["total"] == 1
+    assert export_payload["items"][0]["user_text"] == "这个答复哪里有问题？"
+    assert export_payload["items"][0]["reply_text"] == "这是一条需要复盘的回复"
+    assert export_payload["items"][0]["review_reason"] == "reply_too_short"
+    assert export_payload["items"][0]["suggested_action"] == "review_prompt_constraints"
+    assert export_payload["items"][0]["action_guidance"]["summary"]
+    assert export_payload["items"][0]["context_summary"] == {}
+    assert export_payload["playbook"]["top_action"] == "review_prompt_constraints"
+    assert export_payload["playbook"]["actions"][0]["review_reasons"] == ["reply_too_short"]
+    assert export_payload["playbook"]["actions"][0]["guidance"]["checks"]

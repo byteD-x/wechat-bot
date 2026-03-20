@@ -18,6 +18,12 @@ const Store = require('electron-store');
 const iconv = require('iconv-lite');
 const { UpdateManager } = require('./update-manager');
 const { BackendIdleController, DEFAULT_IDLE_SHUTDOWN_MS } = require('./backend-idle-controller');
+const { createBackendManager } = require('./backend-manager');
+const {
+    createConfigCli,
+    createSharedConfigService,
+} = require('./shared-config');
+const { registerIpcHandlers } = require('./ipc');
 
 // Electron on Windows can be launched without a valid stdout/stderr (or the pipe can be closed),
 // which makes console.* throw synchronously with EPIPE and crash the main process.
@@ -249,310 +255,9 @@ function getBackendCommand(commandArgs = []) {
     };
 }
 
-function flattenPaths(input, prefix = '', output = {}) {
-    if (!input || typeof input !== 'object' || Array.isArray(input)) {
-        if (prefix) {
-            output[prefix] = input;
-        }
-        return output;
-    }
-    const entries = Object.entries(input);
-    if (!entries.length && prefix) {
-        output[prefix] = input;
-        return output;
-    }
-    for (const [key, value] of entries) {
-        const nextPrefix = prefix ? `${prefix}.${key}` : key;
-        if (value && typeof value === 'object' && !Array.isArray(value)) {
-            flattenPaths(value, nextPrefix, output);
-        } else {
-            output[nextPrefix] = value;
-        }
-    }
-    return output;
-}
-
-function diffConfigPaths(before = {}, after = {}) {
-    const left = flattenPaths(before);
-    const right = flattenPaths(after);
-    const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
-    return [...keys].filter((key) => JSON.stringify(left[key]) !== JSON.stringify(right[key])).sort();
-}
-
-function inferProviderId(preset = {}) {
-    const existing = String(preset.provider_id || '').trim().toLowerCase();
-    if (existing) {
-        return existing;
-    }
-    const name = String(preset.name || '').trim().toLowerCase();
-    const baseUrl = String(preset.base_url || '').trim().toLowerCase();
-    const model = String(preset.model || '').trim().toLowerCase();
-    if (name.includes('ollama') || baseUrl.includes('11434')) return 'ollama';
-    if (name.includes('openai') || baseUrl.includes('openai.com')) return 'openai';
-    if (name.includes('deepseek') || baseUrl.includes('deepseek.com')) return 'deepseek';
-    if (name.includes('qwen') || model.includes('qwen') || baseUrl.includes('dashscope')) return 'qwen';
-    if (name.includes('claude') || model.includes('claude') || baseUrl.includes('anthropic')) return 'anthropic';
-    if (name.includes('gemini') || model.includes('gemini') || baseUrl.includes('generativelanguage')) return 'gemini';
-    return '';
-}
-
-function maskPreset(preset = {}) {
-    const nextPreset = { ...preset };
-    nextPreset.provider_id = inferProviderId(nextPreset);
-    const apiKey = String(nextPreset.api_key || '').trim();
-    const allowEmptyKey = !!nextPreset.allow_empty_key;
-    if (allowEmptyKey) {
-        nextPreset.api_key_configured = false;
-        nextPreset.api_key_masked = '';
-    } else if (apiKey && !apiKey.startsWith('YOUR_')) {
-        nextPreset.api_key_configured = true;
-        nextPreset.api_key_masked = apiKey.length > 12 ? `${apiKey.slice(0, 8)}****${apiKey.slice(-4)}` : '****';
-    } else {
-        nextPreset.api_key_configured = false;
-        nextPreset.api_key_masked = '';
-    }
-    nextPreset.api_key_required = !allowEmptyKey;
-    delete nextPreset.api_key;
-    return nextPreset;
-}
-
-function buildRendererConfigPayload(config = {}) {
-    const api = { ...(config.api || {}) };
-    api.presets = Array.isArray(api.presets) ? api.presets.map((preset) => maskPreset(preset)) : [];
-
-    const bot = { ...(config.bot || {}) };
-    delete bot.reply_timeout_fallback_text;
-    delete bot.stream_buffer_chars;
-    delete bot.stream_chunk_max_chars;
-    delete bot.stream_reply;
-
-    const agent = { ...(config.agent || {}) };
-    agent.langsmith_api_key_configured = !!String(agent.langsmith_api_key || '').trim();
-    delete agent.langsmith_api_key;
-    delete agent.streaming_enabled;
-
-    return {
-        api,
-        bot,
-        logging: { ...(config.logging || {}) },
-        agent,
-        services: { ...(config.services || {}) },
-    };
-}
-
-function readJsonFile(filePath, fallback = {}) {
-    try {
-        return JSON.parse(fs.readFileSync(filePath, 'utf8'));
-    } catch (_) {
-        return fallback;
-    }
-}
-
-function atomicWriteJson(filePath, payload) {
-    const rendered = `${JSON.stringify(payload, null, 2)}\n`;
-    const tempPath = `${filePath}.tmp`;
-    fs.writeFileSync(tempPath, rendered, 'utf8');
-    fs.renameSync(tempPath, filePath);
-}
-
 // ═══════════════════════════════════════════════════════════════════════════════
 //                               Python 后端管理
 // ═══════════════════════════════════════════════════════════════════════════════
-
-const BackendManager = {
-    checkServer() {
-        return new Promise((resolve) => {
-            const req = http.get({
-                hostname: '127.0.0.1',
-                port: GLOBAL_STATE.flaskPort,
-                path: '/api/ping',
-                headers: GLOBAL_STATE.apiToken ? { 'X-Api-Token': GLOBAL_STATE.apiToken } : {},
-            }, (res) => {
-                resolve(res.statusCode === 200);
-            });
-            req.on('error', () => resolve(false));
-            req.setTimeout(1000, () => {
-                req.destroy();
-                resolve(false);
-            });
-        });
-    },
-
-    async start() {
-        if (await this.checkServer()) {
-            RUNTIME_IDLE_CONTROLLER.setWindowVisible(getMainWindowVisible());
-            RUNTIME_IDLE_CONTROLLER.setServiceRunning(true);
-            console.log('[Backend] 服务已在运行');
-            updateSplashStatus('后端服务已就绪，正在加载界面...', 60);
-            return;
-        }
-
-        if (GLOBAL_STATE.pythonProcess) {
-            console.log('[Backend] 后端正在启动');
-            updateSplashStatus('后端服务启动中...', 50);
-            return;
-        }
-
-        const { cmd, args, options } = getBackendCommand([
-            'web',
-            '--host',
-            '127.0.0.1',
-            '--port',
-            GLOBAL_STATE.flaskPort.toString(),
-        ]);
-
-        console.log(`[Backend] 启动: ${cmd} ${args.join(' ')}`);
-        updateSplashStatus('正在启动后端服务...', 35);
-        
-        GLOBAL_STATE.pythonProcess = spawn(cmd, args, options);
-        this._setupProcessListeners(GLOBAL_STATE.pythonProcess);
-    },
-
-    async ensureReady(timeoutMs = 20000) {
-        await this.start();
-        const startedAt = Date.now();
-        while ((Date.now() - startedAt) < timeoutMs) {
-            if (await this.checkServer()) {
-                RUNTIME_IDLE_CONTROLLER.setWindowVisible(getMainWindowVisible());
-                RUNTIME_IDLE_CONTROLLER.setServiceRunning(true);
-                return true;
-            }
-            await new Promise((resolve) => setTimeout(resolve, 400));
-        }
-        throw new Error('Python 服务启动超时');
-    },
-
-    stop(reason = 'manual') {
-        const proc = GLOBAL_STATE.pythonProcess;
-        if (!proc) return Promise.resolve();
-        return new Promise((resolve) => {
-            let resolved = false;
-            const done = () => {
-                if (resolved) return;
-                resolved = true;
-                resolve();
-            };
-            console.log('[Backend] 正在停止...');
-            proc.__backendStopReason = reason;
-            proc.once('exit', done);
-            try {
-                proc.kill('SIGTERM');
-            } catch (e) {
-                // If the process is already gone, treat it as stopped.
-                done();
-            }
-            const pid = proc.pid;
-            setTimeout(() => {
-                try { process.kill(pid, 0) && process.kill(pid, 'SIGKILL'); } catch (e) {}
-            }, 3000);
-            setTimeout(done, 3500);
-            GLOBAL_STATE.pythonProcess = null;
-        });
-    },
-
-    _setupProcessListeners(proc) {
-        if (!proc) {
-            return;
-        }
-        proc.on('error', (err) => {
-            console.error(`[Backend Spawn Error] ${err.message}`);
-            GLOBAL_STATE.pythonProcess = null;
-            RUNTIME_IDLE_CONTROLLER.setServiceStopped('spawn_error');
-        });
-
-        const decodeSafe = (data) => {
-            try {
-                const buffer = Buffer.isBuffer(data) ? data : Buffer.from(String(data));
-                const utf8 = iconv.decode(buffer, 'utf-8');
-                if (!utf8.includes('\ufffd')) {
-                    return utf8;
-                }
-                return iconv.decode(buffer, 'cp936');
-            } catch (e) {
-                try {
-                    return Buffer.isBuffer(data) ? data.toString('utf8') : String(data);
-                } catch (_) {
-                    return '';
-                }
-            }
-        };
-
-        if (proc.stdout && typeof proc.stdout.on === 'function') {
-            // Avoid crashing the main process on unhandled stream errors.
-            proc.stdout.on('error', (err) => {
-                console.warn('[Backend Stdout Error]', err?.message || err);
-            });
-            proc.stdout.on('data', (data) => {
-                const str = decodeSafe(data);
-                console.log(`[Backend] ${str.trim()}`);
-                updateSplashStatus('后端服务启动中...', 50);
-            });
-        }
-
-        if (proc.stderr && typeof proc.stderr.on === 'function') {
-            proc.stderr.on('error', (err) => {
-                console.warn('[Backend Stderr Error]', err?.message || err);
-            });
-            proc.stderr.on('data', (data) => {
-                const str = decodeSafe(data);
-                console.error(`[Backend Err] ${str.trim()}`);
-            });
-        }
-
-        proc.on('exit', (code) => {
-            console.log(`[Backend] 退出代码: ${code}`);
-            GLOBAL_STATE.pythonProcess = null;
-            RUNTIME_IDLE_CONTROLLER.setServiceStopped(proc.__backendStopReason || 'process_exit');
-        });
-    },
-
-    requestJson(method, endpoint, payload = null, timeoutMs = 10000) {
-        return new Promise((resolve, reject) => {
-            const body = payload == null ? null : JSON.stringify(payload);
-            const req = http.request(
-                {
-                    hostname: '127.0.0.1',
-                    port: GLOBAL_STATE.flaskPort,
-                    path: endpoint,
-                    method,
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-Api-Token': GLOBAL_STATE.apiToken,
-                        ...(body ? { 'Content-Length': Buffer.byteLength(body) } : {}),
-                    },
-                    timeout: timeoutMs,
-                },
-                (res) => {
-                    const chunks = [];
-                    res.on('data', (chunk) => chunks.push(chunk));
-                    res.on('end', () => {
-                        const raw = Buffer.concat(chunks).toString('utf8');
-                        let data = {};
-                        if (raw.trim()) {
-                            try {
-                                data = JSON.parse(raw);
-                            } catch (error) {
-                                reject(new Error(`后端返回了无效 JSON: ${raw.slice(0, 200)}`));
-                                return;
-                            }
-                        }
-                        if ((res.statusCode || 500) >= 400) {
-                            reject(new Error(data?.message || `后端请求失败 (${res.statusCode})`));
-                            return;
-                        }
-                        resolve(data);
-                    });
-                }
-            );
-            req.on('error', reject);
-            req.on('timeout', () => req.destroy(new Error('请求超时')));
-            if (body) {
-                req.write(body);
-            }
-            req.end();
-        });
-    }
-};
 
 const RUNTIME_IDLE_CONTROLLER = new BackendIdleController({
     delayMs: DEFAULT_IDLE_SHUTDOWN_MS,
@@ -562,6 +267,17 @@ const RUNTIME_IDLE_CONTROLLER = new BackendIdleController({
     onStopService: async () => {
         await BackendManager.stop('idle_timeout');
     },
+});
+
+const BackendManager = createBackendManager({
+    http,
+    spawn,
+    iconv,
+    GLOBAL_STATE,
+    getBackendCommand,
+    getMainWindowVisible,
+    updateSplashStatus,
+    runtimeIdleController: RUNTIME_IDLE_CONTROLLER,
 });
 
 function getRuntimeIdleState() {
@@ -586,254 +302,21 @@ function applyRuntimeStatus(status) {
     });
 }
 
-const ConfigCli = {
-    async run(commandArgs, options = {}) {
-        const {
-            stdinPayload = null,
-            timeoutMs = 20000,
-        } = options;
-        const { cmd, args, options: spawnOptions } = getBackendCommand(commandArgs);
+const ConfigCli = createConfigCli({
+    spawn,
+    getBackendCommand,
+    getSharedConfigPath,
+});
 
-        return new Promise((resolve, reject) => {
-            const child = spawn(cmd, args, {
-                ...spawnOptions,
-                stdio: ['pipe', 'pipe', 'pipe'],
-            });
-            const stdoutChunks = [];
-            const stderrChunks = [];
-            let settled = false;
-
-            const finish = (error, value) => {
-                if (settled) {
-                    return;
-                }
-                settled = true;
-                if (timer) {
-                    clearTimeout(timer);
-                }
-                if (error) {
-                    reject(error);
-                } else {
-                    resolve(value);
-                }
-            };
-
-            const timer = setTimeout(() => {
-                try {
-                    child.kill('SIGTERM');
-                } catch (_) {}
-                finish(new Error(`配置命令执行超时: ${commandArgs.join(' ')}`));
-            }, timeoutMs);
-
-            child.stdout.on('data', (chunk) => stdoutChunks.push(Buffer.from(chunk)));
-            child.stderr.on('data', (chunk) => stderrChunks.push(Buffer.from(chunk)));
-            child.on('error', (error) => finish(error));
-            child.on('exit', (code) => {
-                const stdout = Buffer.concat(stdoutChunks).toString('utf8').trim();
-                const stderr = Buffer.concat(stderrChunks).toString('utf8').trim();
-                if (code !== 0) {
-                    finish(new Error(stderr || stdout || `配置命令退出失败 (${code})`));
-                    return;
-                }
-                const lines = stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-                const jsonLine = [...lines].reverse().find((line) => line.startsWith('{') && line.endsWith('}'));
-                if (!jsonLine) {
-                    finish(new Error(stdout || '配置命令未返回 JSON 结果'));
-                    return;
-                }
-                try {
-                    finish(null, JSON.parse(jsonLine));
-                } catch (error) {
-                    finish(new Error(`配置命令返回了不可解析 JSON: ${jsonLine}`));
-                }
-            });
-
-            if (stdinPayload != null) {
-                child.stdin.write(JSON.stringify(stdinPayload));
-            }
-            child.stdin.end();
-        });
-    },
-
-    async ensureMigrated() {
-        const configPath = getSharedConfigPath();
-        if (fs.existsSync(configPath)) {
-            return readJsonFile(configPath, {});
-        }
-        const result = await this.run(['config', 'migrate', '--output', configPath], { timeoutMs: 30000 });
-        return result.config || {};
-    },
-
-    async validate(patch = {}) {
-        await this.ensureMigrated();
-        const useStdin = !!patch && Object.keys(patch).length > 0;
-        const args = ['config', 'validate', '--base-path', getSharedConfigPath()];
-        if (useStdin) {
-            args.push('--stdin');
-        }
-        const result = await this.run(args, {
-            stdinPayload: useStdin ? patch : null,
-            timeoutMs: 30000,
-        });
-        if (!result?.success) {
-            throw new Error(result?.message || '配置校验失败');
-        }
-        return result.config || {};
-    },
-
-    async probe({ patch = null, presetName = '' } = {}) {
-        await this.ensureMigrated();
-        const useStdin = !!patch && Object.keys(patch).length > 0;
-        const args = ['config', 'probe', '--base-path', getSharedConfigPath()];
-        if (useStdin) {
-            args.push('--stdin');
-        }
-        if (presetName) {
-            args.push('--preset-name', presetName);
-        }
-        return this.run(args, {
-            stdinPayload: useStdin ? patch : null,
-            timeoutMs: 15000,
-        });
-    },
-};
-
-const SharedConfigService = {
-    _cache: null,
-    _watching: false,
-    _writeQueue: Promise.resolve(),
-    _modelCatalogCache: null,
-
-    async ensureLoaded() {
-        if (this._cache) {
-            return this._cache;
-        }
-        await ConfigCli.ensureMigrated();
-        this._cache = readJsonFile(getSharedConfigPath(), {});
-        this._ensureWatcher();
-        return this._cache;
-    },
-
-    _ensureWatcher() {
-        if (this._watching) {
-            return;
-        }
-        const configPath = getSharedConfigPath();
-        fs.watchFile(configPath, { interval: 500 }, async (current, previous) => {
-            if (current.mtimeMs === previous.mtimeMs) {
-                return;
-            }
-            try {
-                this._cache = readJsonFile(configPath, {});
-                this.broadcast('external');
-            } catch (error) {
-                console.error('[Config] reload failed:', error);
-            }
-        });
-        this._watching = true;
-    },
-
-    getModelCatalog() {
-        const catalogPath = getSharedModelCatalogPath();
-        try {
-            const stat = fs.statSync(catalogPath);
-            if (
-                this._modelCatalogCache
-                && this._modelCatalogCache.mtimeMs === stat.mtimeMs
-            ) {
-                return this._modelCatalogCache.payload;
-            }
-            const payload = readJsonFile(catalogPath, { providers: [] });
-            this._modelCatalogCache = {
-                mtimeMs: stat.mtimeMs,
-                payload,
-            };
-            return payload;
-        } catch (_) {
-            this._modelCatalogCache = null;
-            return { providers: [] };
-        }
-    },
-
-    buildPayload(config = {}) {
-        return {
-            success: true,
-            ...buildRendererConfigPayload(config),
-            modelCatalog: this.getModelCatalog(),
-            configPath: getSharedConfigPath(),
-        };
-    },
-
-    broadcast(source = 'external') {
-        const payload = {
-            ...this.buildPayload(this._cache || {}),
-            source,
-        };
-        for (const win of BrowserWindow.getAllWindows()) {
-            if (!win || win.isDestroyed()) {
-                continue;
-            }
-            try {
-                win.webContents.send('config:changed', payload);
-            } catch (_) {}
-        }
-    },
-
-    async get() {
-        const config = await this.ensureLoaded();
-        return this.buildPayload(config);
-    },
-
-    async patch(patch = {}) {
-        let response = null;
-        const task = this._writeQueue.catch(() => {}).then(async () => {
-            const previous = JSON.parse(JSON.stringify(await this.ensureLoaded()));
-            const nextConfig = await ConfigCli.validate(patch);
-            const changedPaths = diffConfigPaths(previous, nextConfig);
-            const configPath = getSharedConfigPath();
-            ensureDir(path.dirname(configPath));
-            atomicWriteJson(configPath, nextConfig);
-            this._cache = nextConfig;
-            response = {
-                ...this.buildPayload(nextConfig),
-                changed_paths: changedPaths,
-                message: changedPaths.length ? '配置已保存' : '未检测到配置变更',
-                save_state: 'saved',
-            };
-        });
-        this._writeQueue = task.then(() => null, () => null);
-        await task;
-        this.broadcast('main_write');
-        return response;
-    },
-
-    async testConnection(options = {}) {
-        const patch = options?.patch && typeof options.patch === 'object' ? options.patch : null;
-        const presetName = String(options?.presetName || '').trim();
-        if (await BackendManager.checkServer()) {
-            try {
-                return await BackendManager.requestJson(
-                    'POST',
-                    '/api/test_connection',
-                    {
-                        preset_name: presetName || null,
-                        patch,
-                    },
-                    12000,
-                );
-            } catch (error) {
-                console.warn('[SharedConfigService] live connection test failed, fallback to CLI:', error);
-            }
-        }
-        return ConfigCli.probe({ patch, presetName });
-    },
-
-    async subscribe() {
-        await this.ensureLoaded();
-        this._ensureWatcher();
-        return this.buildPayload(this._cache || {});
-    },
-};
+const SharedConfigService = createSharedConfigService({
+    ConfigCli,
+    getSharedConfigPath,
+    getSharedModelCatalogPath,
+    ensureDir,
+    listWindows: () => BrowserWindow.getAllWindows(),
+    backendCheckServer: () => BackendManager.checkServer(),
+    backendRequestJson: (...args) => BackendManager.requestJson(...args),
+});
 
 const RuntimeManager = {
     async ensureService() {
@@ -1194,205 +677,26 @@ const WindowManager = {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function setupIPC() {
-    ipcMain.handle('get-flask-url', () => GLOBAL_STATE.flaskUrl);
-    ipcMain.handle('get-api-token', () => GLOBAL_STATE.apiToken);
-    ipcMain.handle('check-backend', () => BackendManager.checkServer());
-    ipcMain.handle('start-backend', async () => {
-        try {
-            await BackendManager.ensureReady();
-            return { success: true };
-        } catch (err) {
-            return { success: false, error: err.message };
-        }
-    });
-
-    ipcMain.handle('config:get', () => SharedConfigService.get());
-    ipcMain.handle('config:patch', (_, patch) => SharedConfigService.patch(patch || {}));
-    ipcMain.handle('config:test-connection', (_, options) => SharedConfigService.testConnection(options || {}));
-    ipcMain.handle('config:subscribe', () => SharedConfigService.subscribe());
-
-    ipcMain.handle('runtime:ensure-service', () => RuntimeManager.ensureService());
-    ipcMain.handle('runtime:start-bot', () => RuntimeManager.startBot());
-    ipcMain.handle('runtime:stop-bot', () => RuntimeManager.stopBot());
-    ipcMain.handle('runtime:start-growth', () => RuntimeManager.startGrowth());
-    ipcMain.handle('runtime:stop-growth', () => RuntimeManager.stopGrowth());
-    ipcMain.handle('runtime:get-idle-state', () => getRuntimeIdleState());
-    ipcMain.handle('runtime:report-status', (_, summary) => ({
-        success: true,
-        idle_state: applyRuntimeStatusSummary(summary || {}),
-    }));
-    ipcMain.handle('runtime:cancel-idle-shutdown', () => ({
-        success: true,
-        idle_state: RUNTIME_IDLE_CONTROLLER.cancelIdleShutdown(),
-    }));
-
-    ipcMain.handle('growth:get-prompt-state', () => GrowthPromptStore.getState());
-    ipcMain.handle('growth:mark-prompt-seen', (_, kind) => GrowthPromptStore.markSeen(kind));
-    
-    ipcMain.handle('open-external', (_, url) => {
-        if (!url || typeof url !== 'string') return;
-        // 简单安全检查：只允许 http/https/mailto
-        if (/^(https?|mailto):/i.test(url)) {
-            shell.openExternal(url);
-        } else {
-            console.warn(`Blocked unsafe URL: ${url}`);
-        }
-    });
-    ipcMain.handle('get-app-version', () => app.getVersion());
-
-    ipcMain.handle('open-wechat', async () => {
-        try {
-            const isWechatRunning = () => new Promise((resolve) => {
-                exec('tasklist /FI "IMAGENAME eq WeChat.exe" /FO CSV /NH', { windowsHide: true }, (err, stdout) => {
-                    if (err) return resolve(false);
-                    const rows = String(stdout || '')
-                        .split(/\r?\n/)
-                        .map(item => item.trim())
-                        .filter(Boolean);
-                    resolve(rows.some(row => !row.startsWith('INFO:')));
-                });
-            });
-
-            if (await isWechatRunning()) {
-                console.log('[OpenWeChat] WeChat already running, skip duplicate launch');
-                return { success: true, message: 'WeChat is already running' };
-            }
-            // 尝试从注册表获取安装路径
-            const getInstallPath = () => new Promise((resolve) => {
-                exec('reg query "HKEY_CURRENT_USER\\Software\\Tencent\\WeChat" /v InstallPath', (err, stdout) => {
-                    if (err || !stdout) return resolve(null);
-                    const match = stdout.match(/InstallPath\s+REG_SZ\s+(.+)/);
-                    if (match && match[1]) {
-                        resolve(path.join(match[1].trim(), 'WeChat.exe'));
-                    } else {
-                        resolve(null);
-                    }
-                });
-            });
-
-            let wechatPath = await getInstallPath();
-            
-            if (!wechatPath) {
-                // 回退到常见路径
-                const commonPaths = [
-                    'C:\\Program Files (x86)\\Tencent\\WeChat\\WeChat.exe',
-                    'C:\\Program Files\\Tencent\\WeChat\\WeChat.exe',
-                    'D:\\Program Files (x86)\\Tencent\\WeChat\\WeChat.exe',
-                    'D:\\Program Files\\Tencent\\WeChat\\WeChat.exe'
-                ];
-                for (const p of commonPaths) {
-                    if (fs.existsSync(p)) {
-                        wechatPath = p;
-                        break;
-                    }
-                }
-            }
-
-            if (wechatPath) {
-                console.log(`[OpenWeChat] Opening WeChat at ${wechatPath}`);
-                shell.openPath(wechatPath); 
-                return { success: true };
-            } else {
-                // 最后的尝试：协议
-                console.log('[OpenWeChat] Path not found, trying protocol');
-                shell.openExternal('weixin://');
-                return { success: true, message: 'Attempted to open via protocol' };
-            }
-        } catch (e) {
-            console.error('[OpenWeChat] Error:', e);
-            return { success: false, error: e.message };
-        }
-    });
-
-    ipcMain.handle('minimize-to-tray', () => {
-        const win = getMainWindowSafe();
-        try { win?.hide(); } catch (e) {}
-    });
-
-    // 窗口控制
-    ipcMain.handle('window-minimize', () => {
-        const win = getMainWindowSafe();
-        try { win?.minimize(); } catch (e) {}
-    });
-    ipcMain.handle('window-maximize', () => {
-        const win = getMainWindowSafe();
-        if (!win) return;
-        try {
-            win.isMaximized() ? win.unmaximize() : win.maximize();
-        } catch (e) {}
-    });
-    ipcMain.handle('window-close', () => requestAppClose({ showWindow: false }));
-
-    ipcMain.handle('confirm-close-action', async (_, payload) => {
-        const { action, remember } = payload || {};
-        if (remember && (action === 'minimize' || action === 'quit')) {
-            store.set('closeBehavior', action);
-        }
-        if (action === 'minimize') {
-            GLOBAL_STATE.mainWindow?.hide();
-            return { success: true };
-        }
-        if (action === 'quit') {
-            GLOBAL_STATE.isQuitting = true;
-            if (GLOBAL_STATE.tray) {
-                GLOBAL_STATE.tray.destroy();
-                GLOBAL_STATE.tray = null;
-            }
-            await BackendManager.stop('quit');
-            app.quit();
-            return { success: true };
-        }
-        return { success: false, message: 'invalid action' };
-    });
-
-    ipcMain.handle('reset-close-behavior', () => {
-        store.set('closeBehavior', 'ask');
-        return { success: true };
-    });
-
-    ipcMain.handle('get-update-state', () => GLOBAL_STATE.updateManager?.getState() || {
-        enabled: false,
-        checking: false,
-        available: false,
-        currentVersion: app.getVersion(),
-        latestVersion: '',
-        lastCheckedAt: '',
-        releaseDate: '',
-        downloadUrl: '',
-        releasePageUrl: '',
-        notes: [],
-        error: '',
-        skippedVersion: '',
-        downloading: false,
-        downloadProgress: 0,
-        readyToInstall: false,
-        downloadedVersion: '',
-        downloadedInstallerPath: ''
-    });
-
-    ipcMain.handle('check-for-updates', (_, options) => (
-        GLOBAL_STATE.updateManager?.checkForUpdates({ ...options, manual: true }) || { success: false, error: 'update manager unavailable' }
-    ));
-
-    ipcMain.handle('skip-update-version', (_, version) => (
-        GLOBAL_STATE.updateManager?.skipVersion(version) || { success: false, error: 'update manager unavailable' }
-    ));
-
-    ipcMain.handle('download-update', () => (
-        GLOBAL_STATE.updateManager?.downloadUpdate() || { success: false, error: 'update manager unavailable' }
-    ));
-
-    ipcMain.handle('install-downloaded-update', () => installDownloadedUpdateAndQuit());
-
-    ipcMain.handle('open-update-download', () => (
-        GLOBAL_STATE.updateManager?.openDownloadPage() || { success: false, error: 'download url unavailable' }
-    ));
-
-    // 状态管理
-    ipcMain.handle('is-first-run', () => store.get('isFirstRun'));
-    ipcMain.handle('set-first-run-complete', () => {
-        store.set('isFirstRun', false);
-        return true;
+    registerIpcHandlers({
+        ipcMain,
+        GLOBAL_STATE,
+        BackendManager,
+        SharedConfigService,
+        RuntimeManager,
+        getRuntimeIdleState,
+        applyRuntimeStatusSummary,
+        runtimeIdleController: RUNTIME_IDLE_CONTROLLER,
+        GrowthPromptStore,
+        shell,
+        app,
+        exec,
+        fs,
+        path,
+        getMainWindowSafe,
+        requestAppClose,
+        installDownloadedUpdateAndQuit,
+        showMainWindowSafe,
+        store,
     });
 }
 

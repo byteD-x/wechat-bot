@@ -22,6 +22,18 @@ function emitStatusRefresh(page, payload = {}, followups = []) {
     });
 }
 
+function refreshIdlePanel(page, deps = {}) {
+    if (typeof page?._renderIdlePanel === 'function') {
+        page._renderIdlePanel();
+        return;
+    }
+
+    const renderFallback = deps.updateBotUI || page?._updateBotUI || updateBotUI;
+    if (typeof renderFallback === 'function') {
+        renderFallback(page);
+    }
+}
+
 export function handleIdleActionClick(page, event, deps = {}) {
     const target = event?.target;
     const button = typeof target?.closest === 'function' ? target.closest('button') : null;
@@ -51,7 +63,7 @@ export function startIdleTimer(page) {
     }
     page._idleRenderTimer = setInterval(() => {
         if (page.isActive()) {
-            page._renderIdlePanel();
+            refreshIdlePanel(page);
         }
     }, 1000);
 }
@@ -109,7 +121,7 @@ export async function cancelIdleShutdown(page, deps = {}) {
         if (idleState) {
             page.setState('backend.idle', idleState);
         }
-        page._renderIdlePanel();
+        refreshIdlePanel(page, deps);
         page.emit(Events.BOT_STATUS_CHANGE, { force: true });
         currentToast.success('已重置本轮后端休眠计时');
     } catch (error) {

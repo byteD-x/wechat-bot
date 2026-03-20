@@ -61,13 +61,17 @@ jobs:
         shell: pwsh
         run: npm ci
 
+      - name: Run Python syntax checks
+        shell: pwsh
+        run: python -m py_compile backend\core\agent_runtime.py backend\bot.py backend\bot_manager.py backend\api.py
+
       - name: Run Node tests
         shell: pwsh
         run: npm test
 
-      - name: Run Python smoke tests
+      - name: Run Python regression tests
         shell: pwsh
-        run: python -m pytest tests\test_smoke.py tests\test_api.py tests\test_runtime_observability.py -q
+        run: python -m pytest tests\test_smoke.py tests\test_api.py tests\test_runtime_observability.py tests\test_agent_runtime.py tests\test_optimization_tasks.py -q
 
       - name: Build release artifacts
         shell: cmd

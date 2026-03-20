@@ -19,6 +19,7 @@ export class MessagesPage extends PageController {
         this._selectedChatId = '';
         this._searchTimer = null;
         this._detailRequestToken = 0;
+        this._openMessageDetail = (message) => openDetailModal(this, message);
     }
 
     async onInit() {
@@ -33,7 +34,7 @@ export class MessagesPage extends PageController {
             return;
         }
         renderMessagesPage(this, {
-            onOpenDetail: (message) => openDetailModal(this, message),
+            onOpenDetail: this._openMessageDetail,
         });
     }
 

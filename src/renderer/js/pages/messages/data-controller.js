@@ -27,8 +27,12 @@ function renderChatFilter(page) {
 }
 
 function renderSummary(page) {
+    const selectedChat = (page._chats || []).find(
+        (chat) => String(chat?.chat_id || '').trim() === String(page._selectedChatId || '').trim()
+    );
     renderMessageSummary(page, {
         selectedChatId: page._selectedChatId,
+        selectedChatName: String(selectedChat?.display_name || '').trim(),
         searchKeyword: page._searchKeyword,
         messageCount: page._messages.length,
         total: page._total,
@@ -36,7 +40,7 @@ function renderSummary(page) {
 }
 
 function renderMessages(page, deps = {}) {
-    const onOpenDetail = deps.onOpenDetail || (() => {});
+    const onOpenDetail = deps.onOpenDetail || page._openMessageDetail || (() => {});
     renderMessageList(page, page._messages, (message) => onOpenDetail(message));
 }
 

@@ -11,6 +11,7 @@ from quart import Quart
 # Import app
 from backend.api import app
 import backend.api as api_module
+from backend.utils.config import compose_system_prompt_template
 
 
 def _build_snapshot(config):
@@ -79,6 +80,18 @@ def mock_manager():
             "contact_prompt_source": source,
             "contact_prompt_last_message_count": int(last_message_count or 0),
         }
+    async def async_update_message_feedback(message_id, feedback):
+        return {
+            "id": int(message_id),
+            "role": "assistant",
+            "feedback": feedback,
+            "previous_feedback": "helpful",
+            "metadata": {
+                "reply_quality": {
+                    "user_feedback": feedback,
+                }
+            },
+        }
     async def async_get_profile_prompt_snapshot(chat_id):
         return {
             "wx_id": chat_id,
@@ -90,6 +103,7 @@ def mock_manager():
     mem_mgr.list_chat_summaries = MagicMock(side_effect=async_list_chat_summaries)
     mem_mgr.get_contact_profile = MagicMock(side_effect=async_get_contact_profile)
     mem_mgr.save_contact_prompt = MagicMock(side_effect=async_save_contact_prompt)
+    mem_mgr.update_message_feedback = MagicMock(side_effect=async_update_message_feedback)
     mem_mgr.get_profile_prompt_snapshot = MagicMock(side_effect=async_get_profile_prompt_snapshot)
     manager.get_memory_manager.return_value = mem_mgr
     
@@ -224,6 +238,43 @@ async def test_api_messages(client, mock_manager):
 
 
 @pytest.mark.asyncio
+async def test_api_messages_preserves_display_name_fields(client, mock_manager):
+    async def _get_message_page(**kwargs):
+        return {
+            "messages": [
+                {
+                    "id": 1,
+                    "wx_id": "friend:alice",
+                    "role": "user",
+                    "content": "hello",
+                    "timestamp": 1,
+                    "sender": "Alice",
+                    "sender_display_name": "Alice",
+                    "display_name": "Alice",
+                    "chat_display_name": "Alice",
+                    "is_self": False,
+                    "relationship": "friend",
+                    "metadata": {},
+                }
+            ],
+            "total": 1,
+            "limit": kwargs.get("limit", 50),
+            "offset": kwargs.get("offset", 0),
+            "has_more": False,
+        }
+
+    mock_manager.get_memory_manager().get_message_page = MagicMock(side_effect=_get_message_page)
+
+    response = await client.get('/api/messages?limit=10')
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["success"] is True
+    assert data["messages"][0]["display_name"] == "Alice"
+    assert data["messages"][0]["chat_display_name"] == "Alice"
+
+
+@pytest.mark.asyncio
 async def test_api_contact_profile(client, mock_manager):
     response = await client.get('/api/contact_profile?chat_id=friend:alice')
 
@@ -236,9 +287,10 @@ async def test_api_contact_profile(client, mock_manager):
 
 @pytest.mark.asyncio
 async def test_api_contact_prompt_save(client, mock_manager):
+    raw_prompt = compose_system_prompt_template("新的联系人 Prompt")
     response = await client.post(
         '/api/contact_prompt',
-        json={"chat_id": "friend:alice", "contact_prompt": "新的联系人 Prompt"},
+        json={"chat_id": "friend:alice", "contact_prompt": raw_prompt},
     )
 
     assert response.status_code == 200
@@ -268,6 +320,45 @@ async def test_api_usage(client, mock_manager):
     data = await response.get_json()
     assert data["success"] is True
     assert data["stats"]["total_tokens"] == 100
+
+
+@pytest.mark.asyncio
+async def test_api_message_feedback(client, mock_manager):
+    mock_manager.bot.reply_quality_tracker = MagicMock()
+    mock_manager.bot.apply_reply_feedback_change = MagicMock()
+
+    response = await client.post('/api/message_feedback', json={"message_id": 12, "feedback": "unhelpful"})
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["success"] is True
+    assert data["feedback"] == "unhelpful"
+    mock_manager.get_memory_manager.return_value.update_message_feedback.assert_called_once_with(12, "unhelpful")
+    mock_manager.bot.reply_quality_tracker.log_feedback.assert_called_once_with(
+        message_id=12,
+        feedback="unhelpful",
+    )
+    mock_manager.bot.apply_reply_feedback_change.assert_called_once_with("helpful", "unhelpful")
+
+
+@pytest.mark.asyncio
+async def test_api_message_feedback_rejects_non_assistant_message(client, mock_manager):
+    async def _update_message_feedback(_message_id, feedback):
+        return {
+            "id": 1,
+            "role": "user",
+            "feedback": feedback,
+            "previous_feedback": "",
+            "metadata": {},
+        }
+
+    mock_manager.get_memory_manager.return_value.update_message_feedback = MagicMock(side_effect=_update_message_feedback)
+
+    response = await client.post('/api/message_feedback', json={"message_id": 1, "feedback": "helpful"})
+
+    assert response.status_code == 400
+    data = await response.get_json()
+    assert data["success"] is False
 
 
 @pytest.mark.asyncio
@@ -317,7 +408,7 @@ async def test_api_pricing_refresh(client):
 async def test_api_costs_summary(client, mock_manager):
     summary_payload = {
         "success": True,
-        "filters": {"period": "30d"},
+        "filters": {"period": "30d", "preset": "default"},
         "overview": {
             "reply_count": 2,
             "total_tokens": 300,
@@ -326,7 +417,10 @@ async def test_api_costs_summary(client, mock_manager):
         "models": [
             {"provider_id": "openai", "model": "gpt-5-mini", "total_tokens": 300},
         ],
-        "options": {"providers": ["openai"], "models": ["gpt-5-mini"]},
+        "options": {"providers": ["openai"], "models": ["gpt-5-mini"], "presets": ["default"]},
+        "review_queue": [
+            {"id": 1, "chat_id": "friend:alice", "reply_preview": "需要复盘"},
+        ],
     }
     config_snapshot = _build_snapshot({"api": {"presets": []}, "bot": {}, "logging": {}})
 
@@ -334,13 +428,15 @@ async def test_api_costs_summary(client, mock_manager):
         patch.object(api_module.cost_service, "get_summary", AsyncMock(return_value=summary_payload)) as get_summary_mock,
         patch.object(api_module.config_service, "get_snapshot", return_value=config_snapshot),
     ):
-        response = await client.get('/api/costs/summary?period=30d&include_estimated=true')
+        response = await client.get('/api/costs/summary?period=30d&preset=default&include_estimated=true')
 
     assert response.status_code == 200
     data = await response.get_json()
     assert data["success"] is True
     assert data["overview"]["total_tokens"] == 300
+    assert data["review_queue"][0]["chat_id"] == "friend:alice"
     get_summary_mock.assert_awaited_once()
+    assert get_summary_mock.await_args.kwargs["preset"] == "default"
 
 
 @pytest.mark.asyncio
@@ -409,6 +505,43 @@ async def test_api_costs_session_details_requires_chat_id(client):
     assert response.status_code == 400
     data = await response.get_json()
     assert data["success"] is False
+
+
+@pytest.mark.asyncio
+async def test_api_costs_review_queue_export(client, mock_manager):
+    export_payload = {
+        "success": True,
+        "filters": {"period": "7d", "preset": "default", "review_reason": "retrieval_weak", "suggested_action": "tune_retrieval_threshold"},
+        "total": 1,
+        "items": [
+            {
+                "id": 2,
+                "chat_id": "friend:alice",
+                "preset": "default",
+                "review_reason": "retrieval_weak",
+                "suggested_action": "tune_retrieval_threshold",
+                "reply_text": "需要复盘的完整回复",
+            }
+        ],
+    }
+    config_snapshot = _build_snapshot({"api": {"presets": []}, "bot": {}, "logging": {}})
+
+    with (
+        patch.object(api_module.cost_service, "export_review_queue", AsyncMock(return_value=export_payload)) as export_mock,
+        patch.object(api_module.config_service, "get_snapshot", return_value=config_snapshot),
+    ):
+        response = await client.get('/api/costs/review_queue_export?period=7d&preset=default&review_reason=retrieval_weak&suggested_action=tune_retrieval_threshold')
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["success"] is True
+    assert data["items"][0]["preset"] == "default"
+    assert data["items"][0]["review_reason"] == "retrieval_weak"
+    assert data["items"][0]["suggested_action"] == "tune_retrieval_threshold"
+    export_mock.assert_awaited_once()
+    assert export_mock.await_args.kwargs["preset"] == "default"
+    assert export_mock.await_args.kwargs["review_reason"] == "retrieval_weak"
+    assert export_mock.await_args.kwargs["suggested_action"] == "tune_retrieval_threshold"
 
 @pytest.mark.asyncio
 async def test_api_messages_error(client, mock_manager):
@@ -645,9 +778,9 @@ async def test_api_preview_prompt_applies_overrides_and_injections(client):
     data = await response.get_json()
     assert data["success"] is True
     assert "群聊专用提示" in data["prompt"]
-    assert "[User Profile]" in data["prompt"]
+    assert "# 用户画像" in data["prompt"]
     assert "relationship: teammate" in data["prompt"]
-    assert "[Current Emotion]" in data["prompt"]
+    assert "# 当前情境" in data["prompt"]
     assert "excited" in data["prompt"]
     assert data["summary"]["override_applied"] is True
     assert data["summary"]["profile_injected"] is True

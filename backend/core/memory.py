@@ -709,14 +709,19 @@ class MemoryManager:
 
         messages: List[Dict[str, Any]] = []
         for row in rows:
+            display_name = str(row["nickname"] or row["wx_id"] or "").strip()
+            role = str(row["role"] or "").strip().lower()
             messages.append({
                 "id": row["id"],
                 "wx_id": row["wx_id"],
                 "role": row["role"],
                 "content": row["content"],
                 "timestamp": row["created_at"],
-                "sender": row["nickname"] or row["wx_id"],
-                "is_self": row["role"] == "assistant",
+                "sender": "AI" if role == "assistant" else display_name,
+                "sender_display_name": "AI" if role == "assistant" else display_name,
+                "display_name": display_name,
+                "chat_display_name": display_name,
+                "is_self": role == "assistant",
                 "relationship": row["relationship"] or "unknown",
                 "metadata": self._deserialize_metadata(row["metadata"]),
             })
@@ -727,6 +732,68 @@ class MemoryManager:
             "limit": limit_val,
             "offset": offset_val,
             "has_more": offset_val + len(messages) < total,
+        }
+
+    async def update_message_feedback(
+        self,
+        message_id: int,
+        feedback: str,
+    ) -> Optional[Dict[str, Any]]:
+        """更新指定消息的人工反馈，并返回最新消息记录。"""
+        await self._maybe_cleanup()
+
+        try:
+            message_id_val = int(message_id)
+        except (TypeError, ValueError):
+            return None
+        if message_id_val <= 0:
+            return None
+
+        normalized_feedback = str(feedback or "").strip().lower()
+        if normalized_feedback not in {"", "helpful", "unhelpful"}:
+            raise ValueError(f"Unsupported feedback: {feedback}")
+
+        db = await self._get_db()
+        async with db.execute(
+            "SELECT id, wx_id, role, content, created_at, metadata "
+            "FROM chat_history WHERE id = ? LIMIT 1",
+            (message_id_val,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        if row is None:
+            return None
+
+        metadata = self._deserialize_metadata(row["metadata"])
+        reply_quality = dict(metadata.get("reply_quality") or {})
+        previous_feedback = str(reply_quality.get("user_feedback") or "").strip().lower()
+
+        if normalized_feedback:
+            reply_quality["user_feedback"] = normalized_feedback
+            reply_quality["feedback_updated_at"] = int(time.time())
+        else:
+            reply_quality.pop("user_feedback", None)
+            reply_quality.pop("feedback_updated_at", None)
+
+        if reply_quality:
+            metadata["reply_quality"] = reply_quality
+        else:
+            metadata.pop("reply_quality", None)
+
+        await db.execute(
+            "UPDATE chat_history SET metadata = ? WHERE id = ?",
+            (self._serialize_metadata(metadata), message_id_val),
+        )
+        await db.commit()
+
+        return {
+            "id": int(row["id"] or 0),
+            "wx_id": str(row["wx_id"] or ""),
+            "role": str(row["role"] or ""),
+            "content": str(row["content"] or ""),
+            "created_at": int(row["created_at"] or 0),
+            "metadata": metadata,
+            "previous_feedback": previous_feedback,
+            "feedback": normalized_feedback,
         }
 
     async def list_chat_summaries(self, limit: int = 200) -> List[Dict[str, Any]]:

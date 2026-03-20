@@ -37,7 +37,7 @@ from backend.utils.logging import (
     get_logging_settings,
     configure_http_access_log_filters,
 )
-from backend.utils.config import resolve_system_prompt
+from backend.utils.config import extract_editable_system_prompt, resolve_system_prompt
 
 # 配置日志
 config_service = get_config_service()
@@ -214,6 +214,9 @@ def _get_cost_filters() -> dict:
         "period": request.args.get("period", "30d", type=str),
         "provider_id": request.args.get("provider_id", "", type=str),
         "model": request.args.get("model", "", type=str),
+        "preset": request.args.get("preset", "", type=str),
+        "review_reason": request.args.get("review_reason", "", type=str),
+        "suggested_action": request.args.get("suggested_action", "", type=str),
         "only_priced": str(request.args.get("only_priced", "false")).strip().lower() in {"1", "true", "yes", "on"},
         "include_estimated": str(request.args.get("include_estimated", "true")).strip().lower() in {"1", "true", "yes", "on"},
     }
@@ -411,7 +414,9 @@ async def save_contact_prompt():
     try:
         data = await request.get_json(silent=True) or {}
         chat_id = str(data.get("chat_id") or "").strip()
-        contact_prompt = str(data.get("contact_prompt") or "").strip()
+        contact_prompt = extract_editable_system_prompt(
+            str(data.get("contact_prompt") or "").strip()
+        )
         if not chat_id:
             return jsonify({"success": False, "message": "缺少 chat_id"}), 400
         if not contact_prompt:
@@ -427,6 +432,49 @@ async def save_contact_prompt():
     except Exception as e:
         logger.error(f"保存联系人 Prompt 失败: {e}")
         return jsonify({"success": False, "message": f"保存联系人 Prompt 失败: {str(e)}"})
+
+
+@app.route("/api/message_feedback", methods=["POST"])
+async def save_message_feedback():
+    """保存单条助手回复的人工反馈。"""
+    try:
+        data = await request.get_json(silent=True) or {}
+        message_id = data.get("message_id")
+        feedback = str(data.get("feedback") or "").strip().lower()
+        if message_id in (None, ""):
+            return jsonify({"success": False, "message": "缺少 message_id"}), 400
+        if feedback not in {"helpful", "unhelpful", ""}:
+            return jsonify({"success": False, "message": "feedback 仅支持 helpful / unhelpful"}), 400
+
+        mem_mgr = manager.get_memory_manager()
+        result = await mem_mgr.update_message_feedback(message_id, feedback)
+        if result is None:
+            return jsonify({"success": False, "message": "消息不存在"}), 404
+        if str(result.get("role") or "").strip().lower() != "assistant":
+            return jsonify({"success": False, "message": "仅支持给助手回复添加反馈"}), 400
+
+        if manager.bot and hasattr(manager.bot, "reply_quality_tracker"):
+            manager.bot.reply_quality_tracker.log_feedback(
+                message_id=int(result.get("id") or 0),
+                feedback=str(result.get("feedback") or ""),
+            )
+        if manager.bot and hasattr(manager.bot, "apply_reply_feedback_change"):
+            manager.bot.apply_reply_feedback_change(
+                str(result.get("previous_feedback") or ""),
+                str(result.get("feedback") or ""),
+            )
+
+        return jsonify(
+            {
+                "success": True,
+                "message_id": int(result.get("id") or 0),
+                "feedback": str(result.get("feedback") or ""),
+                "metadata": dict(result.get("metadata") or {}),
+            }
+        )
+    except Exception as e:
+        logger.error(f"保存消息反馈失败: {e}")
+        return jsonify({"success": False, "message": f"保存消息反馈失败: {str(e)}"})
 
 
 @app.route("/api/send", methods=["POST"])
@@ -533,6 +581,22 @@ async def get_cost_session_details():
     except Exception as e:
         logger.error(f"获取会话成本明细失败: {e}")
         return jsonify({"success": False, "message": f"获取会话成本明细失败: {str(e)}"})
+
+
+@app.route("/api/costs/review_queue_export", methods=["GET"])
+async def export_cost_review_queue():
+    """导出低质量回复复盘列表。"""
+    try:
+        snapshot = config_service.get_snapshot()
+        payload = await cost_service.export_review_queue(
+            manager.get_memory_manager(),
+            snapshot.config,
+            **_get_cost_filters(),
+        )
+        return jsonify(payload)
+    except Exception as e:
+        logger.error(f"瀵煎嚭浣庤川閲忓洖澶嶅鐩樺垪琛ㄥけ璐? {e}")
+        return jsonify({"success": False, "message": f"瀵煎嚭浣庤川閲忓洖澶嶅鐩樺垪琛ㄥけ璐? {str(e)}"})
 
 
 @app.route("/api/model_catalog", methods=["GET"])

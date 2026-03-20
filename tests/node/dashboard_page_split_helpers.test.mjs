@@ -432,6 +432,39 @@ test('dashboard runtime helper manages idle timer and wake flow', async () => {
     assert.equal(toast.calls.at(-1)?.message, '后端已唤醒');
 });
 
+test('dashboard runtime helper falls back to full UI refresh when idle renderer is missing', async () => {
+    const page = createDashboardPage({
+        backend: {
+            idle: {
+                state: 'countdown',
+                remainingMs: 10000,
+                updatedAt: Date.now(),
+            },
+        },
+    });
+    const toast = createToastRecorder();
+    delete page._renderIdlePanel;
+
+    await cancelIdleShutdown(page, {
+        toast,
+        updateBotUI: () => {
+            page._botUiUpdates += 1;
+        },
+        windowApi: {
+            runtimeCancelIdleShutdown: async () => ({
+                idle_state: {
+                    state: 'active',
+                    remainingMs: 0,
+                    updatedAt: Date.now(),
+                },
+            }),
+        },
+    });
+
+    assert.equal(page.state.backend.idle.state, 'active');
+    assert.equal(page._botUiUpdates, 1);
+});
+
 test('dashboard runtime helper exposes stable idle state helpers', () => {
     const page = {
         getState(path) {
@@ -580,6 +613,7 @@ test('dashboard status presenter updates summary stats and delegates detailed pa
         system_metrics: { cpu_percent: 10 },
         health_checks: { ai: { status: 'ok' } },
         merge_feedback: { active: true },
+        reply_quality: { success_rate: 75, attempted: 4 },
         retriever_stats: { top_k: 8 },
         runtime_timings: { invoke_sec: 1.2 },
         export_rag: { enabled: true },
@@ -595,8 +629,8 @@ test('dashboard status presenter updates summary stats and delegates detailed pa
         renderDiagnostics: (_page, value) => {
             calls.push(['diagnostics', value]);
         },
-        renderHealthMetrics: (_page, metrics, checks, mergeFeedback) => {
-            calls.push(['health', metrics, checks, mergeFeedback]);
+        renderHealthMetrics: (_page, metrics, checks, mergeFeedback, replyQuality) => {
+            calls.push(['health', metrics, checks, mergeFeedback, replyQuality]);
         },
         renderRetrieval: (_page, stats, timings, exportRag) => {
             calls.push(['retrieval', stats, timings, exportRag]);
@@ -616,6 +650,10 @@ test('dashboard status presenter updates summary stats and delegates detailed pa
     assert.equal(selectors['#bot-transport-warning'].hidden, false);
     assert.equal(selectors['#bot-transport-warning'].textContent, '连接波动');
     assert.equal(calls.some((entry) => entry[0] === 'health'), true);
+    assert.deepEqual(calls.find((entry) => entry[0] === 'health')?.[4], {
+        success_rate: 75,
+        attempted: 4,
+    });
     assert.equal(calls.some((entry) => entry[0] === 'retrieval'), true);
     assert.equal(calls.some((entry) => entry[0] === 'cost'), true);
     assert.equal(page._lastStats.transport_backend, 'wcferry');

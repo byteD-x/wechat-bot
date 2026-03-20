@@ -118,41 +118,42 @@ def build_compare_url(repository_url: str, previous_tag: str, current_tag: str) 
 
 def render_release_notes(current_tag: str, previous_tag: str, repository_url: str, commits: list[CommitEntry]) -> str:
     grouped = group_commits(commits)
-    compare_url = build_compare_url(repository_url, previous_tag, current_tag)
-
     lines = [f"# {current_tag} 更新说明", ""]
-    if previous_tag:
-        lines.append(f"对比范围：`{previous_tag}...{current_tag}`")
-        if compare_url:
-            lines.append(f"Compare 链接：{compare_url}")
-    else:
-        lines.append("这是首个正式版本，以下内容覆盖从仓库起点到当前版本的所有变更。")
-    lines.append("")
-    lines.append("## Commit 摘要")
+    lines.append("本次更新聚焦于稳定性、可观测性和桌面端使用体验，重点减少误配置带来的行为漂移，并让问题定位和复盘更直接。")
     lines.append("")
 
-    has_group_content = False
-    for group in RELEASE_TYPE_ORDER:
-        items = grouped.get(group) or []
+    section_specs = [
+        ("功能与体验", ("feat", "refactor")),
+        ("稳定性与修复", ("fix",)),
+        ("工程与质量", ("ci", "build", "test", "docs", "chore")),
+    ]
+
+    rendered_any = False
+    for title, kinds in section_specs:
+        items: list[str] = []
+        for kind in kinds:
+            for _, clean_subject, breaking in grouped.get(kind, []):
+                suffix = "（含破坏性调整）" if breaking else ""
+                items.append(f"- {clean_subject}{suffix}")
         if not items:
             continue
-        has_group_content = True
-        lines.append(f"### {RELEASE_TYPE_LABELS.get(group, group)}")
+        rendered_any = True
+        lines.append(f"## {title}")
         lines.append("")
-        for commit, clean_subject, breaking in items:
-            suffix = " [breaking]" if breaking else ""
-            lines.append(f"- {clean_subject}{suffix} (`{commit.short_sha}`)")
+        lines.extend(items[:8])
         lines.append("")
 
-    if not has_group_content:
-        lines.append("- 无可归类提交")
+    if not rendered_any:
+        lines.append("## 本次更新")
+        lines.append("")
+        lines.append("- 优化了应用的整体稳定性与日常使用体验。")
         lines.append("")
 
-    lines.append("## 原始提交列表")
+    lines.append("## 升级建议")
     lines.append("")
-    for commit in commits:
-        lines.append(f"- `{commit.short_sha}` {commit.subject}")
-
+    lines.append("- 桌面端用户更新后建议先检查一次设置页与消息详情里的 Prompt 配置，确认自定义规则符合当前使用习惯。")
+    lines.append("- 如你依赖成本分析或回复复盘，请在“成本管理”页确认筛选条件、导出内容和建议动作是否符合预期。")
+    lines.append("- 若本次更新涉及桌面端安装包替换，建议完成更新后重启应用一次，以确保主进程与后端组件使用同一版本。")
     lines.append("")
     return "\n".join(lines)
 

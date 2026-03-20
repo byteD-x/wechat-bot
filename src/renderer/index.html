@@ -90,6 +90,11 @@
             <line x1="16" y1="17" x2="8" y2="17" />
             <polyline points="10 9 9 9 8 9" />
         </symbol>
+        <symbol id="icon-download" viewBox="0 0 24 24">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="7 10 12 15 17 10" />
+            <line x1="12" y1="15" x2="12" y2="3" />
+        </symbol>
         <symbol id="icon-user" viewBox="0 0 24 24">
             <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
             <circle cx="12" cy="7" r="4" />
@@ -539,6 +544,12 @@
                             </svg>
                             <span>刷新数据</span>
                         </button>
+                        <button class="btn btn-secondary btn-sm" id="btn-export-cost-review">
+                            <svg class="icon icon-sm">
+                                <use href="#icon-download" />
+                            </svg>
+                            <span>导出复盘</span>
+                        </button>
                     </div>
                 </div>
 
@@ -564,6 +575,24 @@
                             <option value="">全部模型</option>
                         </select>
                     </div>
+                    <div class="cost-filter-group">
+                        <label class="form-label" for="cost-preset">预设</label>
+                        <select class="form-input" id="cost-preset">
+                            <option value="">全部预设</option>
+                        </select>
+                    </div>
+                    <div class="cost-filter-group">
+                        <label class="form-label" for="cost-review-reason">复盘原因</label>
+                        <select class="form-input" id="cost-review-reason">
+                            <option value="">全部原因</option>
+                        </select>
+                    </div>
+                    <div class="cost-filter-group">
+                        <label class="form-label" for="cost-suggested-action">处理建议</label>
+                        <select class="form-input" id="cost-suggested-action">
+                            <option value="">全部动作</option>
+                        </select>
+                    </div>
                     <label class="cost-toggle-row" for="cost-only-priced">
                         <input type="checkbox" id="cost-only-priced">
                         <span>仅已定价</span>
@@ -587,6 +616,20 @@
                     </div>
                     <div class="card-body">
                         <div id="cost-models">
+                            <div class="loading-state">
+                                <div class="spinner"></div>
+                                <span>加载中...</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card cost-session-card">
+                    <div class="card-header">
+                        <h2 class="card-title">低质量回复复盘</h2>
+                    </div>
+                    <div class="card-body">
+                        <div id="cost-review-list">
                             <div class="loading-state">
                                 <div class="spinner"></div>
                                 <span>加载中...</span>
@@ -735,12 +778,19 @@
                     <div class="settings-card">
                         <h2 class="settings-card-title">系统提示</h2>
                         <div class="form-group full-width">
-                            <label class="form-label">系统提示词</label>
-                            <textarea id="setting-system-prompt" rows="6"></textarea>
+                            <label class="form-label">自定义系统提示词</label>
+                            <textarea id="setting-system-prompt-editable" rows="6"></textarea>
+                            <div class="detail-help">这里仅编辑你希望补充给系统的自定义规则；历史对话、用户画像、情绪/时间/风格等系统注入块会固定保留，不允许在这里改写。</div>
+                        </div>
+                        <div class="form-group full-width">
+                            <label class="form-label">固定注入块（只读）</label>
+                            <textarea id="setting-system-prompt-fixed" rows="8" readonly></textarea>
+                            <div class="detail-help">这部分由系统在运行时自动填充，用来注入历史对话、联系人画像和当前情境。它会参与最终系统提示词，但不会暴露给普通设置编辑。</div>
                         </div>
                         <div class="form-group full-width">
                             <label class="form-label">会话提示覆盖（每行：会话名|提示词）</label>
                             <textarea id="setting-system-prompt-overrides" rows="4"></textarea>
+                            <div class="detail-help">这里只填写每个会话额外的自定义规则；系统必需的历史对话、画像、情绪/时间/风格注入块仍会在运行时自动补齐。</div>
                         </div>
                     </div>
 

@@ -121,6 +121,20 @@ def test_bot_manager_export_metrics_includes_core_values(monkeypatch):
             "merge_pending_chats": 1,
             "merge_pending_messages": 4,
             "ai_latency_ms": 333.3,
+            "reply_success_rate": 88.9,
+            "reply_success_rate_24h": 91.2,
+            "reply_success_rate_7d": 84.5,
+            "reply_attempts_24h": 12,
+            "reply_attempts_7d": 48,
+            "reply_empty_count": 1,
+            "reply_failed_count": 2,
+            "reply_helpful_count": 3,
+            "reply_unhelpful_count": 1,
+            "reply_helpful_count_24h": 8,
+            "reply_unhelpful_count_24h": 2,
+            "delayed_reply_count": 3,
+            "retrieval_augmented_replies": 5,
+            "retrieval_hit_count": 8,
         },
         "health_checks": {
             "ai": {"status": "healthy"},
@@ -131,6 +145,11 @@ def test_bot_manager_export_metrics_includes_core_values(monkeypatch):
     metrics = manager.export_metrics()
     assert "wechat_bot_running 1" in metrics
     assert "wechat_bot_today_replies 3" in metrics
+    assert "wechat_bot_reply_success_rate 88.9" in metrics
+    assert "wechat_bot_reply_success_rate_24h 91.2" in metrics
+    assert "wechat_bot_reply_attempts_7d 48" in metrics
+    assert "wechat_bot_reply_helpful_count_24h 8" in metrics
+    assert "wechat_bot_retrieval_hit_count 8" in metrics
     assert 'wechat_bot_config_reload_mode{mode="watchdog"} 1' in metrics
     assert 'wechat_bot_health_check{component="wechat",status="degraded"} 1' in metrics
 
@@ -234,7 +253,19 @@ def test_bot_manager_get_status_includes_growth_runtime_fields(monkeypatch):
                 "ai_health": {"status": "healthy", "detail": "ok"},
             },
             get_transport_status=lambda: {"transport_status": "connected", "transport_warning": ""},
-            get_runtime_status=lambda: {"pending_tasks": 1, "merge_pending_chats": 0, "merge_pending_messages": 0},
+            get_runtime_status=lambda: {
+                "pending_tasks": 1,
+                "merge_pending_chats": 0,
+                "merge_pending_messages": 0,
+                "reply_quality": {
+                    "attempted": 3,
+                    "successful": 2,
+                    "success_rate": 66.7,
+                    "status_text": "回复成功率 66.7%",
+                    "history_24h": {"attempted": 10, "success_rate": 80.0, "helpful_count": 4},
+                    "history_7d": {"attempted": 50, "success_rate": 78.0},
+                },
+            },
         )
 
         status = manager.get_status()
@@ -242,6 +273,9 @@ def test_bot_manager_get_status_includes_growth_runtime_fields(monkeypatch):
         assert status["growth_mode"] == "background_only"
         assert status["growth_tasks_pending"] == 2
         assert status["last_growth_error"] == "emotion step boom"
+        assert status["reply_quality"]["success_rate"] == 66.7
+        assert status["reply_quality"]["history_24h"]["success_rate"] == 80.0
+        assert status["reply_quality"]["history_24h"]["helpful_count"] == 4
         assert status["config_snapshot"]["version"] >= 1
         assert status["config_snapshot"]["valid"] is True
     finally:

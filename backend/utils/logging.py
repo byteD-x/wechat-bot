@@ -104,14 +104,20 @@ def setup_logging(
         log_dir = os.path.dirname(log_path)
         if log_dir:
             os.makedirs(log_dir, exist_ok=True)
-        handlers.append(
-            RotatingFileHandler(
-                log_path,
-                maxBytes=max_bytes,
-                backupCount=backup_count,
-                encoding="utf-8",
+        try:
+            handlers.append(
+                RotatingFileHandler(
+                    log_path,
+                    maxBytes=max_bytes,
+                    backupCount=backup_count,
+                    encoding="utf-8",
+                )
             )
-        )
+        except OSError as exc:
+            logging.getLogger(__name__).warning(
+                "日志文件不可写，已回退为仅控制台日志: %s",
+                exc,
+            )
         
     # 设置格式化器
     if format_type == 'json':

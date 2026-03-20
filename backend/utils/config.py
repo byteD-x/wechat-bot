@@ -5,12 +5,15 @@
 import importlib.util
 import json
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 from .common import as_int, as_float, as_optional_int, as_optional_str, iter_items, truncate_text
 
 __all__ = [
     "normalize_system_prompt",
+    "extract_editable_system_prompt",
+    "compose_system_prompt_template",
     "load_config_py",
     "load_config_json",
     "load_config",
@@ -20,6 +23,31 @@ __all__ = [
     "get_model_alias",
     "resolve_system_prompt",
 ]
+
+SYSTEM_PROMPT_FIXED_INJECTION_BLOCK = (
+    "# 系统注入上下文（固定）\n"
+    "以下内容由系统在运行时自动注入，请勿手动改写：\n"
+    "# 历史对话\n"
+    "{history_context}\n\n"
+    "# 用户画像\n"
+    "{user_profile}\n\n"
+    "# 当前情境\n"
+    "{emotion_hint}{time_hint}{style_hint}"
+)
+
+_SYSTEM_PROMPT_RESERVED_SECTION_PATTERNS = [
+    re.compile(
+        r"(?:^|\n)#\s*系统注入上下文（固定）\n以下内容由系统在运行时自动注入，请勿手动改写：\n# 历史对话\n\{history_context\}\n\n# 用户画像\n\{user_profile\}\n\n# 当前情境\n\{emotion_hint\}\{time_hint\}\{style_hint\}\s*",
+        re.MULTILINE,
+    ),
+    re.compile(r"(?:^|\n)#\s*历史对话\s*\n\{history_context\}\s*", re.MULTILINE),
+    re.compile(r"(?:^|\n)#\s*用户画像\s*\n\{user_profile\}\s*", re.MULTILINE),
+    re.compile(r"(?:^|\n)#\s*当前情境\s*\n\{emotion_hint\}\{time_hint\}\{style_hint\}\s*", re.MULTILINE),
+]
+
+_SYSTEM_PROMPT_PLACEHOLDER_PATTERN = re.compile(
+    r"\{history_context\}|\{user_profile\}|\{emotion_hint\}|\{time_hint\}|\{style_hint\}"
+)
 
 
 def normalize_system_prompt(value: Any) -> str:
@@ -34,6 +62,27 @@ def normalize_system_prompt(value: Any) -> str:
     if isinstance(value, list):
         return "\n".join(str(v).strip() for v in value if v)
     return str(value).strip()
+
+
+def _clean_system_prompt_spacing(text: str) -> str:
+    cleaned = str(text or "").replace("\r\n", "\n").strip()
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
+def extract_editable_system_prompt(value: Any) -> str:
+    cleaned = normalize_system_prompt(value).replace("\r\n", "\n")
+    for pattern in _SYSTEM_PROMPT_RESERVED_SECTION_PATTERNS:
+        cleaned = pattern.sub("\n", cleaned)
+    cleaned = _SYSTEM_PROMPT_PLACEHOLDER_PATTERN.sub("", cleaned)
+    return _clean_system_prompt_spacing(cleaned)
+
+
+def compose_system_prompt_template(value: Any) -> str:
+    editable = extract_editable_system_prompt(value)
+    if not editable:
+        return SYSTEM_PROMPT_FIXED_INJECTION_BLOCK
+    return f"{editable}\n\n{SYSTEM_PROMPT_FIXED_INJECTION_BLOCK}"
 
 
 def load_config_py(path: str) -> Dict[str, Any]:
@@ -210,7 +259,7 @@ def resolve_system_prompt(
         base_prompt = contact_prompt
 
     # 2. 规范化
-    system_prompt = normalize_system_prompt(base_prompt)
+    system_prompt = compose_system_prompt_template(base_prompt)
 
     template = system_prompt
     has_history_placeholder = "{history_context}" in template

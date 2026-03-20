@@ -22,6 +22,19 @@ function getDocument(deps = {}) {
     return deps.documentObj || globalThis.document;
 }
 
+function syncMessageFeedback(page, messageId, metadata) {
+    const nextMetadata = metadata && typeof metadata === 'object' ? metadata : {};
+    page._messages = (page._messages || []).map((item) => {
+        if (Number(item?.id || 0) !== Number(messageId || 0)) {
+            return item;
+        }
+        return {
+            ...item,
+            metadata: nextMetadata,
+        };
+    });
+}
+
 export async function openDetailModal(page, message, deps = {}) {
     const documentObj = getDocument(deps);
     const currentToast = getToast(deps);
@@ -43,6 +56,28 @@ export async function openDetailModal(page, message, deps = {}) {
 
     body.appendChild(createMessageStateBlock(MESSAGE_TEXT.contactPromptLoading));
 
+    const saveFeedback = async (nextMessage, nextFeedback) => {
+        try {
+            const saveResult = await getApiService(deps).saveMessageFeedback(
+                nextMessage.id,
+                nextFeedback
+            );
+            if (!saveResult?.success) {
+                throw new Error(saveResult?.message || MESSAGE_TEXT.feedbackSaveFailed);
+            }
+            const updatedMessage = {
+                ...nextMessage,
+                metadata: saveResult.metadata || {},
+            };
+            syncMessageFeedback(page, nextMessage.id, updatedMessage.metadata);
+            currentToast.success(MESSAGE_TEXT.feedbackSaveSuccess);
+            return updatedMessage;
+        } catch (error) {
+            currentToast.error(currentToast.getErrorMessage(error, MESSAGE_TEXT.feedbackSaveFailed));
+            return null;
+        }
+    };
+
     try {
         const result = await getApiService(deps).getContactProfile(message.wx_id || '');
         if (requestToken !== page._detailRequestToken) {
@@ -52,7 +87,9 @@ export async function openDetailModal(page, message, deps = {}) {
             throw new Error(result?.message || MESSAGE_TEXT.contactPromptLoadFailed);
         }
         body.textContent = '';
-        body.appendChild(buildMessageDetail(message));
+        body.appendChild(buildMessageDetail(message, {
+            onFeedback: saveFeedback,
+        }));
         body.appendChild(buildContactProfileDetail(message, result.profile || {}, {
             onEmptyPrompt: () => {
                 currentToast.error(MESSAGE_TEXT.contactPromptEmpty);
@@ -77,7 +114,9 @@ export async function openDetailModal(page, message, deps = {}) {
         }
         console.error('[MessagesPage] contact profile load failed:', error);
         body.textContent = '';
-        body.appendChild(buildMessageDetail(message));
+        body.appendChild(buildMessageDetail(message, {
+            onFeedback: saveFeedback,
+        }));
         body.appendChild(buildContactProfileError(
             currentToast.getErrorMessage(error, MESSAGE_TEXT.contactPromptLoadFailed)
         ));

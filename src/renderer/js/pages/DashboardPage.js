@@ -11,6 +11,14 @@ import {
     refreshDashboardCost,
 } from './dashboard/data-loader.js';
 import {
+    formatDurationMs,
+} from './dashboard/formatters.js';
+import {
+    renderIdlePanel,
+} from './dashboard/renderers.js';
+import {
+    getIdleRemainingMs,
+    getIdleState,
     startIdleTimer,
     stopIdleTimer,
 } from './dashboard/runtime-controller.js';
@@ -31,6 +39,22 @@ export class DashboardPage extends PageController {
             today: null,
             recent: null,
         };
+        this._renderIdlePanel = () => {
+            const status = this.getState('bot.status') || {};
+            const idleState = getIdleState(this);
+            renderIdlePanel(this, {
+                connected: !!this.getState('bot.connected'),
+                isRunning: !!this.getState('bot.running'),
+                growthRunning: !!status.growth_running,
+                startupActive: !!status?.startup?.active,
+                idleState,
+            }, {
+                getIdleState: () => idleState,
+                getIdleRemainingMs: (state) => getIdleRemainingMs(this, state),
+                formatDurationMs,
+            });
+        };
+        this._updateBotUI = () => updateBotUI(this);
     }
 
     async onInit() {

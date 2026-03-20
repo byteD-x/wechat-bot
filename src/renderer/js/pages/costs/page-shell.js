@@ -1,5 +1,6 @@
 import {
     refreshCosts,
+    exportCostReviewQueue,
     refreshPricingCatalog,
 } from './data-controller.js';
 
@@ -18,7 +19,23 @@ export function bindCostsPage(page, deps = {}) {
         void runRefreshPricingCatalog(page);
     });
 
-    ['#cost-period', '#cost-provider', '#cost-model'].forEach((selector) => {
+    page.bindEvent('#btn-export-cost-review', 'click', () => {
+        void (deps.exportCostReviewQueue || ((targetPage) => exportCostReviewQueue(targetPage, deps)))(page);
+    });
+
+    page._applySuggestedActionFilter = (action) => {
+        const select = page.$('#cost-suggested-action');
+        if (select) {
+            select.value = action || '';
+        }
+        page._filters = {
+            ...(page._filters || {}),
+            suggested_action: action || '',
+        };
+        void runRefreshCosts(page);
+    };
+
+    ['#cost-period', '#cost-provider', '#cost-model', '#cost-preset', '#cost-review-reason', '#cost-suggested-action'].forEach((selector) => {
         page.bindEvent(selector, 'change', () => {
             void runRefreshCosts(page);
         });

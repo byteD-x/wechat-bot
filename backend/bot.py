@@ -11,8 +11,6 @@ from .core.export_rag import ExportChatRAG
 from .core.memory import MemoryManager
 from .core.vector_memory import VectorMemory
 from .core.bot_control import (
-    parse_control_command,
-    is_command_message,
     should_respond,
     get_bot_state,
 )
@@ -29,8 +27,37 @@ from .core.factory import (
 from .core.config_service import get_config_service
 from .core.config_audit import diff_config_paths
 from .core.pricing_catalog import get_pricing_catalog
+from .core.reply_quality_tracker import get_reply_quality_tracker
 
 from .types import MessageEvent
+from .bot_event_flow import (
+    handle_control_command as helper_handle_control_command,
+    maybe_save_event_image,
+    maybe_send_quiet_reply,
+    record_incoming_event,
+    schedule_incoming_broadcast,
+)
+from .bot_runtime_helpers import (
+    build_final_reply_text as helper_build_final_reply_text,
+    build_reply_body_text as helper_build_reply_body_text,
+    build_reply_suffix_text as helper_build_reply_suffix_text,
+    ensure_send_succeeded as helper_ensure_send_succeeded,
+    get_natural_split_config as helper_get_natural_split_config,
+    is_filehelper_chat as helper_is_filehelper_chat,
+    is_recent_outgoing_echo as helper_is_recent_outgoing_echo,
+    normalize_chat_name as helper_normalize_chat_name,
+    prepare_event_for_processing as helper_prepare_event_for_processing,
+    prune_recent_outgoing_messages as helper_prune_recent_outgoing_messages,
+    remember_recent_outgoing_message as helper_remember_recent_outgoing_message,
+    sanitize_reply_segment as helper_sanitize_reply_segment,
+)
+from .bot_reply_flow import (
+    complete_delayed_reply as helper_complete_delayed_reply,
+    finalize_reply_delivery as helper_finalize_reply_delivery,
+    mark_deadline_missed as helper_mark_deadline_missed,
+    process_and_reply as helper_process_and_reply,
+    schedule_delayed_reply as helper_schedule_delayed_reply,
+)
 from .handlers.filter import should_reply_with_reason
 from .handlers.sender import send_message, send_reply_chunks
 from .handlers.converters import normalize_new_messages
@@ -46,11 +73,6 @@ from .utils.logging import (
 from .utils.config_watcher import ConfigReloadWatcher
 from .utils.message import (
     is_voice_message,
-    is_image_message,
-    build_reply_suffix,
-    refine_reply_text,
-    sanitize_reply_text,
-    split_reply_chunks,
     split_reply_naturally,
 )
 from .utils.tools import transcribe_voice_message, estimate_exchange_tokens
@@ -60,10 +82,6 @@ from .wechat_versions import OFFICIAL_SUPPORTED_WECHAT_VERSION
 from .model_catalog import infer_provider_id
 from .transports import BaseTransport
 
-_FILEHELPER_CHAT_NAMES = {"filehelper", "文件传输助手"}
-_RECENT_SELF_MESSAGE_ECHO_TTL_SEC = 8.0
-_RECENT_SELF_MESSAGE_ECHO_MAX_ITEMS = 20
-
 class WeChatBot:
     def __init__(self, config_path: str, memory_manager: Optional[MemoryManager] = None):
         self.config_path = config_path
@@ -72,6 +90,7 @@ class WeChatBot:
         self.bot_cfg: Dict[str, Any] = {}
         self.api_cfg: Dict[str, Any] = {}
         self.agent_cfg: Dict[str, Any] = {}
+        self.reply_quality_tracker = get_reply_quality_tracker()
         self.ai_client: Optional[Any] = None
         self.wx: Optional[BaseTransport] = None
         self.memory: Optional[MemoryManager] = memory_manager
@@ -124,6 +143,18 @@ class WeChatBot:
         self.ignore_names_set: Set[str] = set()
         self.ignore_keywords_list: List[str] = []
         self.recent_outgoing_messages: Dict[str, List[Dict[str, Any]]] = {}
+        self.reply_quality_stats: Dict[str, Any] = {
+            "attempted": 0,
+            "successful": 0,
+            "empty": 0,
+            "failed": 0,
+            "delayed": 0,
+            "retrieval_augmented": 0,
+            "retrieval_hit_count": 0,
+            "helpful_count": 0,
+            "unhelpful_count": 0,
+            "last_reply_at": None,
+        }
 
     def _load_effective_config(self, *, force_reload: bool = False) -> Dict[str, Any]:
         snapshot = self.config_service.get_snapshot(
@@ -131,6 +162,10 @@ class WeChatBot:
             force_reload=force_reload,
         )
         self.config = snapshot.to_dict()
+        self.config_service.sync_default_config_snapshot(
+            self.config,
+            config_path=self.config_path,
+        )
         return self.config
 
     def _build_event_trace_id(self, event: MessageEvent) -> str:
@@ -425,25 +460,16 @@ class WeChatBot:
 
     @staticmethod
     def _normalize_chat_name(chat_name: str) -> str:
-        return str(chat_name or "").strip().lower()
+        return helper_normalize_chat_name(chat_name)
 
     def _is_filehelper_chat(self, chat_name: str) -> bool:
-        return self._normalize_chat_name(chat_name) in _FILEHELPER_CHAT_NAMES
+        return helper_is_filehelper_chat(chat_name)
 
     def _prune_recent_outgoing_messages(self, *, now: Optional[float] = None) -> None:
-        deadline = float(now if now is not None else time.time()) - _RECENT_SELF_MESSAGE_ECHO_TTL_SEC
-        stale_keys: List[str] = []
-        for chat_key, entries in self.recent_outgoing_messages.items():
-            kept = [
-                item for item in entries
-                if float(item.get("ts", 0.0) or 0.0) >= deadline
-            ]
-            if kept:
-                self.recent_outgoing_messages[chat_key] = kept[-_RECENT_SELF_MESSAGE_ECHO_MAX_ITEMS:]
-            else:
-                stale_keys.append(chat_key)
-        for chat_key in stale_keys:
-            self.recent_outgoing_messages.pop(chat_key, None)
+        helper_prune_recent_outgoing_messages(
+            self.recent_outgoing_messages,
+            now=now,
+        )
 
     def _remember_recent_outgoing_message(
         self,
@@ -452,62 +478,27 @@ class WeChatBot:
         *,
         chunk_size: Optional[int] = None,
     ) -> None:
-        if not self._is_filehelper_chat(chat_name):
-            return
-
-        content = str(text or "").strip()
-        if not content:
-            return
-
-        pieces = [content]
-        if chunk_size and chunk_size > 0:
-            try:
-                pieces = [
-                    chunk.strip()
-                    for chunk in split_reply_chunks(content, int(chunk_size))
-                    if str(chunk).strip()
-                ] or [content]
-            except Exception:
-                pieces = [content]
-
-        now = time.time()
-        self._prune_recent_outgoing_messages(now=now)
-        chat_key = self._normalize_chat_name(chat_name)
-        entries = self.recent_outgoing_messages.setdefault(chat_key, [])
-        for piece in pieces:
-            entries.append({"content": piece, "ts": now})
-        self.recent_outgoing_messages[chat_key] = entries[-_RECENT_SELF_MESSAGE_ECHO_MAX_ITEMS:]
+        helper_remember_recent_outgoing_message(
+            self.recent_outgoing_messages,
+            chat_name,
+            text,
+            chunk_size=chunk_size,
+        )
 
     def _is_recent_outgoing_echo(self, event: MessageEvent) -> bool:
-        if not event.is_self or not self._is_filehelper_chat(event.chat_name):
-            return False
-
-        content = str(event.content or "").strip()
-        if not content:
-            return False
-
-        self._prune_recent_outgoing_messages()
-        for item in reversed(
-            self.recent_outgoing_messages.get(self._normalize_chat_name(event.chat_name), [])
-        ):
-            if str(item.get("content") or "").strip() == content:
-                return True
-        return False
+        return helper_is_recent_outgoing_echo(self.recent_outgoing_messages, event)
 
     def _prepare_event_for_processing(self, event: MessageEvent) -> str:
-        if not event.is_self:
-            return "normal"
-        if not self._is_filehelper_chat(event.chat_name):
-            return "self_filtered"
-        if not bool(self.bot_cfg.get("allow_filehelper_self_message", True)):
-            return "self_filtered"
-        if self._is_recent_outgoing_echo(event):
+        result = helper_prepare_event_for_processing(
+            event,
+            self.bot_cfg,
+            self.recent_outgoing_messages,
+        )
+        if result == "skip_recent_outgoing_echo":
             logging.debug("跳过文件传输助手回声消息 | 会话=%s", event.chat_name)
-            return "skip_recent_outgoing_echo"
-
-        event.is_self = False
-        logging.debug("允许文件传输助手自发消息进入处理链路 | 会话=%s", event.chat_name)
-        return "accepted_self_filehelper"
+        elif result == "accepted_self_filehelper":
+            logging.debug("允许文件传输助手自发消息进入处理链路 | 会话=%s", event.chat_name)
+        return result
 
     async def run(self) -> None:
         wx = await self.initialize()
@@ -790,6 +781,10 @@ class WeChatBot:
             else:
                 snapshot = self.config_service.reload(config_path=self.config_path)
             self.config = snapshot.to_dict()
+            self.config_service.sync_default_config_snapshot(
+                self.config,
+                config_path=self.config_path,
+            )
             self.config_mtime = get_file_mtime(self.config_path)
         except Exception as exc:
             logging.warning("立即重载配置失败: %s", exc)
@@ -1149,47 +1144,13 @@ class WeChatBot:
                     preview=message_log,
                 )
 
-                # 如果是图片消息，content 包含 [图片] 标记
-                image_path = None
-                if is_image_message(event.msg_type) and "[图片]" in event.content:
-                    try:
-                        save_dir = os.path.join(os.getcwd(), "temp_images")
-                        os.makedirs(save_dir, exist_ok=True)
-                        if event.raw_item:
-                            filename = f"{int(time.time())}_{hash(event.sender)}.jpg"
-                            save_path = os.path.join(save_dir, filename)
-                            await asyncio.to_thread(event.raw_item.save_file, save_path)
-                            self._log_flow(
-                                logging.INFO,
-                                "EVENT.IMAGE_SAVED",
-                                event=event,
-                                trace_id=trace_id,
-                                path=save_path,
-                            )
-                            image_path = save_path
-                    except Exception as e:
-                        self._log_flow(
-                            logging.ERROR,
-                            "EVENT.IMAGE_SAVE_FAILED",
-                            event=event,
-                            trace_id=trace_id,
-                            error=str(e),
-                        )
+                image_path = await self._maybe_save_event_image(
+                    event,
+                    trace_id=trace_id,
+                )
                 
-                # IPC 记录
-                recipient = f"group:{event.chat_name}" if event.is_group else "Bot"
-                self.ipc.log_message(event.sender, event.content, "incoming", recipient)
-                
-                # 广播事件
-                asyncio.create_task(self.bot_manager.broadcast_event("message", {
-                    "direction": "incoming",
-                    "chat_id": f"group:{event.chat_name}" if event.is_group else f"friend:{event.chat_name}",
-                    "chat_name": event.chat_name,
-                    "sender": event.sender,
-                    "content": event.content,
-                    "recipient": recipient,
-                    "timestamp": event.timestamp or time.time()
-                }))
+                record_incoming_event(self.ipc, event)
+                schedule_incoming_broadcast(self.bot_manager, event)
 
 
                 # 2. 控制命令
@@ -1207,11 +1168,13 @@ class WeChatBot:
                         trace_id=trace_id,
                         quiet_reply=bool(quiet_reply),
                     )
-                    if quiet_reply:
-                        async with self.wx_lock:
-                            await asyncio.to_thread(
-                                send_message, wx, event.chat_name, quiet_reply, self.bot_cfg
-                            )
+                    await maybe_send_quiet_reply(
+                        wx=wx,
+                        event=event,
+                        quiet_reply=quiet_reply,
+                        bot_cfg=self.bot_cfg,
+                        wx_lock=self.wx_lock,
+                    )
                     return
 
                 should_handle, reason = should_reply_with_reason(
@@ -1299,50 +1262,27 @@ class WeChatBot:
         event: MessageEvent,
         trace_id: Optional[str] = None,
     ) -> bool:
-        cmd_prefix = self.bot_cfg.get("control_command_prefix", "/")
-        if not is_command_message(event.content, cmd_prefix):
-            return False
-            
-        allowed = self.bot_cfg.get("control_allowed_users", [])
-        
-        # 使用 asyncio.to_thread 包装可能包含文件 I/O 的同步调用
-        result = await asyncio.to_thread(
-            parse_control_command, 
-            event.content, 
-            cmd_prefix, 
-            allowed, 
-            event.sender
+        return await helper_handle_control_command(
+            wx=wx,
+            event=event,
+            trace_id=trace_id,
+            bot_cfg=self.bot_cfg,
+            log_flow=self._log_flow,
+            bot_manager=self.bot_manager,
+            wx_lock=self.wx_lock,
         )
-        
-        if result and result.should_reply:
-            self._log_flow(
-                logging.INFO,
-                "CONTROL.MATCHED",
-                event=event,
-                trace_id=trace_id,
-                command=result.command,
-                args=result.args,
-            )
-            if result.command in ("pause", "resume"):
-                await self.bot_manager.apply_pause_state(
-                    result.command == "pause",
-                    reason=(" ".join(result.args) or "手动暂停") if result.command == "pause" else "",
-                    propagate_to_bot=False,
-                )
-            if self.bot_cfg.get("control_reply_visible", True):
-                async with self.wx_lock:
-                    await asyncio.to_thread(
-                        send_message, wx, event.chat_name, result.response, self.bot_cfg
-                    )
-            self._log_flow(
-                logging.INFO,
-                "CONTROL.DONE",
-                event=event,
-                trace_id=trace_id,
-                command=result.command,
-            )
-            return True
-        return False
+
+    async def _maybe_save_event_image(
+        self,
+        event: MessageEvent,
+        *,
+        trace_id: Optional[str] = None,
+    ) -> Optional[str]:
+        return await maybe_save_event_image(
+            event,
+            trace_id=trace_id,
+            log_flow=self._log_flow,
+        )
 
     async def _process_and_reply(
         self,
@@ -1353,214 +1293,15 @@ class WeChatBot:
         image_path: Optional[str] = None,
         trace_id: Optional[str] = None,
     ) -> None:
-        self._ensure_event_defaults(event)
-        chat_id = f"group:{event.chat_name}" if event.is_group else f"friend:{event.chat_name}"
-        if not self.ai_client:
-            self._log_flow(
-                logging.WARNING,
-                "AI.SKIP_UNAVAILABLE",
-                event=event,
-                trace_id=trace_id,
-                chat_id=chat_id,
-            )
-            return
-
-        try:
-            async with self._get_chat_lock(chat_id):
-                started = time.perf_counter()
-                self._log_flow(
-                    logging.INFO,
-                    "AI.PREPARE_START",
-                    event=event,
-                    trace_id=trace_id,
-                    chat_id=chat_id,
-                    user_text=self._message_preview(user_text),
-                )
-                prepared = await self.ai_client.prepare_request(
-                    event=event,
-                    chat_id=chat_id,
-                    user_text=user_text,
-                    dependencies=self._runtime_dependencies(),
-                    image_path=image_path,
-                )
-                self._log_flow(
-                    logging.INFO,
-                    "CONV.PREPARE_DONE",
-                    event=event,
-                    trace_id=trace_id,
-                    chat_id=chat_id,
-                    has_image=bool(image_path),
-                )
-
-                reply_text = ""
-                should_stream = False
-                reply_deadline_sec = as_float(
-                    self.bot_cfg.get("reply_deadline_sec", 0.0),
-                    0.0,
-                    min_value=0.0,
-                )
-
-                invoke_task = asyncio.create_task(self.ai_client.invoke(prepared))
-                if reply_deadline_sec <= 0:
-                    self._log_flow(
-                        logging.INFO,
-                        "AI.INVOKE_START",
-                        event=event,
-                        trace_id=trace_id,
-                        chat_id=chat_id,
-                        mode="sync",
-                        deadline_disabled=True,
-                    )
-                    try:
-                        invoke_reply = await invoke_task
-                    except Exception as exc:
-                        prepared.response_metadata["response_error"] = str(exc)
-                        self._log_flow(
-                            logging.ERROR,
-                            "AI.INVOKE_FAILED",
-                            event=event,
-                            trace_id=trace_id,
-                            chat_id=chat_id,
-                            error=str(exc),
-                        )
-                        raise
-                else:
-                    elapsed_before_invoke = time.perf_counter() - started
-                    remaining_budget = max(0.0, reply_deadline_sec - elapsed_before_invoke)
-
-                    if remaining_budget <= 0:
-                        self._mark_deadline_missed(
-                            prepared,
-                            reply_deadline_sec,
-                            reason="deadline_exhausted_before_invoke",
-                        )
-                        self._log_flow(
-                            logging.WARNING,
-                            "AI.DEADLINE_EXHAUSTED",
-                            event=event,
-                            trace_id=trace_id,
-                            chat_id=chat_id,
-                            deadline_sec=reply_deadline_sec,
-                        )
-                        self._schedule_delayed_reply(
-                            wx=wx,
-                            event=event,
-                            prepared=prepared,
-                            user_text=user_text,
-                            chat_id=chat_id,
-                            trace_id=trace_id,
-                            invoke_task=invoke_task,
-                            reply_deadline_sec=reply_deadline_sec,
-                        )
-                        return
-
-                    self._log_flow(
-                        logging.INFO,
-                        "AI.INVOKE_START",
-                        event=event,
-                        trace_id=trace_id,
-                        chat_id=chat_id,
-                        mode="sync",
-                        deadline_ms=round(remaining_budget * 1000),
-                    )
-                    try:
-                        invoke_reply = await asyncio.wait_for(
-                            asyncio.shield(invoke_task),
-                            timeout=remaining_budget,
-                        )
-                    except asyncio.TimeoutError:
-                        self._mark_deadline_missed(
-                            prepared,
-                            reply_deadline_sec,
-                            reason="timeout",
-                        )
-                        self._log_flow(
-                            logging.WARNING,
-                            "AI.DELAYED_REPLY_SCHEDULED",
-                            event=event,
-                            trace_id=trace_id,
-                            chat_id=chat_id,
-                            deadline_sec=reply_deadline_sec,
-                        )
-                        self._schedule_delayed_reply(
-                            wx=wx,
-                            event=event,
-                            prepared=prepared,
-                            user_text=user_text,
-                            chat_id=chat_id,
-                            trace_id=trace_id,
-                            invoke_task=invoke_task,
-                            reply_deadline_sec=reply_deadline_sec,
-                        )
-                        return
-                    except Exception as exc:
-                        prepared.response_metadata["response_error"] = str(exc)
-                        self._log_flow(
-                            logging.ERROR,
-                            "AI.INVOKE_FAILED",
-                            event=event,
-                            trace_id=trace_id,
-                            chat_id=chat_id,
-                            error=str(exc),
-                        )
-                        raise
-
-                if not str(invoke_reply or "").strip():
-                    prepared.response_metadata["empty_reply"] = True
-                    self._set_ai_health(
-                        "degraded",
-                        f"Last AI call returned empty reply on preset {self.runtime_preset_name or 'unknown'}",
-                        success=True,
-                    )
-                    self._log_flow(
-                        logging.WARNING,
-                        "AI.REPLY_SKIPPED_EMPTY",
-                        event=event,
-                        trace_id=trace_id,
-                        chat_id=chat_id,
-                        tool_call_only=bool(prepared.response_metadata.get("tool_call_only_response")),
-                    )
-                    return
-
-                self._log_flow(
-                    logging.INFO,
-                    "CONV.AI_DONE",
-                    event=event,
-                    trace_id=trace_id,
-                    chat_id=chat_id,
-                    reply=self._reply_preview(invoke_reply),
-                )
-                reply_text = await self._send_smart_reply(
-                    wx,
-                    event,
-                    invoke_reply,
-                    trace_id=trace_id,
-                )
-        except Exception as exc:
-            self._set_ai_health("error", f"Last AI call failed: {exc}", error=True)
-            self._log_flow(
-                logging.ERROR,
-                "AI.FAILED",
-                event=event,
-                trace_id=trace_id,
-                chat_id=chat_id,
-                error=str(exc),
-            )
-            raise
-
-        try:
-            await self._finalize_reply_delivery(
-                prepared=prepared,
-                event=event,
-                chat_id=chat_id,
-                user_text=user_text,
-                reply_text=reply_text,
-                trace_id=trace_id,
-                streamed=should_stream,
-            )
-        finally:
-            if image_path and os.path.exists(image_path):
-                await asyncio.to_thread(os.remove, image_path)
+        await helper_process_and_reply(
+            self,
+            wx,
+            event,
+            user_text,
+            message_log,
+            image_path=image_path,
+            trace_id=trace_id,
+        )
 
     def _mark_deadline_missed(
         self,
@@ -1569,10 +1310,11 @@ class WeChatBot:
         *,
         reason: str,
     ) -> None:
-        prepared.response_metadata["deadline_missed"] = True
-        prepared.response_metadata["delayed_reply"] = True
-        prepared.response_metadata["response_deadline_sec"] = reply_deadline_sec
-        prepared.response_metadata["deadline_reason"] = reason
+        helper_mark_deadline_missed(
+            prepared,
+            reply_deadline_sec,
+            reason=reason,
+        )
 
     def _schedule_delayed_reply(
         self,
@@ -1586,20 +1328,17 @@ class WeChatBot:
         invoke_task: asyncio.Task,
         reply_deadline_sec: float,
     ) -> None:
-        task = asyncio.create_task(
-            self._complete_delayed_reply(
-                wx=wx,
-                event=event,
-                prepared=prepared,
-                user_text=user_text,
-                chat_id=chat_id,
-                trace_id=trace_id,
-                invoke_task=invoke_task,
-                reply_deadline_sec=reply_deadline_sec,
-            )
+        helper_schedule_delayed_reply(
+            self,
+            wx=wx,
+            event=event,
+            prepared=prepared,
+            user_text=user_text,
+            chat_id=chat_id,
+            trace_id=trace_id,
+            invoke_task=invoke_task,
+            reply_deadline_sec=reply_deadline_sec,
         )
-        self._track_pending_task(task)
-        task.add_done_callback(self.pending_tasks.discard)
 
     async def _complete_delayed_reply(
         self,
@@ -1613,77 +1352,17 @@ class WeChatBot:
         invoke_task: asyncio.Task,
         reply_deadline_sec: float,
     ) -> None:
-        try:
-            invoke_reply = await invoke_task
-        except Exception as exc:
-            prepared.response_metadata["response_error"] = str(exc)
-            self._set_ai_health("error", f"Delayed AI call failed: {exc}", error=True)
-            self._log_flow(
-                logging.ERROR,
-                "AI.DELAYED_REPLY_FAILED",
-                event=event,
-                trace_id=trace_id,
-                chat_id=chat_id,
-                error=str(exc),
-            )
-            return
-
-        if not str(invoke_reply or "").strip():
-            prepared.response_metadata["empty_reply"] = True
-            self._set_ai_health(
-                "degraded",
-                (
-                    f"Last AI call returned empty reply after missing {reply_deadline_sec}s "
-                    f"deadline on preset {self.runtime_preset_name or 'unknown'}"
-                ),
-                success=True,
-            )
-            self._log_flow(
-                logging.WARNING,
-                "AI.DELAYED_REPLY_SKIPPED_EMPTY",
-                event=event,
-                trace_id=trace_id,
-                chat_id=chat_id,
-                tool_call_only=bool(prepared.response_metadata.get("tool_call_only_response")),
-            )
-            return
-
-        self._log_flow(
-            logging.INFO,
-            "CONV.AI_DONE",
+        await helper_complete_delayed_reply(
+            self,
+            wx=wx,
             event=event,
-            trace_id=trace_id,
+            prepared=prepared,
+            user_text=user_text,
             chat_id=chat_id,
-            reply=self._reply_preview(invoke_reply),
+            trace_id=trace_id,
+            invoke_task=invoke_task,
+            reply_deadline_sec=reply_deadline_sec,
         )
-
-        try:
-            async with self._get_chat_lock(chat_id):
-                reply_text = await self._send_smart_reply(
-                    wx,
-                    event,
-                    invoke_reply,
-                    trace_id=trace_id,
-                )
-                await self._finalize_reply_delivery(
-                    prepared=prepared,
-                    event=event,
-                    chat_id=chat_id,
-                    user_text=user_text,
-                    reply_text=reply_text,
-                    trace_id=trace_id,
-                    streamed=False,
-                )
-        except Exception as exc:
-            self._set_ai_health("error", f"Delayed reply delivery failed: {exc}", error=True)
-            self._log_flow(
-                logging.ERROR,
-                "AI.DELAYED_REPLY_DELIVERY_FAILED",
-                event=event,
-                trace_id=trace_id,
-                chat_id=chat_id,
-                error=str(exc),
-            )
 
     async def _finalize_reply_delivery(
         self,
@@ -1696,97 +1375,16 @@ class WeChatBot:
         trace_id: Optional[str],
         streamed: bool,
     ) -> str:
-        if not reply_text:
-            self._log_flow(
-                logging.WARNING,
-                "AI.REPLY_EMPTY",
-                event=event,
-                trace_id=trace_id,
-                chat_id=chat_id,
-            )
-            return ""
-
-        timings = dict(getattr(prepared, "timings", {}) or {})
-        latency_sec = 0.0
-        for key in ("stream_sec", "invoke_sec", "prepare_total_sec"):
-            value = timings.get(key)
-            if value:
-                latency_sec = float(value)
-                break
-
-        deadline_missed = bool(prepared.response_metadata.get("deadline_missed"))
-        delayed_reply = bool(prepared.response_metadata.get("delayed_reply"))
-        if deadline_missed:
-            detail = (
-                f"Last AI call missed {prepared.response_metadata.get('response_deadline_sec', self.bot_cfg.get('reply_deadline_sec', 0.0))}s "
-                f"deadline on preset {self.runtime_preset_name or 'unknown'}"
-            )
-            if delayed_reply:
-                detail = f"{detail} and was sent later"
-            self._set_ai_health("degraded", detail, success=True)
-        elif latency_sec > 0:
-            detail = (
-                f"Last AI call succeeded on preset {self.runtime_preset_name or 'unknown'} "
-                f"in {round(latency_sec * 1000)} ms"
-            )
-            self._set_ai_health("healthy", detail, success=True)
-        else:
-            detail = f"Last AI call succeeded on preset {self.runtime_preset_name or 'unknown'}"
-            self._set_ai_health("healthy", detail, success=True)
-
-        response_metadata = self._build_reply_metadata(
+        return await helper_finalize_reply_delivery(
+            self,
             prepared=prepared,
             event=event,
             chat_id=chat_id,
             user_text=user_text,
             reply_text=reply_text,
+            trace_id=trace_id,
             streamed=streamed,
         )
-        prepared.response_metadata = response_metadata
-        self._log_flow(
-            logging.INFO,
-            "AI.REPLY_READY",
-            event=event,
-            trace_id=trace_id,
-            chat_id=chat_id,
-            streamed=streamed,
-            reply=self._reply_preview(reply_text),
-        )
-
-        self.ipc.log_message("Bot", reply_text, "outgoing", event.sender)
-
-        asyncio.create_task(self.bot_manager.broadcast_event("message", {
-            "direction": "outgoing",
-            "chat_id": chat_id,
-            "chat_name": event.chat_name,
-            "sender": "Bot",
-            "content": reply_text,
-            "recipient": event.chat_name,
-            "timestamp": time.time(),
-            "metadata": response_metadata,
-        }))
-
-        self._log_flow(
-            logging.INFO,
-            "AI.FINALIZE_START",
-            event=event,
-            trace_id=trace_id,
-            chat_id=chat_id,
-        )
-        await self.ai_client.finalize_request(
-            prepared,
-            reply_text,
-            self._runtime_dependencies(),
-        )
-        self._log_flow(
-            logging.INFO,
-            "AI.FINALIZE_DONE",
-            event=event,
-            trace_id=trace_id,
-            chat_id=chat_id,
-        )
-        self._record_reply_stats(user_text, reply_text)
-        return reply_text
 
     def _runtime_dependencies(self) -> Dict[str, Any]:
         return {
@@ -1924,69 +1522,23 @@ class WeChatBot:
         return sanitized_reply
 
     def _sanitize_reply_segment(self, reply_text: str) -> str:
-        emoji_policy = str(self.bot_cfg.get("emoji_policy", "wechat"))
-        replacements = self.bot_cfg.get("emoji_replacements")
-        refined_reply = refine_reply_text(reply_text)
-        return sanitize_reply_text(refined_reply, emoji_policy, replacements)
+        return helper_sanitize_reply_segment(self.bot_cfg, reply_text)
 
     def _build_reply_body_text(self, reply_text: str) -> str:
-        sanitized = self._sanitize_reply_segment(reply_text)
-        if str(sanitized or "").strip():
-            return str(sanitized).strip()
-
-        fallback_raw = str(reply_text or "").strip()
-        if not fallback_raw:
-            return ""
-
-        emoji_policy = str(self.bot_cfg.get("emoji_policy", "wechat"))
-        replacements = self.bot_cfg.get("emoji_replacements")
-        fallback_sanitized = sanitize_reply_text(fallback_raw, emoji_policy, replacements)
-        return str(fallback_sanitized or "").strip()
+        return helper_build_reply_body_text(self.bot_cfg, reply_text)
 
     @staticmethod
     def _ensure_send_succeeded(result: Any, *, context: str) -> None:
-        ok, err_msg = result
-        if ok:
-            return
-        detail = str(err_msg or "").strip() or "unknown error"
-        raise RuntimeError(f"{context}发送失败: {detail}")
+        helper_ensure_send_succeeded(result, context=context)
 
     def _build_final_reply_text(self, reply_text: str) -> str:
-        sanitized = self._build_reply_body_text(reply_text)
-        if not sanitized:
-            return ""
-        suffix = self._build_reply_suffix_text()
-        return f"{sanitized}{suffix}" if suffix else sanitized
+        return helper_build_final_reply_text(self.bot_cfg, self.ai_client, reply_text)
 
     def _build_reply_suffix_text(self) -> str:
-        reply_suffix = str(self.bot_cfg.get("reply_suffix") or "").strip()
-        if not reply_suffix:
-            return ""
-        model_name = getattr(self.ai_client, "model", "") if self.ai_client else ""
-        alias = get_model_alias(self.ai_client)
-        return build_reply_suffix(reply_suffix, model_name or "", alias)
+        return helper_build_reply_suffix_text(self.bot_cfg, self.ai_client)
 
     def _get_natural_split_config(self) -> Dict[str, float]:
-        delay_range = self.bot_cfg.get("natural_split_delay_sec")
-        delay_min = as_float(
-            delay_range[0] if isinstance(delay_range, (list, tuple)) and len(delay_range) > 0 else 0.3,
-            0.3,
-            min_value=0.0,
-        )
-        delay_max = as_float(
-            delay_range[1] if isinstance(delay_range, (list, tuple)) and len(delay_range) > 1 else delay_min,
-            delay_min,
-            min_value=0.0,
-        )
-        if delay_max < delay_min:
-            delay_min, delay_max = delay_max, delay_min
-        return {
-            "min_chars": as_int(self.bot_cfg.get("natural_split_min_chars", 30), 30, min_value=1),
-            "max_chars": as_int(self.bot_cfg.get("natural_split_max_chars", 120), 120, min_value=1),
-            "max_segments": as_int(self.bot_cfg.get("natural_split_max_segments", 3), 3, min_value=1),
-            "delay_min": delay_min,
-            "delay_max": delay_max,
-        }
+        return helper_get_natural_split_config(self.bot_cfg)
 
     def _record_reply_stats(self, user_text: str, reply_text: str) -> None:
         state = get_bot_state()
@@ -1996,6 +1548,155 @@ class WeChatBot:
         state.add_reply(tokens)
         self.bot_manager._invalidate_status_cache()
         asyncio.create_task(self.bot_manager.notify_status_change())
+
+    def _mark_reply_quality_dirty(self) -> None:
+        self.bot_manager._invalidate_status_cache()
+
+    def _record_reply_attempt(self) -> None:
+        self.reply_quality_stats["attempted"] = int(self.reply_quality_stats.get("attempted", 0) or 0) + 1
+        self._mark_reply_quality_dirty()
+
+    def _record_reply_empty(self) -> None:
+        self.reply_quality_stats["empty"] = int(self.reply_quality_stats.get("empty", 0) or 0) + 1
+        try:
+            self.reply_quality_tracker.log_event(outcome="empty")
+        except Exception as exc:
+            logging.warning("回复质量持久化失败(empty): %s", exc)
+        self._notify_runtime_status_changed()
+
+    def _record_reply_failure(self) -> None:
+        self.reply_quality_stats["failed"] = int(self.reply_quality_stats.get("failed", 0) or 0) + 1
+        try:
+            self.reply_quality_tracker.log_event(outcome="failed")
+        except Exception as exc:
+            logging.warning("回复质量持久化失败(failed): %s", exc)
+        self._notify_runtime_status_changed()
+
+    def _record_reply_success(self, response_metadata: Optional[Dict[str, Any]] = None) -> None:
+        metadata = dict(response_metadata or {})
+        retrieval = dict(metadata.get("retrieval") or {})
+        runtime_hit_count = as_int(retrieval.get("runtime_hit_count", 0), 0, min_value=0)
+        retrieval_augmented = bool(retrieval.get("augmented"))
+
+        self.reply_quality_stats["successful"] = int(self.reply_quality_stats.get("successful", 0) or 0) + 1
+        if bool(metadata.get("delayed_reply")):
+            self.reply_quality_stats["delayed"] = int(self.reply_quality_stats.get("delayed", 0) or 0) + 1
+        if retrieval_augmented:
+            self.reply_quality_stats["retrieval_augmented"] = (
+                int(self.reply_quality_stats.get("retrieval_augmented", 0) or 0) + 1
+            )
+        if runtime_hit_count > 0:
+            self.reply_quality_stats["retrieval_hit_count"] = (
+                int(self.reply_quality_stats.get("retrieval_hit_count", 0) or 0) + runtime_hit_count
+            )
+        self.reply_quality_stats["last_reply_at"] = time.time()
+        try:
+            self.reply_quality_tracker.log_event(
+                outcome="success",
+                delayed=bool(metadata.get("delayed_reply")),
+                retrieval_augmented=retrieval_augmented,
+                retrieval_hit_count=runtime_hit_count,
+            )
+        except Exception as exc:
+            logging.warning("回复质量持久化失败(success): %s", exc)
+        self._mark_reply_quality_dirty()
+
+    @staticmethod
+    def _summarize_prepared_retrieval(prepared: Any) -> Dict[str, Any]:
+        memory_context = list(getattr(prepared, "memory_context", []) or [])
+        runtime_hit_count = 0
+        export_rag_used = False
+
+        for item in memory_context:
+            if not isinstance(item, dict):
+                continue
+            runtime_hit_count += as_int(item.get("hit_count", 0), 0, min_value=0)
+            content = str(item.get("content") or "").strip()
+            if content.startswith("以下内容来自你与当前联系人的真实历史聊天"):
+                export_rag_used = True
+
+        return {
+            "augmented": runtime_hit_count > 0 or export_rag_used,
+            "runtime_hit_count": runtime_hit_count,
+            "export_rag_used": export_rag_used,
+        }
+
+    def _build_reply_quality_status(self) -> Dict[str, Any]:
+        attempted = int(self.reply_quality_stats.get("attempted", 0) or 0)
+        successful = int(self.reply_quality_stats.get("successful", 0) or 0)
+        empty = int(self.reply_quality_stats.get("empty", 0) or 0)
+        failed = int(self.reply_quality_stats.get("failed", 0) or 0)
+        delayed = int(self.reply_quality_stats.get("delayed", 0) or 0)
+        retrieval_augmented = int(self.reply_quality_stats.get("retrieval_augmented", 0) or 0)
+        retrieval_hit_count = int(self.reply_quality_stats.get("retrieval_hit_count", 0) or 0)
+        helpful_count = int(self.reply_quality_stats.get("helpful_count", 0) or 0)
+        unhelpful_count = int(self.reply_quality_stats.get("unhelpful_count", 0) or 0)
+        success_rate = round((successful / attempted) * 100, 1) if attempted > 0 else 0.0
+        history_24h: Dict[str, Any] = {}
+        history_7d: Dict[str, Any] = {}
+        try:
+            summaries = self.reply_quality_tracker.get_recent_summaries()
+            history_24h = dict(summaries.get("24h") or {})
+            history_7d = dict(summaries.get("7d") or {})
+        except Exception as exc:
+            logging.warning("读取回复质量历史失败: %s", exc)
+
+        if attempted <= 0:
+            status_text = "回复质量：暂无样本"
+        else:
+            status_text = (
+                f"回复成功率 {success_rate:.1f}%（{successful}/{attempted}），"
+                f"空回复 {empty}，失败 {failed}，检索增强 {retrieval_augmented} 次"
+            )
+
+        return {
+            "attempted": attempted,
+            "successful": successful,
+            "empty": empty,
+            "failed": failed,
+            "delayed": delayed,
+            "retrieval_augmented": retrieval_augmented,
+            "retrieval_hit_count": retrieval_hit_count,
+            "helpful_count": helpful_count,
+            "unhelpful_count": unhelpful_count,
+            "success_rate": success_rate,
+            "last_reply_at": self.reply_quality_stats.get("last_reply_at"),
+            "status_text": status_text,
+            "history_24h": history_24h,
+            "history_7d": history_7d,
+        }
+
+    def apply_reply_feedback_change(
+        self,
+        previous_feedback: str,
+        next_feedback: str,
+    ) -> None:
+        prev = str(previous_feedback or "").strip().lower()
+        nxt = str(next_feedback or "").strip().lower()
+
+        if prev == nxt:
+            return
+        if prev == "helpful":
+            self.reply_quality_stats["helpful_count"] = max(
+                0,
+                int(self.reply_quality_stats.get("helpful_count", 0) or 0) - 1,
+            )
+        elif prev == "unhelpful":
+            self.reply_quality_stats["unhelpful_count"] = max(
+                0,
+                int(self.reply_quality_stats.get("unhelpful_count", 0) or 0) - 1,
+            )
+
+        if nxt == "helpful":
+            self.reply_quality_stats["helpful_count"] = int(
+                self.reply_quality_stats.get("helpful_count", 0) or 0
+            ) + 1
+        elif nxt == "unhelpful":
+            self.reply_quality_stats["unhelpful_count"] = int(
+                self.reply_quality_stats.get("unhelpful_count", 0) or 0
+            ) + 1
+
+        self._notify_runtime_status_changed()
 
     def _track_pending_task(self, task: asyncio.Task) -> None:
         completed = {item for item in self.pending_tasks if item.done()}
@@ -2037,6 +1738,7 @@ class WeChatBot:
                 engine = "unknown"
 
         metadata = dict(getattr(prepared, "response_metadata", {}) or {})
+        retrieval_summary = self._summarize_prepared_retrieval(prepared)
         provider_id = str(getattr(self.ai_client, "provider_id", "") or "").strip().lower()
         if not provider_id:
             provider_id = infer_provider_id(
@@ -2101,6 +1803,7 @@ class WeChatBot:
             "emotion": dict(getattr(prepared, "trace", {}).get("emotion") or {}) or None,
             "context_summary": dict(getattr(prepared, "trace", {}).get("context_summary") or {}),
             "profile": dict(getattr(prepared, "trace", {}).get("profile") or {}) or None,
+            "retrieval": retrieval_summary,
         })
         return metadata
 
@@ -2130,6 +1833,7 @@ class WeChatBot:
                     "watch_paths": [],
                 }
             ),
+            "reply_quality": self._build_reply_quality_status(),
         }
 
     def _notify_runtime_status_changed(self) -> None:

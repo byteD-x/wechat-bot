@@ -128,3 +128,32 @@ async def test_send_smart_reply_fast_mode_skips_natural_split():
     sent_text = mock_send_chunks.await_args.args[2]
     assert sent_text == "done[bot]"
     assert sent == "done[bot]"
+
+
+def test_build_final_reply_text_uses_suffix_after_sanitizing():
+    bot = WeChatBot("config.yaml")
+    bot.bot_cfg = {
+        "emoji_policy": "strip",
+        "reply_suffix": " [bot]",
+    }
+    bot.ai_client = SimpleNamespace(model="test-model")
+
+    assert bot._build_final_reply_text("hi😀") == "hi[bot]"
+
+
+def test_get_natural_split_config_normalizes_reversed_delay_range():
+    bot = WeChatBot("config.yaml")
+    bot.bot_cfg = {
+        "natural_split_min_chars": 20,
+        "natural_split_max_chars": 50,
+        "natural_split_max_segments": 4,
+        "natural_split_delay_sec": [0.9, 0.2],
+    }
+
+    config = bot._get_natural_split_config()
+
+    assert config["min_chars"] == 20
+    assert config["max_chars"] == 50
+    assert config["max_segments"] == 4
+    assert config["delay_min"] == 0.2
+    assert config["delay_max"] == 0.9

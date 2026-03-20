@@ -290,6 +290,16 @@ class ApiService {
         });
     }
 
+    async saveMessageFeedback(messageId, feedback) {
+        return this.request('/api/message_feedback', {
+            method: 'POST',
+            body: {
+                message_id: messageId,
+                feedback,
+            }
+        });
+    }
+
     async sendMessage(target, content) {
         return this.request('/api/send', {
             method: 'POST',
@@ -361,6 +371,10 @@ class ApiService {
             chat_id: chatId,
             ...params,
         })}`);
+    }
+
+    async exportCostReviewQueue(params = {}) {
+        return this.request(`/api/costs/review_queue_export${this._buildQueryString(params)}`);
     }
 }
 

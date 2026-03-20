@@ -200,6 +200,7 @@ export function updateStats(page, stats, deps = {}) {
         system_metrics: stats.system_metrics || {},
         health_checks: stats.health_checks || {},
         merge_feedback: stats.merge_feedback || null,
+        reply_quality: stats.reply_quality || null,
         retriever_stats: stats.retriever_stats || {},
         runtime_timings: stats.runtime_timings || {},
         export_rag: stats.export_rag || null,
@@ -244,7 +245,8 @@ export function updateStats(page, stats, deps = {}) {
         page,
         nextStats.system_metrics,
         nextStats.health_checks,
-        nextStats.merge_feedback
+        nextStats.merge_feedback,
+        nextStats.reply_quality
     );
     helper.renderRetrieval(
         page,

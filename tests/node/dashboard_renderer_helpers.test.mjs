@@ -167,6 +167,19 @@ test('renderIdlePanel and renderHealthMetrics update panel state', () => withDom
     }, {
         status_text: '消息合并状态：活跃',
         active: true,
+    }, {
+        attempted: 5,
+        success_rate: 80,
+        delayed: 1,
+        retrieval_augmented: 2,
+        empty: 1,
+        helpful_count: 2,
+        unhelpful_count: 1,
+        history_24h: {
+            attempted: 12,
+            success_rate: 91.7,
+            helpful_count: 5,
+        },
     });
 
     assert.equal(selectors['#health-cpu'].textContent, '12.3%');
@@ -175,6 +188,11 @@ test('renderIdlePanel and renderHealthMetrics update panel state', () => withDom
     assert.equal(selectors['#health-latency'].textContent, '420 ms');
     assert.equal(selectors['#health-warning'].hidden, false);
     assert.equal(selectors['#health-merge-feedback'].dataset.active, 'true');
+    assert.match(selectors['#health-merge-feedback'].textContent, /本次 80\.0%/);
+    assert.match(selectors['#health-merge-feedback'].textContent, /近24h 91\.7%/);
+    assert.match(selectors['#health-merge-feedback'].textContent, /有帮助 2/);
+    assert.match(selectors['#health-merge-feedback'].textContent, /近24h 有帮助 5/);
+    assert.match(selectors['#health-merge-feedback'].textContent, /检索增强 2/);
     assert.equal(selectors['#health-ai'].dataset.level, 'healthy');
     assert.equal(
         selectors['#health-ai'].querySelector('.health-check-text')?.textContent,

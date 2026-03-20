@@ -98,6 +98,23 @@ function createInteractiveControl(initial = '') {
     };
 }
 
+function findFirstButtonByText(root, expectedText) {
+    const queue = [root];
+    while (queue.length > 0) {
+        const current = queue.shift();
+        if (!current) {
+            continue;
+        }
+        if (String(current.tagName || '').toLowerCase() === 'button' && current.textContent === expectedText) {
+            return current;
+        }
+        if (Array.isArray(current.children)) {
+            queue.push(...current.children);
+        }
+    }
+    return null;
+}
+
 test('messages data helper resets offline state and renders loaded messages', async () => withDom(async ({ document, registerElement }) => {
     const selectors = {
         '#all-messages': document.createElement('div'),
@@ -178,6 +195,95 @@ test('messages data helper applies realtime message filter and renders list', as
     assert.equal(page._messages.length, 2);
 }));
 
+test('messages list keeps detail click available through page fallback handler', async () => withDom(async ({ document }) => {
+    const selectors = {
+        '#all-messages': document.createElement('div'),
+        '#message-filter-summary': document.createElement('div'),
+        '#message-total-count': document.createElement('div'),
+        '#btn-load-more-messages': document.createElement('button'),
+    };
+    const page = createMessagesPage({
+        bot: { connected: true },
+    }, selectors);
+    const opened = [];
+    page._openMessageDetail = (message) => {
+        opened.push(message?.wx_id || '');
+    };
+
+    await fetchMessages(page, { append: false }, {
+        apiService: {
+            getMessages: async () => ({
+                success: true,
+                messages: [
+                    { wx_id: 'wx-1', sender: 'A', content: 'hello', timestamp: 1 },
+                ],
+                chats: [],
+                total: 1,
+                has_more: false,
+            }),
+        },
+    });
+
+    const firstItem = selectors['#all-messages'].querySelector('button');
+    firstItem.click();
+    assert.deepEqual(opened, ['wx-1']);
+}));
+
+test('messages page renders friend display names instead of chat ids', async () => withDom(async ({ document }) => {
+    const selectors = {
+        '#all-messages': document.createElement('div'),
+        '#message-chat-filter': document.createElement('select'),
+        '#message-filter-summary': document.createElement('div'),
+        '#message-total-count': document.createElement('div'),
+        '#btn-load-more-messages': document.createElement('button'),
+    };
+    const page = createMessagesPage({
+        bot: { connected: true },
+    }, selectors);
+    page._selectedChatId = 'friend:alice';
+
+    await fetchMessages(page, { append: false }, {
+        apiService: {
+            getMessages: async () => ({
+                success: true,
+                messages: [
+                    {
+                        wx_id: 'friend:alice',
+                        sender: 'Alice',
+                        sender_display_name: 'Alice',
+                        display_name: 'Alice',
+                        chat_display_name: 'Alice',
+                        content: 'hello',
+                        timestamp: 1,
+                        is_self: false,
+                    },
+                    {
+                        wx_id: 'friend:alice',
+                        sender: 'AI',
+                        sender_display_name: 'AI',
+                        display_name: 'Alice',
+                        chat_display_name: 'Alice',
+                        content: 'reply',
+                        timestamp: 2,
+                        is_self: true,
+                        role: 'assistant',
+                    },
+                ],
+                chats: [
+                    { chat_id: 'friend:alice', display_name: 'Alice', message_count: 2 },
+                ],
+                total: 2,
+                has_more: false,
+            }),
+        },
+    });
+
+    assert.equal(selectors['#message-filter-summary'].textContent.includes('Alice'), true);
+    assert.equal(selectors['#message-filter-summary'].textContent.includes('friend:alice'), false);
+    assert.equal(selectors['#all-messages'].textContent.includes('Alice'), true);
+    assert.equal(selectors['#all-messages'].textContent.includes('friend:alice'), false);
+}));
+
 test('messages detail helper handles offline and success profile flows', async () => withDom(async ({ document, registerElement }) => {
     const modal = registerElement('message-detail-modal', document.createElement('div'));
     const body = registerElement('message-detail-body', document.createElement('div'));
@@ -224,8 +330,176 @@ test('messages detail helper handles offline and success profile flows', async (
     });
 
     assert.equal(body.textContent.includes('summary'), true);
+    assert.equal(body.textContent.includes('固定注入块（只读）'), true);
     closeDetailModal(page, { documentObj: document });
     assert.equal(modal.classList.contains('active'), false);
+}));
+
+test('messages detail helper strips fixed prompt block before editing contact prompt', async () => withDom(async ({ document, registerElement }) => {
+    registerElement('message-detail-modal', document.createElement('div'));
+    const body = registerElement('message-detail-body', document.createElement('div'));
+    const toast = createToastRecorder();
+    const saved = [];
+    const page = createMessagesPage({
+        bot: { connected: true },
+    });
+
+    await openDetailModal(page, {
+        wx_id: 'friend:alice',
+        sender: 'Alice',
+        sender_display_name: 'Alice',
+        display_name: 'Alice',
+        chat_display_name: 'Alice',
+        content: 'hello',
+        timestamp: 1,
+        is_self: false,
+    }, {
+        documentObj: document,
+        toast,
+        apiService: {
+            getContactProfile: async () => ({
+                success: true,
+                profile: {
+                    relationship: 'friend',
+                    message_count: 9,
+                    last_emotion: 'calm',
+                    profile_summary: 'summary',
+                    contact_prompt: [
+                        '像老朋友一样回复，少一点解释。',
+                        '',
+                        '# 系统注入上下文（固定）',
+                        '以下内容由系统在运行时自动注入，请勿手动改写：',
+                        '# 历史对话',
+                        '{history_context}',
+                        '',
+                        '# 用户画像',
+                        '{user_profile}',
+                        '',
+                        '# 当前情境',
+                        '{emotion_hint}{time_hint}{style_hint}',
+                    ].join('\n'),
+                },
+            }),
+            saveContactPrompt: async (_chatId, contactPrompt) => {
+                saved.push(contactPrompt);
+                return {
+                    success: true,
+                    profile: {
+                        relationship: 'friend',
+                        message_count: 9,
+                        last_emotion: 'calm',
+                        profile_summary: 'summary',
+                        contact_prompt,
+                    },
+                };
+            },
+        },
+    });
+
+    const textareas = Array.from(body.querySelectorAll('textarea'));
+    const editable = textareas.find((item) => item.readOnly !== true);
+    const fixed = textareas.find((item) => item.readOnly === true && item.value.includes('{history_context}'));
+    assert.equal(editable.value, '像老朋友一样回复，少一点解释。');
+    assert.equal(fixed.value.includes('{history_context}'), true);
+
+    editable.value = '保留熟悉感，但别太长。';
+    const saveButton = findFirstButtonByText(body, '保存 Prompt');
+    saveButton.click();
+
+    await Promise.resolve();
+    assert.deepEqual(saved, ['保留熟悉感，但别太长。']);
+}));
+
+test('messages detail helper prefers friend display name over chat id', async () => withDom(async ({ document, registerElement }) => {
+    registerElement('message-detail-modal', document.createElement('div'));
+    const body = registerElement('message-detail-body', document.createElement('div'));
+    const page = createMessagesPage({
+        bot: { connected: true },
+    });
+
+    await openDetailModal(page, {
+        wx_id: 'friend:alice',
+        sender: 'Alice',
+        sender_display_name: 'Alice',
+        display_name: 'Alice',
+        chat_display_name: 'Alice',
+        content: 'hello',
+        timestamp: 1,
+        is_self: false,
+    }, {
+        documentObj: document,
+        toast: createToastRecorder(),
+        apiService: {
+            getContactProfile: async () => ({
+                success: true,
+                profile: {
+                    relationship: 'friend',
+                    message_count: 9,
+                    last_emotion: 'calm',
+                    profile_summary: 'summary',
+                    contact_prompt: 'prompt',
+                },
+            }),
+        },
+    });
+
+    assert.equal(body.textContent.includes('Alice'), true);
+    assert.equal(body.textContent.includes('friend:alice'), false);
+}));
+
+test('messages detail helper saves assistant feedback and updates local metadata', async () => withDom(async ({ document, registerElement }) => {
+    const modal = registerElement('message-detail-modal', document.createElement('div'));
+    const body = registerElement('message-detail-body', document.createElement('div'));
+    const toast = createToastRecorder();
+    const message = {
+        id: 7,
+        wx_id: 'wx-1',
+        sender: 'Bot',
+        content: 'hello',
+        timestamp: 1,
+        is_self: true,
+        role: 'assistant',
+        metadata: {},
+    };
+    const page = createMessagesPage({
+        bot: { connected: true },
+    });
+    page._messages = [message];
+
+    await openDetailModal(page, message, {
+        documentObj: document,
+        toast,
+        apiService: {
+            getContactProfile: async () => ({
+                success: true,
+                profile: {
+                    relationship: 'friend',
+                    message_count: 9,
+                    last_emotion: 'calm',
+                    profile_summary: 'summary',
+                    contact_prompt: 'prompt',
+                },
+            }),
+            saveMessageFeedback: async (_messageId, feedback) => ({
+                success: true,
+                metadata: {
+                    reply_quality: {
+                        user_feedback: feedback,
+                    },
+                },
+            }),
+        },
+    });
+
+    const buttons = Array.from(body.querySelectorAll('button'));
+    const helpfulButton = buttons.find((item) => item.textContent === '有帮助');
+    helpfulButton.click();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    assert.equal(modal.classList.contains('active'), true);
+    assert.equal(page._messages[0].metadata.reply_quality.user_feedback, 'helpful');
+    assert.equal(toast.calls.some((item) => item.type === 'success'), true);
 }));
 
 test('messages page shell binds controls, debounce search and close modal flows', async () => withDom(async ({ document, registerElement }) => {

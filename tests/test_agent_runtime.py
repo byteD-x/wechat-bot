@@ -1102,6 +1102,7 @@ async def test_agent_runtime_finalize_request_persists_messages(monkeypatch):
     assert memory.saved_messages[0][0] == "friend:bob"
     saved_roles = [item["role"] for item in memory.saved_messages[0][1]]
     assert saved_roles == ["user", "assistant"]
+    assert ("friend:bob", {"nickname": "Bob"}) in memory.profile_updates
     assert prepared.response_metadata["growth_message_count"] == 4
     assert len(memory.background_backlog) == 4
     assert ("friend:bob", "emotion") in memory.background_backlog
