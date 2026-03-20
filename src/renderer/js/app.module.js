@@ -13,6 +13,33 @@ import { DashboardPage, CostsPage, MessagesPage, SettingsPage, LogsPage, AboutPa
 const DEFAULT_IDLE_DELAY_MS = 15 * 60 * 1000;
 const AUTO_WAKE_PAGES = new Set(['dashboard', 'costs', 'messages', 'logs']);
 
+function formatDateTime(value) {
+    if (!value) {
+        return '--';
+    }
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+        return '--';
+    }
+    return new Intl.DateTimeFormat('zh-CN', {
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+    }).format(date);
+}
+
+function createElement(tag, className, text) {
+    const element = document.createElement(tag);
+    if (className) {
+        element.className = className;
+    }
+    if (text !== undefined) {
+        element.textContent = text;
+    }
+    return element;
+}
+
 class App {
     constructor() {
         this.pages = {
@@ -33,6 +60,8 @@ class App {
         this._backendStartAttempted = false;
         this._statusPausedByVisibility = false;
         this._lastUpdateToastVersion = '';
+        this._lastUpdateModalVersion = '';
+        this._confirmModalResolver = null;
         this._removeUpdateListener = null;
         this._removeRuntimeIdleListener = null;
         this._eventSource = null;
@@ -53,6 +82,8 @@ class App {
         this._bindGlobalEvents();
         this._bindKeyboardShortcuts();
         this._setupCloseChoiceModal();
+        this._setupConfirmModal();
+        this._setupUpdateModal();
 
         for (const [pageName, page] of Object.entries(this.pages)) {
             await this._runInitStep(`${pageName}.onInit`, () => page.onInit());
@@ -96,6 +127,7 @@ class App {
 
         const initialState = await window.electronAPI.getUpdateState();
         this._applyUpdateState(initialState, { silent: true });
+        this._maybePromptForUpdate({ forceReadyToInstall: true });
 
         this._removeUpdateListener = window.electronAPI.onUpdateStateChanged?.((nextState) => {
             this._applyUpdateState(nextState);
@@ -191,11 +223,18 @@ class App {
             'updater.downloadUrl': updateState.downloadUrl || '',
             'updater.releasePageUrl': updateState.releasePageUrl || '',
             'updater.notes': Array.isArray(updateState.notes) ? updateState.notes : [],
-            'updater.error': updateState.error || ''
+            'updater.error': updateState.error || '',
+            'updater.skippedVersion': updateState.skippedVersion || '',
+            'updater.downloading': !!updateState.downloading,
+            'updater.downloadProgress': Number(updateState.downloadProgress || 0),
+            'updater.readyToInstall': !!updateState.readyToInstall,
+            'updater.downloadedVersion': updateState.downloadedVersion || '',
+            'updater.downloadedInstallerPath': updateState.downloadedInstallerPath || ''
         });
 
         this._updateVersionText();
         this._updateSidebarUpdateBadge();
+        this._renderUpdateModal();
 
         const nextVersion = updateState.latestVersion || '';
         if (
@@ -207,6 +246,8 @@ class App {
             this._lastUpdateToastVersion = nextVersion;
             notificationService.info(`发现新版本 v${nextVersion}，可在设置页下载更新。`, 5000);
         }
+
+        this._maybePromptForUpdate(options);
     }
 
     _updateVersionText() {
@@ -220,10 +261,17 @@ class App {
         const available = stateManager.get('updater.available');
         const latestVersion = stateManager.get('updater.latestVersion');
         const enabled = stateManager.get('updater.enabled');
+        const downloading = stateManager.get('updater.downloading');
+        const downloadProgress = Number(stateManager.get('updater.downloadProgress') || 0);
+        const readyToInstall = stateManager.get('updater.readyToInstall');
 
         let suffix = '';
         if (checking) {
             suffix = ' · 检查更新中';
+        } else if (downloading) {
+            suffix = ` · 下载中 ${downloadProgress}%`;
+        } else if (readyToInstall) {
+            suffix = ` · 已下载 v${latestVersion || currentVersion}`;
         } else if (available && latestVersion) {
             suffix = ` · 可更新到 v${latestVersion}`;
         } else if (enabled) {
@@ -242,6 +290,23 @@ class App {
         const available = stateManager.get('updater.available');
         const latestVersion = stateManager.get('updater.latestVersion');
         const checking = stateManager.get('updater.checking');
+        const downloading = stateManager.get('updater.downloading');
+        const downloadProgress = Number(stateManager.get('updater.downloadProgress') || 0);
+        const readyToInstall = stateManager.get('updater.readyToInstall');
+
+        if (readyToInstall) {
+            badge.hidden = false;
+            badge.textContent = '安装更新';
+            badge.disabled = false;
+            return;
+        }
+
+        if (downloading) {
+            badge.hidden = false;
+            badge.textContent = `下载 ${downloadProgress}%`;
+            badge.disabled = true;
+            return;
+        }
 
         if (available && latestVersion) {
             badge.hidden = false;
@@ -403,7 +468,11 @@ class App {
         });
 
         document.getElementById('update-badge')?.addEventListener('click', async () => {
-            await this._openUpdateDownload();
+            if (stateManager.get('updater.available') || stateManager.get('updater.readyToInstall')) {
+                this._openUpdateModal();
+                return;
+            }
+            await this._switchPage('settings', { source: 'update-badge' });
         });
 
         if (window.electronAPI?.onTrayAction) {
@@ -519,6 +588,7 @@ class App {
 
     _setupCloseChoiceModal() {
         const modal = document.getElementById('close-choice-modal');
+        const btnClose = document.getElementById('btn-close-choice-modal');
         const remember = document.getElementById('close-choice-remember');
         const btnMinimize = document.getElementById('btn-close-choice-minimize');
         const btnQuit = document.getElementById('btn-close-choice-quit');
@@ -556,6 +626,8 @@ class App {
             openModal();
         });
 
+        btnClose?.addEventListener('click', closeModal);
+
         modal.addEventListener('click', (event) => {
             if (event.target === modal) {
                 closeModal();
@@ -579,6 +651,272 @@ class App {
             closeModal();
             await window.electronAPI.confirmCloseAction('quit', keep);
         });
+    }
+
+    _setupConfirmModal() {
+        const modal = document.getElementById('confirm-modal');
+        const btnClose = document.getElementById('btn-close-confirm-modal');
+        const btnCancel = document.getElementById('btn-confirm-modal-cancel');
+        const btnConfirm = document.getElementById('btn-confirm-modal-confirm');
+        if (!modal || !btnCancel || !btnConfirm) {
+            return;
+        }
+
+        const closeWith = (accepted) => {
+            modal.classList.remove('active');
+            if (this._confirmModalResolver) {
+                const resolver = this._confirmModalResolver;
+                this._confirmModalResolver = null;
+                resolver(Boolean(accepted));
+            }
+        };
+
+        modal.addEventListener('click', (event) => {
+            if (event.target === modal) {
+                closeWith(false);
+            }
+        });
+
+        btnClose?.addEventListener('click', () => closeWith(false));
+        btnCancel.addEventListener('click', () => closeWith(false));
+        btnConfirm.addEventListener('click', () => closeWith(true));
+
+        window.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape' && modal.classList.contains('active')) {
+                closeWith(false);
+            }
+        });
+
+        window.appConfirm = (options = {}) => {
+            const title = String(options.title || '确认操作').trim();
+            const message = String(options.message || '确认是否继续？').trim();
+            const kicker = String(options.kicker || '操作确认').trim();
+            const subtitle = String(options.subtitle || '').trim();
+            const confirmText = String(options.confirmText || '确认').trim();
+            const cancelText = String(options.cancelText || '取消').trim();
+
+            const kickerElem = document.getElementById('confirm-modal-kicker');
+            const titleElem = document.getElementById('confirm-modal-title');
+            const subtitleElem = document.getElementById('confirm-modal-subtitle');
+            const messageElem = document.getElementById('confirm-modal-message');
+
+            if (kickerElem) {
+                kickerElem.textContent = kicker;
+            }
+            if (titleElem) {
+                titleElem.textContent = title;
+            }
+            if (subtitleElem) {
+                subtitleElem.textContent = subtitle || '请确认是否继续执行当前操作。';
+            }
+            if (messageElem) {
+                messageElem.textContent = message;
+            }
+            btnCancel.textContent = cancelText;
+            btnConfirm.textContent = confirmText;
+
+            if (this._confirmModalResolver) {
+                this._confirmModalResolver(false);
+                this._confirmModalResolver = null;
+            }
+
+            modal.classList.add('active');
+            return new Promise((resolve) => {
+                this._confirmModalResolver = resolve;
+            });
+        };
+    }
+
+    _setupUpdateModal() {
+        const modal = document.getElementById('update-modal');
+        const btnClose = document.getElementById('btn-close-update-modal');
+        const btnSkip = document.getElementById('btn-update-modal-skip');
+        const btnAction = document.getElementById('btn-update-modal-action');
+        if (!modal) {
+            return;
+        }
+
+        const closeModal = () => {
+            modal.classList.remove('active');
+        };
+
+        modal.addEventListener('click', (event) => {
+            if (event.target === modal) {
+                closeModal();
+            }
+        });
+
+        btnClose?.addEventListener('click', closeModal);
+
+        window.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape' && modal.classList.contains('active')) {
+                closeModal();
+            }
+        });
+
+        btnSkip?.addEventListener('click', async () => {
+            if (!window.electronAPI?.skipUpdateVersion) {
+                return;
+            }
+            const latestVersion = stateManager.get('updater.latestVersion');
+            if (!latestVersion) {
+                return;
+            }
+            const result = await window.electronAPI.skipUpdateVersion(latestVersion);
+            if (!result?.success) {
+                notificationService.warning(result?.error || '跳过版本失败');
+                return;
+            }
+            notificationService.info(`已跳过 v${latestVersion}`);
+            closeModal();
+        });
+
+        btnAction?.addEventListener('click', async () => {
+            if (stateManager.get('updater.readyToInstall')) {
+                await this._installDownloadedUpdate();
+                return;
+            }
+            await this._downloadUpdate();
+        });
+
+        this._renderUpdateModal();
+    }
+
+    _openUpdateModal() {
+        const modal = document.getElementById('update-modal');
+        if (!modal) {
+            return;
+        }
+        this._renderUpdateModal();
+        modal.classList.add('active');
+    }
+
+    _maybePromptForUpdate(options = {}) {
+        const latestVersion = stateManager.get('updater.latestVersion');
+        const skippedVersion = stateManager.get('updater.skippedVersion');
+        const readyToInstall = stateManager.get('updater.readyToInstall');
+        const available = stateManager.get('updater.available');
+
+        if (readyToInstall && latestVersion) {
+            this._lastUpdateModalVersion = latestVersion;
+            this._openUpdateModal();
+            return;
+        }
+
+        if (!available || !latestVersion || latestVersion === skippedVersion) {
+            return;
+        }
+
+        if (options.silent && !options.forceReadyToInstall) {
+            return;
+        }
+
+        if (this._lastUpdateModalVersion === latestVersion) {
+            return;
+        }
+
+        this._lastUpdateModalVersion = latestVersion;
+        this._openUpdateModal();
+    }
+
+    _renderUpdateModal() {
+        const statusText = document.getElementById('update-modal-status');
+        const meta = document.getElementById('update-modal-meta');
+        const notes = document.getElementById('update-modal-notes');
+        const progress = document.getElementById('update-modal-progress');
+        const progressFill = document.getElementById('update-modal-progress-fill');
+        const progressText = document.getElementById('update-modal-progress-text');
+        const btnSkip = document.getElementById('btn-update-modal-skip');
+        const btnAction = document.getElementById('btn-update-modal-action');
+        if (!statusText || !meta || !notes || !progress || !progressFill || !progressText || !btnSkip || !btnAction) {
+            return;
+        }
+
+        const currentVersion = stateManager.get('updater.currentVersion') || '--';
+        const latestVersion = stateManager.get('updater.latestVersion') || '';
+        const releaseDate = stateManager.get('updater.releaseDate');
+        const checkedAt = stateManager.get('updater.lastCheckedAt');
+        const error = stateManager.get('updater.error');
+        const readyToInstall = !!stateManager.get('updater.readyToInstall');
+        const downloading = !!stateManager.get('updater.downloading');
+        const downloadProgress = Math.min(100, Math.max(0, Number(stateManager.get('updater.downloadProgress') || 0)));
+        const available = !!stateManager.get('updater.available');
+        const noteItems = Array.isArray(stateManager.get('updater.notes')) ? stateManager.get('updater.notes') : [];
+
+        if (readyToInstall) {
+            statusText.textContent = `更新已准备好：v${latestVersion || currentVersion}`;
+        } else if (downloading) {
+            statusText.textContent = `正在下载 v${latestVersion}...`;
+        } else if (error) {
+            statusText.textContent = error;
+        } else if (available && latestVersion) {
+            statusText.textContent = `发现新版本 v${latestVersion}`;
+        } else {
+            statusText.textContent = '当前已经是最新版本';
+        }
+
+        meta.textContent = [
+            `当前版本：v${currentVersion}`,
+            latestVersion ? `最新版本：v${latestVersion}` : '',
+            releaseDate ? `发布日期：${formatDateTime(releaseDate)}` : '',
+            checkedAt ? `最近检查：${formatDateTime(checkedAt)}` : '',
+        ].filter(Boolean).join(' · ');
+
+        notes.textContent = '';
+        const renderedNotes = noteItems.length > 0 ? noteItems : ['暂无更新说明。'];
+        renderedNotes.forEach((item) => {
+            notes.appendChild(createElement('li', 'update-modal-note-item', item));
+        });
+
+        progress.hidden = !downloading;
+        progressFill.style.width = `${downloadProgress}%`;
+        progressText.textContent = downloading ? `下载进度 ${downloadProgress}%` : '';
+
+        btnSkip.style.display = readyToInstall ? 'none' : 'inline-flex';
+        btnSkip.disabled = downloading || !latestVersion;
+
+        if (readyToInstall) {
+            btnAction.textContent = '立即安装并重启';
+            btnAction.disabled = false;
+        } else if (downloading) {
+            btnAction.textContent = `下载中 ${downloadProgress}%`;
+            btnAction.disabled = true;
+        } else {
+            btnAction.textContent = '下载更新';
+            btnAction.disabled = !latestVersion;
+        }
+    }
+
+    async _downloadUpdate() {
+        if (window.electronAPI?.downloadUpdate) {
+            const result = await window.electronAPI.downloadUpdate();
+            if (!result?.success) {
+                notificationService.warning(result?.error || '下载安装包失败');
+                return;
+            }
+            if (result?.alreadyDownloaded) {
+                notificationService.info('更新安装包已下载完成');
+            } else {
+                notificationService.info('开始下载更新，请稍候...');
+            }
+            this._openUpdateModal();
+            return;
+        }
+        await this._openUpdateDownload();
+    }
+
+    async _installDownloadedUpdate() {
+        if (!window.electronAPI?.installDownloadedUpdate) {
+            notificationService.warning('当前环境不支持安装更新');
+            return;
+        }
+
+        const result = await window.electronAPI.installDownloadedUpdate();
+        if (!result?.success) {
+            notificationService.warning(result?.error || '启动更新安装失败');
+            return;
+        }
+        notificationService.info('正在退出应用并启动安装程序...');
     }
 
     async _openUpdateDownload() {

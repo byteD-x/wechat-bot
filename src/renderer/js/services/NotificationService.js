@@ -10,6 +10,7 @@ class NotificationService {
     constructor() {
         this.container = null;
         this.defaultDuration = 3000;
+        this.hoverResumeDuration = 1400;
     }
 
     init() {
@@ -39,16 +40,59 @@ class NotificationService {
         msgWrap.className = 'toast-message';
         msgWrap.textContent = String(message ?? '');
 
+        const closeButton = document.createElement('button');
+        closeButton.type = 'button';
+        closeButton.className = 'toast-close';
+        closeButton.setAttribute('aria-label', '关闭提示');
+        closeButton.appendChild(this._getIconSvgElement('x'));
+
         toast.appendChild(iconWrap);
         toast.appendChild(msgWrap);
+        toast.appendChild(closeButton);
         this.container.appendChild(toast);
 
         eventBus.emit(Events.TOAST_SHOW, { message, type });
 
-        setTimeout(() => {
-            toast.style.animation = 'toastEnter 0.25s ease reverse';
-            setTimeout(() => toast.remove(), 250);
-        }, duration);
+        let timeoutId = null;
+        const dismiss = () => {
+            if (!toast.isConnected || toast.classList.contains('is-leaving')) {
+                return;
+            }
+            if (timeoutId) {
+                clearTimeout(timeoutId);
+                timeoutId = null;
+            }
+            toast.classList.add('is-leaving');
+            toast.classList.remove('is-visible');
+            window.setTimeout(() => {
+                if (toast.isConnected) {
+                    toast.remove();
+                }
+            }, 220);
+        };
+
+        const scheduleDismiss = (delay) => {
+            if (timeoutId) {
+                clearTimeout(timeoutId);
+            }
+            timeoutId = window.setTimeout(dismiss, delay);
+        };
+
+        closeButton.addEventListener('click', dismiss);
+        toast.addEventListener('mouseenter', () => {
+            if (timeoutId) {
+                clearTimeout(timeoutId);
+                timeoutId = null;
+            }
+        });
+        toast.addEventListener('mouseleave', () => {
+            scheduleDismiss(this.hoverResumeDuration);
+        });
+
+        requestAnimationFrame(() => {
+            toast.classList.add('is-visible');
+        });
+        scheduleDismiss(Math.max(1200, Number(duration) || this.defaultDuration));
     }
 
     success(message, duration) {
@@ -85,7 +129,8 @@ class NotificationService {
             success: 'check',
             error: 'x',
             warning: 'alert-circle',
-            info: 'info'
+            info: 'info',
+            x: 'x',
         };
         const iconName = map[type] || 'info';
 

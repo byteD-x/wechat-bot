@@ -64,7 +64,11 @@ const store = new Store({
             feedUrl: '',
             autoCheckOnLaunch: true,
             checkIntervalHours: 6,
-            notifyOnUpdate: true
+            notifyOnUpdate: true,
+            skippedVersion: '',
+            lastCheckedAt: '',
+            downloadedVersion: '',
+            downloadedInstallerPath: ''
         }
     }
 });
@@ -75,6 +79,7 @@ const GLOBAL_STATE = {
     tray: null,
     pythonProcess: null,
     updateManager: null,
+    installingUpdate: false,
     isQuitting: false,
     isDev: process.argv.includes('--dev'),
     flaskPort: store.get('flaskPort'),
@@ -932,6 +937,34 @@ async function requestAppClose(options = {}) {
     return { action: 'ask' };
 }
 
+async function installDownloadedUpdateAndQuit() {
+    const prepareResult = GLOBAL_STATE.updateManager?.prepareInstall() || {
+        success: false,
+        error: 'update manager unavailable'
+    };
+    if (!prepareResult.success) {
+        return prepareResult;
+    }
+
+    GLOBAL_STATE.installingUpdate = true;
+    setTimeout(async () => {
+        try {
+            GLOBAL_STATE.isQuitting = true;
+            if (GLOBAL_STATE.tray) {
+                GLOBAL_STATE.tray.destroy();
+                GLOBAL_STATE.tray = null;
+            }
+            await BackendManager.stop('install-update');
+        } catch (error) {
+            console.warn('[Update] stop backend before install failed:', error?.message || error);
+        } finally {
+            app.quit();
+        }
+    }, 150);
+
+    return { success: true };
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 //                               窗口管理
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1322,18 +1355,34 @@ function setupIPC() {
         checking: false,
         available: false,
         currentVersion: app.getVersion(),
-        latestVersion: null,
-        lastCheckedAt: null,
-        releaseDate: null,
+        latestVersion: '',
+        lastCheckedAt: '',
+        releaseDate: '',
         downloadUrl: '',
         releasePageUrl: '',
         notes: [],
-        error: ''
+        error: '',
+        skippedVersion: '',
+        downloading: false,
+        downloadProgress: 0,
+        readyToInstall: false,
+        downloadedVersion: '',
+        downloadedInstallerPath: ''
     });
 
     ipcMain.handle('check-for-updates', (_, options) => (
         GLOBAL_STATE.updateManager?.checkForUpdates({ ...options, manual: true }) || { success: false, error: 'update manager unavailable' }
     ));
+
+    ipcMain.handle('skip-update-version', (_, version) => (
+        GLOBAL_STATE.updateManager?.skipVersion(version) || { success: false, error: 'update manager unavailable' }
+    ));
+
+    ipcMain.handle('download-update', () => (
+        GLOBAL_STATE.updateManager?.downloadUpdate() || { success: false, error: 'update manager unavailable' }
+    ));
+
+    ipcMain.handle('install-downloaded-update', () => installDownloadedUpdateAndQuit());
 
     ipcMain.handle('open-update-download', () => (
         GLOBAL_STATE.updateManager?.openDownloadPage() || { success: false, error: 'download url unavailable' }
@@ -1419,7 +1468,13 @@ if (!app.requestSingleInstanceLock()) {
     app.on('before-quit', () => {
         GLOBAL_STATE.isQuitting = true;
         GLOBAL_STATE.updateManager?.dispose();
-        BackendManager.stop('quit');
+        BackendManager.stop(GLOBAL_STATE.installingUpdate ? 'install-update' : 'quit');
+    });
+
+    app.on('will-quit', () => {
+        if (GLOBAL_STATE.installingUpdate) {
+            GLOBAL_STATE.updateManager?.launchPreparedInstaller();
+        }
     });
 
     app.on('window-all-closed', () => {

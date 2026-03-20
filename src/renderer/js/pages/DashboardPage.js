@@ -292,7 +292,13 @@ export class DashboardPage extends PageController {
         }
 
         if (action === 'clear') {
-            const accepted = window.confirm(`确认清空“${this._getGrowthTaskLabel(taskType)}”队列吗？`);
+            const accepted = await this._confirmAction({
+                kicker: '队列操作',
+                title: '确认清空成长任务队列',
+                subtitle: '该操作会立即移除当前等待执行的任务。',
+                message: `确认清空“${this._getGrowthTaskLabel(taskType)}”队列吗？`,
+                confirmText: '确认清空',
+            });
             if (!accepted) {
                 return;
             }
@@ -349,7 +355,13 @@ export class DashboardPage extends PageController {
         if (promptState?.enableCostSeen) {
             return true;
         }
-        const accepted = window.confirm('启动机器人会自动开启成长任务，并持续消耗模型额度用于后台整理记忆、画像和语料。确认继续吗？');
+        const accepted = await this._confirmAction({
+            kicker: '启动提醒',
+            title: '确认启动机器人',
+            subtitle: '成长任务会随机器人一起启动。',
+            message: '启动机器人会自动开启成长任务，并持续消耗模型额度用于后台整理记忆、画像和语料。确认继续吗？',
+            confirmText: '确认启动',
+        });
         if (!accepted) {
             return false;
         }
@@ -365,12 +377,25 @@ export class DashboardPage extends PageController {
         if (promptState?.disableRiskSeen) {
             return true;
         }
-        const accepted = window.confirm('关闭成长任务后，后台记忆整理、画像更新和语料增量处理都会暂停，可能影响后续回复质量。确认继续吗？');
+        const accepted = await this._confirmAction({
+            kicker: '风险提示',
+            title: '确认关闭成长任务',
+            subtitle: '关闭后不会影响当前界面操作，但会影响后续回复质量的成长链路。',
+            message: '关闭成长任务后，后台记忆整理、画像更新和语料增量处理都会暂停，可能影响后续回复质量。确认继续吗？',
+            confirmText: '确认关闭',
+        });
         if (!accepted) {
             return false;
         }
         await window.electronAPI.markGrowthPromptSeen('disable-risk');
         return true;
+    }
+
+    async _confirmAction(options) {
+        if (typeof window.appConfirm === 'function') {
+            return window.appConfirm(options);
+        }
+        return window.confirm(String(options?.message || '确认是否继续？'));
     }
 
     _startIdleTimer() {

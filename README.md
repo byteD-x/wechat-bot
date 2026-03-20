@@ -257,7 +257,9 @@ Windows 正式发布现在默认只生成两种产物：
 补充说明：
 
 - `MSI` 不再参与日常发版，只保留 `npm run build:msi` 作为按需构建入口
-- 应用内自动更新已停用，桌面端只保留“打开 GitHub Releases 页面”的下载入口
+- `setup.exe` 安装版已启用应用内自动更新：每次启动会检查 GitHub 最新 Release，发现新版本时弹窗展示版本号与更新说明，并支持“跳过此版本”或“下载更新”
+- 下载完成后可在应用内直接执行“立即安装并重启”；安装流程会使用最新 `setup.exe` 覆盖升级现有安装目录
+- `portable.exe` 仍保留手动更新模式，需前往 GitHub Releases 下载新版安装包
 - 正式 Release 通过 GitHub Actions 构建并上传，不再建议在本地直接上传大文件
 - 每次 Release 的更新说明会自动基于“上一个正式 tag 到当前 tag”的 commit 区间生成
 

@@ -275,6 +275,12 @@ export class SettingsPage extends PageController {
                 this._closePresetModal();
             }
         });
+
+        this.bindEvent(window, 'keydown', (event) => {
+            if (event.key === 'Escape' && document.getElementById('preset-modal')?.classList.contains('active')) {
+                this._closePresetModal();
+            }
+        });
     }
 
     _bindAutoSaveEvents() {
@@ -343,6 +349,8 @@ export class SettingsPage extends PageController {
         [
             'updater.enabled', 'updater.checking', 'updater.available', 'updater.currentVersion',
             'updater.latestVersion', 'updater.lastCheckedAt', 'updater.releaseDate', 'updater.error',
+            'updater.skippedVersion', 'updater.downloading', 'updater.downloadProgress',
+            'updater.readyToInstall', 'updater.downloadedVersion',
         ].forEach((path) => {
             this.watchState(path, () => {
                 if (this.isActive()) {
@@ -943,6 +951,28 @@ export class SettingsPage extends PageController {
     }
 
     async _openUpdateDownload() {
+        const readyToInstall = !!this.getState('updater.readyToInstall');
+
+        if (readyToInstall && window.electronAPI?.installDownloadedUpdate) {
+            const result = await window.electronAPI.installDownloadedUpdate();
+            if (!result?.success) {
+                toast.warning(result?.error || '启动更新安装失败');
+                return;
+            }
+            toast.info('正在退出应用并启动安装程序...');
+            return;
+        }
+
+        if (window.electronAPI?.downloadUpdate && this.getState('updater.enabled')) {
+            const result = await window.electronAPI.downloadUpdate();
+            if (!result?.success) {
+                toast.warning(result?.error || '下载安装包失败');
+                return;
+            }
+            toast.info(result?.alreadyDownloaded ? '更新安装包已下载完成' : '开始下载更新，请稍候...');
+            return;
+        }
+
         if (!window.electronAPI?.openUpdateDownload) {
             toast.warning('当前环境不支持打开下载页');
             return;
@@ -1646,8 +1676,9 @@ export class SettingsPage extends PageController {
     _renderUpdatePanel() {
         const statusText = this.$('#update-status-text');
         const statusMeta = this.$('#update-status-meta');
+        const checkButton = this.$('#btn-check-updates');
         const downloadButton = this.$('#btn-open-update-download');
-        if (!statusText || !statusMeta || !downloadButton) {
+        if (!statusText || !statusMeta || !downloadButton || !checkButton) {
             return;
         }
         const enabled = !!this.getState('updater.enabled');
@@ -1658,23 +1689,52 @@ export class SettingsPage extends PageController {
         const lastCheckedAt = this.getState('updater.lastCheckedAt');
         const releaseDate = this.getState('updater.releaseDate');
         const error = this.getState('updater.error');
+        const skippedVersion = this.getState('updater.skippedVersion') || '';
+        const downloading = !!this.getState('updater.downloading');
+        const downloadProgress = Math.min(100, Math.max(0, Number(this.getState('updater.downloadProgress') || 0)));
+        const readyToInstall = !!this.getState('updater.readyToInstall');
+
+        checkButton.disabled = checking || downloading;
 
         if (!enabled) {
-            statusText.textContent = '当前环境未启用更新检查';
+            statusText.textContent = '当前环境未启用应用内更新';
             statusMeta.textContent = `当前版本：v${currentVersion}`;
-            downloadButton.style.display = 'none';
+            downloadButton.textContent = '打开发布页';
+            downloadButton.style.display = 'inline-flex';
+            downloadButton.disabled = false;
         } else if (checking) {
             statusText.textContent = '正在检查更新...';
             statusMeta.textContent = `当前版本：v${currentVersion}`;
             downloadButton.style.display = 'none';
+        } else if (downloading) {
+            statusText.textContent = `正在下载新版本 v${latestVersion}...`;
+            statusMeta.textContent = `当前版本：v${currentVersion} · 下载进度：${downloadProgress}% · 最近检查：${formatDateTime(lastCheckedAt)}`;
+            downloadButton.style.display = 'inline-flex';
+            downloadButton.textContent = `下载中 ${downloadProgress}%`;
+            downloadButton.disabled = true;
+        } else if (readyToInstall) {
+            statusText.textContent = `更新已下载完成 v${latestVersion || currentVersion}`;
+            statusMeta.textContent = `当前版本：v${currentVersion} · 发布日期：${formatDateTime(releaseDate)} · 最近检查：${formatDateTime(lastCheckedAt)}`;
+            downloadButton.style.display = 'inline-flex';
+            downloadButton.textContent = '立即安装并重启';
+            downloadButton.disabled = false;
         } else if (error) {
             statusText.textContent = error;
             statusMeta.textContent = `当前版本：v${currentVersion} · 最近检查：${formatDateTime(lastCheckedAt)}`;
             downloadButton.style.display = available ? 'inline-flex' : 'none';
+            downloadButton.textContent = '下载更新';
+            downloadButton.disabled = !available;
         } else if (available && latestVersion) {
             statusText.textContent = `发现新版本 v${latestVersion}`;
-            statusMeta.textContent = `当前版本：v${currentVersion} · 发布日期：${formatDateTime(releaseDate)} · 最近检查：${formatDateTime(lastCheckedAt)}`;
+            statusMeta.textContent = [
+                `当前版本：v${currentVersion}`,
+                `发布日期：${formatDateTime(releaseDate)}`,
+                `最近检查：${formatDateTime(lastCheckedAt)}`,
+                skippedVersion === latestVersion ? `已跳过：v${latestVersion}` : '',
+            ].filter(Boolean).join(' · ');
             downloadButton.style.display = 'inline-flex';
+            downloadButton.textContent = '下载更新';
+            downloadButton.disabled = false;
         } else {
             statusText.textContent = '当前已经是最新版本';
             statusMeta.textContent = `当前版本：v${currentVersion} · 最近检查：${formatDateTime(lastCheckedAt)}`;

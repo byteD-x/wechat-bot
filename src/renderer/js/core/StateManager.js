@@ -35,7 +35,13 @@ class StateManager {
                 downloadUrl: '',
                 releasePageUrl: '',
                 notes: [],
-                error: ''
+                error: '',
+                skippedVersion: '',
+                downloading: false,
+                downloadProgress: 0,
+                readyToInstall: false,
+                downloadedVersion: '',
+                downloadedInstallerPath: ''
             },
             currentPage: 'dashboard',
             logs: {

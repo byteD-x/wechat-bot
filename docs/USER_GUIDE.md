@@ -592,7 +592,11 @@ python -m py_compile backend\core\agent_runtime.py backend\bot.py backend\bot_ma
 
 - 日常发布默认只生成 `setup.exe` 和 `portable.exe`
 - `MSI` 仅保留为按需构建产物，可通过 `npm run build:msi` 单独生成
-- 应用内自动更新已停用，桌面端只保留“打开 GitHub Releases 页面”的入口
+- `setup.exe` 安装版支持应用内自动更新：应用启动后会自动检查 GitHub 最新 Release
+- 检查到新版本时会弹窗显示最新版本号、发布日期和更新说明，并提供“跳过此版本”和“下载更新”两个操作
+- 选择“跳过此版本”后，该版本只会在当前机器上被忽略；当后续发布更高版本时会重新提示
+- 下载完成后可直接执行“立即安装并重启”，应用会退出并启动最新 `setup.exe` 完成覆盖升级
+- `portable.exe` 仍为手动更新模式，桌面端会保留打开 GitHub Releases 的入口
 - 正式 Release 通过 GitHub Actions 构建并上传，不再依赖本地手工上传大文件
 
 Release Notes 规则：

@@ -138,6 +138,12 @@ export class MessagesPage extends PageController {
                 this._closeDetailModal();
             }
         });
+
+        this.bindEvent(window, 'keydown', (event) => {
+            if (event.key === 'Escape' && document.getElementById('message-detail-modal')?.classList.contains('active')) {
+                this._closeDetailModal();
+            }
+        });
     }
 
     async _refreshMessages() {
