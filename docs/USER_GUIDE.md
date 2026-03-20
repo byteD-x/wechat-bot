@@ -581,10 +581,22 @@ python run.py check
 ### 10.2 测试
 
 ```bash
-python -m unittest discover -s tests
+# 前端 / Electron 侧测试
+npm test
+npm run test:renderer
+
+# Python 回归
 python -m pytest tests\test_runtime_observability.py -q
+python -m pytest tests\test_smoke.py tests\test_api.py tests\test_runtime_observability.py -q
+
+# 语法检查
 python -m py_compile backend\core\agent_runtime.py backend\bot.py backend\bot_manager.py backend\api.py
 ```
+
+说明：
+
+- `npm test` 会顺序执行 `update-manager`、`backend-idle-controller` 和 renderer helper 测试。
+- `npm run test:renderer` 适合只验证 `src/renderer/js/pages/settings/` 与 `src/renderer/js/pages/dashboard/` 拆分后的辅助模块。
 
 ### 10.3 Windows 发布说明
 

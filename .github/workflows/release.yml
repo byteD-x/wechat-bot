@@ -61,6 +61,14 @@ jobs:
         shell: pwsh
         run: npm ci
 
+      - name: Run Node tests
+        shell: pwsh
+        run: npm test
+
+      - name: Run Python smoke tests
+        shell: pwsh
+        run: python -m pytest tests\test_smoke.py tests\test_api.py tests\test_runtime_observability.py -q
+
       - name: Build release artifacts
         shell: cmd
         run: build.bat

@@ -1,6 +1,52 @@
 import { PageController } from '../core/PageController.js';
 import { apiService } from '../services/ApiService.js';
 import { toast } from '../services/NotificationService.js';
+import { FIELD_META_BY_ID } from './settings/schema.js';
+import {
+    collectSettingsPayload,
+    createElement,
+    deepClone,
+    fillSettingsForm,
+} from './settings/form-codec.js';
+import {
+    commitPresetModal,
+    createDefaultPreset,
+    createModelKindBadge,
+    fillPresetModal,
+    formatModelOptionLabel,
+    getActivePresetDraft,
+    getEffectivePreset,
+    getOllamaBaseUrl,
+    getPresetByName,
+    getPresetModelMeta,
+    getProviderLabel,
+    getRuntimePresetDraft,
+    handlePresetProviderChange,
+    inferOllamaModelKind,
+    isOllamaPreset,
+    loadOllamaModels,
+    openPresetModal,
+    populateModelOptions,
+    populateProviderOptions,
+    removePreset,
+    resolveProviderModels,
+    runPresetConnectionTest,
+    setHeroTestFeedback,
+    syncPresetModelInput,
+    testPreset,
+    testPresetByName,
+    togglePresetKeyVisibility,
+    updatePresetHelpLink,
+    warmOllamaModels,
+    closePresetModal,
+} from './settings/preset-service.js';
+import {
+    renderExportRagStatus,
+    renderPresetList,
+    renderSaveFeedback,
+    renderSettingsHero,
+    renderUpdatePanel,
+} from './settings/renderers.js';
 
 const TEXT = {
     loading: '加载配置中...',
@@ -15,193 +61,6 @@ const TEXT = {
     presetSaveSuccess: '预设草稿已更新，记得点击“保存配置”生效',
     noAudit: '未获取到配置审计信息',
 };
-
-const FIELD_DEFS = [];
-const LIST_FIELD_DEFS = [];
-const MAP_FIELD_DEFS = [];
-const RANGE_FIELD_DEFS = [];
-
-FIELD_DEFS.push(
-    ['setting-self-name', 'bot', 'self_name', 'text'], ['setting-reply-suffix', 'bot', 'reply_suffix', 'text'],
-    ['setting-group-at-only', 'bot', 'group_reply_only_when_at', 'checkbox'],
-    ['setting-system-prompt', 'bot', 'system_prompt', 'text'],
-    ['setting-emoji-policy', 'bot', 'emoji_policy', 'text'], ['setting-voice-to-text', 'bot', 'voice_to_text', 'checkbox'],
-    ['setting-voice-to-text-fail-reply', 'bot', 'voice_to_text_fail_reply', 'text'], ['setting-memory-db-path', 'bot', 'memory_db_path', 'text'],
-    ['setting-memory-context-limit', 'bot', 'memory_context_limit', 'number'], ['setting-memory-ttl-sec', 'bot', 'memory_ttl_sec', 'number', { nullable: true }],
-    ['setting-memory-cleanup-interval-sec', 'bot', 'memory_cleanup_interval_sec', 'number'], ['setting-context-rounds', 'bot', 'context_rounds', 'number'],
-    ['setting-context-max-tokens', 'bot', 'context_max_tokens', 'number'], ['setting-history-max-chats', 'bot', 'history_max_chats', 'number'],
-    ['setting-history-ttl-sec', 'bot', 'history_ttl_sec', 'number', { nullable: true }], ['setting-poll-interval-min-sec', 'bot', 'poll_interval_min_sec', 'number'],
-    ['setting-poll-interval-max-sec', 'bot', 'poll_interval_max_sec', 'number'], ['setting-poll-interval-backoff-factor', 'bot', 'poll_interval_backoff_factor', 'number'],
-    ['setting-min-reply-interval-sec', 'bot', 'min_reply_interval_sec', 'number'], ['setting-merge-user-messages-sec', 'bot', 'merge_user_messages_sec', 'number'],
-    ['setting-merge-user-messages-max-wait-sec', 'bot', 'merge_user_messages_max_wait_sec', 'number'], ['setting-reply-chunk-size', 'bot', 'reply_chunk_size', 'number'],
-    ['setting-reply-chunk-delay-sec', 'bot', 'reply_chunk_delay_sec', 'number'], ['setting-reply-deadline-sec', 'bot', 'reply_deadline_sec', 'number'],
-    ['setting-max-concurrency', 'bot', 'max_concurrency', 'number'],
-    ['setting-natural-split-enabled', 'bot', 'natural_split_enabled', 'checkbox'], ['setting-natural-split-min-chars', 'bot', 'natural_split_min_chars', 'number'],
-    ['setting-natural-split-max-chars', 'bot', 'natural_split_max_chars', 'number'], ['setting-natural-split-max-segments', 'bot', 'natural_split_max_segments', 'number'],
-    ['setting-required-wechat-version', 'bot', 'required_wechat_version', 'text'],
-    ['setting-silent-mode-required', 'bot', 'silent_mode_required', 'checkbox'], ['setting-config-reload-sec', 'bot', 'config_reload_sec', 'number'],
-    ['setting-reload-ai-client-on-change', 'bot', 'reload_ai_client_on_change', 'checkbox'], ['setting-reload-ai-client-module', 'bot', 'reload_ai_client_module', 'checkbox'],
-    ['setting-keepalive-idle-sec', 'bot', 'keepalive_idle_sec', 'number'], ['setting-reconnect-max-retries', 'bot', 'reconnect_max_retries', 'number'],
-    ['setting-reconnect-backoff-sec', 'bot', 'reconnect_backoff_sec', 'number'], ['setting-reconnect-max-delay-sec', 'bot', 'reconnect_max_delay_sec', 'number'],
-    ['setting-group-include-sender', 'bot', 'group_include_sender', 'checkbox'], ['setting-send-exact-match', 'bot', 'send_exact_match', 'checkbox'],
-    ['setting-send-fallback-current-chat', 'bot', 'send_fallback_current_chat', 'checkbox'], ['setting-filter-mute', 'bot', 'filter_mute', 'checkbox'],
-    ['setting-ignore-official', 'bot', 'ignore_official', 'checkbox'], ['setting-ignore-service', 'bot', 'ignore_service', 'checkbox'],
-    ['setting-allow-filehelper-self-message', 'bot', 'allow_filehelper_self_message', 'checkbox'],
-    ['setting-personalization-enabled', 'bot', 'personalization_enabled', 'checkbox'], ['setting-profile-update-frequency', 'bot', 'profile_update_frequency', 'number'],
-    ['setting-contact-prompt-update-frequency', 'bot', 'contact_prompt_update_frequency', 'number'],
-    ['setting-remember-facts-enabled', 'bot', 'remember_facts_enabled', 'checkbox'], ['setting-max-context-facts', 'bot', 'max_context_facts', 'number'],
-    ['setting-profile-inject-in-prompt', 'bot', 'profile_inject_in_prompt', 'checkbox'], ['setting-vector-memory-enabled', 'bot', 'rag_enabled', 'checkbox'],
-    ['setting-vector-memory-embedding-model', 'bot', 'vector_memory_embedding_model', 'text'], ['setting-export-rag-enabled', 'bot', 'export_rag_enabled', 'checkbox'],
-    ['setting-export-rag-auto-ingest', 'bot', 'export_rag_auto_ingest', 'checkbox'], ['setting-export-rag-dir', 'bot', 'export_rag_dir', 'text'],
-    ['setting-export-rag-top-k', 'bot', 'export_rag_top_k', 'number'], ['setting-export-rag-max-chunks-per-chat', 'bot', 'export_rag_max_chunks_per_chat', 'number'],
-    ['setting-control-commands-enabled', 'bot', 'control_commands_enabled', 'checkbox'], ['setting-control-command-prefix', 'bot', 'control_command_prefix', 'text'],
-    ['setting-control-reply-visible', 'bot', 'control_reply_visible', 'checkbox'], ['setting-quiet-hours-enabled', 'bot', 'quiet_hours_enabled', 'checkbox'],
-    ['setting-quiet-hours-start', 'bot', 'quiet_hours_start', 'text'], ['setting-quiet-hours-end', 'bot', 'quiet_hours_end', 'text'],
-    ['setting-quiet-hours-reply', 'bot', 'quiet_hours_reply', 'text'], ['setting-usage-tracking-enabled', 'bot', 'usage_tracking_enabled', 'checkbox'],
-    ['setting-daily-token-limit', 'bot', 'daily_token_limit', 'number'], ['setting-token-warning-threshold', 'bot', 'token_warning_threshold', 'number'],
-    ['setting-emotion-detection-enabled', 'bot', 'emotion_detection_enabled', 'checkbox'], ['setting-emotion-detection-mode', 'bot', 'emotion_detection_mode', 'text'],
-    ['setting-emotion-inject-in-prompt', 'bot', 'emotion_inject_in_prompt', 'checkbox'], ['setting-emotion-log-enabled', 'bot', 'emotion_log_enabled', 'checkbox'],
-    ['setting-whitelist-enabled', 'bot', 'whitelist_enabled', 'checkbox'], ['setting-agent-enabled', 'agent', 'enabled', 'checkbox'],
-    ['setting-agent-graph-mode', 'agent', 'graph_mode', 'text'],
-    ['setting-agent-retriever-top-k', 'agent', 'retriever_top_k', 'number'], ['setting-agent-retriever-threshold', 'agent', 'retriever_score_threshold', 'number'],
-    ['setting-agent-embedding-cache-ttl', 'agent', 'embedding_cache_ttl_sec', 'number'], ['setting-agent-max-parallel-retrievers', 'agent', 'max_parallel_retrievers', 'number'],
-    ['setting-agent-background-facts', 'agent', 'background_fact_extraction_enabled', 'checkbox'], ['setting-agent-emotion-fast-path', 'agent', 'emotion_fast_path_enabled', 'checkbox'],
-    ['setting-agent-langsmith-enabled', 'agent', 'langsmith_enabled', 'checkbox'], ['setting-agent-langsmith-project', 'agent', 'langsmith_project', 'text'],
-    ['setting-agent-langsmith-endpoint', 'agent', 'langsmith_endpoint', 'text', { nullable: true }], ['setting-log-level', 'logging', 'level', 'text'],
-    ['setting-log-format', 'logging', 'format', 'text'], ['setting-log-file', 'logging', 'file', 'text'],
-    ['setting-log-max-bytes', 'logging', 'max_bytes', 'number'], ['setting-log-backup-count', 'logging', 'backup_count', 'number'],
-    ['setting-log-message-content', 'logging', 'log_message_content', 'checkbox'], ['setting-log-reply-content', 'logging', 'log_reply_content', 'checkbox'],
-);
-
-LIST_FIELD_DEFS.push(
-    ['setting-ignore-names', 'bot', 'ignore_names'], ['setting-ignore-keywords', 'bot', 'ignore_keywords'],
-    ['setting-control-allowed-users', 'bot', 'control_allowed_users'], ['setting-whitelist', 'bot', 'whitelist'],
-);
-
-MAP_FIELD_DEFS.push(
-    ['setting-system-prompt-overrides', 'bot', 'system_prompt_overrides', '|'],
-    ['setting-emoji-replacements', 'bot', 'emoji_replacements', '='],
-);
-
-RANGE_FIELD_DEFS.push(
-    ['setting-random-delay-min-sec', 'setting-random-delay-max-sec', 'bot', 'random_delay_range_sec'],
-    ['setting-natural-split-delay-min-sec', 'setting-natural-split-delay-max-sec', 'bot', 'natural_split_delay_sec'],
-);
-
-const FIELD_META_BY_ID = new Map();
-
-FIELD_DEFS.forEach(([id, section, path, type, options = {}]) => {
-    FIELD_META_BY_ID.set(id, { id, section, path, type, options, kind: 'field' });
-});
-LIST_FIELD_DEFS.forEach(([id, section, path]) => {
-    FIELD_META_BY_ID.set(id, { id, section, path, kind: 'list' });
-});
-MAP_FIELD_DEFS.forEach(([id, section, path, separator]) => {
-    FIELD_META_BY_ID.set(id, { id, section, path, separator, kind: 'map' });
-});
-RANGE_FIELD_DEFS.forEach(([minId, maxId, section, path]) => {
-    FIELD_META_BY_ID.set(minId, { id: minId, pairId: maxId, section, path, kind: 'range' });
-    FIELD_META_BY_ID.set(maxId, { id: maxId, pairId: minId, section, path, kind: 'range' });
-});
-
-function deepClone(value) {
-    return JSON.parse(JSON.stringify(value ?? {}));
-}
-
-function getPathValue(target, path) {
-    return String(path || '')
-        .split('.')
-        .filter(Boolean)
-        .reduce((cursor, key) => (cursor && key in cursor ? cursor[key] : undefined), target);
-}
-
-function setPathValue(target, path, value) {
-    const keys = String(path || '').split('.').filter(Boolean);
-    let cursor = target;
-    while (keys.length > 1) {
-        const key = keys.shift();
-        if (!cursor[key] || typeof cursor[key] !== 'object') {
-            cursor[key] = {};
-        }
-        cursor = cursor[key];
-    }
-    cursor[keys[0]] = value;
-}
-
-function normalizeListText(value) {
-    return String(value || '')
-        .split(/\r?\n/)
-        .map((item) => item.trim())
-        .filter(Boolean);
-}
-
-function listToMultiline(value) {
-    return Array.isArray(value) ? value.join('\n') : '';
-}
-
-function mapToMultiline(value, separator) {
-    if (!value || typeof value !== 'object') {
-        return '';
-    }
-    return Object.entries(value)
-        .map(([key, next]) => `${key}${separator}${next}`)
-        .join('\n');
-}
-
-function multilineToMap(value, separator) {
-    const result = {};
-    for (const line of normalizeListText(value)) {
-        const index = line.indexOf(separator);
-        if (index <= 0) {
-            continue;
-        }
-        const key = line.slice(0, index).trim();
-        const nextValue = line.slice(index + separator.length).trim();
-        if (key) {
-            result[key] = nextValue;
-        }
-    }
-    return result;
-}
-
-function formatDateTime(value) {
-    if (!value) {
-        return '--';
-    }
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) {
-        return '--';
-    }
-    return new Intl.DateTimeFormat('zh-CN', {
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-    }).format(date);
-}
-
-function createElement(tag, className, text) {
-    const element = document.createElement(tag);
-    if (className) {
-        element.className = className;
-    }
-    if (text !== undefined) {
-        element.textContent = text;
-    }
-    return element;
-}
-
-function pruneEmptySections(payload) {
-    const nextPayload = payload && typeof payload === 'object' ? payload : {};
-    Object.keys(nextPayload).forEach((section) => {
-        const value = nextPayload[section];
-        if (value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0) {
-            delete nextPayload[section];
-        }
-    });
-    return nextPayload;
-}
 
 export class SettingsPage extends PageController {
     constructor() {
@@ -284,7 +143,7 @@ export class SettingsPage extends PageController {
     }
 
     _bindAutoSaveEvents() {
-        const root = document.getElementById(this.pageId);
+        const root = document.getElementById(this.containerId);
         if (!root) {
             return;
         }
@@ -701,150 +560,14 @@ export class SettingsPage extends PageController {
     }
 
     _fillForm(scope = null) {
-        const includeIds = scope?.ids instanceof Set ? scope.ids : null;
-        const includeSections = scope?.sections instanceof Set ? scope.sections : null;
-
-        FIELD_DEFS.forEach(([id, section, path, type, options = {}]) => {
-            if ((includeSections && !includeSections.has(section)) || (includeIds && !includeIds.has(id))) {
-                return;
-            }
-            const element = this.$(`#${id}`);
-            if (!element) {
-                return;
-            }
-            const value = getPathValue(this._config[section] || {}, path);
-            if (type === 'checkbox') {
-                element.checked = !!value;
-            } else if (type === 'number') {
-                element.value = value === null || value === undefined ? '' : String(value);
-                if (options.nullable && (value === null || value === undefined)) {
-                    element.placeholder = '留空';
-                }
-            } else {
-                element.value = value ?? '';
-            }
-        });
-
-        LIST_FIELD_DEFS.forEach(([id, section, path]) => {
-            if ((includeSections && !includeSections.has(section)) || (includeIds && !includeIds.has(id))) {
-                return;
-            }
-            const element = this.$(`#${id}`);
-            if (element) {
-                element.value = listToMultiline(getPathValue(this._config[section] || {}, path));
-            }
-        });
-
-        MAP_FIELD_DEFS.forEach(([id, section, path, separator]) => {
-            if ((includeSections && !includeSections.has(section)) || (includeIds && !includeIds.has(id))) {
-                return;
-            }
-            const element = this.$(`#${id}`);
-            if (element) {
-                element.value = mapToMultiline(getPathValue(this._config[section] || {}, path), separator);
-            }
-        });
-
-        RANGE_FIELD_DEFS.forEach(([minId, maxId, section, path]) => {
-            if ((includeSections && !includeSections.has(section)) || (includeIds && !includeIds.has(minId) && !includeIds.has(maxId))) {
-                return;
-            }
-            const range = getPathValue(this._config[section] || {}, path);
-            const [minValue, maxValue] = Array.isArray(range) ? range : ['', ''];
-            if (this.$(`#${minId}`)) {
-                this.$(`#${minId}`).value = minValue ?? '';
-            }
-            if (this.$(`#${maxId}`)) {
-                this.$(`#${maxId}`).value = maxValue ?? '';
-            }
-        });
-
-        const langsmithStatus = document.getElementById('agent-langsmith-key-status');
-        if (langsmithStatus) {
-            langsmithStatus.value = this._config.agent?.langsmith_api_key_configured ? '已配置（已隐藏）' : '未配置';
-        }
+        fillSettingsForm(this, this._config, scope);
     }
 
     _collectPayload(scope = null) {
-        const includeIds = scope?.ids instanceof Set ? scope.ids : null;
-        const includeSections = scope?.sections instanceof Set ? scope.sections : null;
-        const includeApiPresets = !scope || !!scope.includeApiPresets;
-        const payload = {};
-
-        FIELD_DEFS.forEach(([id, section, path, type, options = {}]) => {
-            const element = this.$(`#${id}`);
-            if (!element) {
-                return;
-            }
-            let value;
-            if (type === 'checkbox') {
-                value = !!element.checked;
-            } else if (type === 'number') {
-                const raw = String(element.value || '').trim();
-                if (!raw && options.nullable) {
-                    value = null;
-                } else if (!raw) {
-                    return;
-                } else {
-                    value = Number(raw);
-                    if (!Number.isFinite(value)) {
-                        return;
-                    }
-                }
-            } else {
-                value = element.value;
-            }
-            if (!payload[section]) {
-                payload[section] = {};
-            }
-            setPathValue(payload[section], path, value);
+        return collectSettingsPayload(this, scope, {
+            activePreset: this._activePreset,
+            presetDrafts: this._presetDrafts,
         });
-
-        LIST_FIELD_DEFS.forEach(([id, section, path]) => {
-            if ((includeSections && !includeSections.has(section)) || (includeIds && !includeIds.has(id))) {
-                return;
-            }
-            const element = this.$(`#${id}`);
-            if (element) {
-                if (!payload[section]) {
-                    payload[section] = {};
-                }
-                setPathValue(payload[section], path, normalizeListText(element.value));
-            }
-        });
-
-        MAP_FIELD_DEFS.forEach(([id, section, path, separator]) => {
-            if ((includeSections && !includeSections.has(section)) || (includeIds && !includeIds.has(id))) {
-                return;
-            }
-            const element = this.$(`#${id}`);
-            if (element) {
-                if (!payload[section]) {
-                    payload[section] = {};
-                }
-                setPathValue(payload[section], path, multilineToMap(element.value, separator));
-            }
-        });
-
-        RANGE_FIELD_DEFS.forEach(([minId, maxId, section, path]) => {
-            if ((includeSections && !includeSections.has(section)) || (includeIds && !includeIds.has(minId) && !includeIds.has(maxId))) {
-                return;
-            }
-            if (!payload[section]) {
-                payload[section] = {};
-            }
-            setPathValue(payload[section], path, [Number(this.$(`#${minId}`)?.value || 0), Number(this.$(`#${maxId}`)?.value || 0)]);
-        });
-
-        if (includeApiPresets) {
-            payload.api = {
-                ...(payload.api || {}),
-                active_preset: this._activePreset,
-                presets: deepClone(this._presetDrafts),
-            };
-        }
-
-        return pruneEmptySections(payload);
     }
 
     async _saveSettings(options = {}) {
@@ -996,799 +719,139 @@ export class SettingsPage extends PageController {
     }
 
     _getPresetByName(name) {
-        const wanted = String(name || '').trim();
-        if (!wanted) {
-            return null;
-        }
-        return this._presetDrafts.find((preset) => String(preset?.name || '').trim() === wanted) || null;
+        return getPresetByName(this, name);
     }
 
     _getRuntimePresetDraft() {
-        return this._getPresetByName(this.getState('bot.status.runtime_preset') || '');
+        return getRuntimePresetDraft(this);
     }
 
     _getActivePresetDraft() {
-        return this._getPresetByName(this._activePreset);
+        return getActivePresetDraft(this);
     }
 
     _getEffectivePreset() {
-        return this._getRuntimePresetDraft() || this._getActivePresetDraft() || this._presetDrafts[0] || null;
+        return getEffectivePreset(this);
     }
 
     _getProviderLabel(providerId) {
-        const provider = this._providersById.get(String(providerId || '').trim()) || null;
-        return provider?.label || providerId || '--';
+        return getProviderLabel(this, providerId);
     }
 
     _isOllamaPreset(preset) {
-        return String(preset?.provider_id || '').trim().toLowerCase() === 'ollama';
+        return isOllamaPreset(preset);
     }
 
     _inferOllamaModelKind(modelName) {
-        const model = String(modelName || '').trim();
-        const lower = model.toLowerCase();
-        if (!lower) {
-            return {
-                key: 'unknown',
-                label: '未设置模型',
-                className: 'is-unknown',
-                title: '当前预设还没有配置聊天模型。',
-            };
-        }
-        if (
-            lower.includes('embed')
-            || lower.includes('embedding')
-            || lower.startsWith('bge-')
-            || lower.startsWith('nomic-embed')
-        ) {
-            return {
-                key: 'embedding',
-                label: 'embedding 模型',
-                className: 'is-embedding',
-                title: '这个模型更适合向量化或检索任务，不适合作为主聊天模型。',
-            };
-        }
-        if (lower.includes(':cloud')) {
-            return {
-                key: 'cloud',
-                label: '云模型',
-                className: 'is-cloud',
-                title: '该模型通过本机 Ollama 接入远端云能力，需要稳定外网连接。',
-            };
-        }
-        return {
-            key: 'local',
-            label: '本地模型',
-            className: 'is-local',
-            title: '该模型由本机 Ollama 提供推理能力。',
-        };
+        return inferOllamaModelKind(modelName);
     }
 
     _getPresetModelMeta(preset, overrideModel = '') {
-        if (!preset) {
-            return null;
-        }
-        const model = String(overrideModel || preset.model || '').trim();
-        if (this._isOllamaPreset(preset)) {
-            return this._inferOllamaModelKind(model);
-        }
-        return null;
+        return getPresetModelMeta(this, preset, overrideModel);
     }
 
     _createModelKindBadge(meta, extraClassName = '') {
-        if (!meta) {
-            return null;
-        }
-        const className = ['model-kind-badge', meta.className, extraClassName].filter(Boolean).join(' ');
-        const badge = createElement('span', className, meta.label);
-        if (meta.title) {
-            badge.title = meta.title;
-        }
-        return badge;
+        return createModelKindBadge(meta, extraClassName);
     }
 
     _setHeroTestFeedback(presetName, state, message) {
-        this._heroTestFeedback = {
-            presetName: String(presetName || '').trim(),
-            state: String(state || 'idle').trim(),
-            message: String(message || '').trim(),
-        };
-        if (this.isActive()) {
-            this._renderHero();
-        }
+        setHeroTestFeedback(this, presetName, state, message);
     }
 
     _getOllamaBaseUrl(providerOrPreset) {
-        const explicitBaseUrl = String(providerOrPreset?.base_url || '').trim();
-        if (explicitBaseUrl) {
-            return explicitBaseUrl;
-        }
-        return 'http://127.0.0.1:11434/v1';
+        return getOllamaBaseUrl(providerOrPreset);
     }
 
     async _loadOllamaModels(baseUrl) {
-        const key = this._getOllamaBaseUrl({ base_url: baseUrl });
-        if (this._ollamaModelCache.has(key)) {
-            return this._ollamaModelCache.get(key);
-        }
-        if (this._ollamaModelPromise.has(key)) {
-            return this._ollamaModelPromise.get(key);
-        }
-        const promise = (async () => {
-            try {
-                const result = await apiService.getOllamaModels(key);
-                const models = Array.isArray(result?.models)
-                    ? Array.from(new Set(result.models.map((item) => String(item || '').trim()).filter(Boolean)))
-                    : [];
-                if (models.length) {
-                    this._ollamaModelCache.set(key, models);
-                }
-                return models;
-            } catch (error) {
-                console.warn('[SettingsPage] load ollama models failed:', error);
-                return [];
-            } finally {
-                this._ollamaModelPromise.delete(key);
-            }
-        })();
-        this._ollamaModelPromise.set(key, promise);
-        return promise;
+        return loadOllamaModels(this, baseUrl);
     }
 
     async _warmOllamaModels() {
-        const candidates = new Set();
-        const provider = this._providersById.get('ollama');
-        if (provider) {
-            candidates.add(this._getOllamaBaseUrl(provider));
-        }
-        this._presetDrafts
-            .filter((preset) => this._isOllamaPreset(preset))
-            .forEach((preset) => candidates.add(this._getOllamaBaseUrl(preset)));
-        if (!candidates.size) {
-            return;
-        }
-        await Promise.allSettled([...candidates].map((baseUrl) => this._loadOllamaModels(baseUrl)));
-        if (this.isActive()) {
-            this._renderPresetList();
-            this._renderHero();
-        }
+        await warmOllamaModels(this);
     }
 
     _formatModelOptionLabel(providerId, modelName) {
-        const model = String(modelName || '').trim();
-        if (!model) {
-            return '-- 选择模型 --';
-        }
-        if (String(providerId || '').trim().toLowerCase() !== 'ollama') {
-            return model;
-        }
-        const meta = this._inferOllamaModelKind(model);
-        return `${model} · ${meta.label}`;
+        return formatModelOptionLabel(providerId, modelName);
     }
 
     _renderHero(highlight = false) {
-        const container = this.$('#current-config-hero');
-        if (!container || !this._config) {
-            return;
-        }
-        {
-        const runtimePresetName = String(this.getState('bot.status.runtime_preset') || '').trim();
-        const runtimePreset = this._getRuntimePresetDraft();
-        const activePreset = this._getActivePresetDraft();
-        const effectivePreset = this._getEffectivePreset();
-        const effectivePresetName = effectivePreset?.name || '未设置激活预设';
-        const effectiveProviderLabel = effectivePreset
-            ? this._getProviderLabel(effectivePreset.provider_id)
-            : '--';
-        const effectiveModel = String(this.getState('bot.status.model') || effectivePreset?.model || '').trim() || '--';
-        const effectiveAlias = String(effectivePreset?.alias || '').trim();
-        const effectiveModelMeta = this._getPresetModelMeta(effectivePreset, effectiveModel);
-        const effectiveScopeLabel = runtimePresetName
-            ? '当前运行中'
-            : (activePreset ? '当前保存配置' : '等待配置');
-        const audit = this._configAudit?.audit || null;
-        const auditStatus = this._getAuditStatusLabel();
-        const hasAudit = !!audit;
-        const unknownCount = hasAudit ? (audit?.unknown_override_paths?.length || 0) : '--';
-        const dormantCount = hasAudit ? (audit?.dormant_paths?.length || 0) : '--';
-        const configuredPresets = this._presetDrafts.filter((preset) => preset.api_key_configured || preset.api_key_required === false).length;
-        const heroTestFeedback = this._heroTestFeedback && this._heroTestFeedback.presetName === effectivePreset?.name
-            ? this._heroTestFeedback
-            : null;
-
-        container.textContent = '';
-        const card = createElement('div', `config-hero-card${highlight ? ' highlight-pulse' : ''}`);
-        const content = createElement('div', 'hero-content');
-        const title = createElement('div', 'hero-title');
-        title.appendChild(createElement('span', 'hero-name', effectivePresetName));
-        title.appendChild(createElement('span', 'hero-live-badge', effectiveScopeLabel));
-        if (effectiveModelMeta) {
-            title.appendChild(this._createModelKindBadge(effectiveModelMeta, 'is-hero'));
-        }
-        content.appendChild(title);
-
-        const subtitleParts = [effectiveProviderLabel, effectiveAlias || '未设置别名'].filter(Boolean);
-        content.appendChild(createElement('div', 'hero-subtitle', subtitleParts.join(' · ')));
-
-        const modelWrap = createElement('div', 'hero-model-row');
-        const modelText = createElement('div', 'hero-model-main');
-        modelText.appendChild(createElement('span', 'hero-model-label', '当前生效模型'));
-        modelText.appendChild(createElement('span', 'hero-model-value', effectiveModel));
-        modelWrap.appendChild(modelText);
-        if (effectiveModelMeta) {
-            modelWrap.appendChild(createElement('div', 'hero-model-hint', effectiveModelMeta.title || effectiveModelMeta.label));
-        }
-        content.appendChild(modelWrap);
-
-        const details = createElement('div', 'hero-details');
-        details.appendChild(this._createHeroDetail('当前运行预设', runtimePreset?.name || '--'));
-        details.appendChild(this._createHeroDetail('当前保存预设', activePreset?.name || '--'));
-        details.appendChild(this._createHeroDetail('运行态审计', auditStatus));
-        details.appendChild(this._createHeroDetail('已配置预设', `${configuredPresets}/${this._presetDrafts.length}`));
-        details.appendChild(this._createHeroDetail('审计版本', String(this._configAudit?.version || '--')));
-        details.appendChild(this._createHeroDetail('最后加载', formatDateTime(this._configAudit?.loaded_at)));
-        details.appendChild(this._createHeroDetail('未知覆盖', typeof unknownCount === 'number' ? `${unknownCount} 项` : '--'));
-        details.appendChild(this._createHeroDetail('未消费配置', typeof dormantCount === 'number' ? `${dormantCount} 项` : '--'));
-        details.appendChild(this._createHeroDetail('LangSmith', this._config.agent?.langsmith_api_key_configured ? '已配置 Key' : '未配置 Key'));
-        content.appendChild(details);
-
-        const actions = createElement('div', 'hero-actions');
-        const button = createElement('button', 'btn btn-secondary', '测试当前连接');
-        button.type = 'button';
-        button.disabled = !effectivePreset?.name;
-        button.addEventListener('click', () => void this._testPresetByName(effectivePreset?.name || ''));
-        actions.appendChild(button);
-
-        const hintClassName = heroTestFeedback
-            ? `ping-result ${heroTestFeedback.state === 'success' ? 'success' : (heroTestFeedback.state === 'error' ? 'error' : 'pending')}`
-            : 'ping-result';
-        const hintText = heroTestFeedback?.message
-            || (effectivePreset?.name ? '可直接测试当前生效预设的连通性，不会启动机器人。' : '请先配置并激活一个预设。');
-        actions.appendChild(createElement('div', hintClassName, hintText));
-
-        card.appendChild(content);
-        card.appendChild(actions);
-        container.appendChild(card);
-        }
-        return;
-
-        const activePreset = this._presetDrafts.find((preset) => preset.name === this._activePreset);
-        const runtimePreset = this.getState('bot.status.runtime_preset') || '--';
-        const audit = this._configAudit?.audit || null;
-        const auditStatus = this._getAuditStatusLabel();
-        const hasAudit = !!audit;
-        const unknownCount = hasAudit ? (audit?.unknown_override_paths?.length || 0) : '--';
-        const dormantCount = hasAudit ? (audit?.dormant_paths?.length || 0) : '--';
-        const configuredPresets = this._presetDrafts.filter((preset) => preset.api_key_configured || preset.api_key_required === false).length;
-
-        container.textContent = '';
-        const card = createElement('div', `config-hero-card${highlight ? ' highlight-pulse' : ''}`);
-        const content = createElement('div', 'hero-content');
-        const title = createElement('div', 'hero-title');
-        title.appendChild(createElement('span', 'hero-name', this._activePreset || '未设置激活预设'));
-        content.appendChild(title);
-        content.appendChild(createElement('div', 'detail-value', activePreset ? `${activePreset.alias || activePreset.provider_id || 'provider'} · ${activePreset.model || '--'}` : '请选择一个可用预设并保存'));
-
-        const details = createElement('div', 'hero-details');
-        details.appendChild(this._createHeroDetail('运行态审计', auditStatus));
-        details.appendChild(this._createHeroDetail('当前运行预设', String(runtimePreset || '--')));
-        details.appendChild(this._createHeroDetail('已配置预设', `${configuredPresets}/${this._presetDrafts.length}`));
-        details.appendChild(this._createHeroDetail('审计版本', String(this._configAudit?.version || '--')));
-        details.appendChild(this._createHeroDetail('最后加载', formatDateTime(this._configAudit?.loaded_at)));
-        content.appendChild(details);
-
-        const extra = createElement('div', 'hero-details');
-        extra.appendChild(this._createHeroDetail('未知覆写', typeof unknownCount === 'number' ? `${unknownCount} 项` : '--'));
-        extra.appendChild(this._createHeroDetail('未消费配置', typeof dormantCount === 'number' ? `${dormantCount} 项` : '--'));
-        extra.appendChild(this._createHeroDetail('LangSmith', this._config.agent?.langsmith_api_key_configured ? '已配置 Key' : '未配置 Key'));
-
-        card.appendChild(content);
-        card.appendChild(extra);
-        container.appendChild(card);
-    }
-
-    _getAuditStatusLabel() {
-        switch (this._auditStatus) {
-        case 'loading':
-            return '加载中';
-        case 'ready':
-            return '已同步';
-        case 'error':
-            return '暂不可用';
-        case 'offline':
-            return '服务未连接';
-        default:
-            return this.getState('bot.connected') ? '待同步' : '服务未连接';
-        }
-    }
-
-    _createHeroDetail(label, value) {
-        const wrap = createElement('div', 'detail-item');
-        wrap.appendChild(createElement('span', 'detail-label', label));
-        wrap.appendChild(createElement('span', 'detail-value', value));
-        return wrap;
+        renderSettingsHero(this, highlight);
     }
 
     _renderPresetList() {
-        const list = this.$('#preset-list');
-        if (!list) {
-            return;
-        }
-        list.textContent = '';
-
-        if (!this._presetDrafts.length) {
-            list.appendChild(createElement('div', 'empty-state-text', '暂无预设，点击“新增”创建一个。'));
-            return;
-        }
-
-        const fragment = document.createDocumentFragment();
-        this._presetDrafts.forEach((preset, index) => {
-            const provider = this._providersById.get(preset.provider_id) || null;
-            const modelMeta = this._getPresetModelMeta(preset);
-            const card = createElement('div', `preset-card${preset.name === this._activePreset ? ' active' : ''}`);
-            const header = createElement('div', 'preset-card-header');
-            const info = createElement('div', 'preset-info');
-            const name = createElement('div', 'preset-name');
-            name.appendChild(document.createTextNode(preset.name || '未命名预设'));
-            if (preset.name === this._activePreset) {
-                name.appendChild(createElement('span', 'config-save-feedback-badge live', '当前激活'));
-            }
-            info.appendChild(name);
-
-            const meta = createElement('div', 'preset-meta');
-            meta.appendChild(createElement('span', 'meta-item', provider?.label || preset.provider_id || '--'));
-            meta.appendChild(createElement('span', 'meta-separator', '·'));
-            meta.appendChild(createElement('span', 'meta-item model-name', preset.model || '--'));
-            if (modelMeta) {
-                meta.appendChild(this._createModelKindBadge(modelMeta));
-            }
-            info.appendChild(meta);
-
-            const detail = createElement('div', 'ping-result', preset.api_key_required === false ? '无需 API Key' : (preset.api_key_configured ? '已配置 API Key' : '未配置 API Key'));
-            info.appendChild(detail);
-            header.appendChild(info);
-            card.appendChild(header);
-
-            const actions = createElement('div', 'preset-card-actions');
-            const useButton = createElement('button', 'btn btn-secondary btn-sm', preset.name === this._activePreset ? '已启用' : '设为当前');
-            useButton.type = 'button';
-            useButton.disabled = preset.name === this._activePreset;
-            useButton.addEventListener('click', () => {
-                this._activePreset = preset.name;
-                this._renderPresetList();
-                this._renderHero();
-                this._scheduleAutoSave({ immediate: true });
-            });
-
-            const testButton = createElement('button', 'btn btn-secondary btn-sm', '测试');
-            testButton.type = 'button';
-            testButton.addEventListener('click', () => void this._testPreset(index, detail));
-
-            const editButton = createElement('button', 'btn btn-primary btn-sm', '编辑');
-            editButton.type = 'button';
-            editButton.addEventListener('click', () => this._openPresetModal(index));
-
-            actions.appendChild(useButton);
-            actions.appendChild(testButton);
-            actions.appendChild(editButton);
-            if (this._presetDrafts.length > 1) {
-                const deleteButton = createElement('button', 'btn btn-secondary btn-sm', '删除');
-                deleteButton.type = 'button';
-                deleteButton.addEventListener('click', () => this._removePreset(index));
-                actions.appendChild(deleteButton);
-            }
-            card.appendChild(actions);
-            fragment.appendChild(card);
-        });
-
-        list.appendChild(fragment);
+        renderPresetList(this);
     }
 
     async _testPresetByName(presetName, detailElement = null) {
-        const preset = this._getPresetByName(presetName);
-        if (!preset?.name) {
-            toast.warning('请先选择一个有效预设');
-            return;
-        }
-        await this._runPresetConnectionTest(preset, detailElement);
+        await testPresetByName(this, presetName, detailElement);
     }
 
     async _runPresetConnectionTest(preset, detailElement) {
-        const pendingText = '连接测试中...';
-        this._setHeroTestFeedback(preset.name, 'pending', pendingText);
-        try {
-            if (detailElement) {
-                detailElement.className = 'ping-result pending';
-                detailElement.textContent = pendingText;
-            }
-            const result = window.electronAPI?.testConfigConnection
-                ? await window.electronAPI.testConfigConnection({
-                    presetName: preset.name,
-                    patch: {
-                        api: {
-                            active_preset: this._activePreset,
-                            presets: deepClone(this._presetDrafts),
-                        },
-                    },
-                })
-                : await apiService.testConnection(preset.name);
-            if (!result?.success) {
-                throw new Error(result?.message || '连接测试失败');
-            }
-            const successMessage = result.message || '连接测试成功';
-            if (detailElement) {
-                detailElement.className = 'ping-result success';
-                detailElement.textContent = successMessage;
-            }
-            this._setHeroTestFeedback(preset.name, 'success', successMessage);
-            toast.success(`${preset.name} 连接测试成功`);
-        } catch (error) {
-            const errorMessage = toast.getErrorMessage(error, '连接测试失败');
-            if (detailElement) {
-                detailElement.className = 'ping-result error';
-                detailElement.textContent = errorMessage;
-            }
-            this._setHeroTestFeedback(preset.name, 'error', errorMessage);
-            toast.error(`${preset.name}：${errorMessage}`);
-        }
+        await runPresetConnectionTest(this, preset, detailElement);
     }
 
     async _testPreset(index, detailElement) {
-        const preset = this._presetDrafts[index];
-        if (!preset?.name) {
-            return;
-        }
-        await this._runPresetConnectionTest(preset, detailElement);
-        return;
-        try {
-            if (detailElement) {
-                detailElement.className = 'ping-result pending';
-                detailElement.textContent = '连接测试中...';
-            }
-            const result = window.electronAPI?.testConfigConnection
-                ? await window.electronAPI.testConfigConnection({
-                    presetName: preset.name,
-                    patch: {
-                        api: {
-                            active_preset: this._activePreset,
-                            presets: deepClone(this._presetDrafts),
-                        },
-                    },
-                })
-                : await apiService.testConnection(preset.name);
-            if (!result?.success) {
-                throw new Error(result?.message || '测试失败');
-            }
-            if (detailElement) {
-                detailElement.className = 'ping-result success';
-                detailElement.textContent = result.message || '连接成功';
-            }
-            toast.success(`${preset.name} 连接测试成功`);
-        } catch (error) {
-            if (detailElement) {
-                detailElement.className = 'ping-result error';
-                detailElement.textContent = toast.getErrorMessage(error, '连接测试失败');
-            }
-            toast.error(`${preset.name}：${toast.getErrorMessage(error, '连接测试失败')}`);
-        }
+        await testPreset(this, index, detailElement);
     }
 
     _removePreset(index) {
-        const preset = this._presetDrafts[index];
-        this._presetDrafts.splice(index, 1);
-        if (preset?.name === this._activePreset) {
-            this._activePreset = this._presetDrafts[0]?.name || '';
-        }
-        this._renderPresetList();
-        this._renderHero();
-        this._scheduleAutoSave({ immediate: true });
-        toast.info('预设已移除');
+        removePreset(this, index);
     }
 
     _openPresetModal(index = -1) {
-        const modal = document.getElementById('preset-modal');
-        if (!modal) {
-            return;
-        }
-        this._selectedPresetIndex = index;
-        const preset = index >= 0 ? deepClone(this._presetDrafts[index]) : this._createDefaultPreset();
-        this._populateProviderOptions(preset.provider_id);
-        this._fillPresetModal(preset);
-        modal.classList.add('active');
+        openPresetModal(this, index);
     }
 
     _closePresetModal() {
-        document.getElementById('preset-modal')?.classList.remove('active');
-        this._selectedPresetIndex = -1;
+        closePresetModal(this);
     }
 
     _createDefaultPreset() {
-        const firstProvider = this._modelCatalog?.providers?.[0] || { id: '', default_model: '' };
-        return { name: '', provider_id: firstProvider.id || '', alias: '', base_url: firstProvider.base_url || '', api_key: '', model: firstProvider.default_model || '', embedding_model: '', allow_empty_key: !!firstProvider.allow_empty_key, timeout_sec: 10, max_retries: 2, temperature: 0.6, max_tokens: 512 };
+        return createDefaultPreset(this);
     }
 
     _populateProviderOptions(selectedId) {
-        const select = this.$('#edit-preset-provider');
-        if (!select) {
-            return;
-        }
-        select.textContent = '';
-        const placeholder = document.createElement('option');
-        placeholder.value = '';
-        placeholder.textContent = '-- 选择服务商 --';
-        select.appendChild(placeholder);
-        (this._modelCatalog?.providers || []).forEach((provider) => {
-            const option = document.createElement('option');
-            option.value = provider.id;
-            option.textContent = provider.label;
-            select.appendChild(option);
-        });
-        select.value = selectedId || '';
+        populateProviderOptions(this, selectedId);
     }
 
     _fillPresetModal(preset) {
-        if (this.$('#edit-preset-original-name')) this.$('#edit-preset-original-name').value = this._selectedPresetIndex >= 0 ? String(preset.name || '') : '';
-        if (this.$('#edit-preset-name')) this.$('#edit-preset-name').value = preset.name || '';
-        if (this.$('#edit-preset-provider')) this.$('#edit-preset-provider').value = preset.provider_id || '';
-        if (this.$('#edit-preset-alias')) this.$('#edit-preset-alias').value = preset.alias || '';
-        if (this.$('#edit-preset-embedding-model')) this.$('#edit-preset-embedding-model').value = preset.embedding_model || '';
-        if (this.$('#edit-preset-key')) {
-            this.$('#edit-preset-key').type = 'password';
-            this.$('#edit-preset-key').value = '';
-            this.$('#edit-preset-key').placeholder = preset.api_key_configured ? '已配置，留空则保持不变' : '输入 API Key';
-        }
-        this._updatePresetHelpLink(preset.provider_id);
-        void this._populateModelOptions(preset.provider_id, preset.model);
+        fillPresetModal(this, preset);
     }
 
     async _handlePresetProviderChange() {
-        const providerId = this.$('#edit-preset-provider')?.value || '';
-        const provider = this._providersById.get(providerId) || {};
-        this._updatePresetHelpLink(providerId);
-        await this._populateModelOptions(providerId, provider.default_model || '');
+        await handlePresetProviderChange(this);
     }
 
     async _resolveProviderModels(provider) {
-        const fallbackModels = Array.isArray(provider?.models) ? [...provider.models] : [];
-        if (String(provider?.id || '').trim().toLowerCase() !== 'ollama') {
-            return fallbackModels;
-        }
-        const liveModels = await this._loadOllamaModels(this._getOllamaBaseUrl(provider));
-        return liveModels.length ? liveModels : fallbackModels;
+        return resolveProviderModels(this, provider);
     }
 
     async _populateModelOptions(providerId, selectedModel) {
-        const select = this.$('#edit-preset-model-select');
-        if (!select) {
-            return;
-        }
-        const resolvedProvider = this._providersById.get(providerId) || null;
-        const resolvedModels = Array.from(
-            new Set((await this._resolveProviderModels(resolvedProvider)).map((item) => String(item || '').trim()).filter(Boolean))
-        );
-        select.textContent = '';
-        [['', '-- 选择模型 --'], ...resolvedModels.map((item) => [item, this._formatModelOptionLabel(providerId, item)]), ['__custom__', '自定义模型']].forEach(([value, label]) => {
-            const option = document.createElement('option');
-            option.value = value;
-            option.textContent = label;
-            select.appendChild(option);
-        });
-        select.value = selectedModel && resolvedModels.includes(selectedModel) ? selectedModel : (selectedModel ? '__custom__' : '');
-        if (this.$('#edit-preset-model-custom')) {
-            this.$('#edit-preset-model-custom').value = !resolvedModels.includes(selectedModel) ? (selectedModel || '') : '';
-        }
-        this._syncPresetModelInput();
-        return;
-        const provider = this._providersById.get(providerId) || null;
-        let models = Array.isArray(provider?.models) ? [...provider.models] : [];
-        select.textContent = '';
-        [['', '-- 选择模型 --'], ...models.map((item) => [item, item]), ['__custom__', '自定义模型']].forEach(([value, label]) => {
-            const option = document.createElement('option');
-            option.value = value;
-            option.textContent = label;
-            select.appendChild(option);
-        });
-        select.value = selectedModel && models.includes(selectedModel) ? selectedModel : (selectedModel ? '__custom__' : '');
-        if (this.$('#edit-preset-model-custom')) {
-            this.$('#edit-preset-model-custom').value = !models.includes(selectedModel) ? (selectedModel || '') : '';
-        }
-        this._syncPresetModelInput();
+        await populateModelOptions(this, providerId, selectedModel);
     }
 
     _syncPresetModelInput() {
-        const select = this.$('#edit-preset-model-select');
-        const customInput = this.$('#edit-preset-model-custom');
-        if (!select || !customInput) {
-            return;
-        }
-        customInput.style.display = select.value === '__custom__' ? 'block' : 'none';
-        if (select.value !== '__custom__') {
-            customInput.value = '';
-        }
+        syncPresetModelInput(this);
     }
 
     _updatePresetHelpLink(providerId) {
-        const provider = this._providersById.get(providerId) || null;
-        const help = document.getElementById('api-key-help');
-        const link = document.getElementById('api-key-help-link');
-        if (!help || !link || !provider?.api_key_url) {
-            if (help) help.style.display = 'none';
-            return;
-        }
-        help.style.display = 'block';
-        link.href = provider.api_key_url;
-        link.onclick = async (event) => {
-            event.preventDefault();
-            if (window.electronAPI?.openExternal) {
-                await window.electronAPI.openExternal(provider.api_key_url);
-            } else {
-                window.open(provider.api_key_url, '_blank', 'noopener,noreferrer');
-            }
-        };
+        updatePresetHelpLink(this, providerId);
     }
 
     _togglePresetKeyVisibility() {
-        if (this.$('#edit-preset-key')) {
-            this.$('#edit-preset-key').type = this.$('#edit-preset-key').type === 'password' ? 'text' : 'password';
-        }
+        togglePresetKeyVisibility(this);
     }
 
     _commitPresetModal() {
-        const name = String(this.$('#edit-preset-name')?.value || '').trim();
-        const providerId = String(this.$('#edit-preset-provider')?.value || '').trim();
-        const alias = String(this.$('#edit-preset-alias')?.value || '').trim();
-        const embeddingModel = String(this.$('#edit-preset-embedding-model')?.value || '').trim();
-        const key = String(this.$('#edit-preset-key')?.value || '').trim();
-        const originalName = String(this.$('#edit-preset-original-name')?.value || '').trim();
-        const selectValue = this.$('#edit-preset-model-select')?.value || '';
-        const customModel = String(this.$('#edit-preset-model-custom')?.value || '').trim();
-        const model = (selectValue === '__custom__' ? customModel : selectValue).trim();
-        if (!name) {
-            toast.error(TEXT.presetNameMissing);
-            return;
-        }
-        if (!model) {
-            toast.error(TEXT.presetModelMissing);
-            return;
-        }
-        const provider = this._providersById.get(providerId) || {};
-        const existing = this._selectedPresetIndex >= 0 ? deepClone(this._presetDrafts[this._selectedPresetIndex]) : this._createDefaultPreset();
-        if (this._selectedPresetIndex >= 0 && originalName && originalName !== name && existing.api_key_configured && !key) {
-            toast.error('重命名已配置 Key 的预设时，请重新填写 API Key');
-            return;
-        }
-        const nextPreset = { ...existing, name, provider_id: providerId, alias, base_url: provider.base_url || '', model, embedding_model: embeddingModel, allow_empty_key: !!provider.allow_empty_key };
-        if (key) {
-            nextPreset.api_key = key;
-        } else if (existing.api_key_configured) {
-            nextPreset._keep_key = true;
-        }
-        if (this._selectedPresetIndex >= 0) this._presetDrafts[this._selectedPresetIndex] = nextPreset;
-        else this._presetDrafts.push(nextPreset);
-        if (!this._activePreset || originalName === this._activePreset) this._activePreset = name;
-        this._renderPresetList();
-        this._renderHero();
-        this._closePresetModal();
-        this._scheduleAutoSave({ immediate: true });
-        toast.success('预设草稿已更新');
+        commitPresetModal(this, TEXT);
     }
 
     _renderUpdatePanel() {
-        const statusText = this.$('#update-status-text');
-        const statusMeta = this.$('#update-status-meta');
-        const checkButton = this.$('#btn-check-updates');
-        const downloadButton = this.$('#btn-open-update-download');
-        if (!statusText || !statusMeta || !downloadButton || !checkButton) {
-            return;
-        }
-        const enabled = !!this.getState('updater.enabled');
-        const checking = !!this.getState('updater.checking');
-        const available = !!this.getState('updater.available');
-        const currentVersion = this.getState('updater.currentVersion') || '--';
-        const latestVersion = this.getState('updater.latestVersion') || '';
-        const lastCheckedAt = this.getState('updater.lastCheckedAt');
-        const releaseDate = this.getState('updater.releaseDate');
-        const error = this.getState('updater.error');
-        const skippedVersion = this.getState('updater.skippedVersion') || '';
-        const downloading = !!this.getState('updater.downloading');
-        const downloadProgress = Math.min(100, Math.max(0, Number(this.getState('updater.downloadProgress') || 0)));
-        const readyToInstall = !!this.getState('updater.readyToInstall');
-
-        checkButton.disabled = checking || downloading;
-
-        if (!enabled) {
-            statusText.textContent = '当前环境未启用应用内更新';
-            statusMeta.textContent = `当前版本：v${currentVersion}`;
-            downloadButton.textContent = '打开发布页';
-            downloadButton.style.display = 'inline-flex';
-            downloadButton.disabled = false;
-        } else if (checking) {
-            statusText.textContent = '正在检查更新...';
-            statusMeta.textContent = `当前版本：v${currentVersion}`;
-            downloadButton.style.display = 'none';
-        } else if (downloading) {
-            statusText.textContent = `正在下载新版本 v${latestVersion}...`;
-            statusMeta.textContent = `当前版本：v${currentVersion} · 下载进度：${downloadProgress}% · 最近检查：${formatDateTime(lastCheckedAt)}`;
-            downloadButton.style.display = 'inline-flex';
-            downloadButton.textContent = `下载中 ${downloadProgress}%`;
-            downloadButton.disabled = true;
-        } else if (readyToInstall) {
-            statusText.textContent = `更新已下载完成 v${latestVersion || currentVersion}`;
-            statusMeta.textContent = `当前版本：v${currentVersion} · 发布日期：${formatDateTime(releaseDate)} · 最近检查：${formatDateTime(lastCheckedAt)}`;
-            downloadButton.style.display = 'inline-flex';
-            downloadButton.textContent = '立即安装并重启';
-            downloadButton.disabled = false;
-        } else if (error) {
-            statusText.textContent = error;
-            statusMeta.textContent = `当前版本：v${currentVersion} · 最近检查：${formatDateTime(lastCheckedAt)}`;
-            downloadButton.style.display = available ? 'inline-flex' : 'none';
-            downloadButton.textContent = '下载更新';
-            downloadButton.disabled = !available;
-        } else if (available && latestVersion) {
-            statusText.textContent = `发现新版本 v${latestVersion}`;
-            statusMeta.textContent = [
-                `当前版本：v${currentVersion}`,
-                `发布日期：${formatDateTime(releaseDate)}`,
-                `最近检查：${formatDateTime(lastCheckedAt)}`,
-                skippedVersion === latestVersion ? `已跳过：v${latestVersion}` : '',
-            ].filter(Boolean).join(' · ');
-            downloadButton.style.display = 'inline-flex';
-            downloadButton.textContent = '下载更新';
-            downloadButton.disabled = false;
-        } else {
-            statusText.textContent = '当前已经是最新版本';
-            statusMeta.textContent = `当前版本：v${currentVersion} · 最近检查：${formatDateTime(lastCheckedAt)}`;
-            downloadButton.style.display = 'none';
-        }
+        renderUpdatePanel(this);
     }
 
     _renderSaveFeedback(result) {
-        const container = this.$('#config-save-feedback');
-        const summary = this.$('#config-save-feedback-summary');
-        const meta = this.$('#config-save-feedback-meta');
-        const groups = this.$('#config-save-feedback-groups');
-        if (!container || !summary || !meta || !groups) {
-            return;
-        }
-        container.hidden = false;
-        groups.textContent = '';
-
-        if (result?.save_state === 'saving') {
-            container.dataset.state = 'warning';
-            summary.textContent = result?.message || '保存中...';
-            meta.textContent = '正在将修改写入共享配置文件。';
-            return;
-        }
-
-        if (!result?.success) {
-            container.dataset.state = 'error';
-            summary.textContent = result?.message || TEXT.saveFailed;
-            meta.textContent = '本次保存未写入配置，请先修正问题后重试。';
-            return;
-        }
-
-        const changedPaths = Array.isArray(result.changed_paths) ? result.changed_paths : [];
-        const runtimeApply = result.runtime_apply;
-        const reloadPlan = Array.isArray(result.reload_plan) ? result.reload_plan : [];
-        const persistenceText = result.default_config_sync_message || '共享配置文件 app_config.json 已更新';
-        container.dataset.state = changedPaths.length > 0 ? 'warning' : 'success';
-        summary.textContent = changedPaths.length > 0 ? '配置已保存' : '未检测到有效配置变更';
-        meta.textContent = [
-            `变更项：${changedPaths.length} 个`,
-            runtimeApply?.message ? `运行时反馈：${runtimeApply.message}` : '运行时反馈：等待运行中实例感知新配置',
-            persistenceText,
-        ].join(' · ');
-
-        reloadPlan.forEach((item) => {
-            const block = createElement('div', 'config-save-feedback-item');
-            const top = createElement('div', 'config-save-feedback-item-top');
-            top.appendChild(createElement('div', 'config-save-feedback-item-title', item.component || 'unknown'));
-            top.appendChild(createElement('span', `config-save-feedback-badge ${item.mode || 'unknown'}`, item.mode || 'unknown'));
-            block.appendChild(top);
-            block.appendChild(createElement('div', 'config-save-feedback-item-note', item.note || ''));
-            block.appendChild(createElement('div', 'config-save-feedback-item-paths', (item.paths || []).join(', ')));
-            groups.appendChild(block);
-        });
+        renderSaveFeedback(this, result, TEXT.saveFailed);
     }
 
     _hideSaveFeedback() {
@@ -1798,13 +861,7 @@ export class SettingsPage extends PageController {
     }
 
     _renderExportRagStatus() {
-        const status = this.$('#export-rag-status');
-        if (!status || !this._config) {
-            return;
-        }
-        status.textContent = this._config.bot?.rag_enabled
-            ? `状态：运行期向量记忆已开启${this._config.bot?.export_rag_enabled ? '，导出聊天记录 RAG 已开启' : ''}`
-            : '状态：向量记忆总开关已关闭，运行期 RAG 和导出 RAG 都不会执行召回';
+        renderExportRagStatus(this);
     }
 }
 

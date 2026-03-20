@@ -464,8 +464,8 @@ async def get_pricing():
         snapshot = await cost_service.get_pricing_snapshot()
         return jsonify({"success": True, **snapshot})
     except Exception as e:
-        logger.error(f"鑾峰彇浠锋牸鐩綍澶辫触: {e}")
-        return jsonify({"success": False, "message": f"鑾峰彇浠锋牸鐩綍澶辫触: {str(e)}"})
+        logger.error(f"获取价格目录失败: {e}")
+        return jsonify({"success": False, "message": f"获取价格目录失败: {str(e)}"})
 
 
 @app.route("/api/pricing/refresh", methods=["POST"])
@@ -479,8 +479,8 @@ async def refresh_pricing():
         )
         return jsonify(payload)
     except Exception as e:
-        logger.error(f"鍒锋柊浠锋牸鐩綍澶辫触: {e}")
-        return jsonify({"success": False, "message": f"鍒锋柊浠锋牸鐩綍澶辫触: {str(e)}"})
+        logger.error(f"刷新价格目录失败: {e}")
+        return jsonify({"success": False, "message": f"刷新价格目录失败: {str(e)}"})
 
 
 @app.route("/api/costs/summary", methods=["GET"])
@@ -495,8 +495,8 @@ async def get_costs_summary():
         )
         return jsonify(payload)
     except Exception as e:
-        logger.error(f"鑾峰彇鎴愭湰鎬昏澶辫触: {e}")
-        return jsonify({"success": False, "message": f"鑾峰彇鎴愭湰鎬昏澶辫触: {str(e)}"})
+        logger.error(f"获取成本总览失败: {e}")
+        return jsonify({"success": False, "message": f"获取成本总览失败: {str(e)}"})
 
 
 @app.route("/api/costs/sessions", methods=["GET"])
@@ -511,8 +511,8 @@ async def get_cost_sessions():
         )
         return jsonify(payload)
     except Exception as e:
-        logger.error(f"鑾峰彇浼氳瘽鎴愭湰澶辫触: {e}")
-        return jsonify({"success": False, "message": f"鑾峰彇浼氳瘽鎴愭湰澶辫触: {str(e)}"})
+        logger.error(f"获取会话成本失败: {e}")
+        return jsonify({"success": False, "message": f"获取会话成本失败: {str(e)}"})
 
 
 @app.route("/api/costs/session_details", methods=["GET"])
@@ -521,7 +521,7 @@ async def get_cost_session_details():
     try:
         chat_id = str(request.args.get("chat_id", "", type=str) or "").strip()
         if not chat_id:
-            return jsonify({"success": False, "message": "缂哄皯 chat_id"}), 400
+            return jsonify({"success": False, "message": "缺少 chat_id"}), 400
         snapshot = config_service.get_snapshot()
         payload = await cost_service.get_session_details(
             manager.get_memory_manager(),
@@ -531,8 +531,8 @@ async def get_cost_session_details():
         )
         return jsonify(payload)
     except Exception as e:
-        logger.error(f"鑾峰彇浼氳瘽鎴愭湰鏄庣粏澶辫触: {e}")
-        return jsonify({"success": False, "message": f"鑾峰彇浼氳瘽鎴愭湰鏄庣粏澶辫触: {str(e)}"})
+        logger.error(f"获取会话成本明细失败: {e}")
+        return jsonify({"success": False, "message": f"获取会话成本明细失败: {str(e)}"})
 
 
 @app.route("/api/model_catalog", methods=["GET"])

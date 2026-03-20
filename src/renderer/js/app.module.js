@@ -1,5 +1,5 @@
 /**
- * 微信AI助手渲染进程入口。
+ * 微信 AI 助手渲染进程入口。
  */
 
 if (typeof window.dragEvent === 'undefined') {
@@ -9,36 +9,17 @@ if (typeof window.dragEvent === 'undefined') {
 import { stateManager, eventBus, Events } from './core/index.js';
 import { apiService, notificationService } from './services/index.js';
 import { DashboardPage, CostsPage, MessagesPage, SettingsPage, LogsPage, AboutPage } from './pages/index.js';
+import {
+    buildDisconnectedStatus,
+    buildUpdateBadgeState,
+    buildVersionText,
+    getConnectionStatusView,
+    normalizeRuntimeIdleState,
+    renderUpdateModalContent,
+} from './app/ui-helpers.js';
 
 const DEFAULT_IDLE_DELAY_MS = 15 * 60 * 1000;
 const AUTO_WAKE_PAGES = new Set(['dashboard', 'costs', 'messages', 'logs']);
-
-function formatDateTime(value) {
-    if (!value) {
-        return '--';
-    }
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) {
-        return '--';
-    }
-    return new Intl.DateTimeFormat('zh-CN', {
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-    }).format(date);
-}
-
-function createElement(tag, className, text) {
-    const element = document.createElement(tag);
-    if (className) {
-        element.className = className;
-    }
-    if (text !== undefined) {
-        element.textContent = text;
-    }
-    return element;
-}
 
 class App {
     constructor() {
@@ -152,17 +133,7 @@ class App {
     }
 
     _normalizeRuntimeIdleState(idleState = {}) {
-        const delayMs = Number(idleState?.delayMs || DEFAULT_IDLE_DELAY_MS);
-        const remainingMs = Number(idleState?.remainingMs ?? delayMs);
-        return {
-            state: String(idleState?.state || 'active').trim() || 'active',
-            delayMs: Number.isFinite(delayMs) && delayMs > 0 ? delayMs : DEFAULT_IDLE_DELAY_MS,
-            remainingMs: Number.isFinite(remainingMs) ? Math.max(0, Math.floor(remainingMs)) : DEFAULT_IDLE_DELAY_MS,
-            reason: String(idleState?.reason || '').trim(),
-            updatedAt: Number.isFinite(Number(idleState?.updatedAt))
-                ? Number(idleState.updatedAt)
-                : Date.now(),
-        };
+        return normalizeRuntimeIdleState(idleState, DEFAULT_IDLE_DELAY_MS);
     }
 
     _applyRuntimeIdleState(idleState, options = {}) {
@@ -255,77 +226,34 @@ class App {
         if (!versionElem) {
             return;
         }
-
-        const currentVersion = stateManager.get('updater.currentVersion') || '--';
-        const checking = stateManager.get('updater.checking');
-        const available = stateManager.get('updater.available');
-        const latestVersion = stateManager.get('updater.latestVersion');
-        const enabled = stateManager.get('updater.enabled');
-        const downloading = stateManager.get('updater.downloading');
-        const downloadProgress = Number(stateManager.get('updater.downloadProgress') || 0);
-        const readyToInstall = stateManager.get('updater.readyToInstall');
-
-        let suffix = '';
-        if (checking) {
-            suffix = ' · 检查更新中';
-        } else if (downloading) {
-            suffix = ` · 下载中 ${downloadProgress}%`;
-        } else if (readyToInstall) {
-            suffix = ` · 已下载 v${latestVersion || currentVersion}`;
-        } else if (available && latestVersion) {
-            suffix = ` · 可更新到 v${latestVersion}`;
-        } else if (enabled) {
-            suffix = ' · 已启用更新检查';
-        }
-
-        versionElem.textContent = `v${currentVersion}${suffix}`;
+        versionElem.textContent = buildVersionText({
+            currentVersion: stateManager.get('updater.currentVersion') || '--',
+            checking: !!stateManager.get('updater.checking'),
+            available: !!stateManager.get('updater.available'),
+            latestVersion: stateManager.get('updater.latestVersion') || '',
+            enabled: !!stateManager.get('updater.enabled'),
+            downloading: !!stateManager.get('updater.downloading'),
+            downloadProgress: Number(stateManager.get('updater.downloadProgress') || 0),
+            readyToInstall: !!stateManager.get('updater.readyToInstall'),
+        });
     }
-
     _updateSidebarUpdateBadge() {
         const badge = document.getElementById('update-badge');
         if (!badge) {
             return;
         }
-
-        const available = stateManager.get('updater.available');
-        const latestVersion = stateManager.get('updater.latestVersion');
-        const checking = stateManager.get('updater.checking');
-        const downloading = stateManager.get('updater.downloading');
-        const downloadProgress = Number(stateManager.get('updater.downloadProgress') || 0);
-        const readyToInstall = stateManager.get('updater.readyToInstall');
-
-        if (readyToInstall) {
-            badge.hidden = false;
-            badge.textContent = '安装更新';
-            badge.disabled = false;
-            return;
-        }
-
-        if (downloading) {
-            badge.hidden = false;
-            badge.textContent = `下载 ${downloadProgress}%`;
-            badge.disabled = true;
-            return;
-        }
-
-        if (available && latestVersion) {
-            badge.hidden = false;
-            badge.textContent = `新版本 v${latestVersion}`;
-            badge.disabled = false;
-            return;
-        }
-
-        if (checking) {
-            badge.hidden = false;
-            badge.textContent = '检查更新中...';
-            badge.disabled = true;
-            return;
-        }
-
-        badge.hidden = true;
-        badge.disabled = false;
+        const nextState = buildUpdateBadgeState({
+            available: !!stateManager.get('updater.available'),
+            latestVersion: stateManager.get('updater.latestVersion') || '',
+            checking: !!stateManager.get('updater.checking'),
+            downloading: !!stateManager.get('updater.downloading'),
+            downloadProgress: Number(stateManager.get('updater.downloadProgress') || 0),
+            readyToInstall: !!stateManager.get('updater.readyToInstall'),
+        });
+        badge.hidden = nextState.hidden;
+        badge.textContent = nextState.text;
+        badge.disabled = nextState.disabled;
     }
-
     async _checkBackendConnection() {
         let connected = false;
 
@@ -820,73 +748,28 @@ class App {
     }
 
     _renderUpdateModal() {
-        const statusText = document.getElementById('update-modal-status');
-        const meta = document.getElementById('update-modal-meta');
-        const notes = document.getElementById('update-modal-notes');
-        const progress = document.getElementById('update-modal-progress');
-        const progressFill = document.getElementById('update-modal-progress-fill');
-        const progressText = document.getElementById('update-modal-progress-text');
-        const btnSkip = document.getElementById('btn-update-modal-skip');
-        const btnAction = document.getElementById('btn-update-modal-action');
-        if (!statusText || !meta || !notes || !progress || !progressFill || !progressText || !btnSkip || !btnAction) {
-            return;
-        }
-
-        const currentVersion = stateManager.get('updater.currentVersion') || '--';
-        const latestVersion = stateManager.get('updater.latestVersion') || '';
-        const releaseDate = stateManager.get('updater.releaseDate');
-        const checkedAt = stateManager.get('updater.lastCheckedAt');
-        const error = stateManager.get('updater.error');
-        const readyToInstall = !!stateManager.get('updater.readyToInstall');
-        const downloading = !!stateManager.get('updater.downloading');
-        const downloadProgress = Math.min(100, Math.max(0, Number(stateManager.get('updater.downloadProgress') || 0)));
-        const available = !!stateManager.get('updater.available');
-        const noteItems = Array.isArray(stateManager.get('updater.notes')) ? stateManager.get('updater.notes') : [];
-
-        if (readyToInstall) {
-            statusText.textContent = `更新已准备好：v${latestVersion || currentVersion}`;
-        } else if (downloading) {
-            statusText.textContent = `正在下载 v${latestVersion}...`;
-        } else if (error) {
-            statusText.textContent = error;
-        } else if (available && latestVersion) {
-            statusText.textContent = `发现新版本 v${latestVersion}`;
-        } else {
-            statusText.textContent = '当前已经是最新版本';
-        }
-
-        meta.textContent = [
-            `当前版本：v${currentVersion}`,
-            latestVersion ? `最新版本：v${latestVersion}` : '',
-            releaseDate ? `发布日期：${formatDateTime(releaseDate)}` : '',
-            checkedAt ? `最近检查：${formatDateTime(checkedAt)}` : '',
-        ].filter(Boolean).join(' · ');
-
-        notes.textContent = '';
-        const renderedNotes = noteItems.length > 0 ? noteItems : ['暂无更新说明。'];
-        renderedNotes.forEach((item) => {
-            notes.appendChild(createElement('li', 'update-modal-note-item', item));
+        renderUpdateModalContent({
+            currentVersion: stateManager.get('updater.currentVersion') || '--',
+            latestVersion: stateManager.get('updater.latestVersion') || '',
+            releaseDate: stateManager.get('updater.releaseDate'),
+            lastCheckedAt: stateManager.get('updater.lastCheckedAt'),
+            error: stateManager.get('updater.error'),
+            readyToInstall: !!stateManager.get('updater.readyToInstall'),
+            downloading: !!stateManager.get('updater.downloading'),
+            downloadProgress: Number(stateManager.get('updater.downloadProgress') || 0),
+            available: !!stateManager.get('updater.available'),
+            notes: Array.isArray(stateManager.get('updater.notes')) ? stateManager.get('updater.notes') : [],
+        }, {
+            statusText: document.getElementById('update-modal-status'),
+            meta: document.getElementById('update-modal-meta'),
+            notes: document.getElementById('update-modal-notes'),
+            progress: document.getElementById('update-modal-progress'),
+            progressFill: document.getElementById('update-modal-progress-fill'),
+            progressText: document.getElementById('update-modal-progress-text'),
+            btnSkip: document.getElementById('btn-update-modal-skip'),
+            btnAction: document.getElementById('btn-update-modal-action'),
         });
-
-        progress.hidden = !downloading;
-        progressFill.style.width = `${downloadProgress}%`;
-        progressText.textContent = downloading ? `下载进度 ${downloadProgress}%` : '';
-
-        btnSkip.style.display = readyToInstall ? 'none' : 'inline-flex';
-        btnSkip.disabled = downloading || !latestVersion;
-
-        if (readyToInstall) {
-            btnAction.textContent = '立即安装并重启';
-            btnAction.disabled = false;
-        } else if (downloading) {
-            btnAction.textContent = `下载中 ${downloadProgress}%`;
-            btnAction.disabled = true;
-        } else {
-            btnAction.textContent = '下载更新';
-            btnAction.disabled = !latestVersion;
-        }
     }
-
     async _downloadUpdate() {
         if (window.electronAPI?.downloadUpdate) {
             const result = await window.electronAPI.downloadUpdate();
@@ -986,38 +869,8 @@ class App {
     }
 
     _buildDisconnectedStatus(previousStatus = null, options = {}) {
-        const baseStatus = previousStatus && typeof previousStatus === 'object'
-            ? previousStatus
-            : {};
-        const previousStartup = baseStatus.startup && typeof baseStatus.startup === 'object'
-            ? baseStatus.startup
-            : {};
-        const idleState = options?.idleState || this._getRuntimeIdleState();
-        const isIdleStopped = idleState?.state === 'stopped_by_idle';
-        const disconnectedMessage = isIdleStopped ? '后端已休眠' : '服务未启动';
-
-        return {
-            ...baseStatus,
-            service_running: false,
-            running: false,
-            bot_running: false,
-            growth_running: false,
-            growth_enabled: false,
-            is_paused: false,
-            background_backlog_count: 0,
-            last_background_batch: null,
-            diagnostics: null,
-            startup: {
-                ...previousStartup,
-                stage: 'stopped',
-                message: disconnectedMessage,
-                progress: 0,
-                active: false,
-                updated_at: Date.now() / 1000,
-            },
-        };
+        return buildDisconnectedStatus(previousStatus, options?.idleState || this._getRuntimeIdleState());
     }
-
     _applyDisconnectedRuntimeState(previousStatus = null, options = {}) {
         stateManager.batchUpdate({
             'bot.connected': false,
@@ -1069,7 +922,7 @@ class App {
 
     _handleSSEError(err) {
         if (!this._isIdleStopped()) {
-            console.warn('[App] SSE 连接异常，准备重连', err);
+            console.warn('[App] SSE 连接异常，准备重连:', err);
         }
         const status = stateManager.get('bot.status') || {};
         const shouldReconnect = !!(
@@ -1165,71 +1018,24 @@ class App {
         if (!badge) {
             return;
         }
-
         const dot = badge.querySelector('.status-dot');
         const label = badge.querySelector('.status-label');
-        const connected = !!stateManager.get('bot.connected');
-        const running = !!stateManager.get('bot.running');
-        const paused = !!stateManager.get('bot.paused');
-        const status = stateManager.get('bot.status');
-        const idleState = this._getRuntimeIdleState();
-        const startupActive = !!(status && typeof status === 'object' && status?.startup?.active);
-        const growthRunning = !!(status && typeof status === 'object' && status?.growth_running);
-        const serviceRunning = !!(status && typeof status === 'object' && status?.service_running);
-        const isIdleStandby = idleState.state === 'standby' || idleState.state === 'countdown';
-        const isIdleStopped = idleState.state === 'stopped_by_idle';
-
-        let labelText = '服务已就绪';
-        let dotClass = 'status-dot offline';
-        let titleText = 'Python 服务已启动，机器人未启动';
-
-        if (!connected && isIdleStopped) {
-            labelText = '后端已休眠';
-            dotClass = 'status-dot sleeping';
-            titleText = 'Python 服务已因空闲自动休眠，点击唤醒';
-        } else if (!connected) {
-            labelText = '服务未连接';
-            dotClass = 'status-dot offline';
-            titleText = (window.electronAPI?.runtimeEnsureService || window.electronAPI?.startBackend)
-                ? 'Python 服务未连接，点击启动'
-                : 'Python 服务未连接';
-        } else if (!running && startupActive) {
-            labelText = '机器人启动中';
-            dotClass = 'status-dot warning';
-            titleText = 'Python 服务已启动，机器人正在启动';
-        } else if (running) {
-            if (paused) {
-                labelText = '机器人已暂停';
-                dotClass = 'status-dot warning';
-                titleText = 'Python 服务已启动，机器人当前处于暂停状态';
-            } else {
-                labelText = '机器人运行中';
-                dotClass = 'status-dot online';
-                titleText = 'Python 服务已启动，机器人正在运行';
-            }
-        } else if (growthRunning) {
-            labelText = '成长任务运行中';
-            dotClass = 'status-dot online';
-            titleText = 'Python 服务已启动，成长任务正在运行';
-        } else if (isIdleStandby) {
-            labelText = '后端待机中';
-            dotClass = 'status-dot standby';
-            titleText = 'Python 服务在线，隐藏到托盘后会进入自动休眠倒计时';
-        } else if (serviceRunning || connected) {
-            labelText = '服务已就绪';
-            dotClass = 'status-dot ready';
-            titleText = 'Python 服务已启动，机器人未启动';
-        }
-
+        const nextView = getConnectionStatusView({
+            connected: !!stateManager.get('bot.connected'),
+            running: !!stateManager.get('bot.running'),
+            paused: !!stateManager.get('bot.paused'),
+            status: stateManager.get('bot.status'),
+            idleState: this._getRuntimeIdleState(),
+            canWake: !!(window.electronAPI?.runtimeEnsureService || window.electronAPI?.startBackend),
+        });
         if (label) {
-            label.textContent = labelText;
+            label.textContent = nextView.labelText;
         }
         if (dot) {
-            dot.className = dotClass;
+            dot.className = nextView.dotClass;
         }
-        badge.title = titleText;
+        badge.title = nextView.titleText;
     }
-
     _startStatusRefresh() {
         this._scheduleNextStatusRefresh(0);
     }

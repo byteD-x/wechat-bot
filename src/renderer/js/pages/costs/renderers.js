@@ -1,0 +1,293 @@
+import {
+    COST_TEXT,
+    createCostElement,
+    createCostStateBlock,
+    formatCostDateTime,
+    formatCostGroups,
+    formatCostNumber,
+    formatCurrencyValue,
+    normalizeCostModelName,
+} from './formatters.js';
+
+export function renderCostLoading(page) {
+    ['#cost-overview', '#cost-models', '#cost-sessions'].forEach((selector) => {
+        const container = page.$(selector);
+        if (!container) {
+            return;
+        }
+        container.textContent = '';
+        container.appendChild(createCostStateBlock(COST_TEXT.loading));
+    });
+}
+
+export function renderCostError(page, message) {
+    ['#cost-overview', '#cost-models', '#cost-sessions'].forEach((selector) => {
+        const container = page.$(selector);
+        if (!container) {
+            return;
+        }
+        container.textContent = '';
+        container.appendChild(createCostStateBlock(message, 'empty-state'));
+    });
+}
+
+export function renderCostOverview(page, overview = {}) {
+    const container = page.$('#cost-overview');
+    if (!container) {
+        return;
+    }
+
+    const cards = [
+        {
+            label: COST_TEXT.totalCost,
+            value: formatCostGroups(overview.currency_groups) || '--',
+        },
+        {
+            label: COST_TEXT.totalTokens,
+            value: formatCostNumber(overview.total_tokens),
+        },
+        {
+            label: COST_TEXT.pricedReplies,
+            value: formatCostNumber(overview.priced_reply_count),
+        },
+        {
+            label: COST_TEXT.unpricedReplies,
+            value: formatCostNumber(overview.unpriced_reply_count),
+        },
+        {
+            label: COST_TEXT.mostExpensiveModel,
+            value: overview.most_expensive_model
+                ? `${normalizeCostModelName(overview.most_expensive_model.model)} \u00b7 ${formatCurrencyValue(
+                    overview.most_expensive_model.currency,
+                    overview.most_expensive_model.total_cost,
+                )}`
+                : COST_TEXT.groupedByCurrency,
+        },
+    ];
+
+    container.textContent = '';
+    const fragment = document.createDocumentFragment();
+    cards.forEach((item) => {
+        const card = createCostElement('article', 'cost-kpi-card');
+        card.appendChild(createCostElement('span', 'cost-kpi-label', item.label));
+        card.appendChild(createCostElement('strong', 'cost-kpi-value', item.value));
+        fragment.appendChild(card);
+    });
+    container.appendChild(fragment);
+}
+
+export function renderCostModelBreakdown(page, models = []) {
+    const container = page.$('#cost-models');
+    if (!container) {
+        return;
+    }
+    container.textContent = '';
+
+    if (!Array.isArray(models) || models.length === 0) {
+        container.appendChild(createCostStateBlock(COST_TEXT.noModelData, 'empty-state'));
+        return;
+    }
+
+    const table = createCostElement('div', 'cost-model-table');
+    const header = createCostElement('div', 'cost-model-row cost-model-row-head');
+    [
+        COST_TEXT.model,
+        COST_TEXT.provider,
+        COST_TEXT.promptTokens,
+        COST_TEXT.completionTokens,
+        COST_TEXT.totalTokens,
+        COST_TEXT.amount,
+    ].forEach((text) => {
+        header.appendChild(createCostElement('span', 'cost-model-cell', text));
+    });
+    table.appendChild(header);
+
+    models.forEach((item) => {
+        const row = createCostElement('div', 'cost-model-row');
+        row.appendChild(createCostElement('span', 'cost-model-cell cost-model-main', normalizeCostModelName(item.model)));
+        row.appendChild(createCostElement('span', 'cost-model-cell', item.provider_id || '--'));
+        row.appendChild(createCostElement('span', 'cost-model-cell', formatCostNumber(item.prompt_tokens)));
+        row.appendChild(createCostElement('span', 'cost-model-cell', formatCostNumber(item.completion_tokens)));
+        row.appendChild(createCostElement('span', 'cost-model-cell', formatCostNumber(item.total_tokens)));
+        row.appendChild(
+            createCostElement(
+                'span',
+                'cost-model-cell',
+                formatCostGroups(item.currency_groups) || COST_TEXT.pendingPricing,
+            ),
+        );
+        table.appendChild(row);
+    });
+
+    container.appendChild(table);
+}
+
+export function renderCostFilterOptions(page, filters, options = {}) {
+    const providerSelect = page.$('#cost-provider');
+    const modelSelect = page.$('#cost-model');
+    if (!providerSelect || !modelSelect) {
+        return;
+    }
+
+    fillCostSelect(providerSelect, options.providers || [], COST_TEXT.allProviders);
+    fillCostSelect(modelSelect, options.models || [], COST_TEXT.allModels);
+
+    providerSelect.value = filters.provider_id;
+    modelSelect.value = filters.model;
+}
+
+function fillCostSelect(select, values, allLabel) {
+    select.textContent = '';
+    const allOption = document.createElement('option');
+    allOption.value = '';
+    allOption.textContent = allLabel;
+    select.appendChild(allOption);
+
+    (values || []).forEach((value) => {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = value;
+        select.appendChild(option);
+    });
+}
+
+export function renderCostSessions(page, sessions = [], onToggleSession) {
+    const container = page.$('#cost-sessions');
+    if (!container) {
+        return;
+    }
+
+    container.textContent = '';
+    if (!Array.isArray(sessions) || sessions.length === 0) {
+        container.appendChild(createCostStateBlock(COST_TEXT.noSessionData, 'empty-state'));
+        return;
+    }
+
+    const fragment = document.createDocumentFragment();
+    sessions.forEach((session) => {
+        const item = createCostElement('article', 'cost-session-item');
+        item.dataset.chatId = session.chat_id;
+
+        const trigger = createCostElement('button', 'cost-session-trigger');
+        trigger.type = 'button';
+        trigger.setAttribute('aria-expanded', 'false');
+        trigger.addEventListener('click', () => {
+            void onToggleSession?.(session.chat_id, item);
+        });
+
+        const header = createCostElement('div', 'cost-session-header');
+        const titleWrap = createCostElement('div', 'cost-session-title-wrap');
+        titleWrap.appendChild(createCostElement('strong', 'cost-session-title', session.display_name || session.chat_id));
+        titleWrap.appendChild(
+            createCostElement(
+                'span',
+                'cost-session-subtitle',
+                `${formatCostDateTime(session.last_timestamp)} \u00b7 ${formatCostNumber(session.reply_count)} ${COST_TEXT.aiReplies}`,
+            ),
+        );
+
+        const meta = createCostElement('div', 'cost-session-meta');
+        meta.appendChild(createCostElement('span', 'cost-session-chip', `${COST_TEXT.inputLabel} ${formatCostNumber(session.prompt_tokens)}`));
+        meta.appendChild(createCostElement('span', 'cost-session-chip', `${COST_TEXT.outputLabel} ${formatCostNumber(session.completion_tokens)}`));
+        meta.appendChild(createCostElement('span', 'cost-session-chip', `${COST_TEXT.totalLabel} ${formatCostNumber(session.total_tokens)}`));
+        meta.appendChild(
+            createCostElement(
+                'span',
+                `cost-session-chip ${session.priced_reply_count > 0 ? 'is-cost' : 'is-pending'}`,
+                formatCostGroups(session.currency_groups) || COST_TEXT.pendingPricing,
+            ),
+        );
+        if (session.estimated_reply_count > 0) {
+            meta.appendChild(
+                createCostElement(
+                    'span',
+                    'cost-session-chip is-estimated',
+                    `${COST_TEXT.estimatedLabel} ${formatCostNumber(session.estimated_reply_count)}`,
+                ),
+            );
+        }
+
+        header.appendChild(titleWrap);
+        header.appendChild(meta);
+        trigger.appendChild(header);
+        item.appendChild(trigger);
+
+        const detail = createCostElement('div', 'cost-session-detail');
+        detail.hidden = true;
+        item.appendChild(detail);
+        fragment.appendChild(item);
+    });
+
+    container.appendChild(fragment);
+}
+
+export function renderCostSessionLoading(container) {
+    container.textContent = '';
+    container.appendChild(createCostStateBlock(COST_TEXT.detailLoading));
+}
+
+export function renderCostSessionError(container, message) {
+    container.textContent = '';
+    container.appendChild(createCostStateBlock(message, 'empty-state'));
+}
+
+export function renderCostSessionDetails(container, records = []) {
+    container.textContent = '';
+    if (!Array.isArray(records) || records.length === 0) {
+        container.appendChild(createCostStateBlock(COST_TEXT.noSessionDetail, 'empty-state'));
+        return;
+    }
+
+    const list = createCostElement('div', 'cost-reply-list');
+    records.forEach((record) => {
+        const item = createCostElement('article', 'cost-reply-item');
+        const top = createCostElement('div', 'cost-reply-top');
+
+        const title = createCostElement('div', 'cost-reply-title');
+        title.appendChild(createCostElement('strong', '', normalizeCostModelName(record.model)));
+        title.appendChild(createCostElement('span', 'cost-reply-time', formatCostDateTime(record.timestamp)));
+        top.appendChild(title);
+
+        const badges = createCostElement('div', 'cost-reply-badges');
+        badges.appendChild(createCostElement('span', 'cost-session-chip', `${COST_TEXT.inputLabel} ${formatCostNumber(record.tokens?.user)}`));
+        badges.appendChild(createCostElement('span', 'cost-session-chip', `${COST_TEXT.outputLabel} ${formatCostNumber(record.tokens?.reply)}`));
+        badges.appendChild(createCostElement('span', 'cost-session-chip', `${COST_TEXT.totalLabel} ${formatCostNumber(record.tokens?.total)}`));
+        badges.appendChild(
+            createCostElement(
+                'span',
+                `cost-session-chip ${record.pricing_available ? 'is-cost' : 'is-pending'}`,
+                record.pricing_available
+                    ? formatCurrencyValue(record.currency, record.cost?.total_cost)
+                    : COST_TEXT.pendingPricing,
+            ),
+        );
+        if (record.estimated?.tokens || record.estimated?.pricing) {
+            badges.appendChild(createCostElement('span', 'cost-session-chip is-estimated', COST_TEXT.estimatedData));
+        }
+        top.appendChild(badges);
+        item.appendChild(top);
+
+        const metrics = createCostElement('div', 'cost-reply-metrics');
+        metrics.appendChild(createCostElement('span', 'cost-reply-metric', `${COST_TEXT.providerMetric}${record.provider_id || '--'}`));
+        metrics.appendChild(createCostElement('span', 'cost-reply-metric', `${COST_TEXT.presetMetric}${record.preset || '--'}`));
+        metrics.appendChild(
+            createCostElement(
+                'span',
+                'cost-reply-metric',
+                `${COST_TEXT.inputAmountMetric}${formatCurrencyValue(record.currency, record.cost?.input_cost)}`,
+            ),
+        );
+        metrics.appendChild(
+            createCostElement(
+                'span',
+                'cost-reply-metric',
+                `${COST_TEXT.outputAmountMetric}${formatCurrencyValue(record.currency, record.cost?.output_cost)}`,
+            ),
+        );
+        item.appendChild(metrics);
+        item.appendChild(createCostElement('p', 'cost-reply-preview', record.reply_preview || record.reply_text || ''));
+        list.appendChild(item);
+    });
+
+    container.appendChild(list);
+}
