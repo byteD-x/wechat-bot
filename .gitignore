@@ -31,6 +31,8 @@ env/
 # 运行时日志
 wxauto_logs/
 logs/
+!src/renderer/js/pages/logs/
+!src/renderer/js/pages/logs/*.js
 *.log
 *.log.*
 
