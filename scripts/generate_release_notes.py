@@ -93,9 +93,10 @@ def list_commits(previous_tag: str, current_tag: str) -> list[CommitEntry]:
 
 
 def classify_commit(subject: str) -> tuple[str, str, bool]:
-    match = CONVENTIONAL_RE.match(subject.strip())
+    normalized_subject = subject.lstrip("\ufeff").strip()
+    match = CONVENTIONAL_RE.match(normalized_subject)
     if not match:
-        return "other", subject.strip(), False
+        return "other", normalized_subject, False
     commit_type = match.group("type").lower()
     clean_subject = match.group("subject").strip()
     breaking = bool(match.group("breaking"))
