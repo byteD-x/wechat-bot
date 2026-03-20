@@ -215,7 +215,7 @@ class App {
             this._lastUpdateToastVersion !== nextVersion
         ) {
             this._lastUpdateToastVersion = nextVersion;
-            notificationService.info(`发现新版本 v${nextVersion}，可在设置页下载更新。`, 5000);
+            notificationService.info(`发现新版本 v${nextVersion}，可在关于页下载更新。`, 5000);
         }
 
         this._maybePromptForUpdate(options);
@@ -400,7 +400,7 @@ class App {
                 this._openUpdateModal();
                 return;
             }
-            await this._switchPage('settings', { source: 'update-badge' });
+            await this._switchPage('about', { source: 'update-badge' });
         });
 
         if (window.electronAPI?.onTrayAction) {

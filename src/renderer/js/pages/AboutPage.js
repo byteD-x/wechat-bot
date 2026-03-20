@@ -1,7 +1,13 @@
 import { PageController } from '../core/PageController.js';
 import { toast } from '../services/NotificationService.js';
+import { checkUpdates, openUpdateDownload } from './settings/action-controller.js';
+import { renderUpdatePanel } from './settings/renderers.js';
+import { watchUpdatePanelState } from './settings/runtime-sync.js';
 
 const FALLBACK_OPEN_OPTIONS = 'noopener,noreferrer';
+const TEXT = {
+    updateFailed: '检查更新失败',
+};
 
 export class AboutPage extends PageController {
     constructor() {
@@ -11,6 +17,12 @@ export class AboutPage extends PageController {
     async onInit() {
         await super.onInit();
         this._bindEvents();
+        this._watchUpdateState();
+    }
+
+    async onEnter() {
+        await super.onEnter();
+        this._renderUpdatePanel();
     }
 
     _bindEvents() {
@@ -19,6 +31,24 @@ export class AboutPage extends PageController {
                 void this._openLinkCard(card);
             });
         });
+        this.bindEvent('#btn-check-updates', 'click', () => void this._checkUpdates());
+        this.bindEvent('#btn-open-update-download', 'click', () => void this._openUpdateDownload());
+    }
+
+    _watchUpdateState() {
+        watchUpdatePanelState(this, () => this._renderUpdatePanel());
+    }
+
+    _renderUpdatePanel() {
+        renderUpdatePanel(this);
+    }
+
+    async _checkUpdates() {
+        await checkUpdates(this, TEXT, { updateSource: 'about-page' });
+    }
+
+    async _openUpdateDownload() {
+        await openUpdateDownload(this);
     }
 
     async _openLinkCard(card) {

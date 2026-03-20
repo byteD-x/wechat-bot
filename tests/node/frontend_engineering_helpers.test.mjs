@@ -29,6 +29,13 @@ import {
     normalizeRuntimeIdleState,
     renderUpdateModalContent,
 } from '../../src/renderer/js/app/ui-helpers.js';
+import {
+    renderPresetList,
+    renderSaveFeedback,
+    renderSettingsHero,
+    renderUpdatePanel,
+} from '../../src/renderer/js/pages/settings/renderers.js';
+import { AboutPage } from '../../src/renderer/js/pages/AboutPage.js';
 import { installDomStub } from './dom-stub.mjs';
 
 function withDom(run) {
@@ -243,3 +250,155 @@ test('app ui helpers keep updater and connection states deterministic', () => wi
     assert.equal(progressFill.style.width, '60%');
     assert.equal(btnAction.disabled, true);
 }));
+
+test('settings render helpers keep hero, preset list and feedback rendering stable', () => withDom(({ document }) => {
+    const selectors = {
+        '#current-config-hero': document.createElement('div'),
+        '#preset-list': document.createElement('div'),
+        '#config-save-feedback': document.createElement('div'),
+        '#config-save-feedback-summary': document.createElement('div'),
+        '#config-save-feedback-meta': document.createElement('div'),
+        '#config-save-feedback-groups': document.createElement('div'),
+        '#update-status-text': document.createElement('div'),
+        '#update-status-meta': document.createElement('div'),
+        '#btn-check-updates': document.createElement('button'),
+        '#btn-open-update-download': document.createElement('button'),
+        '#export-rag-status': document.createElement('div'),
+    };
+    const page = {
+        _config: {
+            bot: {
+                rag_enabled: true,
+                export_rag_enabled: true,
+            },
+            agent: {
+                langsmith_api_key_configured: true,
+            },
+        },
+        _configAudit: {
+            version: 3,
+            loaded_at: 1_700_000_000,
+            audit: {
+                unknown_override_paths: ['bot.a'],
+                dormant_paths: ['bot.b'],
+            },
+        },
+        _auditStatus: 'ready',
+        _presetDrafts: [{
+            name: 'default',
+            provider_id: 'ollama',
+            alias: 'Main',
+            model: 'llama3',
+            api_key_required: false,
+        }],
+        _providersById: new Map([
+            ['ollama', { id: 'ollama', label: 'Ollama' }],
+        ]),
+        _activePreset: 'default',
+        _heroTestFeedback: {
+            presetName: 'default',
+            state: 'success',
+            message: 'ok',
+        },
+        $(selector) {
+            return selectors[selector] || null;
+        },
+        getState(path) {
+            const mapping = {
+                'bot.connected': true,
+                'bot.status.runtime_preset': 'default',
+                'bot.status.model': 'llama3',
+                'updater.enabled': true,
+                'updater.checking': false,
+                'updater.available': true,
+                'updater.currentVersion': '1.0.0',
+                'updater.latestVersion': '1.1.0',
+                'updater.lastCheckedAt': 1_700_000_000,
+                'updater.releaseDate': 1_700_000_000,
+                'updater.error': '',
+                'updater.skippedVersion': '',
+                'updater.downloading': false,
+                'updater.downloadProgress': 0,
+                'updater.readyToInstall': false,
+            };
+            return mapping[path];
+        },
+        _testPresetByName() {},
+        _testPreset() {},
+        _openPresetModal() {},
+        _removePreset() {},
+        _renderPresetList() {},
+        _renderHero() {},
+        _scheduleAutoSave() {},
+    };
+
+    renderSettingsHero(page, true);
+    renderPresetList(page);
+    renderUpdatePanel(page);
+    renderSaveFeedback(page, {
+        success: true,
+        changed_paths: ['bot.reply_mode'],
+        runtime_apply: { message: 'applied' },
+        default_config_sync_message: 'synced',
+        reload_plan: [{
+            component: 'bot',
+            mode: 'hot_reload',
+            note: 'ok',
+            paths: ['bot.reply_mode'],
+        }],
+    }, 'failed');
+
+    assert.equal(selectors['#current-config-hero'].children.length, 1);
+    assert.match(selectors['#current-config-hero'].textContent, /default/);
+    assert.equal(selectors['#preset-list'].children.length, 1);
+    assert.match(selectors['#preset-list'].textContent, /Ollama/);
+    assert.match(selectors['#update-status-text'].textContent, /1\.1\.0/);
+    assert.equal(selectors['#config-save-feedback'].hidden, false);
+    assert.equal(selectors['#config-save-feedback-groups'].children.length, 1);
+}));
+
+test('about page wires updater state and renders update panel on enter', async () => {
+    const page = new AboutPage();
+    const bindings = [];
+    const watchPaths = [];
+    const calls = [];
+    const linkCard = { dataset: { url: 'https://example.com', label: '示例链接' } };
+
+    page.$$ = (selector) => selector === '.about-link-card' ? [linkCard] : [];
+    page.bindEvent = (target, type, handler) => {
+        bindings.push({ target, type, handler });
+    };
+    page.watchState = (path, handler) => {
+        watchPaths.push({ path, handler });
+    };
+    page._renderUpdatePanel = () => {
+        calls.push('render-update');
+    };
+    page._openLinkCard = async () => {
+        calls.push('open-link');
+    };
+
+    await page.onInit();
+    await page.onEnter();
+
+    assert.equal(bindings.length, 3);
+    assert.equal(watchPaths.length, 13);
+    assert.deepEqual(watchPaths.map((item) => item.path), [
+        'updater.enabled',
+        'updater.checking',
+        'updater.available',
+        'updater.currentVersion',
+        'updater.latestVersion',
+        'updater.lastCheckedAt',
+        'updater.releaseDate',
+        'updater.error',
+        'updater.skippedVersion',
+        'updater.downloading',
+        'updater.downloadProgress',
+        'updater.readyToInstall',
+        'updater.downloadedVersion',
+    ]);
+
+    await bindings[0].handler();
+    assert.deepEqual(calls, ['render-update', 'open-link']);
+});

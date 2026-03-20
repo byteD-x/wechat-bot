@@ -1,5 +1,9 @@
 export {
+    closePresetModal,
+    commitPresetModal,
+    createDefaultPreset,
     createModelKindBadge,
+    fillPresetModal,
     formatModelOptionLabel,
     getActivePresetDraft,
     getEffectivePreset,
@@ -8,34 +12,21 @@ export {
     getPresetModelMeta,
     getProviderLabel,
     getRuntimePresetDraft,
+    handlePresetProviderChange,
     inferOllamaModelKind,
     isOllamaPreset,
-    setHeroTestFeedback,
-} from './preset-meta.js';
-
-export {
     loadOllamaModels,
-    resolveProviderModels,
-    warmOllamaModels,
-} from './preset-ollama.js';
-
-export {
-    runPresetConnectionTest,
-    testPreset,
-    testPresetByName,
-} from './preset-test.js';
-
-export {
-    closePresetModal,
-    commitPresetModal,
-    createDefaultPreset,
-    fillPresetModal,
-    handlePresetProviderChange,
     openPresetModal,
     populateModelOptions,
     populateProviderOptions,
     removePreset,
+    resolveProviderModels,
+    runPresetConnectionTest,
+    setHeroTestFeedback,
     syncPresetModelInput,
+    testPreset,
+    testPresetByName,
     togglePresetKeyVisibility,
     updatePresetHelpLink,
-} from './preset-modal.js';
+    warmOllamaModels,
+} from './preset-service.js';

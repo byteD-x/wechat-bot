@@ -3520,8 +3520,9 @@ option {
 }
 
 .about-hero-body {
-    display: flex;
-    align-items: center;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 320px;
+    align-items: stretch;
     gap: 24px;
     padding: 24px 28px;
 }
@@ -3531,11 +3532,11 @@ option {
 }
 
 .about-hero-main {
-    flex: 1 1 auto;
     min-width: 0;
     display: flex;
     flex-direction: column;
-    justify-content: center;
+    justify-content: space-between;
+    gap: 18px;
 }
 
 .about-hero-brand {
@@ -3593,11 +3594,49 @@ option {
 }
 
 .about-hero-description {
-    margin: 8px 0 0;
+    margin: 10px 0 0;
     max-width: 680px;
     color: var(--text-secondary);
     font-size: 14px;
     line-height: 1.7;
+}
+
+.about-hero-side {
+    display: grid;
+    gap: 14px;
+    align-content: stretch;
+}
+
+.about-hero-update {
+    padding: 16px 18px;
+    border-radius: 20px;
+    background: rgba(255, 255, 255, 0.72);
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+.about-hero-update-kicker {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: rgba(14, 165, 233, 0.12);
+    color: #0369a1;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.about-hero-update .update-panel {
+    margin-top: 12px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 14px;
+}
+
+.about-hero-update .update-panel-actions {
+    justify-content: flex-start;
 }
 
 .about-hero-tags {
@@ -3621,9 +3660,6 @@ option {
 }
 
 .about-hero-note {
-    width: min(280px, 100%);
-    flex: 0 0 auto;
-    align-self: stretch;
     padding: 18px;
     border-radius: 20px;
     background:
@@ -3663,16 +3699,16 @@ option {
 }
 
 .about-link-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 16px;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 14px;
     margin-bottom: 0;
     align-items: stretch;
 }
 
 .about-link-card {
     width: 100%;
-    min-height: 188px;
-    padding: 18px 20px;
+    min-height: 156px;
+    padding: 16px 18px;
     border: 1px solid var(--border-color);
     border-radius: var(--radius-lg);
     background: var(--bg-surface);
@@ -3842,16 +3878,15 @@ option {
     .about-hero-body {
         padding: 22px 24px;
     }
+
+    .about-link-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
 }
 
 @media (max-width: 1024px) {
     .about-hero-body {
-        flex-direction: column;
-        align-items: stretch;
-    }
-
-    .about-hero-note {
-        width: 100%;
+        grid-template-columns: 1fr;
     }
 
     .about-link-grid {
@@ -3892,13 +3927,12 @@ option {
     }
 
     .about-hero-note {
-        width: min(248px, 100%);
         padding: 16px;
     }
 
     .about-link-card {
-        min-height: 168px;
-        padding: 16px 18px;
+        min-height: 148px;
+        padding: 15px 16px;
     }
 }
 
@@ -3912,7 +3946,7 @@ option {
     }
 
     .about-link-card {
-        min-height: 154px;
+        min-height: 142px;
     }
 }
 
@@ -3953,6 +3987,10 @@ option {
     .about-hero-body,
     .about-hero .card-body {
         padding: 24px 22px;
+    }
+
+    .about-hero-update {
+        padding: 14px 16px;
     }
 
     .about-link-footer {

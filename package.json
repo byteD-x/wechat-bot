@@ -16,7 +16,7 @@
     "dev": "chcp 65001 && electron . --dev",
     "test:main": "node --test tests\\update-manager.test.cjs && node tests\\node\\test_backend_idle_controller.js",
     "test": "npm run test:main && npm run test:renderer",
-    "test:renderer": "node --test tests\\node\\dashboard_renderer_helpers.test.mjs tests\\node\\settings_form_codec.test.mjs tests\\node\\frontend_engineering_helpers.test.mjs",
+    "test:renderer": "node --test tests\\node\\costs_page_split_helpers.test.mjs tests\\node\\dashboard_renderer_helpers.test.mjs tests\\node\\dashboard_page_split_helpers.test.mjs tests\\node\\logs_page_split_helpers.test.mjs tests\\node\\messages_page_split_helpers.test.mjs tests\\node\\settings_form_codec.test.mjs tests\\node\\frontend_engineering_helpers.test.mjs tests\\node\\settings_page_split_helpers.test.mjs",
     "build": "electron-builder --config electron-builder.yml",
     "build:win": "electron-builder --config electron-builder.yml --win portable nsis --publish never",
     "build:portable": "electron-builder --config electron-builder.yml --win portable --publish never",
