@@ -21,6 +21,8 @@ class ConfigReloadWatcher:
         preferred_mode: str = "auto",
     ) -> None:
         self._watch_paths: Set[str] = set()
+        self._watch_file_paths: Set[str] = set()
+        self._watch_target_dirs: Set[str] = set()
         self._watch_dirs: Set[str] = set()
         self._debounce_sec = max(0.0, int(debounce_ms) / 1000.0)
         self._preferred_mode = str(preferred_mode or "auto").strip().lower() or "auto"
@@ -45,10 +47,21 @@ class ConfigReloadWatcher:
             if str(path or "").strip()
         }
         self._watch_paths = normalized_paths
-        self._watch_dirs = {
-            os.path.dirname(path) or os.getcwd()
-            for path in normalized_paths
+        self._watch_file_paths = {
+            path for path in normalized_paths
+            if not os.path.isdir(path)
         }
+        self._watch_target_dirs = {
+            path for path in normalized_paths
+            if os.path.isdir(path)
+        }
+        watch_dirs: Set[str] = set(self._watch_target_dirs)
+        watch_dirs.update(
+            os.path.dirname(path) or os.getcwd()
+            for path in self._watch_file_paths
+            if os.path.isdir(os.path.dirname(path) or os.getcwd())
+        )
+        self._watch_dirs = watch_dirs
 
     def start(self) -> None:
         self.stop()
@@ -126,7 +139,13 @@ class ConfigReloadWatcher:
 
     def notify_path_changed(self, path: str) -> bool:
         normalized = os.path.abspath(str(path or ""))
-        if normalized not in self._watch_paths:
+        matched = normalized in self._watch_file_paths
+        if not matched:
+            for watch_dir in self._watch_target_dirs:
+                if normalized == watch_dir or normalized.startswith(f"{watch_dir}{os.sep}"):
+                    matched = True
+                    break
+        if not matched:
             return False
         self._dirty = True
         self._last_event_ts = time.monotonic()
@@ -147,4 +166,6 @@ class ConfigReloadWatcher:
             "preferred_mode": self._preferred_mode,
             "debounce_ms": self.debounce_ms,
             "watch_paths": sorted(self._watch_paths),
+            "watch_file_paths": sorted(self._watch_file_paths),
+            "watch_target_dirs": sorted(self._watch_target_dirs),
         }

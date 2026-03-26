@@ -8,10 +8,10 @@
  * 4. 增强的进程生命周期管理
  */
 
-const { app, BrowserWindow, Tray, Menu, ipcMain, shell, nativeImage, Notification } = require('electron');
+const { app, BrowserWindow, Tray, Menu, ipcMain, shell, nativeImage, Notification, dialog } = require('electron');
 const fs = require('fs');
 const path = require('path');
-const { spawn, exec } = require('child_process');
+const { spawn, exec, execFile } = require('child_process');
 const http = require('http');
 const crypto = require('crypto');
 const Store = require('electron-store');
@@ -496,7 +496,7 @@ const WindowManager = {
             minHeight: 600,
             title: '微信AI助手',
             icon: PathUtils.iconPath,
-            backgroundColor: '#F7F7F8', // 关键：与 CSS 背景一致，防止白屏
+            backgroundColor: '#F3EFE7', // 关键：与 CSS 背景一致，防止白屏
             frame: false,
             show: false, // 关键：初始隐藏
             webPreferences: {
@@ -690,6 +690,7 @@ function setupIPC() {
         shell,
         app,
         exec,
+        execFile,
         fs,
         path,
         getMainWindowSafe,
@@ -697,6 +698,7 @@ function setupIPC() {
         installDownloadedUpdateAndQuit,
         showMainWindowSafe,
         store,
+        dialog,
     });
 }
 

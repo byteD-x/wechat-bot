@@ -934,13 +934,13 @@ class BotManager:
 
         if not ai_detail:
             if ai_ready and status.get("model"):
-                ai_detail = f"AI client ready: {status.get('model')}"
+                ai_detail = f"AI 客户端已就绪：{status.get('model')}"
             elif ai_ready:
-                ai_detail = "AI client initialized, awaiting first runtime check"
+                ai_detail = "AI 客户端已初始化，等待首次运行检查"
             elif self.is_running:
-                ai_detail = "Bot is running, but AI client is unavailable"
+                ai_detail = "机器人正在运行，但 AI 客户端当前不可用"
             else:
-                ai_detail = "Bot not running, AI has not been checked yet"
+                ai_detail = "机器人未运行，尚未检查 AI 状态"
 
         transport_status = str(status.get("transport_status") or "").strip().lower()
         transport_warning = str(status.get("transport_warning") or "").strip()
@@ -949,9 +949,9 @@ class BotManager:
         startup_stage = str(startup.get("stage") or "").strip().lower()
         if transport_status == "connected":
             wechat_status = "healthy"
-            wechat_detail = "Verified active WeChat connection"
+            wechat_detail = "微信连接正常"
             if transport_warning:
-                wechat_detail = f"{wechat_detail}; {transport_warning}"
+                wechat_detail = f"{wechat_detail}；{transport_warning}"
         elif self.is_running and startup_active:
             wechat_status = "warning"
             if startup_stage == "connect_wechat":
@@ -964,17 +964,17 @@ class BotManager:
             wechat_status = "error"
             wechat_detail = (
                 transport_warning
-                or "Bot is running, but no active WeChat connection was detected"
+                or "机器人正在运行，但没有检测到可用的微信连接"
             )
         else:
             wechat_status = "warning"
             wechat_detail = (
                 transport_warning
-                or "Bot is stopped, so WeChat connection is not active"
+                or "机器人已停止，微信连接当前未激活"
             )
 
         db_status = "warning"
-        db_detail = "Database connection has not been initialized"
+        db_detail = "数据库连接尚未初始化"
         memory_manager = None
         if self.bot and hasattr(self.bot, "memory"):
             memory_manager = getattr(self.bot, "memory", None)
@@ -985,10 +985,10 @@ class BotManager:
             has_connection = getattr(memory_manager, "_conn", None) is not None
             if has_connection:
                 db_status = "healthy"
-                db_detail = db_path or "Verified active SQLite connection"
+                db_detail = db_path or "SQLite 连接正常"
             elif db_path:
                 db_detail = (
-                    f"Database path configured, but no active connection: {db_path}"
+                    f"数据库路径已配置，但当前没有活跃连接：{db_path}"
                 )
 
         checks = {

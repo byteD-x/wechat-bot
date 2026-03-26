@@ -6,8 +6,8 @@ import {
 } from './formatters.js';
 import {
     buildContactProfileDetail,
-    buildContactProfileError,
     buildMessageDetail,
+    buildReplyApprovalDetail,
 } from './renderers.js';
 
 function getApiService(deps = {}) {
@@ -20,6 +20,31 @@ function getToast(deps = {}) {
 
 function getDocument(deps = {}) {
     return deps.documentObj || globalThis.document;
+}
+
+function buildRetrySection(documentObj, titleText, messageText, retryLabel, onRetry) {
+    const root = documentObj.createElement('div');
+    root.className = 'detail-group';
+
+    const title = documentObj.createElement('div');
+    title.className = 'detail-group-title';
+    title.textContent = titleText;
+    root.appendChild(title);
+
+    root.appendChild(createMessageStateBlock(messageText, 'empty-state'));
+
+    const actions = documentObj.createElement('div');
+    actions.className = 'detail-actions';
+    const retryButton = documentObj.createElement('button');
+    retryButton.type = 'button';
+    retryButton.className = 'btn btn-secondary btn-sm';
+    retryButton.textContent = retryLabel;
+    retryButton.addEventListener('click', () => {
+        void onRetry?.();
+    });
+    actions.appendChild(retryButton);
+    root.appendChild(actions);
+    return root;
 }
 
 function syncMessageFeedback(page, messageId, metadata) {
@@ -38,6 +63,7 @@ function syncMessageFeedback(page, messageId, metadata) {
 export async function openDetailModal(page, message, deps = {}) {
     const documentObj = getDocument(deps);
     const currentToast = getToast(deps);
+    const currentApi = getApiService(deps);
     const modal = documentObj.getElementById('message-detail-modal');
     const body = documentObj.getElementById('message-detail-body');
     if (!modal || !body) {
@@ -46,7 +72,7 @@ export async function openDetailModal(page, message, deps = {}) {
 
     const requestToken = ++page._detailRequestToken;
     body.textContent = '';
-    body.appendChild(buildMessageDetail(message));
+    body.appendChild(buildMessageDetail(message, { documentObj }));
     modal.classList.add('active');
 
     if (!page.getState('bot.connected')) {
@@ -56,9 +82,27 @@ export async function openDetailModal(page, message, deps = {}) {
 
     body.appendChild(createMessageStateBlock(MESSAGE_TEXT.contactPromptLoading));
 
+    const refreshDetail = async () => {
+        await openDetailModal(page, message, deps);
+    };
+
+    const copyText = async (value, label) => {
+        const text = String(value || '').trim();
+        if (!text) {
+            currentToast.info(`${label}暂无可复制内容`);
+            return;
+        }
+        try {
+            await globalThis.navigator?.clipboard?.writeText?.(text);
+            currentToast.success(`${label}已复制`);
+        } catch (_error) {
+            currentToast.error(`复制${label}失败`);
+        }
+    };
+
     const saveFeedback = async (nextMessage, nextFeedback) => {
         try {
-            const saveResult = await getApiService(deps).saveMessageFeedback(
+            const saveResult = await currentApi.saveMessageFeedback(
                 nextMessage.id,
                 nextFeedback
             );
@@ -79,35 +123,126 @@ export async function openDetailModal(page, message, deps = {}) {
     };
 
     try {
-        const result = await getApiService(deps).getContactProfile(message.wx_id || '');
+        const [profileResult, pendingResult, replyPolicyResult] = await Promise.allSettled([
+            currentApi.getContactProfile(message.wx_id || ''),
+            currentApi.listPendingReplies({
+                chatId: message.wx_id || '',
+                status: 'pending',
+                limit: 20,
+            }),
+            currentApi.getReplyPolicies(),
+        ]);
         if (requestToken !== page._detailRequestToken) {
             return;
         }
-        if (!result?.success) {
-            throw new Error(result?.message || MESSAGE_TEXT.contactPromptLoadFailed);
-        }
+
         body.textContent = '';
         body.appendChild(buildMessageDetail(message, {
+            documentObj,
             onFeedback: saveFeedback,
+            onCopy: copyText,
         }));
-        body.appendChild(buildContactProfileDetail(message, result.profile || {}, {
-            onEmptyPrompt: () => {
-                currentToast.error(MESSAGE_TEXT.contactPromptEmpty);
-            },
-            onSavePrompt: async (nextMessage, nextPrompt, previousProfile) => {
-                try {
-                    const saveResult = await getApiService(deps).saveContactPrompt(nextMessage.wx_id || '', nextPrompt);
-                    if (!saveResult?.success) {
-                        throw new Error(saveResult?.message || MESSAGE_TEXT.contactPromptSaveFailed);
+
+        if (profileResult.status === 'fulfilled' && profileResult.value?.success) {
+            body.appendChild(buildContactProfileDetail(message, profileResult.value.profile || {}, {
+                documentObj,
+                onCopy: copyText,
+                onEmptyPrompt: () => {
+                    currentToast.error(MESSAGE_TEXT.contactPromptEmpty);
+                },
+                onSavePrompt: async (nextMessage, nextPrompt, previousProfile) => {
+                    try {
+                        const saveResult = await currentApi.saveContactPrompt(nextMessage.wx_id || '', nextPrompt);
+                        if (!saveResult?.success) {
+                            throw new Error(saveResult?.message || MESSAGE_TEXT.contactPromptSaveFailed);
+                        }
+                        currentToast.success(MESSAGE_TEXT.contactPromptSaveSuccess);
+                        return saveResult.profile || previousProfile;
+                    } catch (error) {
+                        currentToast.error(currentToast.getErrorMessage(error, MESSAGE_TEXT.contactPromptSaveFailed));
+                        return null;
                     }
-                    currentToast.success(MESSAGE_TEXT.contactPromptSaveSuccess);
-                    return saveResult.profile || previousProfile;
-                } catch (error) {
-                    currentToast.error(currentToast.getErrorMessage(error, MESSAGE_TEXT.contactPromptSaveFailed));
-                    return null;
-                }
-            },
-        }));
+                },
+            }));
+        } else {
+            const profileMessage = profileResult.status === 'fulfilled'
+                ? currentToast.getErrorMessage(profileResult.value, MESSAGE_TEXT.contactPromptLoadFailed)
+                : currentToast.getErrorMessage(profileResult.reason, MESSAGE_TEXT.contactPromptLoadFailed);
+            body.appendChild(buildRetrySection(
+                documentObj,
+                MESSAGE_TEXT.profileTitle,
+                profileMessage,
+                '重试加载画像',
+                refreshDetail,
+            ));
+        }
+
+        if (
+            pendingResult.status === 'fulfilled'
+            && replyPolicyResult.status === 'fulfilled'
+            && pendingResult.value?.success !== false
+            && replyPolicyResult.value?.success !== false
+        ) {
+            body.appendChild(buildReplyApprovalDetail(message, {
+                replyPolicy: replyPolicyResult.value?.reply_policy || {},
+                pendingReplies: pendingResult.value?.items || [],
+            }, {
+                documentObj,
+                onSaveOverride: async (nextMessage, mode) => {
+                    try {
+                        const result = await currentApi.saveReplyPolicies({
+                            chat_id: nextMessage.wx_id || nextMessage.chat_id || '',
+                            mode,
+                        });
+                        if (!result?.success) {
+                            throw new Error(result?.message || '保存会话审批策略失败');
+                        }
+                        currentToast.success('会话审批策略已更新');
+                    } catch (error) {
+                        currentToast.error(currentToast.getErrorMessage(error, '保存会话审批策略失败'));
+                    }
+                },
+                onApprovePending: async (_nextMessage, pendingReply, editedReply) => {
+                    try {
+                        const result = await currentApi.approvePendingReply(pendingReply.id, editedReply);
+                        if (!result?.success) {
+                            throw new Error(result?.message || '批准待审批回复失败');
+                        }
+                        currentToast.success('已批准并发送回复');
+                        await refreshDetail();
+                    } catch (error) {
+                        currentToast.error(currentToast.getErrorMessage(error, '批准待审批回复失败'));
+                    }
+                },
+                onRejectPending: async (_nextMessage, pendingReply) => {
+                    try {
+                        const result = await currentApi.rejectPendingReply(pendingReply.id);
+                        if (!result?.success) {
+                            throw new Error(result?.message || '拒绝待审批回复失败');
+                        }
+                        currentToast.success('已拒绝待审批回复');
+                        await refreshDetail();
+                    } catch (error) {
+                        currentToast.error(currentToast.getErrorMessage(error, '拒绝待审批回复失败'));
+                    }
+                },
+            }));
+        } else {
+            const policyMessage = pendingResult.status !== 'fulfilled'
+                ? currentToast.getErrorMessage(pendingResult.reason, '加载待审批回复失败')
+                : (
+                    replyPolicyResult.status !== 'fulfilled'
+                        ? currentToast.getErrorMessage(replyPolicyResult.reason, '加载回复策略失败')
+                        : currentToast.getErrorMessage(replyPolicyResult.value, '加载回复策略失败')
+                );
+            body.appendChild(buildRetrySection(
+                documentObj,
+                '回复策略与审批',
+                policyMessage,
+                '重试加载审批信息',
+                refreshDetail,
+            ));
+        }
     } catch (error) {
         if (requestToken !== page._detailRequestToken) {
             return;
@@ -115,10 +250,16 @@ export async function openDetailModal(page, message, deps = {}) {
         console.error('[MessagesPage] contact profile load failed:', error);
         body.textContent = '';
         body.appendChild(buildMessageDetail(message, {
+            documentObj,
             onFeedback: saveFeedback,
+            onCopy: copyText,
         }));
-        body.appendChild(buildContactProfileError(
-            currentToast.getErrorMessage(error, MESSAGE_TEXT.contactPromptLoadFailed)
+        body.appendChild(buildRetrySection(
+            documentObj,
+            MESSAGE_TEXT.profileTitle,
+            currentToast.getErrorMessage(error, MESSAGE_TEXT.contactPromptLoadFailed),
+            '重新加载详情',
+            refreshDetail,
         ));
     }
 }

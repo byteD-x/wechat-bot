@@ -23,7 +23,7 @@
 from copy import deepcopy
 
 
-from backend.utils.config import is_placeholder_key
+from backend.core.oauth_support import get_preset_auth_summary
 from backend.wechat_versions import OFFICIAL_SUPPORTED_WECHAT_VERSION
 
 
@@ -598,13 +598,13 @@ def _auto_select_active_preset(config: dict) -> None:
         model = preset.get("model") or api_cfg.get("model")
         if not base_url or not model:
             return False
-        key = preset.get("api_key") or api_cfg.get("api_key")
-        allow_empty_key = preset.get("allow_empty_key")
-        if allow_empty_key is None:
-            allow_empty_key = api_cfg.get("allow_empty_key", False)
-        if allow_empty_key:
-            return True
-        return not is_placeholder_key(key)
+        summary = get_preset_auth_summary(
+            {
+                **api_cfg,
+                **preset,
+            }
+        )
+        return bool(summary.get("auth_ready"))
 
     if active_name:
         active_preset = next((p for p in presets if p.get("name") == active_name), None)

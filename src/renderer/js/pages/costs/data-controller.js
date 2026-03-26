@@ -24,6 +24,53 @@ function getToast(deps = {}) {
     return deps.toast || toast;
 }
 
+function formatTimeLabel(value) {
+    if (!value) {
+        return '尚未刷新';
+    }
+    return `更新于 ${new Intl.DateTimeFormat('zh-CN', {
+        hour: '2-digit',
+        minute: '2-digit',
+    }).format(value)}`;
+}
+
+function renderToolbarMeta(page, summaryText) {
+    const summaryElem = page.$('#cost-filter-summary');
+    const updatedElem = page.$('#cost-last-updated');
+    if (summaryElem) {
+        summaryElem.textContent = summaryText;
+    }
+    if (updatedElem) {
+        updatedElem.textContent = formatTimeLabel(page._lastLoadedAt);
+    }
+}
+
+function buildFilterSummary(filters = {}) {
+    const parts = [];
+    if (filters.period) {
+        parts.push(`时间：${filters.period}`);
+    }
+    if (filters.provider_id) {
+        parts.push(`服务方：${filters.provider_id}`);
+    }
+    if (filters.model) {
+        parts.push(`模型：${filters.model}`);
+    }
+    if (filters.review_reason) {
+        parts.push(`原因：${filters.review_reason}`);
+    }
+    if (filters.suggested_action) {
+        parts.push(`建议：${filters.suggested_action}`);
+    }
+    if (filters.only_priced) {
+        parts.push('仅已定价');
+    }
+    if (filters.include_estimated === false) {
+        parts.push('不含估算');
+    }
+    return `当前筛选：${parts.join(' / ') || '近 30 天'}`;
+}
+
 export function renderCostSummary(page) {
     renderCostOverview(page, page._summary?.overview || {});
     renderCostModelBreakdown(page, page._summary?.models || []);
@@ -39,6 +86,7 @@ export function renderCostPage(page, deps = {}) {
     const onToggleSession = deps.onToggleSession || (() => {});
     renderCostSummary(page);
     renderCostSessions(page, page._sessions, (chatId, item) => onToggleSession(chatId, item));
+    renderToolbarMeta(page, buildFilterSummary(page._filters));
 }
 
 export async function refreshCosts(page, deps = {}) {
@@ -52,6 +100,7 @@ export async function refreshCosts(page, deps = {}) {
         page._details.clear();
         renderCostError(page, COST_TEXT.offline);
         syncCostFilters(page);
+        renderToolbarMeta(page, '当前筛选：等待连接后可查看');
         return;
     }
 
@@ -76,9 +125,11 @@ export async function refreshCosts(page, deps = {}) {
         page._summary = summary;
         page._sessions = Array.isArray(sessions.sessions) ? sessions.sessions : [];
         page._details.clear();
+        page._lastLoadedAt = Date.now();
         renderCostPage(page, deps);
     } catch (error) {
         renderCostError(page, getToast(deps).getErrorMessage(error, COST_TEXT.loadFailed));
+        renderToolbarMeta(page, buildFilterSummary(page._filters));
     } finally {
         syncCostFilters(page);
         page._loading = false;
@@ -127,7 +178,7 @@ export async function exportCostReviewQueue(page, deps = {}) {
         const params = toCostApiParams(page._filters);
         const result = await getApiService(deps).exportCostReviewQueue(params);
         if (!result?.success) {
-            throw new Error(result?.message || 'Export review queue failed');
+            throw new Error(result?.message || '导出复盘队列失败');
         }
 
         const payload = JSON.stringify(result, null, 2);

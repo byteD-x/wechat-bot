@@ -29,6 +29,27 @@ export function bindLogsEvents(page, deps = {}) {
         (deps.exportLogs || exportLogs)(page, deps);
     });
 
+    page.bindEvent('#btn-reset-log-filters', 'click', () => {
+        page._keyword = '';
+        page._level = '';
+        page._lineCount = 500;
+
+        const searchInput = page.$('#log-search');
+        if (searchInput) {
+            searchInput.value = '';
+        }
+        const levelSelect = page.$('#log-level');
+        if (levelSelect) {
+            levelSelect.value = '';
+        }
+        const lineSelect = page.$('#log-lines');
+        if (lineSelect) {
+            lineSelect.value = '500';
+        }
+
+        void (deps.refreshLogs || refreshLogs)(page, {}, deps);
+    });
+
     const searchInput = page.$('#log-search');
     searchInput?.addEventListener('input', () => {
         page._keyword = String(searchInput.value || '').trim().toLowerCase();

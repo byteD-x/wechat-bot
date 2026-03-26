@@ -9,6 +9,7 @@ from .core.bot_control import is_command_message, parse_control_command
 from .handlers.sender import send_message
 from .types import MessageEvent
 from .utils.message import is_image_message
+from .utils.runtime_artifacts import runtime_path
 
 
 async def maybe_save_event_image(
@@ -24,10 +25,9 @@ async def maybe_save_event_image(
         return None
 
     try:
-        target_root = save_root or os.path.join(os.getcwd(), "temp_images")
-        os.makedirs(target_root, exist_ok=True)
         filename = f"{int(time.time())}_{hash(getattr(event, 'sender', ''))}.jpg"
-        save_path = os.path.join(target_root, filename)
+        save_path = save_root or runtime_path("event-images", filename)
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
         await asyncio.to_thread(event.raw_item.save_file, save_path)
         if callable(log_flow):
             log_flow(

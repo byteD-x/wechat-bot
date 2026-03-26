@@ -1,12 +1,8 @@
-
 import pytest
-import asyncio
 from datetime import datetime
 from unittest.mock import MagicMock, AsyncMock, patch
 
 pytest.importorskip("quart")
-
-from quart import Quart
 
 # Import app
 from backend.api import app
@@ -51,6 +47,7 @@ def mock_manager():
     manager.resume_growth_task = AsyncMock(return_value={"success": True, "task_type": "emotion", "paused_growth_task_types": []})
     manager.is_running = True
     manager.bot = MagicMock()
+    manager.memory_manager = None
 
     # Mock MemoryManager
     mem_mgr = MagicMock()
@@ -99,13 +96,72 @@ def mock_manager():
             "contact_prompt": "数据库中的联系人 Prompt",
             "contact_prompt_source": "user_edit",
         }
+    async def async_expire_pending_replies(*args, **kwargs):
+        return 0
+    async def async_get_pending_reply_stats():
+        return {
+            "total": 1,
+            "pending": 1,
+            "approved": 0,
+            "rejected": 0,
+            "expired": 0,
+            "failed": 0,
+            "latest_created_at": 1,
+            "by_status": {"pending": 1},
+        }
+    async def async_list_pending_replies(*args, **kwargs):
+        return [
+            {
+                "id": 7,
+                "chat_id": kwargs.get("chat_id") or "friend:alice",
+                "source_message_id": "m-1",
+                "trigger_reason": "quiet_hours",
+                "draft_reply": "晚上回复",
+                "metadata": {"chat_id": kwargs.get("chat_id") or "friend:alice"},
+                "status": kwargs.get("status") or "pending",
+                "created_at": 1,
+                "resolved_at": None,
+            }
+        ]
+    async def async_get_pending_reply(pending_id):
+        return {
+            "id": int(pending_id),
+            "chat_id": "friend:alice",
+            "source_message_id": "m-1",
+            "trigger_reason": "quiet_hours",
+            "draft_reply": "晚上回复",
+            "metadata": {"chat_id": "friend:alice"},
+            "status": "pending",
+            "created_at": 1,
+            "resolved_at": None,
+        }
+    async def async_resolve_pending_reply(pending_id, status, draft_reply=None, metadata=None):
+        return {
+            "id": int(pending_id),
+            "chat_id": "friend:alice",
+            "source_message_id": "m-1",
+            "trigger_reason": "quiet_hours",
+            "draft_reply": draft_reply or "晚上回复",
+            "metadata": metadata or {},
+            "status": status,
+            "created_at": 1,
+            "resolved_at": 2,
+        }
     mem_mgr.get_message_page = MagicMock(side_effect=async_get_message_page)
     mem_mgr.list_chat_summaries = MagicMock(side_effect=async_list_chat_summaries)
     mem_mgr.get_contact_profile = MagicMock(side_effect=async_get_contact_profile)
     mem_mgr.save_contact_prompt = MagicMock(side_effect=async_save_contact_prompt)
     mem_mgr.update_message_feedback = MagicMock(side_effect=async_update_message_feedback)
     mem_mgr.get_profile_prompt_snapshot = MagicMock(side_effect=async_get_profile_prompt_snapshot)
+    mem_mgr.expire_pending_replies = AsyncMock(side_effect=async_expire_pending_replies)
+    mem_mgr.get_pending_reply_stats = AsyncMock(side_effect=async_get_pending_reply_stats)
+    mem_mgr.list_pending_replies = AsyncMock(side_effect=async_list_pending_replies)
+    mem_mgr.get_pending_reply = AsyncMock(side_effect=async_get_pending_reply)
+    mem_mgr.resolve_pending_reply = AsyncMock(side_effect=async_resolve_pending_reply)
     manager.get_memory_manager.return_value = mem_mgr
+    manager.bot.approve_pending_reply = AsyncMock(return_value={"success": True, "pending_reply": {"id": 7, "status": "approved"}})
+    manager.bot.reject_pending_reply = AsyncMock(return_value={"success": True, "pending_reply": {"id": 7, "status": "rejected"}})
+    manager.bot.refresh_pending_reply_stats = AsyncMock(return_value={})
     
     # Replace the manager in the api module
     original_manager = api_module.manager
@@ -130,6 +186,43 @@ async def test_api_ping(client, mock_manager):
     data = await response.get_json()
     assert data == {"success": True, "service_running": True}
     mock_manager.get_status.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_api_readiness(client, mock_manager):
+    payload = {
+        "success": True,
+        "ready": False,
+        "blocking_count": 2,
+        "checks": [
+            {
+                "key": "admin_permission",
+                "status": "failed",
+                "blocking": True,
+            }
+        ],
+        "suggested_actions": [
+            {
+                "action": "retry",
+                "label": "重新检查",
+                "source_check": "admin_permission",
+            }
+        ],
+        "summary": {
+            "title": "还有 2 项准备未完成",
+            "detail": "请先处理阻塞项。",
+        },
+        "checked_at": 123.0,
+    }
+
+    with patch.object(api_module.readiness_service, "get_report", return_value=payload) as mock_get_report:
+        response = await client.get('/api/readiness?refresh=true')
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["blocking_count"] == 2
+    assert data["summary"]["title"] == "还有 2 项准备未完成"
+    mock_get_report.assert_called_once_with(force_refresh=True)
 
 
 @pytest.mark.asyncio
@@ -577,9 +670,109 @@ async def test_api_model_catalog(client):
     assert response.status_code == 200
     data = await response.get_json()
     assert data["success"] is True
-    qwen = next((provider for provider in data["providers"] if provider["id"] == "qwen"), None)
+    providers = {provider["id"]: provider for provider in data["providers"]}
+
+    qwen = providers.get("qwen")
     assert qwen is not None
     assert "qwen3.5-plus" in qwen["models"]
+    assert "qwen3-coder-next" in qwen["models"]
+
+    google = providers.get("google")
+    assert google is not None
+    assert google["base_url"] == "https://generativelanguage.googleapis.com/v1beta/openai"
+    assert "gemini-2.5-flash-lite" in google["models"]
+
+    doubao = providers.get("doubao")
+    assert doubao is not None
+    assert doubao["default_model"] == "doubao-seed-1.8"
+    assert "doubao-seed-2.0-pro" in doubao["models"]
+
+    openai = providers.get("openai")
+    assert openai is not None
+    assert openai["default_model"] == "gpt-5.4-mini"
+    assert "gpt-5.4" in openai["models"]
+    assert "gpt-5.3-codex" in openai["models"]
+    auth_methods = {item["id"]: item["type"] for item in openai.get("auth_methods", [])}
+    assert auth_methods["api_key"] == "api_key"
+    assert auth_methods["codex_local"] == "local_import"
+
+    assert providers["zhipu"]["default_model"] == "glm-5"
+    assert "glm-4.7" in providers["zhipu"]["models"]
+    assert providers["openrouter"]["default_model"] == "openrouter/auto"
+    assert "google/gemini-3.1-pro-preview" in providers["openrouter"]["models"]
+    assert providers["perplexity"]["models"] == ["sonar", "sonar-pro", "sonar-reasoning-pro", "sonar-deep-research"]
+
+
+@pytest.mark.asyncio
+async def test_api_auth_providers_status(client):
+    payload = {
+        "success": True,
+        "providers": {
+            "openai_codex": {
+                "configured": True,
+                "detected": True,
+                "message": "local auth detected",
+            }
+        },
+        "supported_provider_ids": ["openai_codex"],
+    }
+
+    with patch.object(api_module, "get_oauth_provider_statuses", return_value=payload):
+        response = await client.get("/api/auth/providers")
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["success"] is True
+    assert data["providers"]["openai_codex"]["configured"] is True
+
+
+@pytest.mark.asyncio
+async def test_api_auth_flow_routes(client):
+    oauth_payload = {
+        "success": True,
+        "providers": {
+            "openai_codex": {
+                "configured": True,
+                "detected": True,
+                "message": "ready",
+            }
+        },
+        "supported_provider_ids": ["openai_codex"],
+    }
+
+    with patch.object(api_module, "launch_oauth_login", return_value={"success": True, "flow_id": "flow-1"}) as start_mock, \
+        patch.object(api_module, "submit_auth_callback", return_value={"success": True, "completed": True}) as submit_mock, \
+        patch.object(api_module, "logout_oauth_provider", return_value={"success": True, "message": "logged out"}) as logout_mock, \
+        patch.object(api_module, "get_oauth_provider_statuses", return_value=oauth_payload):
+        start_response = await client.post(
+            "/api/auth/providers/openai_codex/start",
+            json={"settings": {"name": "OpenAI", "auth_mode": "oauth"}},
+        )
+        submit_response = await client.post(
+            "/api/auth/providers/openai_codex/submit_callback",
+            json={"flow_id": "flow-1", "payload": {"code": "abc"}},
+        )
+        logout_response = await client.post(
+            "/api/auth/providers/openai_codex/logout_source",
+            json={"settings": {"name": "OpenAI", "auth_mode": "oauth"}},
+        )
+
+    assert start_response.status_code == 200
+    assert submit_response.status_code == 200
+    assert logout_response.status_code == 200
+
+    start_data = await start_response.get_json()
+    submit_data = await submit_response.get_json()
+    logout_data = await logout_response.get_json()
+
+    assert start_data["flow_id"] == "flow-1"
+    assert start_data["oauth"]["providers"]["openai_codex"]["configured"] is True
+    assert submit_data["completed"] is True
+    assert logout_data["message"] == "logged out"
+
+    start_mock.assert_called_once()
+    submit_mock.assert_called_once_with("openai_codex", "flow-1", {"code": "abc"})
+    logout_mock.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -590,7 +783,7 @@ async def test_api_config_masks_key_and_infers_provider(client):
                 {
                     "name": "Qwen",
                     "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-                    "api_key": "sk-1234567890abcdef",
+                    "api_key": "demo-openai-key-123456",
                     "model": "qwen3.5-plus",
                     "alias": "小千",
                     "timeout_sec": 10,
@@ -827,7 +1020,7 @@ async def test_api_save_config_triggers_runtime_reload(client, mock_manager):
                     "name": "OpenAI",
                     "provider_id": "openai",
                     "base_url": "https://api.openai.com/v1",
-                    "api_key": "sk-test-openai",
+                    "api_key": "demo-openai-test-key",
                     "model": "gpt-5-mini",
                     "alias": "小欧",
                     "allow_empty_key": False,
@@ -836,7 +1029,7 @@ async def test_api_save_config_triggers_runtime_reload(client, mock_manager):
                     "name": "DeepSeek",
                     "provider_id": "deepseek",
                     "base_url": "https://api.deepseek.com/v1",
-                    "api_key": "sk-test-deepseek",
+                    "api_key": "demo-deepseek-test-key",
                     "model": "deepseek-chat",
                     "alias": "小深",
                     "allow_empty_key": False,
@@ -921,3 +1114,305 @@ async def test_api_save_config_forces_ai_reload_for_agent_changes(client, mock_m
     _, kwargs = mock_manager.reload_runtime_config.await_args
     assert kwargs["force_ai_reload"] is True
     assert "agent.langsmith_enabled" in kwargs["changed_paths"]
+
+
+@pytest.mark.asyncio
+async def test_api_reply_policies_get(client, mock_manager):
+    snapshot = _build_snapshot(
+        {
+            "api": {"presets": []},
+            "bot": {
+                "reply_policy": {
+                    "default_mode": "auto",
+                    "new_contact_mode": "manual",
+                    "group_mode": "whitelist_only",
+                    "quiet_hours": {"start": "00:00", "end": "07:30", "mode": "manual"},
+                    "sensitive_keywords": ["contract"],
+                    "per_chat_overrides": [],
+                    "pending_ttl_hours": 24,
+                }
+            },
+            "logging": {},
+            "agent": {},
+            "services": {},
+        }
+    )
+
+    with patch.object(api_module.config_service, "get_snapshot", return_value=snapshot):
+        response = await client.get("/api/reply_policies")
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["success"] is True
+    assert data["reply_policy"]["new_contact_mode"] == "manual"
+    assert data["pending_stats"]["pending"] == 1
+    mock_manager.get_memory_manager().expire_pending_replies.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_api_reply_policies_post_supports_chat_override(client, mock_manager):
+    current_config = {
+        "api": {"presets": []},
+        "bot": {
+            "reply_policy": {
+                "default_mode": "auto",
+                "new_contact_mode": "manual",
+                "group_mode": "whitelist_only",
+                "quiet_hours": {"start": "00:00", "end": "07:30", "mode": "manual"},
+                "sensitive_keywords": [],
+                "per_chat_overrides": [],
+                "pending_ttl_hours": 24,
+            }
+        },
+        "logging": {},
+        "agent": {},
+        "services": {},
+    }
+    updated_config = {
+        **current_config,
+        "bot": {
+            "reply_policy": {
+                **current_config["bot"]["reply_policy"],
+                "per_chat_overrides": [{"chat_id": "friend:alice", "mode": "manual"}],
+            }
+        },
+    }
+    current_snapshot = _build_snapshot(current_config)
+    updated_snapshot = _build_snapshot(updated_config)
+
+    async def _fake_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    with (
+        patch("backend.api.asyncio.to_thread", AsyncMock(side_effect=_fake_to_thread)),
+        patch.object(api_module.config_service, "get_snapshot", return_value=current_snapshot),
+        patch.object(api_module.config_service, "save_effective_config", return_value=updated_snapshot) as save_mock,
+    ):
+        response = await client.post(
+            "/api/reply_policies",
+            json={"chat_id": "friend:alice", "mode": "manual"},
+        )
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["success"] is True
+    assert data["reply_policy"]["per_chat_overrides"][0]["chat_id"] == "friend:alice"
+    mock_manager.reload_runtime_config.assert_awaited()
+    save_mock.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_api_pending_replies_list_and_approve(client, mock_manager):
+    snapshot = _build_snapshot(
+        {
+            "api": {"presets": []},
+            "bot": {
+                "reply_policy": {
+                    "default_mode": "auto",
+                    "new_contact_mode": "manual",
+                    "group_mode": "whitelist_only",
+                    "quiet_hours": {"start": "00:00", "end": "07:30", "mode": "manual"},
+                    "sensitive_keywords": [],
+                    "per_chat_overrides": [],
+                    "pending_ttl_hours": 24,
+                }
+            },
+            "logging": {},
+            "agent": {},
+            "services": {},
+        }
+    )
+
+    with patch.object(api_module.config_service, "get_snapshot", return_value=snapshot):
+        list_response = await client.get("/api/pending_replies?chat_id=friend:alice&status=pending&limit=20")
+        approve_response = await client.post(
+            "/api/pending_replies/7/approve",
+            json={"edited_reply": "修改后回复"},
+        )
+
+    assert list_response.status_code == 200
+    list_data = await list_response.get_json()
+    assert list_data["success"] is True
+    assert list_data["items"][0]["chat_id"] == "friend:alice"
+
+    assert approve_response.status_code == 200
+    approve_data = await approve_response.get_json()
+    assert approve_data["success"] is True
+    mock_manager.bot.approve_pending_reply.assert_awaited_once_with(7, edited_reply="修改后回复")
+
+
+@pytest.mark.asyncio
+async def test_api_pending_reply_reject_works_without_running_bot(client, mock_manager):
+    mock_manager.is_running = False
+    mock_manager.bot = None
+    snapshot = _build_snapshot(
+        {
+            "api": {"presets": []},
+            "bot": {
+                "reply_policy": {
+                    "default_mode": "auto",
+                    "new_contact_mode": "manual",
+                    "group_mode": "whitelist_only",
+                    "quiet_hours": {"start": "00:00", "end": "07:30", "mode": "manual"},
+                    "sensitive_keywords": [],
+                    "per_chat_overrides": [],
+                    "pending_ttl_hours": 24,
+                }
+            },
+            "logging": {},
+            "agent": {},
+            "services": {},
+        }
+    )
+
+    with patch.object(api_module.config_service, "get_snapshot", return_value=snapshot):
+        response = await client.post("/api/pending_replies/7/reject")
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["success"] is True
+    mock_manager.get_memory_manager().resolve_pending_reply.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_api_backups_create_and_dry_run_restore(client, mock_manager):
+    async def _fake_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    with (
+        patch("backend.api.asyncio.to_thread", AsyncMock(side_effect=_fake_to_thread)),
+        patch.object(api_module.backup_service, "create_backup", return_value={"id": "b1", "mode": "quick"}) as create_mock,
+        patch.object(
+            api_module.backup_service,
+            "list_backups",
+            return_value={"success": True, "backups": [{"id": "b1"}], "summary": {"latest_quick_backup_at": 1}},
+        ) as list_mock,
+        patch.object(
+            api_module.backup_service,
+            "build_restore_plan",
+            return_value={"backup": {"id": "b1"}, "included_files": ["app_config.json"], "missing_files": [], "valid": True},
+        ) as plan_mock,
+    ):
+        create_response = await client.post("/api/backups", json={"mode": "quick", "label": "nightly"})
+        dry_run_response = await client.post("/api/backups/restore", json={"backup_id": "b1", "dry_run": True})
+
+    assert create_response.status_code == 200
+    create_data = await create_response.get_json()
+    assert create_data["success"] is True
+    assert create_data["backup"]["id"] == "b1"
+    create_mock.assert_called_once_with("quick", label="nightly")
+    list_mock.assert_called()
+
+    assert dry_run_response.status_code == 200
+    dry_run_data = await dry_run_response.get_json()
+    assert dry_run_data["success"] is True
+    assert dry_run_data["dry_run"] is True
+    plan_mock.assert_called_once_with("b1")
+
+
+@pytest.mark.asyncio
+async def test_api_backups_cleanup_supports_dry_run_and_apply(client, mock_manager):
+    async def _fake_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    with (
+        patch("backend.api.asyncio.to_thread", AsyncMock(side_effect=_fake_to_thread)),
+        patch.object(
+            api_module.backup_service,
+            "cleanup_backups",
+            side_effect=[
+                {
+                    "success": True,
+                    "dry_run": True,
+                    "candidate_count": 2,
+                    "delete_candidates": [{"id": "quick-1"}],
+                    "deleted_backups": [],
+                    "keep_policy": {"keep_quick": 4, "keep_full": 2},
+                },
+                {
+                    "success": True,
+                    "dry_run": False,
+                    "candidate_count": 1,
+                    "deleted_count": 1,
+                    "delete_candidates": [{"id": "quick-2"}],
+                    "deleted_backups": [{"id": "quick-2"}],
+                    "keep_policy": {"keep_quick": 4, "keep_full": 2},
+                },
+            ],
+        ) as cleanup_mock,
+    ):
+        preview_response = await client.post(
+            "/api/backups/cleanup",
+            json={"keep_quick": 4, "keep_full": 2, "dry_run": True},
+        )
+        apply_response = await client.post(
+            "/api/backups/cleanup",
+            json={"keep_quick": 4, "keep_full": 2, "dry_run": False},
+        )
+
+    assert preview_response.status_code == 200
+    preview_data = await preview_response.get_json()
+    assert preview_data["success"] is True
+    assert preview_data["dry_run"] is True
+    assert preview_data["candidate_count"] == 2
+
+    assert apply_response.status_code == 200
+    apply_data = await apply_response.get_json()
+    assert apply_data["success"] is True
+    assert apply_data["dry_run"] is False
+    assert apply_data["deleted_count"] == 1
+
+    assert cleanup_mock.call_args_list[0].kwargs == {
+        "keep_quick": 4,
+        "keep_full": 2,
+        "apply": False,
+    }
+    assert cleanup_mock.call_args_list[1].kwargs == {
+        "keep_quick": 4,
+        "keep_full": 2,
+        "apply": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_api_backups_restore_applies_and_restarts_runtime(client, mock_manager):
+    async def _fake_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    growth_manager = MagicMock()
+    growth_manager.is_running = True
+    growth_manager.stop = AsyncMock(return_value={"success": True, "message": "growth stopped"})
+    growth_manager.start = AsyncMock(return_value={"success": True, "message": "growth started"})
+
+    mock_manager.is_running = True
+    mock_manager.stop = AsyncMock(return_value={"success": True, "message": "bot stopped"})
+    mock_manager.start = AsyncMock(return_value={"success": True, "message": "bot started"})
+    mock_manager.memory_manager = MagicMock()
+    memory_close = AsyncMock()
+    mock_manager.memory_manager.close = memory_close
+
+    with (
+        patch("backend.api.asyncio.to_thread", AsyncMock(side_effect=_fake_to_thread)),
+        patch("backend.api.get_growth_manager", return_value=growth_manager),
+        patch.object(
+            api_module.backup_service,
+            "build_restore_plan",
+            return_value={"backup": {"id": "b1"}, "included_files": ["app_config.json"], "missing_files": [], "valid": True},
+        ),
+        patch.object(api_module.backup_service, "create_backup", return_value={"id": "pre-1", "mode": "quick"}),
+        patch.object(api_module.backup_service, "apply_restore", return_value={"success": True, "restored_count": 1}),
+        patch.object(api_module.backup_service, "save_restore_result") as save_result_mock,
+        patch.object(api_module.config_service, "reload", return_value=_build_snapshot({"api": {}, "bot": {}, "logging": {}, "agent": {}, "services": {}})),
+    ):
+        response = await client.post("/api/backups/restore", json={"backup_id": "b1", "dry_run": False})
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["success"] is True
+    assert data["pre_restore_backup"]["id"] == "pre-1"
+    mock_manager.stop.assert_awaited_once()
+    mock_manager.start.assert_awaited_once()
+    growth_manager.stop.assert_awaited_once()
+    growth_manager.start.assert_awaited_once()
+    memory_close.assert_awaited_once()
+    save_result_mock.assert_called_once()

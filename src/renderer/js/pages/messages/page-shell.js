@@ -39,6 +39,25 @@ export function bindMessagesPage(page, deps = {}) {
         });
     });
 
+    page.bindEvent('#btn-clear-message-filters', 'click', () => {
+        const clearTimeoutFn = deps.clearTimeoutFn || globalThis.clearTimeout;
+        clearTimeoutFn(page._searchTimer);
+        page._searchKeyword = '';
+        page._selectedChatId = '';
+        const searchInputElem = page.$('#message-search');
+        if (searchInputElem) {
+            searchInputElem.value = '';
+        }
+        const chatFilterElem = page.$('#message-chat-filter');
+        if (chatFilterElem) {
+            chatFilterElem.value = '';
+        }
+        void runRefreshMessages(page, {
+            ...deps,
+            onOpenDetail: createOpenDetail(),
+        });
+    });
+
     const searchInput = page.$('#message-search');
     searchInput?.addEventListener('input', () => {
         const clearTimeoutFn = deps.clearTimeoutFn || globalThis.clearTimeout;

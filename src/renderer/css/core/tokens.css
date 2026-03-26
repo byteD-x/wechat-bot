@@ -1,0 +1,66 @@
+:root {
+    --color-primary: #2563eb;
+    --color-primary-light: #3b82f6;
+    --color-primary-dark: #1d4ed8;
+    --color-secondary: #64748b;
+    --color-cta: var(--color-primary);
+    --color-cta-hover: var(--color-primary-dark);
+
+    --bg-base: #f8f9fa;
+    --bg-surface: #ffffff;
+    --bg-elevated: #ffffff;
+    --bg-input: #ffffff;
+    --bg-hover: #f1f5f9;
+    --bg-active: #e2e8f0;
+    --bg-panel: #f1f5f9;
+    --bg-modal: #ffffff;
+
+    --text-primary: #111827;
+    --text-secondary: #4b5563;
+    --text-muted: #9ca3af;
+    --text-disabled: #d1d5db;
+    --text-placeholder: #9ca3af;
+
+    --color-success: #16a34a;
+    --color-warning: #d97706;
+    --color-error: #dc2626;
+    --color-info: #2563eb;
+
+    --border-color: #e5e7eb;
+    --border-subtle: #d1d5db;
+    --border-focus: rgba(37, 99, 235, 0.5);
+
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+    --shadow-lg: 0 10px 25px rgba(0, 0, 0, 0.1);
+    --glow-primary: 0 0 0 3px rgba(37, 99, 235, 0.12);
+    --glow-success: 0 0 0 3px rgba(22, 163, 74, 0.12);
+    --glow-error: 0 0 0 3px rgba(220, 38, 38, 0.12);
+
+    --font-sans: "Segoe UI Variable Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", sans-serif;
+    --font-display: "Segoe UI Variable Display", "PingFang SC", "Microsoft YaHei UI", sans-serif;
+    --font-mono: "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+
+    --sidebar-width: 248px;
+    --titlebar-height: 46px;
+    --radius-sm: 8px;
+    --radius-md: 12px;
+    --radius-lg: 16px;
+    --radius-xl: 18px;
+
+    --motion-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+    --motion-ease-in: cubic-bezier(0.7, 0, 0.84, 0);
+    --motion-ease-emphasis: cubic-bezier(0.22, 1, 0.36, 1);
+    --transition-fast: 160ms var(--motion-ease-out);
+    --transition-normal: 220ms var(--motion-ease-out);
+    --transition-slow: 320ms var(--motion-ease-emphasis);
+
+    --app-shell-bg: #ffffff;
+    --app-shell-panel: #f8fafc;
+    --app-shell-panel-hover: #f1f5f9;
+    --app-shell-border: #e5e7eb;
+    --app-shell-text: #111827;
+    --app-shell-muted: #6b7280;
+    --app-shell-accent: var(--color-primary);
+    --workspace-max-width: 1380px;
+}

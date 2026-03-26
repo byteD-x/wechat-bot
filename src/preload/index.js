@@ -80,6 +80,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
      * 打开微信客户端
      */
     openWeChat: () => ipcRenderer.invoke('open-wechat'),
+    restartAppAsAdmin: () => ipcRenderer.invoke('restart-app-as-admin'),
 
     /**
      * 获取应用版本
@@ -91,6 +92,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     downloadUpdate: () => ipcRenderer.invoke('download-update'),
     installDownloadedUpdate: () => ipcRenderer.invoke('install-downloaded-update'),
     openUpdateDownload: () => ipcRenderer.invoke('open-update-download'),
+    exportDiagnosticsSnapshot: () => ipcRenderer.invoke('export-diagnostics-snapshot'),
 
     // ═══════════════════════════════════════════════════════════════════════
     //                           事件监听

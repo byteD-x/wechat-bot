@@ -916,6 +916,144 @@ async def test_agent_runtime_probe_falls_back_to_compat_for_ollama(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_agent_runtime_anthropic_native_invokes_messages_endpoint(monkeypatch):
+    monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
+
+    runtime = AgentRuntime(
+        settings={
+            "base_url": "https://api.anthropic.com/v1",
+            "api_key": "anthropic-test-key",
+            "model": "claude-sonnet-4-5",
+            "provider_id": "anthropic",
+            "auth_transport": "anthropic_native",
+        },
+        bot_cfg={},
+        agent_cfg={"enabled": True},
+    )
+    prepared = SimpleNamespace(
+        prompt_messages=[_FakeMessage("hello anthropic")],
+        chat_id="friend:alice",
+        response_metadata={},
+        timings={},
+    )
+    observed = {}
+
+    class _FakeResponse:
+        status_code = 200
+        text = '{"type":"message"}'
+
+        def json(self):
+            return {
+                "type": "message",
+                "content": [{"type": "text", "text": "anthropic reply"}],
+                "stop_reason": "end_turn",
+            }
+
+    class _FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            observed["timeout"] = kwargs.get("timeout")
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            observed["url"] = url
+            observed["headers"] = headers
+            observed["json"] = json
+            return _FakeResponse()
+
+    monkeypatch.setattr("backend.core.agent_runtime.httpx.AsyncClient", _FakeAsyncClient)
+
+    reply = await runtime.invoke(prepared)
+
+    assert reply == "anthropic reply"
+    assert observed["url"].endswith("/messages")
+    assert observed["headers"]["x-api-key"] == "anthropic-test-key"
+    assert observed["headers"]["anthropic-version"] == "2023-06-01"
+    assert observed["json"]["messages"][0]["content"][0]["text"] == "hello anthropic"
+    assert prepared.response_metadata["finish_reason"] == "end_turn"
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_anthropic_native_refreshes_auth_on_401(monkeypatch):
+    monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
+
+    auth_state = {"api_key": "anthropic-stale-key", "refresh_calls": 0}
+
+    def _refresh_auth():
+        auth_state["refresh_calls"] += 1
+        auth_state["api_key"] = "anthropic-fresh-key"
+
+    runtime = AgentRuntime(
+        settings={
+            "base_url": "https://api.anthropic.com/v1",
+            "api_key": lambda: auth_state["api_key"],
+            "model": "claude-sonnet-4-5",
+            "provider_id": "anthropic",
+            "auth_transport": "anthropic_native",
+            "auth_refresh_hook": _refresh_auth,
+        },
+        bot_cfg={},
+        agent_cfg={"enabled": True},
+    )
+    prepared = SimpleNamespace(
+        prompt_messages=[_FakeMessage("refresh claude")],
+        chat_id="friend:alice",
+        response_metadata={},
+        timings={},
+    )
+    observed = []
+
+    class _UnauthorizedResponse:
+        status_code = 401
+        text = '{"error":"expired"}'
+
+        def json(self):
+            return {"error": "expired"}
+
+    class _SuccessResponse:
+        status_code = 200
+        text = '{"type":"message"}'
+
+        def json(self):
+            return {
+                "type": "message",
+                "content": [{"type": "text", "text": "anthropic refreshed"}],
+                "stop_reason": "end_turn",
+            }
+
+    class _FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            self.calls = 0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            self.calls += 1
+            observed.append({"url": url, "headers": headers, "json": json})
+            if self.calls == 1:
+                return _UnauthorizedResponse()
+            return _SuccessResponse()
+
+    monkeypatch.setattr("backend.core.agent_runtime.httpx.AsyncClient", _FakeAsyncClient)
+
+    reply = await runtime.invoke(prepared)
+
+    assert reply == "anthropic refreshed"
+    assert auth_state["refresh_calls"] == 1
+    assert observed[0]["headers"]["x-api-key"] == "anthropic-stale-key"
+    assert observed[1]["headers"]["x-api-key"] == "anthropic-fresh-key"
+    assert prepared.response_metadata["finish_reason"] == "end_turn"
+
+
+@pytest.mark.asyncio
 async def test_agent_runtime_stream_prefers_visible_answer_over_reasoning_for_user_reply(monkeypatch):
     monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
 

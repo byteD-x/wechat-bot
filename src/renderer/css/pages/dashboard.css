@@ -1,0 +1,89 @@
+.page.page-dashboard {
+    width: min(100%, 1540px);
+}
+
+.card-grid,
+.dashboard-stage-grid,
+.dashboard-stage-grid-business {
+    display: grid;
+    gap: clamp(16px, 1.8vw, 22px);
+    margin-bottom: 16px;
+}
+
+.card-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.stats-row {
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+}
+
+.dashboard-stage-grid {
+    grid-template-columns: minmax(0, 1.08fr) minmax(360px, 0.92fr);
+}
+
+.dashboard-stage-grid-business {
+    grid-template-columns: minmax(0, 1.14fr) minmax(360px, 0.86fr);
+}
+
+.dashboard-stage-card {
+    min-height: 100%;
+}
+
+.dashboard-stage-column {
+    display: grid;
+    gap: clamp(16px, 1.5vw, 20px);
+    align-content: start;
+    min-width: 0;
+}
+
+.bot-status-stage,
+.growth-task-summary,
+.dashboard-recovery-panel {
+    display: grid;
+    gap: 14px;
+}
+
+.bot-status-actions,
+.detail-actions,
+.detail-card-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.health-check-list,
+.task-list {
+    display: grid;
+    gap: 10px;
+}
+
+.health-check-item,
+.task-list-item,
+.growth-task-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: var(--bg-panel);
+}
+
+.growth-task-grid,
+.retrieval-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+}
+
+.health-grid,
+.quick-grid {
+    gap: 12px;
+}
+
+@media (min-width: 1500px) {
+    .stats-row {
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+    }
+}

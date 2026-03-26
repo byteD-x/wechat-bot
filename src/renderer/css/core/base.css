@@ -1,0 +1,78 @@
+* {
+    box-sizing: border-box;
+}
+
+html {
+    font-size: clamp(13px, 0.22vw + 12.2px, 15px);
+}
+
+body {
+    margin: 0;
+    min-height: 100vh;
+    font-family: var(--font-sans);
+    line-height: 1.6;
+    color: var(--text-primary);
+    background:
+        radial-gradient(circle at top right, rgba(22, 124, 102, 0.06), transparent 26%),
+        linear-gradient(180deg, #f6f8fb 0%, var(--bg-base) 100%);
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+a {
+    color: inherit;
+    text-decoration: none;
+}
+
+button,
+input,
+textarea,
+select {
+    font: inherit;
+}
+
+img {
+    display: block;
+    max-width: 100%;
+}
+
+svg {
+    flex-shrink: 0;
+}
+
+.no-select {
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+:focus-visible {
+    outline: 2px solid var(--border-focus);
+    outline-offset: 2px;
+}
+
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: rgba(100, 116, 139, 0.32);
+    border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: rgba(100, 116, 139, 0.46);
+}
+
+.is-hidden {
+    display: none !important;
+}
+
+[hidden] {
+    display: none !important;
+}

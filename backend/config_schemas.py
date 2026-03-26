@@ -1,4 +1,4 @@
-from typing import List, Dict, Optional, Any, Union, Literal
+from typing import Any, List, Dict, Optional, Literal
 from pydantic import BaseModel, Field
 from backend.wechat_versions import OFFICIAL_SUPPORTED_WECHAT_VERSION
 
@@ -8,6 +8,15 @@ class PresetConfig(BaseModel):
     alias: str
     base_url: str
     api_key: str
+    credential_ref: Optional[str] = None
+    provider_auth_profile_id: Optional[str] = None
+    auth_mode: Literal["api_key", "oauth", "local_import", "web_session"] = "api_key"
+    oauth_provider: Optional[str] = None
+    oauth_source: Optional[str] = None
+    oauth_binding: Optional[Dict[str, Any]] = None
+    oauth_experimental_ack: bool = False
+    oauth_project_id: Optional[str] = None
+    oauth_location: Optional[str] = None
     model: str
     timeout_sec: int = 10
     max_retries: int = 2
@@ -21,6 +30,15 @@ class PresetConfig(BaseModel):
 class ApiConfig(BaseModel):
     base_url: str = 'https://api.openai.com/v1'
     api_key: str = "YOUR_API_KEY"
+    credential_ref: Optional[str] = None
+    provider_auth_profile_id: Optional[str] = None
+    auth_mode: Literal["api_key", "oauth", "local_import", "web_session"] = "api_key"
+    oauth_provider: Optional[str] = None
+    oauth_source: Optional[str] = None
+    oauth_binding: Optional[Dict[str, Any]] = None
+    oauth_experimental_ack: bool = False
+    oauth_project_id: Optional[str] = None
+    oauth_location: Optional[str] = None
     model: str = 'gpt-5-mini'
     embedding_model: Optional[str] = None  # 新增
     alias: str = '小欧'
@@ -33,6 +51,28 @@ class ApiConfig(BaseModel):
     allow_empty_key: bool = False
     active_preset: str = 'Doubao'
     presets: List[PresetConfig] = Field(default_factory=list)
+    provider_auth_center: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ReplyPolicyQuietHoursConfig(BaseModel):
+    start: str = "00:00"
+    end: str = "07:30"
+    mode: Literal["auto", "manual"] = "manual"
+
+
+class ReplyPolicyChatOverride(BaseModel):
+    chat_id: str
+    mode: Literal["auto", "manual"] = "manual"
+
+
+class ReplyPolicyConfig(BaseModel):
+    default_mode: Literal["auto", "manual"] = "auto"
+    new_contact_mode: Literal["auto", "manual"] = "manual"
+    group_mode: Literal["auto", "manual", "whitelist_only"] = "whitelist_only"
+    quiet_hours: ReplyPolicyQuietHoursConfig = Field(default_factory=ReplyPolicyQuietHoursConfig)
+    sensitive_keywords: List[str] = Field(default_factory=list)
+    per_chat_overrides: List[ReplyPolicyChatOverride] = Field(default_factory=list)
+    pending_ttl_hours: int = Field(default=24, ge=1, le=24 * 30)
 
 class BotConfig(BaseModel):
     # Identity
@@ -152,6 +192,7 @@ class BotConfig(BaseModel):
     quiet_hours_start: str = "23:00"
     quiet_hours_end: str = "07:00"
     quiet_hours_reply: str = ""
+    reply_policy: ReplyPolicyConfig = Field(default_factory=ReplyPolicyConfig)
 
     # Usage tracking
     usage_tracking_enabled: bool = True

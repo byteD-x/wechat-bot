@@ -136,10 +136,15 @@ def test_migrate_legacy_config_writes_shared_config_and_backup(tmp_path, monkeyp
     project_root = tmp_path / "repo"
     (project_root / "backend").mkdir(parents=True, exist_ok=True)
     (project_root / "data").mkdir(parents=True, exist_ok=True)
+    (project_root / "shared").mkdir(parents=True, exist_ok=True)
     (project_root / "backend" / "config.py").write_text("# legacy\n", encoding="utf-8")
     (project_root / "data" / "config_override.json").write_text("{}", encoding="utf-8")
     (project_root / "data" / "api_keys.py").write_text("API_KEYS = {}\n", encoding="utf-8")
     (project_root / "prompt_overrides.py").write_text("PROMPT_OVERRIDES = {}\n", encoding="utf-8")
+    (project_root / "shared" / "model_catalog.json").write_text(
+        (Path(__file__).resolve().parents[1] / "shared" / "model_catalog.json").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
 
     data_root = tmp_path / "shared-data"
     monkeypatch.setenv("WECHAT_BOT_DATA_DIR", str(data_root))
@@ -155,7 +160,7 @@ def test_migrate_legacy_config_writes_shared_config_and_backup(tmp_path, monkeyp
     monkeypatch.setattr(
         shared_config_module,
         "_apply_api_keys",
-        lambda payload: payload["api"]["presets"][0].__setitem__("api_key", "sk-migrated"),
+        lambda payload: payload["api"]["presets"][0].__setitem__("api_key", "migrated-demo-key"),
     )
     monkeypatch.setattr(
         shared_config_module,
@@ -174,8 +179,11 @@ def test_migrate_legacy_config_writes_shared_config_and_backup(tmp_path, monkeyp
     persisted = json.loads(config_path.read_text(encoding="utf-8"))
     backups = sorted((data_root / "backups").glob("legacy-config-*"))
 
-    assert result["api"]["presets"][0]["api_key"] == "sk-migrated"
+    assert result["api"]["presets"][0]["api_key"] == ""
+    assert result["api"]["presets"][0]["credential_ref"].startswith("provider-auth::openai::api_key::")
     assert persisted["api"]["active_preset"] == "DeepSeek"
+    assert persisted["api"]["presets"][0]["api_key"] == ""
+    assert persisted["api"]["presets"][0]["credential_ref"] == result["api"]["presets"][0]["credential_ref"]
     assert persisted["bot"]["system_prompt_overrides"] == {"Alice": "Hi"}
     assert Path(persisted["bot"]["memory_db_path"]).is_absolute()
     assert backups

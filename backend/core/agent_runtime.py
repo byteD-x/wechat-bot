@@ -7,7 +7,7 @@ import os
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any, AsyncIterator, Dict, Iterable, List, Optional
+from typing import Any, AsyncIterator, Callable, Dict, Iterable, List, Optional
 import httpx
 
 from ..schemas import EmotionResult
@@ -15,7 +15,11 @@ from ..utils.common import as_float, as_int
 from ..utils.config import is_placeholder_key
 from ..utils.logging import build_stage_log_message
 from .provider_compat import (
+    build_anthropic_headers,
+    build_anthropic_messages_payload,
+    infer_auth_transport,
     build_openai_chat_payload,
+    build_openai_responses_payload,
     extract_reasoning_text as compat_extract_reasoning_text,
     extract_visible_text as compat_extract_visible_text,
     normalize_chat_result,
@@ -59,6 +63,19 @@ _BACKGROUND_TASK_ORDER = {
     _TASK_CONTACT_PROMPT: 50,
 }
 _BACKGROUND_TASK_TYPES = frozenset(_BACKGROUND_TASK_ORDER)
+
+
+class _AnthropicNativeChatModel:
+    def __init__(self, runtime: "AgentRuntime", *, streaming: bool) -> None:
+        self._runtime = runtime
+        self._streaming = streaming
+
+    async def ainvoke(self, messages, config=None):
+        return await self._runtime._invoke_anthropic_native_chat(messages, stream=self._streaming)
+
+    async def astream(self, messages, config=None):
+        response = await self.ainvoke(messages, config=config)
+        yield response
 
 
 @dataclass(slots=True)
@@ -156,11 +173,26 @@ class AgentRuntime:
         self.bot_cfg = dict(bot_cfg)
         self.agent_cfg = dict(agent_cfg or {})
         self.base_url = str(settings.get("base_url") or "").strip().rstrip("/")
-        self.api_key = str(settings.get("api_key") or "").strip()
+        runtime_api_key = settings.get("api_key")
+        if runtime_api_key is None:
+            runtime_api_key = ""
+        elif not callable(runtime_api_key):
+            runtime_api_key = str(runtime_api_key).strip()
+        self.api_key = runtime_api_key
+        runtime_extra_headers = settings.get("extra_headers")
+        if runtime_extra_headers is None:
+            runtime_extra_headers = {}
+        self.extra_headers = runtime_extra_headers
         self.allow_empty_key = bool(settings.get("allow_empty_key", False))
-        self.runtime_api_key = self.api_key or (
-            _ALLOW_EMPTY_KEY_PLACEHOLDER if self.allow_empty_key else None
+        self.auth_refresh_hook = settings.get("auth_refresh_hook") if callable(settings.get("auth_refresh_hook")) else None
+        self.runtime_api_key = None
+        self.auth_transport = infer_auth_transport(
+            str(settings.get("base_url") or "").strip(),
+            str(settings.get("auth_transport") or "").strip() or None,
         )
+        self.transport_metadata = dict(settings.get("resolved_auth_metadata") or {})
+        self._resolved_runtime_api_key = ""
+        self._resolved_extra_headers: Dict[str, str] = {}
         self.model = str(settings.get("model") or "").strip()
         self.model_alias = str(settings.get("alias") or "").strip()
         self.provider_id = str(settings.get("provider_id") or "").strip().lower()
@@ -273,6 +305,7 @@ class AgentRuntime:
         self._rerank_backend = (
             "cross_encoder" if self._cross_encoder_reranker is not None else "lightweight"
         )
+        self._refresh_runtime_auth_clients(force=True, rebuild=False)
         self._chat_model = self._build_chat_model(streaming=False)
         self._stream_model = self._build_chat_model(streaming=True)
         self._embedding_client = self._build_embedding_client()
@@ -342,6 +375,8 @@ class AgentRuntime:
         )
 
     def _build_chat_model(self, *, streaming: bool) -> Any:
+        if self.auth_transport == "anthropic_native":
+            return _AnthropicNativeChatModel(self, streaming=streaming)
         kwargs: Dict[str, Any] = {
             "model": self.model,
             "api_key": self.runtime_api_key,
@@ -351,6 +386,8 @@ class AgentRuntime:
             "streaming": streaming,
             "model_kwargs": self._build_model_kwargs(),
         }
+        if self._resolved_extra_headers:
+            kwargs["default_headers"] = dict(self._resolved_extra_headers)
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
         if self.temperature is not None:
@@ -358,6 +395,8 @@ class AgentRuntime:
         return self._imports["ChatOpenAI"](**kwargs)
 
     def _build_embedding_client(self) -> Optional[Any]:
+        if self.auth_transport in {"anthropic_native", "openai_codex_responses", "google_code_assist"}:
+            return None
         if not self.embedding_model:
             return None
         return self._imports["OpenAIEmbeddings"](
@@ -366,6 +405,7 @@ class AgentRuntime:
             base_url=self.base_url or None,
             request_timeout=self.timeout_sec,
             max_retries=self.max_retries,
+            default_headers=(dict(self._resolved_extra_headers) if self._resolved_extra_headers else None),
         )
 
     def _build_cross_encoder_reranker(self) -> Optional[Any]:
@@ -751,10 +791,73 @@ class AgentRuntime:
         return str(chat_id or "").strip().startswith("__")
 
     def _build_openai_compatible_headers(self) -> Dict[str, str]:
+        extra_headers = self._resolve_extra_headers()
+        api_key = self._resolve_runtime_api_key()
+        if self.auth_transport == "anthropic_native":
+            return build_anthropic_headers(api_key=api_key, extra_headers=extra_headers)
         headers = {"Content-Type": "application/json"}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        headers.update(extra_headers)
         return headers
+
+    def _resolve_runtime_api_key(self) -> str:
+        if callable(self.api_key):
+            try:
+                return str(self.api_key() or "").strip()
+            except Exception as exc:
+                logger.warning("Failed to resolve runtime API key dynamically: %s", exc)
+                return ""
+        return str(self.api_key or "").strip()
+
+    def _resolve_extra_headers(self) -> Dict[str, str]:
+        raw_headers = self.extra_headers
+        if callable(raw_headers):
+            try:
+                raw_headers = raw_headers()
+            except Exception as exc:
+                logger.warning("Failed to resolve runtime extra headers dynamically: %s", exc)
+                raw_headers = {}
+        if not isinstance(raw_headers, dict):
+            return {}
+        resolved: Dict[str, str] = {}
+        for key, value in raw_headers.items():
+            header_key = str(key or "").strip()
+            header_value = "" if value is None else str(value).strip()
+            if header_key and header_value:
+                resolved[header_key] = header_value
+        return resolved
+
+    def _force_refresh_auth(self, *, reason: str) -> bool:
+        if not callable(self.auth_refresh_hook):
+            return False
+        try:
+            self.auth_refresh_hook()
+            self._refresh_runtime_auth_clients(force=True, rebuild=True)
+            logger.info("Forced runtime auth refresh for %s", reason)
+            return True
+        except Exception as exc:
+            logger.warning("Forced runtime auth refresh failed for %s: %s", reason, exc)
+            return False
+
+    def _refresh_runtime_auth_clients(self, *, force: bool = False, rebuild: bool = True) -> None:
+        latest_api_key = self._resolve_runtime_api_key()
+        latest_headers = self._resolve_extra_headers()
+        if (
+            not force
+            and latest_api_key == self._resolved_runtime_api_key
+            and latest_headers == self._resolved_extra_headers
+        ):
+            return
+        self._resolved_runtime_api_key = latest_api_key
+        self._resolved_extra_headers = latest_headers
+        self.runtime_api_key = latest_api_key or (
+            _ALLOW_EMPTY_KEY_PLACEHOLDER if self.allow_empty_key else None
+        )
+        if rebuild:
+            self._chat_model = self._build_chat_model(streaming=False)
+            self._stream_model = self._build_chat_model(streaming=True)
+            self._embedding_client = self._build_embedding_client()
 
     def _serialize_prompt_messages_for_openai(self, prompt_messages: Iterable[Any]) -> List[Dict[str, Any]]:
         serialized: List[Dict[str, Any]] = []
@@ -788,6 +891,250 @@ class AgentRuntime:
             reasoning_effort=self.reasoning_effort,
         )
 
+    def _build_anthropic_native_payload(
+        self,
+        messages: Iterable[Any],
+        *,
+        stream: bool,
+    ) -> Dict[str, Any]:
+        return build_anthropic_messages_payload(
+            model=self.model,
+            messages=self._serialize_prompt_messages_for_openai(messages),
+            stream=stream,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+            max_completion_tokens=self.max_completion_tokens,
+        )
+
+    async def _invoke_anthropic_native_chat(
+        self,
+        messages: Iterable[Any],
+        *,
+        stream: bool,
+    ) -> Any:
+        url = f"{self.base_url}/messages"
+        payload = self._build_anthropic_native_payload(messages, stream=stream)
+        headers = self._build_openai_compatible_headers()
+        async with httpx.AsyncClient(timeout=self.effective_timeout_sec) as client:
+            response = await client.post(url, headers=headers, json=payload)
+            if response.status_code == 401 and self._force_refresh_auth(reason="anthropic_message_401"):
+                response = await client.post(
+                    url,
+                    headers=self._build_openai_compatible_headers(),
+                    json=self._build_anthropic_native_payload(messages, stream=stream),
+                )
+        if response.status_code >= 400:
+            normalized_error = normalize_provider_error(response=response)
+            raise RuntimeError(normalized_error.message)
+        try:
+            return response.json()
+        except ValueError as exc:
+            normalized_error = normalize_provider_error(
+                exc=exc,
+                response=response,
+                payload=response.text[:200],
+            )
+            raise RuntimeError(normalized_error.message) from exc
+
+    def _is_openai_codex_responses_transport(self) -> bool:
+        return self.auth_transport == "openai_codex_responses"
+
+    def _is_google_code_assist_transport(self) -> bool:
+        return self.auth_transport == "google_code_assist"
+
+    def _serialize_prompt_messages_for_google(self, prompt_messages: Iterable[Any]) -> tuple[List[Dict[str, Any]], str]:
+        contents: List[Dict[str, Any]] = []
+        system_parts: List[str] = []
+        for item in prompt_messages or []:
+            role = _detect_message_role(item)
+            content = getattr(item, "content", None)
+            if content is None and isinstance(item, dict):
+                content = item.get("content")
+            if content is None:
+                continue
+            if isinstance(content, list):
+                text_parts: List[str] = []
+                for part in content:
+                    if isinstance(part, dict):
+                        text = str(part.get("text") or "").strip()
+                        if text:
+                            text_parts.append(text)
+                    elif part:
+                        text_parts.append(str(part).strip())
+                text = "\n".join(part for part in text_parts if part).strip()
+            else:
+                text = str(content or "").strip()
+            if not text:
+                continue
+            if role == "system":
+                system_parts.append(text)
+                continue
+            contents.append(
+                {
+                    "role": "model" if role == "assistant" else "user",
+                    "parts": [{"text": text}],
+                }
+            )
+        return contents, "\n\n".join(part for part in system_parts if part).strip()
+
+    def _build_openai_codex_payload(
+        self,
+        messages: Iterable[Any],
+        *,
+        stream: bool,
+    ) -> Dict[str, Any]:
+        return build_openai_responses_payload(
+            model=self.model,
+            messages=self._serialize_prompt_messages_for_openai(messages),
+            stream=stream,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+            max_completion_tokens=self.max_completion_tokens,
+            reasoning_effort=self.reasoning_effort,
+        )
+
+    def _build_google_code_assist_payload(self, messages: Iterable[Any]) -> Dict[str, Any]:
+        project_id = str(self.transport_metadata.get("project_id") or "").strip()
+        if not project_id:
+            raise RuntimeError("Google Code Assist 缺少可用的项目标识。")
+        contents, system_prompt = self._serialize_prompt_messages_for_google(messages)
+        request: Dict[str, Any] = {"contents": contents}
+        generation_config: Dict[str, Any] = {}
+        if self.temperature is not None:
+            generation_config["temperature"] = self.temperature
+        if self.max_completion_tokens is not None:
+            generation_config["maxOutputTokens"] = self.max_completion_tokens
+        elif self.max_tokens is not None:
+            generation_config["maxOutputTokens"] = self.max_tokens
+        if generation_config:
+            request["generationConfig"] = generation_config
+        if system_prompt:
+            request["systemInstruction"] = {"parts": [{"text": system_prompt}]}
+        return {
+            "project": project_id,
+            "model": self.model,
+            "request": request,
+            "userAgent": "wechat-chat",
+            "requestId": f"wechat-chat-{int(time.time() * 1000)}",
+        }
+
+    async def _parse_sse_json_events(self, response: httpx.Response) -> List[Dict[str, Any]]:
+        events: List[Dict[str, Any]] = []
+        async for line in response.aiter_lines():
+            if not line or not line.startswith("data:"):
+                continue
+            payload = line[5:].strip()
+            if not payload or payload == "[DONE]":
+                continue
+            try:
+                parsed = json.loads(payload)
+            except Exception:
+                continue
+            if isinstance(parsed, dict):
+                events.append(parsed)
+        return events
+
+    @staticmethod
+    def _normalize_codex_sse_events(events: List[Dict[str, Any]]) -> Dict[str, Any]:
+        text_parts: List[str] = []
+        reasoning_parts: List[str] = []
+        finish_reason = ""
+        for event in events:
+            event_type = str(event.get("type") or "").strip()
+            if event_type == "response.output_text.delta":
+                delta = str(event.get("delta") or "").strip()
+                if delta:
+                    text_parts.append(delta)
+            elif event_type == "response.output_text.done":
+                text = str(event.get("text") or "").strip()
+                if text:
+                    text_parts = [text]
+            elif event_type in {"response.reasoning_summary_text.delta", "response.reasoning_summary_text.done"}:
+                text = str(event.get("delta") or event.get("text") or "").strip()
+                if text:
+                    reasoning_parts.append(text)
+            elif event_type in {"response.completed", "response.done"}:
+                response_payload = event.get("response") if isinstance(event.get("response"), dict) else {}
+                finish_reason = str(
+                    response_payload.get("status")
+                    or response_payload.get("finish_reason")
+                    or response_payload.get("stop_reason")
+                    or finish_reason
+                ).strip()
+        return {
+            "content": [{"type": "output_text", "text": "".join(text_parts).strip()}],
+            "reasoning_content": [{"type": "output_text", "text": "".join(reasoning_parts).strip()}],
+            "finish_reason": finish_reason,
+        }
+
+    @staticmethod
+    def _normalize_google_code_assist_events(events: List[Dict[str, Any]]) -> Dict[str, Any]:
+        text_parts: List[str] = []
+        finish_reason = ""
+        for event in events:
+            response_payload = event.get("response") if isinstance(event.get("response"), dict) else {}
+            candidates = response_payload.get("candidates") if isinstance(response_payload.get("candidates"), list) else []
+            if not candidates:
+                continue
+            candidate = candidates[0] if isinstance(candidates[0], dict) else {}
+            finish_reason = str(candidate.get("finishReason") or finish_reason).strip()
+            content = candidate.get("content") if isinstance(candidate.get("content"), dict) else {}
+            parts = content.get("parts") if isinstance(content.get("parts"), list) else []
+            for part in parts:
+                if not isinstance(part, dict):
+                    continue
+                text = str(part.get("text") or "").strip()
+                if text:
+                    text_parts.append(text)
+        return {
+            "content": [{"type": "text", "text": "".join(text_parts).strip()}],
+            "finish_reason": finish_reason,
+        }
+
+    async def _request_native_sse_json(
+        self,
+        *,
+        url: str,
+        payload: Dict[str, Any],
+        refresh_reason: str,
+    ) -> List[Dict[str, Any]]:
+        headers = self._build_openai_compatible_headers()
+        async with httpx.AsyncClient(timeout=self.effective_timeout_sec) as client:
+            async with client.stream("POST", url, headers=headers, json=payload) as response:
+                if response.status_code == 401 and self._force_refresh_auth(reason=refresh_reason):
+                    refreshed_headers = self._build_openai_compatible_headers()
+                    async with client.stream("POST", url, headers=refreshed_headers, json=payload) as retried:
+                        if retried.status_code >= 400:
+                            normalized_error = normalize_provider_error(
+                                response=retried,
+                                payload=await retried.aread(),
+                            )
+                            raise RuntimeError(normalized_error.message)
+                        return await self._parse_sse_json_events(retried)
+                if response.status_code >= 400:
+                    normalized_error = normalize_provider_error(
+                        response=response,
+                        payload=await response.aread(),
+                    )
+                    raise RuntimeError(normalized_error.message)
+                return await self._parse_sse_json_events(response)
+
+    async def _invoke_openai_codex_response(self, prepared: AgentPreparedRequest) -> Any:
+        events = await self._request_native_sse_json(
+            url=f"{self.base_url}/codex/responses",
+            payload=self._build_openai_codex_payload(prepared.prompt_messages, stream=True),
+            refresh_reason="codex_responses_401",
+        )
+        return normalize_chat_result(self._normalize_codex_sse_events(events))
+
+    async def _invoke_google_code_assist_response(self, prepared: AgentPreparedRequest) -> Any:
+        events = await self._request_native_sse_json(
+            url=f"{self.base_url}/v1internal:streamGenerateContent?alt=sse",
+            payload=self._build_google_code_assist_payload(prepared.prompt_messages),
+            refresh_reason="google_code_assist_401",
+        )
+        return normalize_chat_result(self._normalize_google_code_assist_events(events))
+
     async def _invoke_openai_compatible_reply(
         self,
         prepared: AgentPreparedRequest,
@@ -803,6 +1150,9 @@ class AgentRuntime:
                 response = None
                 try:
                     response = await client.post(url, headers=headers, json=payload)
+                    if response.status_code == 401 and self._force_refresh_auth(reason="compat_fallback_401"):
+                        headers = self._build_openai_compatible_headers()
+                        response = await client.post(url, headers=headers, json=payload)
                     response.raise_for_status()
                     return normalize_chat_result(response.json())
                 except ValueError as exc:
@@ -905,9 +1255,37 @@ class AgentRuntime:
             return False
         return not bool(getattr(normalized, "tool_calls", None))
 
+    def _supports_chat_completions_fallback(self) -> bool:
+        return self.auth_transport not in {
+            "anthropic_native",
+            "openai_codex_responses",
+            "google_code_assist",
+        }
+
     async def probe(self) -> bool:
+        self._refresh_runtime_auth_clients()
         human = self._imports["HumanMessage"]
         try:
+            if self._is_openai_codex_responses_transport():
+                normalized = await self._invoke_openai_codex_response(
+                    AgentPreparedRequest(
+                        chat_id="__probe__",
+                        user_text="ping",
+                        system_prompt="",
+                        prompt_messages=[human(content="ping")],
+                    )
+                )
+                return bool(normalized.text or normalized.reasoning)
+            if self._is_google_code_assist_transport():
+                normalized = await self._invoke_google_code_assist_response(
+                    AgentPreparedRequest(
+                        chat_id="__probe__",
+                        user_text="ping",
+                        system_prompt="",
+                        prompt_messages=[human(content="ping")],
+                    )
+                )
+                return bool(normalized.text or normalized.reasoning)
             await self._chat_model.ainvoke([human(content="ping")])
             return True
         except Exception as exc:
@@ -990,6 +1368,7 @@ class AgentRuntime:
         *,
         priority: str,
     ) -> str:
+        self._refresh_runtime_auth_clients()
         self._stats["requests"] += 1
         started = time.perf_counter()
         await self._acquire_llm_slot(priority)
@@ -999,21 +1378,39 @@ class AgentRuntime:
             reply_text = ""
             reasoning_text = ""
             try:
-                response = await self._chat_model.ainvoke(
-                    prepared.prompt_messages,
-                    config={
-                        "tags": ["wechat-chat", "agent-runtime", "invoke"],
-                        "metadata": {"chat_id": prepared.chat_id, "engine": "langgraph"},
-                    },
-                )
-                normalized = normalize_chat_result(response)
-                final_normalized = normalized
-                reply_text, reasoning_text = self._consume_normalized_reply(
-                    prepared,
-                    normalized,
-                    source="invoke",
-                )
+                if self._is_openai_codex_responses_transport():
+                    normalized = await self._invoke_openai_codex_response(prepared)
+                    final_normalized = normalized
+                    reply_text, reasoning_text = self._consume_normalized_reply(
+                        prepared,
+                        normalized,
+                        source="codex_responses",
+                    )
+                elif self._is_google_code_assist_transport():
+                    normalized = await self._invoke_google_code_assist_response(prepared)
+                    final_normalized = normalized
+                    reply_text, reasoning_text = self._consume_normalized_reply(
+                        prepared,
+                        normalized,
+                        source="google_code_assist",
+                    )
+                else:
+                    response = await self._chat_model.ainvoke(
+                        prepared.prompt_messages,
+                        config={
+                            "tags": ["wechat-chat", "agent-runtime", "invoke"],
+                            "metadata": {"chat_id": prepared.chat_id, "engine": "langgraph"},
+                        },
+                    )
+                    normalized = normalize_chat_result(response)
+                    final_normalized = normalized
+                    reply_text, reasoning_text = self._consume_normalized_reply(
+                        prepared,
+                        normalized,
+                        source="invoke",
+                    )
             except Exception as exc:
+                prepared.response_metadata["invoke_error"] = str(exc)
                 prepared.response_metadata["langchain_invoke_error"] = str(exc)
                 if not self._is_ollama_runtime():
                     raise
@@ -1035,10 +1432,14 @@ class AgentRuntime:
                 reply_text = fallback_reply_text
                 reasoning_text = fallback_reasoning_text
 
-            if final_normalized is not None and self._should_attempt_empty_reply_fallback(
-                final_normalized,
-                reply_text=reply_text,
-                reasoning_text=reasoning_text,
+            if (
+                self._supports_chat_completions_fallback()
+                and final_normalized is not None
+                and self._should_attempt_empty_reply_fallback(
+                    final_normalized,
+                    reply_text=reply_text,
+                    reasoning_text=reasoning_text,
+                )
             ):
                 try:
                     fallback_normalized = await self._invoke_openai_compatible_reply(prepared)
@@ -1494,6 +1895,7 @@ class AgentRuntime:
         *,
         priority: str = "foreground",
     ) -> Optional[List[float]]:
+        self._refresh_runtime_auth_clients()
         query = str(text or "").strip()
         if not query or self._embedding_client is None:
             return None

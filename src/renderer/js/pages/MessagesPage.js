@@ -5,6 +5,7 @@ import {
 } from './messages/data-controller.js';
 import { openDetailModal } from './messages/detail-controller.js';
 import { bindMessagesPage } from './messages/page-shell.js';
+import { renderMessagesPageShell } from '../app-shell/pages/index.js';
 
 export class MessagesPage extends PageController {
     constructor() {
@@ -19,11 +20,16 @@ export class MessagesPage extends PageController {
         this._selectedChatId = '';
         this._searchTimer = null;
         this._detailRequestToken = 0;
+        this._lastLoadedAt = 0;
         this._openMessageDetail = (message) => openDetailModal(this, message);
     }
 
     async onInit() {
         await super.onInit();
+        const container = this.container || (typeof document !== 'undefined' ? this.getContainer() : null);
+        if (container) {
+            container.innerHTML = renderMessagesPageShell();
+        }
         bindMessagesPage(this);
     }
 

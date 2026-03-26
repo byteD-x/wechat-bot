@@ -48,9 +48,17 @@ jobs:
         shell: pwsh
         run: python -m py_compile backend\core\agent_runtime.py backend\bot.py backend\bot_manager.py backend\api.py
 
+      - name: Run Ruff
+        shell: pwsh
+        run: python -m ruff check backend\api.py backend\bot.py backend\bot_reply_flow.py backend\config_schemas.py backend\core\memory.py backend\core\reply_policy.py backend\core\workspace_backup.py backend\core\eval_runner.py run.py tests\test_api.py tests\test_reply_policy.py tests\test_backup_service.py tests\test_eval_runner.py
+
       - name: Run Python regression tests
         shell: pwsh
-        run: python -m pytest tests\test_smoke.py tests\test_api.py tests\test_runtime_observability.py tests\test_agent_runtime.py tests\test_optimization_tasks.py -q
+        run: python -m pytest tests\test_smoke.py tests\test_api.py tests\test_runtime_observability.py tests\test_agent_runtime.py tests\test_optimization_tasks.py tests\test_reply_policy.py tests\test_backup_service.py tests\test_eval_runner.py -q
+
+      - name: Run Offline Eval Smoke Gate
+        shell: pwsh
+        run: python run.py eval --dataset tests\fixtures\evals\smoke_cases.json --preset ci-smoke --report data\evals\ci-smoke-report.json
 
       - name: Run Node tests
         shell: pwsh

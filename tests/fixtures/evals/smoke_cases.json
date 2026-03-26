@@ -1,0 +1,168 @@
+{
+  "baseline": {
+    "short_reply_rate": 0.1,
+    "retrieval_hit_rate": 0.5
+  },
+  "cases": [
+    {
+      "id": "friend-greeting",
+      "chat_id": "friend:alice",
+      "user_text": "今晚有空一起吃饭吗",
+      "assistant_reply": "今晚可以，七点后我比较方便。",
+      "retrieval": { "augmented": true },
+      "reply_quality": { "user_feedback": "helpful" }
+    },
+    {
+      "id": "work-followup",
+      "chat_id": "friend:bob",
+      "user_text": "客户那边的方案你看过了吗",
+      "assistant_reply": "我看过了，建议先确认预算范围再发正式版。",
+      "retrieval": { "augmented": true },
+      "reply_quality": { "user_feedback": "helpful" }
+    },
+    {
+      "id": "family-checkin",
+      "chat_id": "friend:mom",
+      "user_text": "到家了吗",
+      "assistant_reply": "刚到家，路上挺顺的。",
+      "retrieval": { "augmented": false },
+      "reply_quality": { "user_feedback": "helpful" }
+    },
+    {
+      "id": "project-status",
+      "chat_id": "group:project-alpha",
+      "user_text": "@bot 今天的进度怎么样",
+      "assistant_reply": "今天已经完成接口联调，剩下回归测试和文档补充。",
+      "retrieval": { "augmented": true },
+      "reply_quality": { "user_feedback": "helpful" }
+    },
+    {
+      "id": "meeting-delay",
+      "chat_id": "friend:carol",
+      "user_text": "我可能晚到十分钟",
+      "assistant_reply": "没问题，我先到的话帮你占座。",
+      "retrieval": { "augmented": false },
+      "reply_quality": { "user_feedback": "helpful" }
+    },
+    {
+      "id": "shopping-list",
+      "chat_id": "friend:partner",
+      "user_text": "回来的时候帮我带点水果",
+      "assistant_reply": "好，我顺路买点香蕉和橙子。",
+      "retrieval": { "augmented": false },
+      "reply_quality": { "user_feedback": "helpful" }
+    },
+    {
+      "id": "travel-plan",
+      "chat_id": "friend:david",
+      "user_text": "周末去苏州你觉得怎么样",
+      "assistant_reply": "可以，周末去苏州两天时间刚好，交通也方便。",
+      "retrieval": { "augmented": true },
+      "reply_quality": { "user_feedback": "helpful" }
+    },
+    {
+      "id": "friend-short-ack",
+      "chat_id": "friend:erin",
+      "user_text": "好的那就这么定",
+      "assistant_reply": "收到",
+      "retrieval": { "augmented": false },
+      "reply_quality": { "user_feedback": "helpful" }
+    },
+    {
+      "id": "invoice-reminder",
+      "chat_id": "friend:finance",
+      "user_text": "发票明天之前能开出来吗",
+      "assistant_reply": "可以，我明早整理好信息后给你确认。",
+      "retrieval": { "augmented": true },
+      "reply_quality": { "user_feedback": "helpful" }
+    },
+    {
+      "id": "new-feature",
+      "chat_id": "group:frontend",
+      "user_text": "@bot 新版卡片你觉得还要补什么",
+      "assistant_reply": "建议再补空状态、加载态和异常态，交互会更完整。",
+      "retrieval": { "augmented": true },
+      "reply_quality": { "user_feedback": "helpful" }
+    },
+    {
+      "id": "weekend-weather",
+      "chat_id": "friend:fiona",
+      "user_text": "周六出去跑步吗",
+      "assistant_reply": "可以，如果早上不下雨我们七点半出发。",
+      "retrieval": { "augmented": false },
+      "reply_quality": { "user_feedback": "unhelpful" }
+    },
+    {
+      "id": "ops-check",
+      "chat_id": "group:ops",
+      "user_text": "@bot 线上告警现在恢复了吗",
+      "assistant_reply": "目前核心服务已经恢复，建议再观察十五分钟确认没有抖动。",
+      "retrieval": { "augmented": true },
+      "reply_quality": { "user_feedback": "helpful" }
+    },
+    {
+      "id": "book-return",
+      "chat_id": "friend:george",
+      "user_text": "上次借你的书我明天带给你",
+      "assistant_reply": "好，明天见面的时候给我就行。",
+      "retrieval": { "augmented": false },
+      "reply_quality": { "user_feedback": "unhelpful" }
+    },
+    {
+      "id": "doctor-reminder",
+      "chat_id": "friend:dad",
+      "user_text": "记得下午去复查",
+      "assistant_reply": "记得的，我两点前会出门。",
+      "retrieval": { "augmented": false },
+      "reply_quality": { "user_feedback": "helpful" }
+    },
+    {
+      "id": "budget-review",
+      "chat_id": "group:pm",
+      "user_text": "@bot 预算表要不要今天先发初版",
+      "assistant_reply": "可以先发初版，备注清楚还在核对的项目即可。",
+      "retrieval": { "augmented": true },
+      "reply_quality": { "user_feedback": "unhelpful" }
+    },
+    {
+      "id": "friend-short-ok",
+      "chat_id": "friend:helen",
+      "user_text": "那我先去忙啦",
+      "assistant_reply": "明白",
+      "retrieval": { "augmented": false },
+      "reply_quality": { "user_feedback": "unhelpful" }
+    },
+    {
+      "id": "support-handoff",
+      "chat_id": "group:support",
+      "user_text": "@bot 这个问题先转给谁跟进",
+      "assistant_reply": "先转给值班同学处理，我同步补充上下文说明。",
+      "retrieval": { "augmented": true },
+      "reply_quality": { "user_feedback": "helpful" }
+    },
+    {
+      "id": "home-maintenance",
+      "chat_id": "friend:landlord",
+      "user_text": "热水器今天有人来修吗",
+      "assistant_reply": "维修师傅下午会联系你，到时候确认上门时间。",
+      "retrieval": { "augmented": false },
+      "reply_quality": { "user_feedback": "unhelpful" }
+    },
+    {
+      "id": "design-review",
+      "chat_id": "group:design",
+      "user_text": "@bot 这个配色会不会有点太重",
+      "assistant_reply": "有一点，建议把背景亮度提一些，主强调色保留就够了。",
+      "retrieval": { "augmented": true },
+      "reply_quality": { "user_feedback": "helpful" }
+    },
+    {
+      "id": "team-lunch",
+      "chat_id": "group:team-lunch",
+      "user_text": "@bot 中午吃什么",
+      "assistant_reply": "如果想快一点，可以选楼下那家简餐。",
+      "retrieval": { "augmented": false },
+      "reply_quality": { "user_feedback": "unhelpful" }
+    }
+  ]
+}

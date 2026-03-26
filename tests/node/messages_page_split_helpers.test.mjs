@@ -326,6 +326,16 @@ test('messages detail helper handles offline and success profile flows', async (
                     contact_prompt: 'prompt',
                 },
             }),
+            listPendingReplies: async () => ({ success: true, items: [] }),
+            getReplyPolicies: async () => ({
+                success: true,
+                reply_policy: {
+                    default_mode: 'auto',
+                    new_contact_mode: 'manual',
+                    group_mode: 'whitelist_only',
+                    per_chat_overrides: [],
+                },
+            }),
         },
     });
 
@@ -378,6 +388,16 @@ test('messages detail helper strips fixed prompt block before editing contact pr
                         '# 当前情境',
                         '{emotion_hint}{time_hint}{style_hint}',
                     ].join('\n'),
+                },
+            }),
+            listPendingReplies: async () => ({ success: true, items: [] }),
+            getReplyPolicies: async () => ({
+                success: true,
+                reply_policy: {
+                    default_mode: 'auto',
+                    new_contact_mode: 'manual',
+                    group_mode: 'whitelist_only',
+                    per_chat_overrides: [],
                 },
             }),
             saveContactPrompt: async (_chatId, contactPrompt) => {
@@ -440,6 +460,16 @@ test('messages detail helper prefers friend display name over chat id', async ()
                     contact_prompt: 'prompt',
                 },
             }),
+            listPendingReplies: async () => ({ success: true, items: [] }),
+            getReplyPolicies: async () => ({
+                success: true,
+                reply_policy: {
+                    default_mode: 'auto',
+                    new_contact_mode: 'manual',
+                    group_mode: 'whitelist_only',
+                    per_chat_overrides: [],
+                },
+            }),
         },
     });
 
@@ -480,6 +510,16 @@ test('messages detail helper saves assistant feedback and updates local metadata
                     contact_prompt: 'prompt',
                 },
             }),
+            listPendingReplies: async () => ({ success: true, items: [] }),
+            getReplyPolicies: async () => ({
+                success: true,
+                reply_policy: {
+                    default_mode: 'auto',
+                    new_contact_mode: 'manual',
+                    group_mode: 'whitelist_only',
+                    per_chat_overrides: [],
+                },
+            }),
             saveMessageFeedback: async (_messageId, feedback) => ({
                 success: true,
                 metadata: {
@@ -500,6 +540,91 @@ test('messages detail helper saves assistant feedback and updates local metadata
     assert.equal(modal.classList.contains('active'), true);
     assert.equal(page._messages[0].metadata.reply_quality.user_feedback, 'helpful');
     assert.equal(toast.calls.some((item) => item.type === 'success'), true);
+}));
+
+test('messages detail helper renders pending approvals and saves per-chat override', async () => withDom(async ({ document, registerElement }) => {
+    registerElement('message-detail-modal', document.createElement('div'));
+    const body = registerElement('message-detail-body', document.createElement('div'));
+    const toast = createToastRecorder();
+    const savedModes = [];
+    const approvals = [];
+
+    const page = createMessagesPage({
+        bot: { connected: true },
+    });
+
+    await openDetailModal(page, {
+        wx_id: 'friend:alice',
+        sender: 'Alice',
+        sender_display_name: 'Alice',
+        display_name: 'Alice',
+        chat_display_name: 'Alice',
+        content: 'hello',
+        timestamp: 1,
+        is_self: false,
+    }, {
+        documentObj: document,
+        toast,
+        apiService: {
+            getContactProfile: async () => ({
+                success: true,
+                profile: {
+                    relationship: 'friend',
+                    message_count: 9,
+                    last_emotion: 'calm',
+                    profile_summary: 'summary',
+                    contact_prompt: 'prompt',
+                },
+            }),
+            listPendingReplies: async () => ({
+                success: true,
+                items: [
+                    {
+                        id: 9,
+                        trigger_reason: 'quiet_hours',
+                        draft_reply: 'draft reply',
+                        created_at: 1,
+                    },
+                ],
+            }),
+            getReplyPolicies: async () => ({
+                success: true,
+                reply_policy: {
+                    default_mode: 'auto',
+                    new_contact_mode: 'manual',
+                    group_mode: 'whitelist_only',
+                    per_chat_overrides: [{ chat_id: 'friend:alice', mode: 'manual' }],
+                },
+            }),
+            saveReplyPolicies: async (payload) => {
+                savedModes.push(payload.mode);
+                return { success: true };
+            },
+            approvePendingReply: async (pendingId, replyText) => {
+                approvals.push({ pendingId, replyText });
+                return { success: true };
+            },
+            rejectPendingReply: async () => ({ success: true }),
+        },
+    });
+
+    assert.equal(body.textContent.includes('回复策略与审批'), true);
+    assert.equal(body.textContent.includes('待审批 #9'), true);
+
+    const selects = Array.from(body.querySelectorAll('select'));
+    const overrideSelect = selects.find((item) => Array.from(item.children).some((child) => child.value === 'manual'));
+    overrideSelect.value = 'auto';
+
+    const saveOverrideButton = findFirstButtonByText(body, '保存会话策略');
+    saveOverrideButton.click();
+    await Promise.resolve();
+
+    const approveButton = findFirstButtonByText(body, '批准并发送');
+    approveButton.click();
+    await Promise.resolve();
+
+    assert.deepEqual(savedModes, ['auto']);
+    assert.deepEqual(approvals, [{ pendingId: 9, replyText: 'draft reply' }]);
 }));
 
 test('messages page shell binds controls, debounce search and close modal flows', async () => withDom(async ({ document, registerElement }) => {
@@ -561,7 +686,7 @@ test('messages page shell binds controls, debounce search and close modal flows'
         },
     });
 
-    assert.equal(page.bindings.length, 3);
+    assert.equal(page.bindings.length, 4);
     assert.equal(page.watchers.length, 1);
     assert.equal(page.listeners.length, 1);
 

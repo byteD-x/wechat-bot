@@ -1,6 +1,7 @@
 import { apiService } from '../../services/ApiService.js';
 import { toast } from '../../services/NotificationService.js';
 import { deepClone } from './form-codec.js';
+import { formatEmailVisibilityText, loadEmailVisibilityPreference } from '../model-auth-display.js';
 
 const UPDATER_STATE_PATHS = [
     'updater.enabled',
@@ -17,6 +18,94 @@ const UPDATER_STATE_PATHS = [
     'updater.readyToInstall',
     'updater.downloadedVersion',
 ];
+
+function mergePresetLiveFields(localPreset = {}, livePreset = null) {
+    if (!livePreset || typeof livePreset !== 'object') {
+        return { ...localPreset };
+    }
+    return {
+        ...localPreset,
+        ...livePreset,
+        api_key: localPreset.api_key,
+        _keep_key: localPreset._keep_key,
+    };
+}
+
+function mergeConfigWithLiveStatus(localConfigResult = {}, liveConfigResult = {}) {
+    const nextApi = deepClone(localConfigResult.api || {});
+    const liveApi = deepClone(liveConfigResult.api || {});
+    const livePresetMap = new Map(
+        (liveApi.presets || []).map((preset) => [String(preset?.name || '').trim(), preset]),
+    );
+    nextApi.presets = (nextApi.presets || []).map((preset) => {
+        const presetName = String(preset?.name || '').trim();
+        return mergePresetLiveFields(preset, livePresetMap.get(presetName) || null);
+    });
+    return {
+        ...localConfigResult,
+        api: {
+            ...nextApi,
+            auth_mode: liveApi.auth_mode || nextApi.auth_mode,
+            oauth_provider: liveApi.oauth_provider || nextApi.oauth_provider,
+        },
+        oauth: liveConfigResult.oauth || localConfigResult.oauth || null,
+    };
+}
+
+export function buildModelSummaryView(modelAuthOverview = null, config = null) {
+    const emailVisibilityMode = loadEmailVisibilityPreference();
+    const cards = Array.isArray(modelAuthOverview?.cards) ? modelAuthOverview.cards : [];
+    const activeProviderId = String(modelAuthOverview?.active_provider_id || '').trim();
+    const activeCard = cards.find((card) => String(card?.provider?.id || '').trim() === activeProviderId)
+        || cards.find((card) => card?.metadata?.is_active_provider)
+        || cards.find((card) => String(card?.selected_label || '').trim())
+        || cards[0]
+        || null;
+    if (activeCard) {
+        const providerLabel = String(activeCard?.provider?.label || activeCard?.provider?.id || '当前服务方').trim();
+        const modelName = String(activeCard?.metadata?.default_model || activeCard?.provider?.default_model || '--').trim() || '--';
+        const authLabel = formatEmailVisibilityText(
+            String(activeCard?.selected_label || activeCard?.selected_method_id || '未设置默认认证').trim(),
+            emailVisibilityMode,
+        );
+        const status = String(activeCard?.summary || activeCard?.detail || '状态待同步').trim() || '状态待同步';
+        return {
+            title: `${providerLabel} · ${modelName}`,
+            meta: `${authLabel} · ${status}`,
+        };
+    }
+
+    const activeName = String(config?.api?.active_preset || '').trim();
+    const preset = (config?.api?.presets || []).find((item) => String(item?.name || '').trim() === activeName) || null;
+    if (!preset) {
+        return {
+            title: '尚未配置回复模型',
+            meta: '模型配置已迁移到“模型”页；配置中心不再承载模型编辑入口。',
+        };
+    }
+    const providerLabel = preset?.provider_id || '未命名服务方';
+    const authMode = preset?.auth_mode === 'oauth' ? 'OAuth' : 'API Key';
+    const status = String(preset?.auth_status_summary || '').trim() || '待完善';
+    return {
+        title: `${activeName} · ${preset?.model || '--'}`,
+        meta: `${providerLabel} · ${authMode} · ${status}`,
+    };
+}
+
+function renderModelSummary(page) {
+    const title = page.$('#settings-model-summary-title');
+    const meta = page.$('#settings-model-summary-meta');
+    const button = page.$('#btn-open-models');
+    if (!title || !meta) {
+        return;
+    }
+    const summary = buildModelSummaryView(page._modelAuthOverview, page._config);
+    title.textContent = summary.title;
+    meta.textContent = summary.meta;
+    if (button) {
+        button.disabled = false;
+    }
+}
 
 export function watchConfigChanges(page) {
     if (!window.electronAPI?.onConfigChanged || page._removeConfigListener) {
@@ -116,25 +205,24 @@ export async function loadSettings(page, options = {}, text = {}) {
             const configResult = window.electronAPI?.configGet
                 ? await window.electronAPI.configGet()
                 : await apiService.getConfig();
-
-            if (!configResult?.success) {
-                throw new Error(configResult?.message || text.loadFailed);
+            let mergedResult = configResult;
+            try {
+                const liveConfigResult = await apiService.getConfig();
+                if (liveConfigResult?.success) {
+                    mergedResult = mergeConfigWithLiveStatus(configResult, liveConfigResult);
+                }
+            } catch (_) {}
+            if (!mergedResult?.success) {
+                throw new Error(mergedResult?.message || text.loadFailed);
             }
 
             page._config = {
-                api: deepClone(configResult.api || {}),
-                bot: deepClone(configResult.bot || {}),
-                logging: deepClone(configResult.logging || {}),
-                agent: deepClone(configResult.agent || {}),
-                services: deepClone(configResult.services || {}),
+                api: deepClone(mergedResult.api || {}),
+                bot: deepClone(mergedResult.bot || {}),
+                logging: deepClone(mergedResult.logging || {}),
+                agent: deepClone(mergedResult.agent || {}),
+                services: deepClone(mergedResult.services || {}),
             };
-            page._modelCatalog = configResult?.modelCatalog || { providers: [] };
-            page._providersById = new Map(
-                (page._modelCatalog.providers || []).map((provider) => [provider.id, provider]),
-            );
-            page._presetDrafts = deepClone(page._config.api.presets || []);
-            page._activePreset = String(page._config.api.active_preset || '').trim();
-            void page._warmOllamaModels();
             const runtimeVersion = Number(page.getState('bot.status.config_snapshot.version') || 0);
             if (!page.getState('bot.connected')) {
                 page._configAudit = null;
@@ -147,14 +235,15 @@ export async function loadSettings(page, options = {}, text = {}) {
             page._lastConfigVersion = Number(page._configAudit?.version || runtimeVersion || 0);
 
             page._fillForm();
-            page._renderPresetList();
             page._renderHero();
             page._renderUpdatePanel?.();
             page._renderExportRagStatus();
+            page._commitSettingsBaseline?.();
             if (!preserveFeedback) {
                 page._hideSaveFeedback();
             }
             page._loaded = true;
+            page._resetDirtyState?.();
             if (page._shouldRefreshAudit() || !silent) {
                 void page._loadConfigAudit({ silent: true, force: !silent });
             }
@@ -167,6 +256,7 @@ export async function loadSettings(page, options = {}, text = {}) {
                 toast.error(toast.getErrorMessage(error, text.loadFailed));
             }
             page._renderLoadError(toast.getErrorMessage(error, text.loadFailed));
+            page._renderWorkbenchState?.();
         } finally {
             page._loadingPromise = null;
         }

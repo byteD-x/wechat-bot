@@ -2,13 +2,14 @@
  * 微信 AI 助手渲染进程入口。
  */
 
-if (typeof window.dragEvent === 'undefined') {
+if (typeof window !== 'undefined' && typeof window.dragEvent === 'undefined') {
     window.dragEvent = window.DragEvent;
 }
 
 import { stateManager, eventBus, Events } from './core/index.js';
 import { apiService, notificationService } from './services/index.js';
-import { DashboardPage, CostsPage, MessagesPage, SettingsPage, LogsPage, AboutPage } from './pages/index.js';
+import { DashboardPage, CostsPage, MessagesPage, ModelsPage, SettingsPage, LogsPage, AboutPage } from './pages/index.js';
+import { renderAppFrame } from './app-shell/frame.js';
 import {
     buildDisconnectedStatus,
     buildUpdateBadgeState,
@@ -17,9 +18,27 @@ import {
     normalizeRuntimeIdleState,
     renderUpdateModalContent,
 } from './app/ui-helpers.js';
+import {
+    buildUnavailableReadinessReport,
+    getReadinessBlockingChecks,
+    normalizeReadinessReport,
+    shouldCompleteFirstRun,
+    shouldShowFirstRunGuide,
+} from './app/readiness-helpers.js';
 
 const DEFAULT_IDLE_DELAY_MS = 15 * 60 * 1000;
-const AUTO_WAKE_PAGES = new Set(['dashboard', 'costs', 'messages', 'logs']);
+const AUTO_WAKE_PAGES = new Set(['dashboard', 'costs', 'messages', 'models', 'logs']);
+
+function ensureAppFrame() {
+    if (typeof document === 'undefined' || !document.body || document.body.dataset.appFrameReady === 'true') {
+        return;
+    }
+    document.body.classList.add('no-select');
+    document.body.innerHTML = renderAppFrame();
+    document.body.dataset.appFrameReady = 'true';
+}
+
+ensureAppFrame();
 
 class App {
     constructor() {
@@ -27,6 +46,7 @@ class App {
             dashboard: new DashboardPage(),
             costs: new CostsPage(),
             messages: new MessagesPage(),
+            models: new ModelsPage(),
             settings: new SettingsPage(),
             logs: new LogsPage(),
             about: new AboutPage()
@@ -39,6 +59,9 @@ class App {
         this._statusBaseIntervalMs = 5000;
         this._statusMaxIntervalMs = 30000;
         this._backendStartAttempted = false;
+        this._readinessRefreshing = false;
+        this._lastReadinessRefreshAt = 0;
+        this._readinessMinIntervalMs = 8000;
         this._statusPausedByVisibility = false;
         this._lastUpdateToastVersion = '';
         this._lastUpdateModalVersion = '';
@@ -56,6 +79,7 @@ class App {
         notificationService.init();
         await this._runInitStep('apiService.init', () => apiService.init());
         await this._runInitStep('_setupRuntimeIdleState', () => this._setupRuntimeIdleState());
+        await this._runInitStep('_loadFirstRunState', () => this._loadFirstRunState());
 
         await this._runInitStep('_setupVersion', () => this._setupVersion());
         await this._runInitStep('_setupUpdater', () => this._setupUpdater());
@@ -65,6 +89,7 @@ class App {
         this._setupCloseChoiceModal();
         this._setupConfirmModal();
         this._setupUpdateModal();
+        this._setupFirstRunGuide();
 
         for (const [pageName, page] of Object.entries(this.pages)) {
             await this._runInitStep(`${pageName}.onInit`, () => page.onInit());
@@ -73,7 +98,6 @@ class App {
         await this._runInitStep('_ensureLightweightBackend', () => this._ensureLightweightBackend());
         await this._runInitStep('_checkBackendConnection', () => this._checkBackendConnection());
         await this._runInitStep('_refreshStatus', () => this._refreshStatus());
-        await this._runInitStep('_connectSSE', () => this._connectSSE());
         await this._runInitStep('_switchPage', () => this._switchPage('dashboard', { source: 'init' }));
         this._startStatusRefresh();
         console.log('[App] 初始化完成');
@@ -471,10 +495,15 @@ class App {
             }
             if (key === '4') {
                 event.preventDefault();
-                this._switchPage('settings');
+                this._switchPage('models');
                 return;
             }
             if (key === '5') {
+                event.preventDefault();
+                this._switchPage('settings');
+                return;
+            }
+            if (key === '6') {
                 event.preventDefault();
                 this._switchPage('logs');
                 return;
@@ -770,6 +799,303 @@ class App {
             btnAction: document.getElementById('btn-update-modal-action'),
         });
     }
+
+    async _loadFirstRunState() {
+        let firstRunPending = false;
+        if (window.electronAPI?.isFirstRun) {
+            try {
+                firstRunPending = !!(await window.electronAPI.isFirstRun());
+            } catch (error) {
+                console.warn('[App] load first run state failed:', error);
+            }
+        }
+
+        stateManager.batchUpdate({
+            'readiness.firstRunPending': firstRunPending,
+            'readiness.firstRunGuideDismissed': false,
+        });
+    }
+
+    _setupFirstRunGuide() {
+        const modal = document.getElementById('first-run-modal');
+        const btnClose = document.getElementById('btn-close-first-run-modal');
+        const btnLater = document.getElementById('btn-first-run-later');
+        const btnRetry = document.getElementById('btn-first-run-retry');
+        const btnSettings = document.getElementById('btn-first-run-settings');
+        if (!modal) {
+            return;
+        }
+
+        const closeModal = () => {
+            modal.classList.remove('active');
+            stateManager.set('readiness.firstRunGuideDismissed', true);
+        };
+
+        modal.addEventListener('click', (event) => {
+            if (event.target === modal) {
+                closeModal();
+                return;
+            }
+            const button = event.target?.closest?.('[data-readiness-action]');
+            if (!button) {
+                return;
+            }
+            event.preventDefault?.();
+            event.stopPropagation?.();
+            void this._handleReadinessAction(button.dataset.readinessAction);
+        });
+
+        btnClose?.addEventListener('click', closeModal);
+        btnLater?.addEventListener('click', closeModal);
+        btnRetry?.addEventListener('click', () => {
+            void this._handleReadinessAction('retry');
+        });
+        btnSettings?.addEventListener('click', () => {
+            void this._handleReadinessAction('open_settings');
+        });
+
+        window.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape' && modal.classList.contains('active')) {
+                closeModal();
+            }
+        });
+    }
+
+    _renderFirstRunGuide(report = stateManager.get('readiness.report')) {
+        const modal = document.getElementById('first-run-modal');
+        const title = document.getElementById('first-run-title');
+        const subtitle = document.getElementById('first-run-subtitle');
+        const summary = document.getElementById('first-run-summary');
+        const list = document.getElementById('first-run-check-list');
+        const settingsButton = document.getElementById('btn-first-run-settings');
+        if (!modal || !title || !subtitle || !summary || !list || !settingsButton) {
+            return;
+        }
+
+        const normalized = normalizeReadinessReport(report);
+        const visible = shouldShowFirstRunGuide({
+            firstRunPending: !!stateManager.get('readiness.firstRunPending'),
+            dismissed: !!stateManager.get('readiness.firstRunGuideDismissed'),
+            report: normalized,
+        });
+
+        if (!visible) {
+            modal.classList.remove('active');
+            return;
+        }
+
+        const blockingChecks = getReadinessBlockingChecks(normalized, {
+            onlyFirstRun: true,
+            limit: 6,
+        });
+
+        title.textContent = normalized.summary.title;
+        subtitle.textContent = normalized.summary.detail;
+        summary.textContent = blockingChecks.length > 0
+            ? `先完成这 ${blockingChecks.length} 项，应用就更接近“开箱即用”。`
+            : '先补齐下面的阻塞项，再启动机器人会更稳妥。';
+        settingsButton.hidden = !blockingChecks.some((check) => check.action === 'open_settings');
+
+        list.textContent = '';
+        blockingChecks.forEach((check) => {
+            const item = document.createElement('li');
+            item.className = 'first-run-check-item';
+            item.dataset.status = check.status;
+
+            const copy = document.createElement('div');
+            copy.className = 'first-run-check-copy';
+
+            const label = document.createElement('strong');
+            label.className = 'first-run-check-label';
+            label.textContent = check.label;
+
+            const message = document.createElement('div');
+            message.className = 'first-run-check-message';
+            message.textContent = check.message;
+
+            copy.appendChild(label);
+            copy.appendChild(message);
+
+            if (check.hint) {
+                const hint = document.createElement('div');
+                hint.className = 'first-run-check-hint';
+                hint.textContent = check.hint;
+                copy.appendChild(hint);
+            }
+
+            item.appendChild(copy);
+
+            if (check.action) {
+                const action = document.createElement('button');
+                action.type = 'button';
+                action.className = 'btn btn-secondary btn-sm';
+                action.dataset.readinessAction = check.action;
+                action.textContent = check.actionLabel;
+                item.appendChild(action);
+            }
+
+            list.appendChild(item);
+        });
+
+        modal.classList.add('active');
+    }
+
+    async _markFirstRunComplete(report) {
+        const normalized = normalizeReadinessReport(report);
+        if (!shouldCompleteFirstRun({
+            firstRunPending: stateManager.get('readiness.firstRunPending'),
+            report: normalized,
+        })) {
+            return;
+        }
+
+        try {
+            await window.electronAPI?.setFirstRunComplete?.();
+        } catch (error) {
+            console.warn('[App] mark first run complete failed:', error);
+        }
+
+        stateManager.batchUpdate({
+            'readiness.firstRunPending': false,
+            'readiness.firstRunGuideDismissed': false,
+        });
+        document.getElementById('first-run-modal')?.classList.remove('active');
+    }
+
+    async _refreshReadiness(options = {}) {
+        if (this._readinessRefreshing) {
+            return stateManager.get('readiness.report');
+        }
+
+        const force = !!options.force;
+        const now = Date.now();
+        const cachedReport = stateManager.get('readiness.report');
+        if (
+            !force
+            && cachedReport
+            && (now - this._lastReadinessRefreshAt) < this._readinessMinIntervalMs
+        ) {
+            this._renderFirstRunGuide(cachedReport);
+            return cachedReport;
+        }
+
+        this._readinessRefreshing = true;
+        stateManager.set('readiness.loading', true);
+        try {
+            const report = normalizeReadinessReport(await apiService.getReadiness(force));
+            this._lastReadinessRefreshAt = now;
+            stateManager.batchUpdate({
+                'readiness.report': report,
+                'readiness.error': '',
+                'readiness.lastCheckedAt': report.checkedAt,
+                'readiness.loading': false,
+            });
+            await this._markFirstRunComplete(report);
+            this._renderFirstRunGuide(report);
+            return report;
+        } catch (error) {
+            const report = buildUnavailableReadinessReport(error?.message || '');
+            stateManager.batchUpdate({
+                'readiness.report': report,
+                'readiness.error': error?.message || '',
+                'readiness.loading': false,
+            });
+            this._renderFirstRunGuide(report);
+            return report;
+        } finally {
+            this._readinessRefreshing = false;
+        }
+    }
+
+    async _handleReadinessAction(action) {
+        const normalizedAction = String(action || '').trim();
+        if (!normalizedAction) {
+            return;
+        }
+        const modal = document.getElementById('first-run-modal');
+
+        if (normalizedAction === 'open_settings') {
+            modal?.classList.remove('active');
+            stateManager.set('readiness.firstRunGuideDismissed', true);
+            await this._switchPage('settings', { source: 'readiness' });
+            notificationService.info('已切换到设置页，请补齐配置后再回来重新检查。');
+            return;
+        }
+
+        if (normalizedAction === 'open_wechat') {
+            modal?.classList.remove('active');
+            stateManager.set('readiness.firstRunGuideDismissed', true);
+            try {
+                if (window.electronAPI?.openWeChat) {
+                    await window.electronAPI.openWeChat();
+                    notificationService.success('正在打开微信客户端...');
+                } else {
+                    notificationService.info('请先手动打开并登录微信客户端。');
+                }
+            } catch (error) {
+                notificationService.error('打开微信客户端失败');
+            }
+            await this._refreshStatus({ force: true, refreshReadiness: true });
+            return;
+        }
+
+        if (normalizedAction === 'restart_as_admin') {
+            modal?.classList.remove('active');
+            stateManager.set('readiness.firstRunGuideDismissed', true);
+            if (!window.electronAPI?.restartAppAsAdmin) {
+                notificationService.warning('当前环境暂不支持自动提权重启，请手动以管理员身份重新启动应用。');
+                return;
+            }
+
+            try {
+                const result = await window.electronAPI.restartAppAsAdmin();
+                if (result?.success) {
+                    notificationService.success(result.message || '正在以管理员身份重新启动应用...');
+                    return;
+                }
+                if (result?.canceled) {
+                    notificationService.info(result.message || '已取消管理员权限授权');
+                    return;
+                }
+                notificationService.error(result?.message || '管理员重启失败');
+            } catch (error) {
+                notificationService.error('管理员重启失败');
+            }
+            return;
+        }
+
+        if (normalizedAction === 'retry') {
+            modal?.classList.remove('active');
+            stateManager.set('readiness.firstRunGuideDismissed', false);
+            await this._refreshStatus({ force: true, refreshReadiness: true });
+            return;
+        }
+
+        modal?.classList.remove('active');
+        stateManager.set('readiness.firstRunGuideDismissed', false);
+        await this._refreshStatus({ force: true, refreshReadiness: true });
+    }
+
+    async _exportDiagnosticsSnapshot() {
+        if (!window.electronAPI?.exportDiagnosticsSnapshot) {
+            notificationService.warning('当前版本暂不支持导出诊断快照。');
+            return;
+        }
+
+        try {
+            const result = await window.electronAPI.exportDiagnosticsSnapshot();
+            if (result?.success) {
+                notificationService.success(result.message || '诊断快照已导出');
+                return;
+            }
+            if (!result?.canceled) {
+                notificationService.error(result?.message || '导出诊断快照失败');
+            }
+        } catch (error) {
+            notificationService.error('导出诊断快照失败');
+        }
+    }
+
     async _downloadUpdate() {
         if (window.electronAPI?.downloadUpdate) {
             const result = await window.electronAPI.downloadUpdate();
@@ -863,6 +1189,9 @@ class App {
             this._applyDisconnectedRuntimeState(previousStatus, { idleState: this._getRuntimeIdleState() });
             this._statusFailureCount += 1;
         } finally {
+            if (options.refreshReadiness !== false) {
+                await this._refreshReadiness({ force: !!options.force });
+            }
             this._statusRefreshing = false;
             this._scheduleNextStatusRefresh(this._getNextStatusIntervalMs());
         }
@@ -1054,11 +1383,15 @@ class App {
     }
 }
 
-document.addEventListener('DOMContentLoaded', async () => {
-    const app = new App();
-    await app.init();
+export { App };
 
-    window.__app = app;
-    window.__state = stateManager;
-    window.__events = eventBus;
-});
+if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+    document.addEventListener('DOMContentLoaded', async () => {
+        const app = new App();
+        await app.init();
+
+        window.__app = app;
+        window.__state = stateManager;
+        window.__events = eventBus;
+    });
+}

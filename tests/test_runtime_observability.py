@@ -40,6 +40,21 @@ def test_config_reload_watcher_updates_runtime_settings():
         assert os.path.abspath(other) in status["watch_paths"]
 
 
+def test_config_reload_watcher_accepts_directory_targets():
+    with tempfile.TemporaryDirectory() as temp_dir:
+        watched_dir = os.path.join(temp_dir, "IndexedDB")
+        os.makedirs(watched_dir, exist_ok=True)
+        watcher = ConfigReloadWatcher([watched_dir], debounce_ms=20, preferred_mode="polling")
+
+        changed_file = os.path.join(watched_dir, "https_yuanbao.tencent.com_0.indexeddb.leveldb", "LOG")
+        assert watcher.notify_path_changed(changed_file) is True
+        assert watcher.consume_change(now=time.monotonic()) is False
+        assert watcher.consume_change(now=time.monotonic() + 0.03) is True
+
+        status = watcher.get_status()
+        assert os.path.abspath(watched_dir) in status["watch_target_dirs"]
+
+
 def test_bot_manager_health_checks_include_dashboard_fields():
     manager = BotManager.get_instance()
     original_bot = manager.bot
@@ -56,13 +71,13 @@ def test_bot_manager_health_checks_include_dashboard_fields():
             "transport_warning": "",
             "ai_health": {
                 "status": "healthy",
-                "detail": "Last AI call succeeded",
+                "detail": "",
             },
         })
 
         assert checks["ai"]["status"] == "healthy"
         assert checks["ai"]["level"] == "healthy"
-        assert checks["ai"]["message"] == "Last AI call succeeded"
+        assert checks["ai"]["message"] == "AI 客户端已就绪：gpt-test"
         assert checks["wechat"]["level"] == "healthy"
         assert checks["database"]["message"] == "data/chat_memory.db"
     finally:
@@ -87,15 +102,16 @@ def test_bot_manager_health_checks_report_connected_transport_and_missing_db_con
             "transport_warning": "",
             "ai_health": {
                 "status": "warning",
-                "detail": "Transport connected but runtime check is degraded",
+                "detail": "",
             },
         })
 
         assert checks["ai"]["level"] == "warning"
+        assert "AI 客户端已初始化" in checks["ai"]["message"]
         assert checks["wechat"]["status"] == "healthy"
-        assert "Verified active WeChat connection" in checks["wechat"]["message"]
+        assert "微信连接正常" in checks["wechat"]["message"]
         assert checks["database"]["status"] == "warning"
-        assert "no active connection" in checks["database"]["message"]
+        assert "没有活跃连接" in checks["database"]["message"]
     finally:
         manager.bot = original_bot
         manager.memory_manager = original_memory

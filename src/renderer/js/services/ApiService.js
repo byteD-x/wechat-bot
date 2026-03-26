@@ -151,6 +151,12 @@ class ApiService {
         return this.request('/api/status');
     }
 
+    async getReadiness(forceRefresh = false) {
+        return this.request(`/api/readiness${this._buildQueryString({
+            refresh: forceRefresh ? 'true' : '',
+        })}`);
+    }
+
     async startBot() {
         return this.request('/api/start', { method: 'POST' });
     }
@@ -307,6 +313,41 @@ class ApiService {
         });
     }
 
+    async getReplyPolicies() {
+        return this.request('/api/reply_policies');
+    }
+
+    async saveReplyPolicies(payload) {
+        return this.request('/api/reply_policies', {
+            method: 'POST',
+            body: payload,
+        });
+    }
+
+    async listPendingReplies(params = {}) {
+        return this.request(`/api/pending_replies${this._buildQueryString({
+            chat_id: params.chatId,
+            status: params.status,
+            limit: params.limit,
+        })}`);
+    }
+
+    async approvePendingReply(pendingId, editedReply = '') {
+        return this.request(`/api/pending_replies/${encodeURIComponent(String(pendingId || ''))}/approve`, {
+            method: 'POST',
+            body: {
+                edited_reply: editedReply,
+            },
+            timeoutMs: 20000,
+        });
+    }
+
+    async rejectPendingReply(pendingId) {
+        return this.request(`/api/pending_replies/${encodeURIComponent(String(pendingId || ''))}/reject`, {
+            method: 'POST',
+        });
+    }
+
     async getConfig() {
         return this.request('/api/config');
     }
@@ -317,6 +358,41 @@ class ApiService {
 
     async getModelCatalog() {
         return this.request('/api/model_catalog');
+    }
+
+    async getModelAuthOverview() {
+        return this.request('/api/model_auth/overview');
+    }
+
+    async runModelAuthAction(action, payload = {}) {
+        return this.request('/api/model_auth/action', {
+            method: 'POST',
+            body: {
+                action,
+                payload,
+            },
+            timeoutMs: 30000,
+        });
+    }
+
+    async getAuthProviders() {
+        return this.getModelAuthOverview();
+    }
+
+    async startAuthProvider(providerKey, payload = {}) {
+        throw new Error('Legacy auth-provider browser flow has been removed. Use /api/model_auth/action instead.');
+    }
+
+    async cancelAuthProvider(providerKey, flowId) {
+        throw new Error('Legacy auth-provider flow cancellation has been removed. Use /api/model_auth/action instead.');
+    }
+
+    async submitAuthProviderCallback(providerKey, flowId, payload = {}) {
+        throw new Error('Legacy auth-provider callback submission has been removed. Use /api/model_auth/action instead.');
+    }
+
+    async logoutAuthProviderSource(providerKey, payload = {}) {
+        throw new Error('Legacy auth-provider source logout has been removed. Use /api/model_auth/action instead.');
     }
 
     async saveConfig(config) {
@@ -333,6 +409,38 @@ class ApiService {
             body: payload,
             timeoutMs: 12000
         });
+    }
+
+    async getBackups(limit = 20) {
+        return this.request(`/api/backups${this._buildQueryString({ limit })}`);
+    }
+
+    async createBackup(mode, label = '') {
+        return this.request('/api/backups', {
+            method: 'POST',
+            body: { mode, label },
+            timeoutMs: 20000,
+        });
+    }
+
+    async cleanupBackups(payload = {}) {
+        return this.request('/api/backups/cleanup', {
+            method: 'POST',
+            body: payload,
+            timeoutMs: 20000,
+        });
+    }
+
+    async restoreBackup(payload) {
+        return this.request('/api/backups/restore', {
+            method: 'POST',
+            body: payload,
+            timeoutMs: 30000,
+        });
+    }
+
+    async getLatestEvalReport() {
+        return this.request('/api/evals/latest', {}, 0);
     }
 
     async getLogs(lines = 200) {

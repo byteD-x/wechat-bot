@@ -1,0 +1,222 @@
+.card,
+.settings-card,
+.stat-card,
+.detail-card,
+.config-hero-card,
+.log-container {
+    border: 1px solid var(--border-color);
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.96);
+    box-shadow: var(--shadow-sm);
+}
+
+.card,
+.settings-card,
+.detail-card {
+    padding: 18px;
+}
+
+.card-header,
+.settings-card-header,
+.detail-card-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 14px;
+}
+
+.card-title-group {
+    display: grid;
+    gap: 4px;
+}
+
+.card-title,
+.settings-card-title,
+.detail-card-title,
+.dashboard-subsection-title {
+    margin: 0;
+    font-size: 17px;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.card-subtitle,
+.settings-card-summary,
+.detail-card-subtitle,
+.detail-help {
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+.card-body {
+    display: grid;
+    gap: 12px;
+}
+
+.stats-row {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 14px;
+    margin-bottom: 16px;
+}
+
+.stat-card {
+    display: flex;
+    gap: 14px;
+    align-items: center;
+    padding: 16px;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(247, 250, 252, 0.96));
+}
+
+.stat-card-accent {
+    border-color: rgba(22, 124, 102, 0.18);
+    background: linear-gradient(180deg, rgba(232, 249, 245, 0.92), rgba(255, 255, 255, 0.98));
+}
+
+.stat-icon {
+    width: 42px;
+    height: 42px;
+    border-radius: 12px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(22, 124, 102, 0.08);
+    color: var(--color-primary);
+}
+
+.stat-content {
+    min-width: 0;
+}
+
+.stat-value {
+    font-size: 24px;
+    font-weight: 700;
+    line-height: 1.15;
+}
+
+.stat-label {
+    margin-top: 4px;
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.detail-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+}
+
+.detail-item {
+    min-width: 0;
+    padding: 12px 14px;
+    border-radius: 12px;
+    background: var(--bg-panel);
+    border: 1px solid rgba(15, 23, 42, 0.04);
+    display: grid;
+    gap: 6px;
+}
+
+.detail-value {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    word-break: break-word;
+}
+
+.loading-state,
+.empty-state,
+.compact-empty {
+    min-height: 84px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    color: var(--text-secondary);
+    text-align: center;
+}
+
+.empty-state {
+    border: 1px dashed var(--border-subtle);
+    border-radius: 12px;
+    background: var(--bg-panel);
+    padding: 18px;
+}
+
+.compact-empty {
+    min-height: 56px;
+}
+
+.spinner {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: 2px solid rgba(22, 124, 102, 0.18);
+    border-top-color: var(--color-primary);
+    animation: shell-spin 0.8s linear infinite;
+}
+
+@keyframes shell-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 34px;
+    padding: 0 12px;
+    border-radius: 999px;
+    background: var(--bg-hover);
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+}
+
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: currentColor;
+}
+
+.status-dot.warning {
+    color: #f59e0b;
+}
+
+.status-dot.success {
+    color: #34d399;
+}
+
+.status-dot.error {
+    color: #f87171;
+}
+
+.update-badge {
+    min-height: 30px;
+    padding: 0 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(37, 99, 235, 0.2);
+    background: rgba(37, 99, 235, 0.06);
+    color: var(--color-primary-dark);
+}
+
+.config-save-feedback {
+    display: grid;
+    gap: 8px;
+}
+
+.prompt-preview-output,
+.log-content {
+    font-family: var(--font-mono);
+}
+
+.message-list,
+.dashboard-pending-replies,
+.dashboard-recent-messages,
+.dashboard-model-list,
+.timeline-list {
+    display: grid;
+    gap: 10px;
+}

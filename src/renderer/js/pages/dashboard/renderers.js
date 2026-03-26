@@ -16,6 +16,11 @@ import {
     getGrowthModeLabel,
     getGrowthTaskLabel,
 } from './formatters.js';
+import {
+    getReadinessDisplayChecks,
+    normalizeReadinessReport,
+} from '../../app/readiness-helpers.js';
+import { getRecoveryButtonModel } from '../../app/self-heal.js';
 
 function createSvgIcon(href) {
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -410,6 +415,76 @@ export function renderDashboardCost(page, dashboardCost) {
     modelsElem.appendChild(listFragment);
 }
 
+export function renderStabilitySummary(page, pendingReplies, stability = {}) {
+    const pendingElem = page.$('#dashboard-pending-replies');
+    const backupElem = page.$('#dashboard-backup-summary');
+    const evalElem = page.$('#dashboard-eval-status');
+    const detailElem = page.$('#dashboard-restore-summary');
+    if (!pendingElem || !backupElem || !evalElem || !detailElem) {
+        return;
+    }
+
+    const pendingCount = Number(pendingReplies?.pending || 0);
+    const backups = stability?.backups || null;
+    const latestEval = stability?.latestEval?.report || null;
+    const latestBackupAt = backups?.summary?.latest_full_backup_at || backups?.summary?.latest_quick_backup_at || null;
+    const lastRestore = backups?.summary?.last_restore_result || null;
+
+    pendingElem.textContent = String(pendingCount);
+    backupElem.textContent = latestBackupAt ? formatGrowthTimestamp(latestBackupAt) : '--';
+    evalElem.textContent = latestEval
+        ? (latestEval?.summary?.passed ? '已通过' : '需关注')
+        : '--';
+
+    detailElem.textContent = '';
+    const rows = [];
+    if (lastRestore) {
+        rows.push({
+            title: lastRestore.success ? '最近一次恢复已完成' : '最近一次恢复未完成',
+            meta: `保险备份 ${lastRestore.pre_restore_backup?.id || '--'}`,
+            extra: lastRestore.message || '',
+        });
+    }
+    if (latestEval) {
+        rows.push({
+            title: latestEval.summary?.passed ? '最近一次质量检查已通过' : '最近一次质量检查需要关注',
+            meta: `覆盖 ${formatNumber(latestEval.summary?.total_cases || 0)} 条用例`,
+            extra: `空回复 ${formatPercent((latestEval.summary?.empty_reply_rate || 0) * 100)} / 检索命中 ${formatPercent((latestEval.summary?.retrieval_hit_rate || 0) * 100)}`,
+        });
+    }
+
+    if (rows.length === 0) {
+        detailElem.appendChild(createCompactEmpty('暂无恢复或评测记录'));
+        return;
+    }
+
+    const fragment = document.createDocumentFragment();
+    rows.forEach((row) => {
+        const item = document.createElement('div');
+        item.className = 'dashboard-model-item';
+
+        const main = document.createElement('div');
+        main.className = 'dashboard-model-main';
+
+        const title = document.createElement('strong');
+        title.textContent = row.title;
+
+        const meta = document.createElement('span');
+        meta.textContent = row.meta;
+
+        const extra = document.createElement('span');
+        extra.className = 'dashboard-model-cost';
+        extra.textContent = row.extra || '--';
+
+        main.appendChild(title);
+        main.appendChild(meta);
+        item.appendChild(main);
+        item.appendChild(extra);
+        fragment.appendChild(item);
+    });
+    detailElem.appendChild(fragment);
+}
+
 export function renderStartupState(page, startup) {
     const panel = page.$('#bot-startup-panel');
     const label = page.$('#bot-startup-label');
@@ -446,13 +521,28 @@ export function renderDiagnostics(page, diagnostics) {
     const detail = page.$('#bot-diagnostics-detail');
     const list = page.$('#bot-diagnostics-list');
     const action = page.$('#btn-recover-bot');
-    if (!panel || !title || !detail || !list || !action) {
+    const exportButton = page.$('#btn-export-diagnostics-snapshot');
+    if (!panel || !title || !detail || !list || !action || !exportButton) {
         return;
     }
 
+    const recoveryAction = getRecoveryButtonModel({
+        readinessReport: page.getState?.('readiness.report'),
+        diagnostics,
+    });
+
     if (!diagnostics) {
-        panel.hidden = true;
+        panel.hidden = false;
+        panel.dataset.level = 'info';
+        title.textContent = '运行诊断';
+        detail.textContent = '当前没有运行中的故障；如果仍然无法启动，可以先查看上方运行准备度，或导出诊断快照继续排查。';
         list.textContent = '';
+        const item = document.createElement('li');
+        item.textContent = '导出的诊断快照会自动脱敏，不会包含原始 API Key 或 token。';
+        list.appendChild(item);
+        action.hidden = recoveryAction.mode === 'none';
+        action.textContent = recoveryAction.label || '一键恢复';
+        exportButton.hidden = false;
         return;
     }
 
@@ -472,8 +562,90 @@ export function renderDiagnostics(page, diagnostics) {
         list.appendChild(frag);
     }
 
-    action.hidden = !diagnostics.recoverable;
+    action.hidden = recoveryAction.mode === 'none';
+    exportButton.hidden = false;
     action.textContent = diagnostics.action_label || '一键恢复';
+}
+
+export function renderReadiness(page, readinessReport) {
+    const panel = page.$('#bot-readiness');
+    const badge = page.$('#bot-readiness-badge');
+    const title = page.$('#bot-readiness-title');
+    const detail = page.$('#bot-readiness-detail');
+    const list = page.$('#bot-readiness-list');
+    if (!panel || !badge || !title || !detail || !list) {
+        return;
+    }
+
+    const report = normalizeReadinessReport(readinessReport);
+    const checks = getReadinessDisplayChecks(report, { limit: 4 });
+
+    panel.hidden = false;
+    panel.dataset.state = report.ready ? 'ready' : 'blocked';
+    badge.textContent = report.ready ? '已就绪' : `阻塞 ${report.blockingCount}`;
+    title.textContent = report.summary.title;
+    detail.textContent = report.summary.detail;
+    list.textContent = '';
+
+    if (checks.length === 0) {
+        const item = document.createElement('li');
+        item.className = 'readiness-check-item';
+        item.textContent = '暂时没有更多可展示的检查项。';
+        list.appendChild(item);
+        return;
+    }
+
+    const fragment = document.createDocumentFragment();
+    checks.forEach((check) => {
+        const item = document.createElement('li');
+        item.className = 'readiness-check-item';
+        item.dataset.status = check.status;
+
+        const copy = document.createElement('div');
+        copy.className = 'readiness-check-copy';
+
+        const top = document.createElement('div');
+        top.className = 'readiness-check-top';
+
+        const label = document.createElement('strong');
+        label.className = 'readiness-check-label';
+        label.textContent = check.label;
+
+        const status = document.createElement('span');
+        status.className = 'readiness-check-status';
+        status.textContent = check.status === 'passed' ? '通过' : '待处理';
+
+        const message = document.createElement('div');
+        message.className = 'readiness-check-message';
+        message.textContent = check.message;
+
+        top.appendChild(label);
+        top.appendChild(status);
+        copy.appendChild(top);
+        copy.appendChild(message);
+
+        if (check.hint) {
+            const hint = document.createElement('div');
+            hint.className = 'readiness-check-hint';
+            hint.textContent = check.hint;
+            copy.appendChild(hint);
+        }
+
+        item.appendChild(copy);
+
+        if (check.action && check.status !== 'passed') {
+            const action = document.createElement('button');
+            action.type = 'button';
+            action.className = 'btn btn-secondary btn-sm readiness-check-action';
+            action.dataset.readinessAction = check.action;
+            action.textContent = check.actionLabel;
+            item.appendChild(action);
+        }
+
+        fragment.appendChild(item);
+    });
+
+    list.appendChild(fragment);
 }
 
 export function renderHealthMetrics(

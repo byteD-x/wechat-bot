@@ -1,5 +1,76 @@
 const fs = require('fs');
 
+const EXTRA_MODEL_PROVIDERS = [
+    {
+        id: 'google',
+        label: 'Google / Gemini CLI',
+        base_url: 'https://generativelanguage.googleapis.com/v1beta/openai',
+        api_key_url: 'https://aistudio.google.com/apikey',
+        aliases: ['google', 'gemini', 'vertex'],
+        default_model: 'gemini-2.5-flash',
+        models: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.5-flash-lite'],
+    },
+    {
+        id: 'yuanbao',
+        label: 'Tencent Yuanbao',
+        base_url: '',
+        api_key_url: 'https://yuanbao.tencent.com/',
+        aliases: ['yuanbao', '腾讯元宝'],
+        default_model: 'yuanbao-web',
+        models: ['yuanbao-web'],
+    },
+];
+
+const AUTH_METHODS_BY_PROVIDER = {
+    openai: [
+        { id: 'api_key', type: 'api_key', tier: 'stable', supports_local_reuse: false, requires_browser_flow: false, requires_fields: [], requires_extra_fields: [] },
+        { id: 'codex_local', type: 'local_import', provider_id: 'openai_codex', tier: 'stable', supports_local_reuse: true, requires_browser_flow: true, requires_fields: [], requires_extra_fields: [] },
+    ],
+    qwen: [
+        { id: 'api_key', type: 'api_key', tier: 'stable', supports_local_reuse: false, requires_browser_flow: false, requires_fields: [], requires_extra_fields: [] },
+        { id: 'qwen_oauth', type: 'oauth', provider_id: 'qwen_oauth', tier: 'stable', supports_local_reuse: true, requires_browser_flow: true, requires_fields: [], requires_extra_fields: [] },
+        { id: 'qwen_local', type: 'local_import', provider_id: 'qwen_oauth', tier: 'stable', supports_local_reuse: true, requires_browser_flow: true, requires_fields: [], requires_extra_fields: [] },
+        { id: 'coding_plan_api_key', type: 'api_key', tier: 'stable', supports_local_reuse: false, requires_browser_flow: false, requires_fields: [], requires_extra_fields: [] },
+    ],
+    google: [
+        { id: 'api_key', type: 'api_key', tier: 'stable', supports_local_reuse: false, requires_browser_flow: false, requires_fields: [], requires_extra_fields: [] },
+        { id: 'google_oauth', type: 'oauth', provider_id: 'google_gemini_cli', tier: 'experimental', supports_local_reuse: true, requires_browser_flow: true, requires_fields: [], requires_extra_fields: [] },
+        { id: 'gemini_cli_local', type: 'local_import', provider_id: 'google_gemini_cli', tier: 'experimental', supports_local_reuse: true, requires_browser_flow: true, requires_fields: [], requires_extra_fields: [] },
+    ],
+    yuanbao: [
+        { id: 'yuanbao_web_session', type: 'web_session', provider_id: 'tencent_yuanbao', tier: 'experimental', supports_local_reuse: false, requires_browser_flow: true, requires_fields: [], requires_extra_fields: [], runtime_supported: false },
+    ],
+};
+
+function buildAuthMethods(provider = {}) {
+    const providerId = String(provider.id || '').trim().toLowerCase();
+    if (AUTH_METHODS_BY_PROVIDER[providerId]) {
+        return JSON.parse(JSON.stringify(AUTH_METHODS_BY_PROVIDER[providerId]));
+    }
+    return [
+        { id: 'api_key', type: 'api_key', tier: 'stable', supports_local_reuse: false, requires_browser_flow: false, requires_fields: [], requires_extra_fields: [] },
+    ];
+}
+
+function enrichModelCatalog(payload = {}) {
+    const providers = Array.isArray(payload.providers) ? payload.providers.map((provider) => ({ ...provider })) : [];
+    const existingIds = new Set(providers.map((provider) => String(provider.id || '').trim().toLowerCase()));
+    EXTRA_MODEL_PROVIDERS.forEach((provider) => {
+        if (!existingIds.has(provider.id)) {
+            providers.push({ ...provider });
+        }
+    });
+    providers.forEach((provider) => {
+        if (!Array.isArray(provider.auth_methods) || !provider.auth_methods.length) {
+            provider.auth_methods = buildAuthMethods(provider);
+        }
+    });
+    return {
+        ...payload,
+        providers,
+    };
+}
+
 function flattenPaths(input, prefix = '', output = {}) {
     if (!input || typeof input !== 'object' || Array.isArray(input)) {
         if (prefix) {
@@ -43,7 +114,8 @@ function inferProviderId(preset = {}) {
     if (name.includes('deepseek') || baseUrl.includes('deepseek.com')) return 'deepseek';
     if (name.includes('qwen') || model.includes('qwen') || baseUrl.includes('dashscope')) return 'qwen';
     if (name.includes('claude') || model.includes('claude') || baseUrl.includes('anthropic')) return 'anthropic';
-    if (name.includes('gemini') || model.includes('gemini') || baseUrl.includes('generativelanguage')) return 'gemini';
+    if (name.includes('gemini') || model.includes('gemini') || baseUrl.includes('generativelanguage') || baseUrl.includes('aiplatform.googleapis.com')) return 'google';
+    if (name.includes('yuanbao') || model.includes('yuanbao') || baseUrl.includes('yuanbao.tencent.com')) return 'yuanbao';
     return '';
 }
 
@@ -286,7 +358,7 @@ function createSharedConfigService({
                 ) {
                     return this._modelCatalogCache.payload;
                 }
-                const payload = readJsonFileImpl(catalogPath, { providers: [] });
+                const payload = enrichModelCatalog(readJsonFileImpl(catalogPath, { providers: [] }));
                 this._modelCatalogCache = {
                     mtimeMs: stat.mtimeMs,
                     payload,
@@ -294,7 +366,7 @@ function createSharedConfigService({
                 return payload;
             } catch (_) {
                 this._modelCatalogCache = null;
-                return { providers: [] };
+                return enrichModelCatalog({ providers: [] });
             }
         },
 

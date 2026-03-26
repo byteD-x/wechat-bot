@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-03-13",
+  "updated_at": "2026-03-26",
   "providers": [
     {
       "id": "openai",
@@ -7,17 +7,17 @@
       "base_url": "https://api.openai.com/v1",
       "api_key_url": "https://platform.openai.com/api-keys",
       "aliases": ["openai", "gpt"],
-      "default_model": "gpt-5-mini",
-      "models": ["gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-4.1", "gpt-4.1-mini", "gpt-4o", "gpt-4o-mini"]
+      "default_model": "gpt-5.4-mini",
+      "models": ["gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.3-codex", "gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano", "gpt-4o", "gpt-4o-mini"]
     },
     {
       "id": "doubao",
-      "label": "Doubao (豆包)",
+      "label": "Doubao (璞嗗寘)",
       "base_url": "https://ark.cn-beijing.volces.com/api/v3",
       "api_key_url": "https://console.volcengine.com/ark",
-      "aliases": ["doubao", "豆包", "ark", "volc"],
-      "default_model": "doubao-seed-1-8-251228",
-      "models": ["doubao-seed-1-8-251228", "doubao-seed-1-6-250615", "doubao-seed-1-6-thinking-250615", "doubao-seed-1-6-flash-250715"]
+      "aliases": ["doubao", "璞嗗寘", "ark", "volc"],
+      "default_model": "doubao-seed-1.8",
+      "models": ["doubao-seed-1.8", "doubao-seed-2.0-pro", "doubao-seed-2.0-lite", "doubao-seed-2.0-mini", "doubao-seed-code"]
     },
     {
       "id": "deepseek",
@@ -30,21 +30,21 @@
     },
     {
       "id": "qwen",
-      "label": "Qwen (通义千问)",
+      "label": "Qwen (閫氫箟鍗冮棶)",
       "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
       "api_key_url": "https://dashscope.console.aliyun.com/apiKey",
-      "aliases": ["qwen", "通义", "千问", "dashscope", "百炼"],
+      "aliases": ["qwen", "閫氫箟", "鍗冮棶", "dashscope", "鐧剧偧"],
       "default_model": "qwen3.5-plus",
-      "models": ["qwen-max-latest", "qwen-plus-latest", "qwen-flash-latest", "qwen3-max", "qwen3.5-plus", "qwen3.5-flash", "qwen3-coder-plus", "qwen3-coder-flash"]
+      "models": ["qwen3.5-plus", "qwen3.5-flash", "qwen3-max-2026-01-23", "qwen-plus-latest", "qwen-turbo-latest", "qwen3-coder-next", "qwen3-coder-plus", "qwen3-coder-flash"]
     },
     {
       "id": "zhipu",
-      "label": "Zhipu (智谱)",
+      "label": "Zhipu (鏅鸿氨)",
       "base_url": "https://open.bigmodel.cn/api/paas/v4",
       "api_key_url": "https://open.bigmodel.cn/usercenter/apikeys",
-      "aliases": ["zhipu", "glm", "智谱"],
-      "default_model": "glm-4.5-air",
-      "models": ["glm-5-plus", "glm-5-air", "glm-5-flash", "glm-4.6", "glm-4.5-air", "glm-4.5-flash"]
+      "aliases": ["zhipu", "glm", "鏅鸿氨"],
+      "default_model": "glm-5",
+      "models": ["glm-5", "glm-4.7", "glm-4.6", "glm-4.5-air"]
     },
     {
       "id": "moonshot",
@@ -53,7 +53,7 @@
       "api_key_url": "https://platform.moonshot.cn/console/api-keys",
       "aliases": ["moonshot", "kimi"],
       "default_model": "kimi-k2-turbo-preview",
-      "models": ["kimi-k2-turbo-preview", "kimi-k2-0711-preview", "kimi-thinking-preview", "moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"]
+      "models": ["kimi-k2-turbo-preview", "kimi-k2-0905-preview", "kimi-k2-thinking-turbo", "kimi-thinking-preview", "kimi-latest"]
     },
     {
       "id": "groq",
@@ -61,17 +61,17 @@
       "base_url": "https://api.groq.com/openai/v1",
       "api_key_url": "https://console.groq.com/keys",
       "aliases": ["groq"],
-      "default_model": "qwen/qwen3-32b",
-      "models": ["qwen/qwen3-32b", "openai/gpt-oss-120b", "meta-llama/llama-4-maverick-17b-128e-instruct", "meta-llama/llama-4-scout-17b-16e-instruct", "deepseek-r1-distill-llama-70b"]
+      "default_model": "moonshotai/kimi-k2-instruct-0905",
+      "models": ["moonshotai/kimi-k2-instruct-0905", "openai/gpt-oss-120b", "qwen/qwen3-32b", "llama-3.3-70b-versatile", "deepseek-r1-distill-llama-70b"]
     },
     {
       "id": "siliconflow",
       "label": "SiliconFlow",
       "base_url": "https://api.siliconflow.cn/v1",
       "api_key_url": "https://cloud.siliconflow.cn/account/ak",
-      "aliases": ["siliconflow", "silicon", "硅基"],
-      "default_model": "deepseek-ai/DeepSeek-V3",
-      "models": ["deepseek-ai/DeepSeek-V3", "deepseek-ai/DeepSeek-R1", "Qwen/Qwen3-32B", "THUDM/GLM-4.5-Air"]
+      "aliases": ["siliconflow", "silicon", "纭呭熀"],
+      "default_model": "deepseek-ai/DeepSeek-V3.2",
+      "models": ["deepseek-ai/DeepSeek-V3.2", "Qwen/Qwen3-Coder-480B-A35B-Instruct", "Qwen/Qwen3-Next-80B-A3B-Instruct", "zai-org/GLM-4.7", "MiniMaxAI/MiniMax-M2"]
     },
     {
       "id": "mistral",
@@ -79,8 +79,8 @@
       "base_url": "https://api.mistral.ai/v1",
       "api_key_url": "https://console.mistral.ai/api-keys/",
       "aliases": ["mistral"],
-      "default_model": "mistral-medium-latest",
-      "models": ["mistral-medium-latest", "mistral-small-latest", "codestral-latest", "ministral-8b-latest"]
+      "default_model": "mistral-large-latest",
+      "models": ["mistral-large-latest", "mistral-medium-latest", "mistral-small-latest", "codestral-latest", "devstral-medium-latest"]
     },
     {
       "id": "perplexity",
@@ -89,7 +89,7 @@
       "api_key_url": "https://www.perplexity.ai/settings/api",
       "aliases": ["perplexity", "sonar"],
       "default_model": "sonar-pro",
-      "models": ["sonar", "sonar-pro", "sonar-reasoning", "sonar-reasoning-pro"]
+      "models": ["sonar", "sonar-pro", "sonar-reasoning-pro", "sonar-deep-research"]
     },
     {
       "id": "openrouter",
@@ -97,8 +97,8 @@
       "base_url": "https://openrouter.ai/api/v1",
       "api_key_url": "https://openrouter.ai/keys",
       "aliases": ["openrouter"],
-      "default_model": "openai/gpt-5-mini",
-      "models": ["openai/gpt-5-mini", "google/gemini-2.5-flash", "deepseek/deepseek-chat-v3.1", "qwen/qwen3-32b"]
+      "default_model": "openrouter/auto",
+      "models": ["openrouter/auto", "anthropic/claude-opus-4.6", "anthropic/claude-sonnet-4.6", "google/gemini-3.1-pro-preview", "openai/gpt-5.1", "deepseek/deepseek-v3.2", "minimax/minimax-m2.5"]
     },
     {
       "id": "together",
@@ -106,8 +106,8 @@
       "base_url": "https://api.together.xyz/v1",
       "api_key_url": "https://api.together.xyz/settings/api-keys",
       "aliases": ["together"],
-      "default_model": "Qwen/Qwen3-32B",
-      "models": ["Qwen/Qwen3-32B", "deepseek-ai/DeepSeek-V3.1", "meta-llama/Llama-3.3-70B-Instruct-Turbo"]
+      "default_model": "moonshotai/Kimi-K2-Instruct-0905",
+      "models": ["moonshotai/Kimi-K2-Instruct-0905", "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8", "deepseek-ai/DeepSeek-V3.1", "openai/gpt-oss-120b", "meta-llama/Llama-3.3-70B-Instruct-Turbo"]
     },
     {
       "id": "fireworks",
@@ -115,8 +115,8 @@
       "base_url": "https://api.fireworks.ai/inference/v1",
       "api_key_url": "https://fireworks.ai/account/api-keys",
       "aliases": ["fireworks"],
-      "default_model": "accounts/fireworks/models/qwen3-30b-a3b",
-      "models": ["accounts/fireworks/models/qwen3-30b-a3b", "accounts/fireworks/models/deepseek-v3p1", "accounts/fireworks/models/llama-v3p3-70b-instruct"]
+      "default_model": "accounts/fireworks/models/deepseek-v3p1",
+      "models": ["accounts/fireworks/models/deepseek-v3p1", "accounts/fireworks/models/qwen3-235b-a22b", "accounts/fireworks/models/qwen3-coder-480b-a35b-instruct", "accounts/fireworks/models/kimi-k2p5"]
     },
     {
       "id": "ollama",

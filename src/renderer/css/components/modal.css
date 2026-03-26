@@ -1,0 +1,129 @@
+.modal-overlay {
+    position: fixed;
+    inset: var(--titlebar-height) 0 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: rgba(15, 23, 42, 0.36);
+    backdrop-filter: blur(8px);
+    z-index: 40;
+}
+
+.modal-overlay.active {
+    display: flex;
+}
+
+.modal,
+.modal-wide,
+.modal-compact {
+    width: min(100%, 720px);
+    max-height: calc(100vh - var(--titlebar-height) - 48px);
+    overflow: auto;
+    border-radius: 16px;
+    background: var(--bg-modal);
+    border: 1px solid rgba(15, 23, 42, 0.08);
+    box-shadow: var(--shadow-lg);
+}
+
+.modal-wide {
+    width: min(100%, 920px);
+}
+
+.modal-compact {
+    width: min(100%, 520px);
+}
+
+.modal-header,
+.modal-body,
+.modal-footer {
+    padding: 18px 20px;
+}
+
+.modal-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 14px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.modal-copy {
+    display: grid;
+    gap: 6px;
+}
+
+.modal-kicker {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--color-primary);
+}
+
+.modal-title {
+    margin: 0;
+    font-size: 22px;
+    line-height: 1.2;
+    font-weight: 700;
+}
+
+.modal-subtitle {
+    margin: 0;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.modal-close {
+    width: 34px;
+    height: 34px;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: transparent;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+}
+
+.modal-body {
+    display: grid;
+    gap: 14px;
+}
+
+.modal-callout {
+    padding: 14px;
+    border-radius: 12px;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-color);
+}
+
+.modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    border-top: 1px solid var(--border-color);
+}
+
+.toast-container {
+    position: fixed;
+    top: calc(var(--titlebar-height) + 20px);
+    right: 20px;
+    display: grid;
+    gap: 10px;
+    width: min(360px, calc(100vw - 40px));
+    z-index: 60;
+}
+
+.toast {
+    position: relative;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: start;
+    gap: 10px;
+    padding: 12px 14px;
+    border-radius: 12px;
+    border: 1px solid var(--border-color);
+    background: rgba(255, 255, 255, 0.96);
+    box-shadow: var(--shadow-md);
+}

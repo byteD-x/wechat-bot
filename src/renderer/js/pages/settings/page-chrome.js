@@ -17,7 +17,7 @@ export function initModuleSaveButtons(page) {
     });
 }
 
-function getCardConfigMeta(card) {
+export function getCardConfigMeta(card) {
     if (!card) {
         return null;
     }

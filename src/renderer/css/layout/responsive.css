@@ -1,0 +1,296 @@
+@media (max-width: 1360px) {
+    .app-shell-container {
+        grid-template-columns: 88px minmax(0, 1fr);
+    }
+
+    .sidebar {
+        padding-inline: 10px;
+    }
+
+    .sidebar-brand {
+        justify-content: center;
+        padding: 4px 0 12px;
+    }
+
+    .sidebar-brand-copy,
+    .sidebar-group-label,
+    .nav-label,
+    .sidebar-runtime-label,
+    .sidebar-version-row {
+        display: none;
+    }
+
+    .sidebar-nav {
+        gap: 6px;
+    }
+
+    .nav-item {
+        justify-content: center;
+        padding: 0;
+    }
+
+    .sidebar-footer {
+        padding: 12px 0 0;
+        justify-items: center;
+    }
+
+    .sidebar-runtime-card {
+        width: 100%;
+        justify-items: center;
+        padding: 10px 8px;
+    }
+
+    .sidebar-runtime-card .status-badge {
+        width: 100%;
+        justify-content: center;
+        padding-inline: 8px;
+    }
+
+    .sidebar-runtime-card .status-label {
+        display: none;
+    }
+
+    .update-badge {
+        width: 100%;
+        justify-content: center;
+        padding-inline: 6px;
+        font-size: 11px;
+    }
+}
+
+@media (max-width: 1200px) {
+    .stats-row {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .dashboard-stage-grid,
+    .dashboard-stage-grid-business,
+    .about-link-grid,
+    .growth-task-grid,
+    .retrieval-kpi-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .cost-filter-bar,
+    .dashboard-cost-summary {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 980px) {
+    .app-shell-container {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto minmax(0, 1fr);
+    }
+
+    .sidebar {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 12px;
+        border-right: 0;
+        border-bottom: 1px solid var(--app-shell-border);
+    }
+
+    .sidebar-brand {
+        justify-content: flex-start;
+        padding: 0;
+    }
+
+    .sidebar-brand-copy {
+        display: flex;
+    }
+
+    .sidebar-brand-copy span {
+        display: none;
+    }
+
+    .sidebar-content {
+        overflow-x: auto;
+        overflow-y: hidden;
+        padding: 0;
+    }
+
+    .sidebar-content::-webkit-scrollbar {
+        display: none;
+    }
+
+    .sidebar-group,
+    .sidebar-nav {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+    }
+
+    .sidebar-group + .sidebar-group {
+        margin-top: 0;
+    }
+
+    .sidebar-group-label {
+        display: none;
+    }
+
+    .nav-item {
+        justify-content: center;
+        min-height: 36px;
+        padding: 0 12px;
+        white-space: nowrap;
+        border-radius: 999px;
+    }
+
+    .nav-label {
+        display: inline;
+        font-size: 12px;
+    }
+
+    .sidebar-footer {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0;
+        border-top: 0;
+    }
+
+    .sidebar-runtime-card {
+        width: auto;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 10px;
+    }
+
+    .sidebar-runtime-card .status-label {
+        display: inline;
+    }
+
+    .update-badge {
+        width: auto;
+    }
+
+    .main-content {
+        padding: 16px 16px 26px;
+    }
+
+    .card-grid,
+    .model-center-layout,
+    .about-hero-body,
+    .dashboard-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 768px) {
+    .titlebar-subtitle,
+    .page-kicker {
+        display: none;
+    }
+
+    .page-header,
+    .page-actions,
+    .update-panel,
+    .log-meta,
+    .toolbar-meta,
+    .message-toolbar-meta,
+    .message-meta,
+    .health-check-item,
+    .task-list-item,
+    .growth-task-item {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .page-actions > * {
+        width: 100%;
+    }
+
+    .stats-row,
+    .dashboard-stage-grid,
+    .dashboard-stage-grid-business,
+    .backup-action-grid,
+    .cost-filter-bar,
+    .about-link-grid,
+    .growth-task-grid,
+    .retrieval-kpi-grid,
+    .health-grid,
+    .dashboard-cost-summary {
+        grid-template-columns: 1fr;
+    }
+
+    .search-wrapper,
+    .log-search-field,
+    .message-chat-filter,
+    .log-compact-select {
+        max-width: none;
+        min-width: 0;
+        width: 100%;
+    }
+
+    .sidebar {
+        grid-template-columns: 1fr;
+        gap: 10px;
+    }
+
+    .sidebar-brand {
+        justify-content: center;
+    }
+
+    .sidebar-footer {
+        justify-content: center;
+        flex-wrap: wrap;
+    }
+}
+
+@media (max-height: 860px) {
+    .main-content {
+        padding-top: 14px;
+        padding-bottom: 18px;
+    }
+
+    .page {
+        padding-bottom: 12px;
+    }
+
+    .model-center-sidebar,
+    .model-center-detail,
+    .settings-workbench-bar {
+        position: static;
+        max-height: none;
+    }
+
+    .message-list.full-height {
+        max-height: none;
+        min-height: 260px;
+    }
+
+    .log-container,
+    .log-content {
+        min-height: 320px;
+    }
+}
+
+@media (max-height: 700px) {
+    .titlebar {
+        padding-left: 10px;
+    }
+
+    .titlebar-btn {
+        width: 40px;
+    }
+
+    .page-header {
+        margin-bottom: 14px;
+    }
+
+    .stats-row {
+        margin-bottom: 14px;
+    }
+
+    .config-hero-card,
+    .model-center-summary-bar,
+    .settings-card,
+    .card {
+        padding-top: 14px;
+        padding-bottom: 14px;
+    }
+}

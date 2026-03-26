@@ -24,6 +24,14 @@ class StateManager {
                     updatedAt: 0,
                 }
             },
+            readiness: {
+                report: null,
+                loading: false,
+                error: '',
+                lastCheckedAt: 0,
+                firstRunPending: false,
+                firstRunGuideDismissed: false,
+            },
             updater: {
                 enabled: false,
                 checking: false,

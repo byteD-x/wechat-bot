@@ -31,6 +31,20 @@ import {
     renderUpdateModalContent,
 } from '../../src/renderer/js/app/ui-helpers.js';
 import {
+    buildUnavailableReadinessReport,
+    getReadinessBlockingChecks,
+    normalizeReadinessReport,
+    shouldCompleteFirstRun,
+    shouldShowFirstRunGuide,
+} from '../../src/renderer/js/app/readiness-helpers.js';
+import {
+    getRecoveryButtonModel,
+    pickSuggestedSelfHealAction,
+} from '../../src/renderer/js/app/self-heal.js';
+import { App } from '../../src/renderer/js/app.module.js';
+import { stateManager } from '../../src/renderer/js/core/StateManager.js';
+import { apiService } from '../../src/renderer/js/services/ApiService.js';
+import {
     renderPresetList,
     renderSaveFeedback,
     renderSettingsHero,
@@ -46,6 +60,18 @@ function withDom(run) {
     } finally {
         env.restore();
     }
+}
+
+function resetReadinessState() {
+    stateManager.batchUpdate({
+        'readiness.report': null,
+        'readiness.loading': false,
+        'readiness.error': '',
+        'readiness.lastCheckedAt': 0,
+        'readiness.firstRunPending': false,
+        'readiness.firstRunGuideDismissed': false,
+        'currentPage': 'dashboard',
+    });
 }
 
 test('message renderer keeps summary and detail rendering stable', () => withDom(({ document, createPage }) => {
@@ -377,13 +403,271 @@ test('settings render helpers keep hero, preset list and feedback rendering stab
     }, 'failed');
 
     assert.equal(selectors['#current-config-hero'].children.length, 1);
-    assert.match(selectors['#current-config-hero'].textContent, /default/);
+    assert.match(selectors['#current-config-hero'].textContent, /回复模型与认证方式统一在“模型”页维护/);
+    assert.match(selectors['#current-config-hero'].textContent, /运行审计与诊断/);
     assert.equal(selectors['#preset-list'].children.length, 1);
     assert.match(selectors['#preset-list'].textContent, /Ollama/);
     assert.match(selectors['#update-status-text'].textContent, /1\.1\.0/);
     assert.equal(selectors['#config-save-feedback'].hidden, false);
     assert.equal(selectors['#config-save-feedback-groups'].children.length, 1);
 }));
+
+test('readiness helpers normalize reports and gate first-run guide visibility', () => {
+    const report = normalizeReadinessReport({
+        success: true,
+        ready: false,
+        blocking_count: 2,
+        checks: [
+            {
+                key: 'admin_permission',
+                label: '管理员权限',
+                status: 'failed',
+                blocking: true,
+                message: '未以管理员身份运行',
+                action: 'restart_as_admin',
+                action_label: '重新检查',
+            },
+            {
+                key: 'api_config',
+                label: 'API 配置',
+                status: 'failed',
+                blocking: true,
+                message: '暂无可用预设',
+                action: 'open_settings',
+                action_label: '前往设置',
+            },
+        ],
+        summary: {
+            title: '还有 2 项准备未完成',
+            detail: '请先处理阻塞项。',
+        },
+    });
+
+    assert.equal(report.blockingCount, 2);
+    assert.equal(getReadinessBlockingChecks(report, { onlyFirstRun: true }).length, 2);
+    assert.equal(report.checks[0].action, 'restart_as_admin');
+    assert.equal(report.checks[0].actionLabel, '以管理员身份重启');
+    assert.deepEqual(pickSuggestedSelfHealAction(report), {
+        action: 'restart_as_admin',
+        label: '以管理员身份重启',
+        sourceCheck: 'admin_permission',
+    });
+    assert.deepEqual(getRecoveryButtonModel({ readinessReport: report, diagnostics: null }), {
+        mode: 'readiness',
+        action: 'restart_as_admin',
+        label: '以管理员身份重启',
+    });
+    assert.equal(
+        shouldShowFirstRunGuide({
+            firstRunPending: true,
+            dismissed: false,
+            report,
+        }),
+        true
+    );
+    assert.equal(
+        shouldCompleteFirstRun({
+            firstRunPending: true,
+            report: { ready: true, blocking_count: 0, checks: [] },
+        }),
+        true
+    );
+
+    const unavailable = buildUnavailableReadinessReport('backend offline');
+    assert.equal(unavailable.ready, false);
+    assert.equal(unavailable.checks[0].action, 'retry');
+});
+
+test('app readiness flow auto-shows first-run guide and completes only after pass', async () => {
+    const previousWindow = globalThis.window;
+    const originalGetReadiness = apiService.getReadiness;
+
+    const env = installDomStub();
+    try {
+        const { document, registerElement } = env;
+        document.addEventListener = () => {};
+
+        const modal = registerElement('first-run-modal', document.createElement('div'));
+        const title = registerElement('first-run-title', document.createElement('div'));
+        const subtitle = registerElement('first-run-subtitle', document.createElement('div'));
+        const summary = registerElement('first-run-summary', document.createElement('div'));
+        const list = registerElement('first-run-check-list', document.createElement('ul'));
+        const settingsButton = registerElement('btn-first-run-settings', document.createElement('button'));
+        registerElement('btn-close-first-run-modal', document.createElement('button'));
+        registerElement('btn-first-run-later', document.createElement('button'));
+        registerElement('btn-first-run-retry', document.createElement('button'));
+
+        let setFirstRunCompleteCalls = 0;
+        const switchPageCalls = [];
+        globalThis.window = {
+            addEventListener() {},
+            electronAPI: {
+                async setFirstRunComplete() {
+                    setFirstRunCompleteCalls += 1;
+                    return true;
+                },
+            },
+        };
+
+        resetReadinessState();
+        stateManager.batchUpdate({
+            'readiness.firstRunPending': true,
+            'readiness.firstRunGuideDismissed': false,
+        });
+
+        const app = Object.create(App.prototype);
+        app._readinessRefreshing = false;
+        app._lastReadinessRefreshAt = 0;
+        app._readinessMinIntervalMs = 0;
+        app._switchPage = async (pageName, options = {}) => {
+            switchPageCalls.push({ pageName, options });
+        };
+        app._refreshStatus = async () => {};
+
+        const blockedReport = {
+            success: true,
+            ready: false,
+            blocking_count: 1,
+            checked_at: 100,
+            summary: {
+                title: '还差 1 项准备',
+                detail: '请先补齐阻塞项。',
+            },
+            checks: [
+                {
+                    key: 'api_config',
+                    label: 'API 配置',
+                    status: 'failed',
+                    blocking: true,
+                    message: '未检测到可用 API 预设',
+                    hint: '请前往设置页补齐至少一个可用预设。',
+                    action: 'open_settings',
+                    action_label: '前往设置',
+                },
+            ],
+            suggested_actions: [
+                {
+                    action: 'open_settings',
+                    label: '前往设置',
+                    source_check: 'api_config',
+                },
+            ],
+        };
+        const readyReport = {
+            success: true,
+            ready: true,
+            blocking_count: 0,
+            checked_at: 101,
+            summary: {
+                title: '运行准备已完成',
+                detail: '所有核心检查均已通过。',
+            },
+            checks: [
+                {
+                    key: 'api_config',
+                    label: 'API 配置',
+                    status: 'passed',
+                    blocking: false,
+                    message: '检测到 1 个可用预设',
+                    action: 'open_settings',
+                    action_label: '前往设置',
+                },
+            ],
+            suggested_actions: [
+                {
+                    action: 'retry',
+                    label: '重新检查',
+                    source_check: '',
+                },
+            ],
+        };
+
+        const queue = [blockedReport, readyReport];
+        apiService.getReadiness = async () => queue.shift();
+
+        await app._refreshReadiness({ force: true });
+
+        assert.equal(stateManager.get('readiness.firstRunPending'), true);
+        assert.equal(setFirstRunCompleteCalls, 0);
+        assert.equal(modal.classList.contains('active'), true);
+        assert.equal(list.children.length, 1);
+        assert.equal(settingsButton.hidden, false);
+        assert.match(title.textContent, /还差 1 项准备/);
+        assert.match(subtitle.textContent, /请先补齐阻塞项/);
+        assert.match(summary.textContent, /开箱即用/);
+
+        await app._handleReadinessAction('open_settings');
+
+        assert.deepEqual(switchPageCalls, [
+            {
+                pageName: 'settings',
+                options: { source: 'readiness' },
+            },
+        ]);
+        assert.equal(stateManager.get('readiness.firstRunGuideDismissed'), true);
+
+        stateManager.set('readiness.firstRunGuideDismissed', false);
+        await app._refreshReadiness({ force: true });
+
+        assert.equal(setFirstRunCompleteCalls, 1);
+        assert.equal(stateManager.get('readiness.firstRunPending'), false);
+        assert.equal(modal.classList.contains('active'), false);
+    } finally {
+        apiService.getReadiness = originalGetReadiness;
+        resetReadinessState();
+        env.restore();
+        if (previousWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = previousWindow;
+        }
+    }
+});
+
+test('app readiness action restart_as_admin delegates to electron api', async () => {
+    const previousWindow = globalThis.window;
+    const env = installDomStub();
+    try {
+        const { document, registerElement } = env;
+        registerElement('first-run-modal', document.createElement('div'));
+
+        let restartCalls = 0;
+        globalThis.window = {
+            electronAPI: {
+                async restartAppAsAdmin() {
+                    restartCalls += 1;
+                    return {
+                        success: true,
+                        message: '正在以管理员身份重新启动应用...',
+                    };
+                },
+            },
+        };
+
+        resetReadinessState();
+        stateManager.batchUpdate({
+            'readiness.firstRunPending': true,
+            'readiness.firstRunGuideDismissed': false,
+        });
+
+        const app = Object.create(App.prototype);
+        app._refreshStatus = async () => {};
+        app._switchPage = async () => {};
+
+        await app._handleReadinessAction('restart_as_admin');
+
+        assert.equal(restartCalls, 1);
+        assert.equal(stateManager.get('readiness.firstRunGuideDismissed'), true);
+    } finally {
+        resetReadinessState();
+        env.restore();
+        if (previousWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = previousWindow;
+        }
+    }
+});
 
 test('about page wires updater state and renders update panel on enter', async () => {
     const page = new AboutPage();

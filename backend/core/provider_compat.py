@@ -4,6 +4,8 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional
 
+ANTHROPIC_VERSION = "2023-06-01"
+
 
 @dataclass(slots=True)
 class NormalizedToolCall:
@@ -265,7 +267,7 @@ def normalize_chat_result(value: Any) -> NormalizedChatResult:
         payload = choice.get("message") or choice.get("delta") or choice
         finish_reason = str(choice.get("finish_reason") or "").strip()
     elif isinstance(value, dict):
-        finish_reason = str(value.get("finish_reason") or "").strip()
+        finish_reason = str(value.get("finish_reason") or value.get("stop_reason") or "").strip()
     else:
         finish_reason = str(getattr(value, "finish_reason", "") or "").strip()
 
@@ -319,6 +321,200 @@ def build_openai_chat_payload(
         payload["tools"] = list(tools)
     if tool_choice is not None:
         payload["tool_choice"] = tool_choice
+    return payload
+
+
+def _normalize_responses_content_parts(value: Any) -> List[Dict[str, Any]]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        text = value.strip()
+        return [{"type": "input_text", "text": text}] if text else []
+    if isinstance(value, list):
+        parts: List[Dict[str, Any]] = []
+        for item in value:
+            if isinstance(item, dict):
+                item_type = str(item.get("type") or "").strip().lower()
+                if item_type == "text":
+                    text = str(item.get("text") or "").strip()
+                    if text:
+                        parts.append({"type": "input_text", "text": text})
+                    continue
+                if item_type == "image_url":
+                    image_payload = item.get("image_url")
+                    if isinstance(image_payload, dict):
+                        url = str(image_payload.get("url") or "").strip()
+                        if url:
+                            parts.append({"type": "input_image", "image_url": url})
+                    continue
+                text = str(item.get("text") or "").strip()
+                if text:
+                    parts.append({"type": "input_text", "text": text})
+                continue
+            text = str(item or "").strip()
+            if text:
+                parts.append({"type": "input_text", "text": text})
+        return parts
+    text = str(value).strip()
+    return [{"type": "input_text", "text": text}] if text else []
+
+
+def build_openai_responses_payload(
+    *,
+    model: str,
+    messages: Iterable[Dict[str, Any]],
+    stream: bool = True,
+    temperature: Optional[float] = None,
+    max_tokens: Optional[int] = None,
+    max_completion_tokens: Optional[int] = None,
+    reasoning_effort: Optional[str] = None,
+) -> Dict[str, Any]:
+    instructions: List[str] = []
+    input_items: List[Dict[str, Any]] = []
+
+    for item in messages or []:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip().lower()
+        content_parts = _normalize_responses_content_parts(item.get("content"))
+        if not content_parts:
+            continue
+        if role == "system":
+            for part in content_parts:
+                text = str(part.get("text") or "").strip()
+                if text:
+                    instructions.append(text)
+            continue
+        if role not in {"user", "assistant", "developer"}:
+            role = "user"
+        input_items.append(
+            {
+                "type": "message",
+                "role": role,
+                "content": content_parts,
+            }
+        )
+
+    payload: Dict[str, Any] = {
+        "model": str(model or "").strip(),
+        "store": False,
+        "stream": bool(stream),
+        "input": input_items,
+        "text": {"verbosity": "medium"},
+    }
+    payload["instructions"] = (
+        "\n\n".join(item for item in instructions if item).strip()
+        or "You are a helpful assistant. Reply directly to the latest user message."
+    )
+    if temperature is not None:
+        payload["temperature"] = temperature
+    if max_completion_tokens is not None:
+        payload["max_output_tokens"] = max_completion_tokens
+    elif max_tokens is not None:
+        payload["max_output_tokens"] = max_tokens
+    if reasoning_effort:
+        payload["reasoning"] = {
+            "effort": str(reasoning_effort).strip(),
+            "summary": "auto",
+        }
+        payload["include"] = ["reasoning.encrypted_content"]
+    return payload
+
+
+def infer_auth_transport(base_url: str, explicit: Optional[str] = None) -> str:
+    normalized = str(explicit or "").strip().lower()
+    if normalized:
+        return normalized
+    base = str(base_url or "").strip().lower()
+    if "api.anthropic.com" in base:
+        return "anthropic_native"
+    return "openai_compatible"
+
+
+def build_anthropic_headers(
+    *,
+    api_key: str,
+    extra_headers: Optional[Dict[str, str]] = None,
+) -> Dict[str, str]:
+    headers: Dict[str, str] = {"Content-Type": "application/json"}
+    provided = dict(extra_headers or {})
+    lowered = {str(key or "").strip().lower(): str(key or "").strip() for key in provided}
+    if "anthropic-version" not in lowered:
+        headers["anthropic-version"] = ANTHROPIC_VERSION
+    headers.update(provided)
+    if api_key and "x-api-key" not in lowered and "authorization" not in lowered:
+        headers["x-api-key"] = api_key
+    return headers
+
+
+def _normalize_anthropic_content(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, list):
+        parts: List[str] = []
+        for item in value:
+            if isinstance(item, dict):
+                item_type = str(item.get("type") or "").strip().lower()
+                if item_type == "text":
+                    text = str(item.get("text") or "").strip()
+                    if text:
+                        parts.append(text)
+                    continue
+                if item_type in {"image_url", "input_audio"}:
+                    continue
+                nested_text = str(item.get("text") or "").strip()
+                if nested_text:
+                    parts.append(nested_text)
+                    continue
+            else:
+                text = str(item or "").strip()
+                if text:
+                    parts.append(text)
+        return "\n".join(part for part in parts if part).strip()
+    if isinstance(value, dict):
+        return str(value.get("text") or "").strip()
+    return str(value or "").strip()
+
+
+def build_anthropic_messages_payload(
+    *,
+    model: str,
+    messages: Iterable[Dict[str, Any]],
+    temperature: Optional[float] = None,
+    max_tokens: Optional[int] = None,
+    max_completion_tokens: Optional[int] = None,
+    stream: bool = False,
+) -> Dict[str, Any]:
+    system_parts: List[str] = []
+    normalized_messages: List[Dict[str, Any]] = []
+    for item in messages or []:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip().lower()
+        content = _normalize_anthropic_content(item.get("content"))
+        if not content:
+            continue
+        if role == "system":
+            system_parts.append(content)
+            continue
+        if role not in {"user", "assistant"}:
+            role = "user"
+        normalized_messages.append(
+            {
+                "role": role,
+                "content": [{"type": "text", "text": content}],
+            }
+        )
+    payload: Dict[str, Any] = {
+        "model": str(model or "").strip(),
+        "messages": normalized_messages,
+        "max_tokens": int(max_completion_tokens or max_tokens or 512),
+        "stream": bool(stream),
+    }
+    if temperature is not None:
+        payload["temperature"] = temperature
+    if system_parts:
+        payload["system"] = "\n\n".join(part for part in system_parts if part).strip()
     return payload
 
 

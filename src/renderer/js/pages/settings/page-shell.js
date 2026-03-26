@@ -4,10 +4,6 @@ function getDocument(deps = {}) {
     return deps.documentObj || globalThis.document;
 }
 
-function getWindow(deps = {}) {
-    return deps.windowObj || globalThis.window;
-}
-
 function isInputElement(target, deps = {}) {
     const InputClass = deps.HTMLInputElementClass || globalThis.HTMLInputElement;
     if (typeof InputClass === 'function') {
@@ -25,31 +21,31 @@ function isSelectElement(target, deps = {}) {
 }
 
 export function bindSettingsEvents(page, deps = {}) {
-    page.bindEvent('#btn-refresh-config', 'click', () => void page.loadSettings({ silent: false }));
-    page.bindEvent('#btn-save-settings', 'click', () => void page._saveSettings());
-    page.bindEvent('#btn-preview-prompt', 'click', () => void page._previewPrompt());
-    page.bindEvent('#btn-reset-close-behavior', 'click', () => void page._resetCloseBehavior());
-    page.bindEvent('#btn-settings-scroll-top', 'click', () => page._scrollToTop());
-    page.bindEvent('#btn-add-preset', 'click', () => page._openPresetModal());
-    page.bindEvent('#btn-close-modal', 'click', () => page._closePresetModal());
-    page.bindEvent('#btn-cancel-modal', 'click', () => page._closePresetModal());
-    page.bindEvent('#btn-save-modal', 'click', () => page._commitPresetModal());
-    page.bindEvent('#btn-toggle-key', 'click', () => page._togglePresetKeyVisibility());
-
-    page.$('#edit-preset-provider')?.addEventListener('change', () => void page._handlePresetProviderChange());
-    page.$('#edit-preset-model-select')?.addEventListener('change', () => page._syncPresetModelInput());
-
-    const documentObj = getDocument(deps);
-    documentObj.getElementById('preset-modal')?.addEventListener('click', (event) => {
-        if (event.target?.id === 'preset-modal') {
-            page._closePresetModal();
+    const bindOptional = (selectorOrTarget, eventName, handler) => {
+        const element = typeof selectorOrTarget === 'string' ? page.$(selectorOrTarget) : selectorOrTarget;
+        if (!element) {
+            return;
         }
-    });
+        page.bindEvent(element, eventName, handler);
+    };
 
-    page.bindEvent(getWindow(deps), 'keydown', (event) => {
-        if (event.key === 'Escape' && documentObj.getElementById('preset-modal')?.classList.contains('active')) {
-            page._closePresetModal();
+    bindOptional('#btn-refresh-config', 'click', () => void page.loadSettings({ silent: false }));
+    bindOptional('#btn-save-settings', 'click', () => void page._saveSettings());
+    bindOptional('#btn-preview-prompt', 'click', () => void page._previewPrompt());
+    bindOptional('#btn-reset-close-behavior', 'click', () => void page._resetCloseBehavior());
+    bindOptional('#btn-settings-scroll-top', 'click', () => page._scrollToTop());
+    bindOptional('#btn-create-quick-backup', 'click', () => void page._createWorkspaceBackup('quick'));
+    bindOptional('#btn-create-full-backup', 'click', () => void page._createWorkspaceBackup('full'));
+    bindOptional('#btn-restore-backup-dry-run', 'click', () => void page._restoreWorkspaceBackup(true));
+    bindOptional('#btn-restore-backup-apply', 'click', () => void page._restoreWorkspaceBackup(false));
+    bindOptional('#btn-cleanup-backup-dry-run', 'click', () => void page._cleanupWorkspaceBackups(true));
+    bindOptional('#btn-cleanup-backup-apply', 'click', () => void page._cleanupWorkspaceBackups(false));
+    bindOptional('#settings-section-nav', 'click', (event) => {
+        const button = event?.target?.closest?.('[data-settings-section]');
+        if (!button) {
+            return;
         }
+        page._setSettingsSection?.(button.dataset.settingsSection || 'all');
     });
 }
 
@@ -72,7 +68,7 @@ export function bindSettingsAutoSave(page, deps = {}) {
         const immediate = isInputElement(target, deps)
             ? target.type === 'checkbox'
             : isSelectElement(target, deps);
-        page._scheduleAutoSave({ immediate });
+        page._scheduleAutoSave({ immediate, target });
     };
 
     root.addEventListener('input', schedule, true);

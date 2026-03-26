@@ -6,6 +6,8 @@
 
 | 日期 | 标题 |
 |------|------|
+| [2026-03-26](#2026-03-26-稳定性产品化与模型认证中心升级) | 稳定性产品化与模型认证中心升级 |
+| [2026-03-25](#2026-03-25-模型与认证中心增强) | 模型与认证中心增强 |
 | [2026-03-20](#2026-03-20-安装版应用内自动更新恢复) | 安装版应用内自动更新恢复 |
 | [2026-03-17](#2026-03-17-桌面端主链路与运行时配置体系修复) | 桌面端主链路与运行时配置体系修复 |
 | [2026-03-17](#2026-03-17-成本定价默认快照补齐) | 成本定价默认快照补齐 |
@@ -39,6 +41,64 @@
 - `portable` 适合免安装分发
 - `setup` 是默认安装包，同时也是安装版应用内升级时下载与执行的产物
 - `MSI` 适合企业或特殊分发场景，但不进入日常发版链路
+
+## 2026-03-26 稳定性产品化与模型认证中心升级
+
+本次 `v1.4.0` 聚焦“可长期使用”的核心闭环，重点把模型配置、回复风险控制、工作区恢复与发布前质量门禁补成一套更稳的产品链路。
+
+### 本次更新
+
+- 新增独立“模型”页，模型配置正式从设置页拆出；同一 Provider 现在可并存 `API Key`、`OAuth`、本机同步与网页登录会话等多种认证方式，并支持自动优先级与手动指定默认认证。
+- 模型与认证中心完成后端统一化，新增 `GET /api/model_auth/overview` 与 `POST /api/model_auth/action`，Provider 状态、认证摘要、健康检查与运行时阻塞原因统一由后端聚合返回。
+- 补齐 `OpenAI / Codex / ChatGPT`、`Google / Gemini / Gemini CLI`、`Qwen / DashScope / Qwen Code`、`Claude / Claude Code`、`Kimi / Kimi Code`、`Doubao / Yuanbao` 等 Provider 的本机认证发现、状态跟随与运行时适配能力。
+- 新增“回复策略”与“待审批回复”机制，可按新联系人、群聊、静音时段、敏感关键词或单会话规则，将回复转入持久化审批队列后再人工确认发送。
+- 新增工作区备份与恢复能力，支持 `quick / full` 备份、完整性校验、旧备份清理、恢复前保险快照，以及 `dry-run -> 校验 -> 恢复 -> 结果摘要` 的保守恢复流程。
+- 新增运行准备度检查、自动脱敏诊断快照与管理员提权重启链路；桌面端现在可以直接识别 readiness 阻塞项，并优先执行提权、打开微信或跳转配置等建议动作。
+- 新增离线评测与持续集成质量门禁，支持通过 `python run.py eval` 生成确定性评测报告，并在 CI 中执行 `ruff`、针对性回归测试与离线 smoke gate。
+
+### 影响说明
+
+- 原设置页中的模型配置入口已迁移到独立“模型”页；设置页保留当前生效模型摘要与跳转入口。
+- 旧模型认证接口保留兼容壳层，但桌面端主流程已统一切换到模型与认证中心接口。
+- 本次版本不包含公开协议级破坏性变更，现有配置会按迁移逻辑自动收敛到新的模型认证中心结构。
+
+## 2026-03-25 模型与认证中心增强
+
+本轮把原先混在设置页里的 API 预设升级成了独立的模型与认证中心，重点变化如下：
+
+- 新增独立“模型”页，负责 Provider 展示、认证方式切换、本机认证扫描、连接测试与默认认证方式管理；设置页不再承载复杂模型认证表单。
+- 后端新增统一 `Provider + Auth Framework`，认证类型统一建模为 `api_key / oauth / local_import / web_session`，不再把所有网页登录都混称为 OAuth。
+- 新增模型中心接口：`GET /api/model_auth/overview` 与 `POST /api/model_auth/action`，前端 Provider 卡片完全由后端状态聚合与动作编排驱动。
+- 引入 `backend/model_auth/` 模块树，拆分为 `domain / providers / storage / sync / services`，统一管理 Provider 定义、能力矩阵、凭据来源、健康检查与状态推导。
+- 旧 `api.presets` 会被迁移并投影到新的 `api.provider_auth_center` 结构；敏感凭据改为通过 `credential_ref` 指向后端安全存储，运行时再按需水合。
+- 已接入重点 Provider 的能力模型：
+  - `OpenAI / Codex / ChatGPT`：`api_key + local_import`
+  - `Google / Gemini / Gemini CLI`：`api_key + oauth + local_import`
+  - `Qwen / DashScope / Qwen Code`：`api_key + oauth + local_import`
+  - `Doubao / 火山方舟 / TRAE`：`api_key + web_session`
+  - `Yuanbao / 元宝`：`web_session`
+- 认证动作改为由后端按 auth method 语义动态下发，避免把本地浏览器登录、网页登录 Session 等非标准流程都误叫成 OAuth。
+- 扩展位更新：
+  - `Claude / Claude Code`：保留 `api_key + local_import` 方向
+  - `Kimi / Moonshot / Kimi Code`：保留 `api_key + oauth + local_import` 方向
+- 同时预留 `Anthropic / Claude`、`Kimi`、`GLM`、`MiniMax`、`DeepSeek` 等 Provider 的标准扩展方式，并动态兼容现有 `model_catalog` 中的 OpenAI-compatible Provider。
+
+本轮重点验证：
+
+- `.\\.venv\\Scripts\\python -m py_compile backend\\model_auth\\providers\\registry.py backend\\model_auth\\sync\\discovery.py backend\\model_auth\\services\\migration.py backend\\model_auth\\services\\health.py backend\\model_auth\\services\\status.py backend\\model_auth\\services\\center.py backend\\shared_config.py backend\\config_schemas.py backend\\core\\config_probe.py backend\\core\\factory.py backend\\api.py`
+  - 结果：通过
+- `node --check src\\renderer\\js\\pages\\ModelsPage.js`
+  - 结果：通过
+- `node --check src\\renderer\\js\\services\\ApiService.js`
+  - 结果：通过
+- `.\\.venv\\Scripts\\python -m pytest tests\\test_model_auth_center.py tests\\test_model_auth_api.py -q`
+  - 结果：`18 passed`
+- `.\\.venv\\Scripts\\python -m pytest tests\\test_api.py -q`
+  - 结果：`48 passed`
+
+说明：
+
+- 由于当前环境没有真实的本机 `codex` / `qwen` / `gemini` 登录态，也没有 Doubao / Yuanbao 的稳定消费级网页登录会话，本轮未在仓库内执行真实外部授权演练；当前版本重点完成架构、迁移、状态编排、页面接线与自动化验证闭环。
 
 ## 2026-03-20 安装版应用内自动更新恢复
 

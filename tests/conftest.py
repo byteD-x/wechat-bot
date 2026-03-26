@@ -6,6 +6,8 @@ import os
 os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
 sys.dont_write_bytecode = True
 
+TEST_LOG_PATH = os.path.join("data", "runtime", "test", "test.log")
+
 @pytest.fixture
 def mock_config():
     return {
@@ -21,6 +23,6 @@ def mock_config():
         },
         "logging": {
             "level": "INFO",
-            "log_file": "test.log",
+            "log_file": TEST_LOG_PATH,
         }
     }

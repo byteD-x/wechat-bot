@@ -292,6 +292,19 @@ class ConfigService:
 
             if not candidate.get("provider_id"):
                 candidate["provider_id"] = (current_match or {}).get("provider_id")
+            for field_name in (
+                "credential_ref",
+                "provider_auth_profile_id",
+                "auth_mode",
+                "oauth_provider",
+                "oauth_source",
+                "oauth_binding",
+                "oauth_experimental_ack",
+                "oauth_project_id",
+                "oauth_location",
+            ):
+                if field_name not in candidate and current_match and field_name in current_match:
+                    candidate[field_name] = deepcopy(current_match.get(field_name))
 
             normalized = merge_provider_defaults(candidate)
             allow_empty_key = bool(normalized.get("allow_empty_key", False))

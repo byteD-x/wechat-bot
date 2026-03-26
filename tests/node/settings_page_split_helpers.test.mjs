@@ -8,20 +8,39 @@ import {
     resetCloseBehavior,
     saveSettings,
 } from '../../src/renderer/js/pages/settings/action-controller.js';
+import { renderSettingsPageShell } from '../../src/renderer/js/app-shell/pages/settings.js';
 import {
     bindSettingsAutoSave,
     bindSettingsEvents,
 } from '../../src/renderer/js/pages/settings/page-shell.js';
+import { renderBackupPanel } from '../../src/renderer/js/pages/settings/backup-panel.js';
+import { renderSettingsHero } from '../../src/renderer/js/pages/settings/hero-renderer.js';
 import {
+    buildModelSummaryView,
     loadSettings,
     scheduleAutoSave,
     shouldRefreshAudit,
 } from '../../src/renderer/js/pages/settings/runtime-sync.js';
 import {
+    EMAIL_VISIBILITY_STORAGE_KEY,
+    maskEmailAddress,
+} from '../../src/renderer/js/pages/model-auth-display.js';
+import {
     commitPresetModal,
     openPresetModal,
 } from '../../src/renderer/js/pages/settings/preset-controller.js';
+import SettingsPage from '../../src/renderer/js/pages/SettingsPage.js';
+import ModelsPage, {
+    getActionWorkflowKind,
+    getLocalizedActionLabel,
+    groupAuthStates,
+    parseCallbackPayload,
+    resolveCardViewMode,
+    sortCardsForDisplay,
+    summarizeCards,
+} from '../../src/renderer/js/pages/ModelsPage.js';
 import { apiService } from '../../src/renderer/js/services/ApiService.js';
+import { toast } from '../../src/renderer/js/services/NotificationService.js';
 import { installDomStub } from './dom-stub.mjs';
 
 async function withDom(run) {
@@ -49,6 +68,34 @@ async function withDom(run) {
     }
 }
 
+async function withMockStorage(initialState, run) {
+    const previousLocalStorage = globalThis.localStorage;
+    const state = new Map(Object.entries(initialState || {}));
+    globalThis.localStorage = {
+        getItem(key) {
+            return state.has(String(key)) ? state.get(String(key)) : null;
+        },
+        setItem(key, value) {
+            state.set(String(key), String(value));
+        },
+        removeItem(key) {
+            state.delete(String(key));
+        },
+        clear() {
+            state.clear();
+        },
+    };
+    try {
+        await run({ state });
+    } finally {
+        if (previousLocalStorage === undefined) {
+            delete globalThis.localStorage;
+        } else {
+            globalThis.localStorage = previousLocalStorage;
+        }
+    }
+}
+
 test('runtime-sync loadSettings refreshes page state and schedules audit when needed', async () => {
     const originalGetConfig = apiService.getConfig;
     try {
@@ -62,9 +109,6 @@ test('runtime-sync loadSettings refreshes page state and schedules audit when ne
             logging: {},
             agent: {},
             services: {},
-            modelCatalog: {
-                providers: [{ id: 'openai', label: 'OpenAI', default_model: 'gpt-4.1' }],
-            },
         });
 
         await withDom(async () => {
@@ -72,10 +116,6 @@ test('runtime-sync loadSettings refreshes page state and schedules audit when ne
             const page = {
                 _config: null,
                 _configAudit: null,
-                _modelCatalog: null,
-                _providersById: new Map(),
-                _presetDrafts: [],
-                _activePreset: '',
                 _loaded: false,
                 _loadingPromise: null,
                 _auditPromise: null,
@@ -104,9 +144,6 @@ test('runtime-sync loadSettings refreshes page state and schedules audit when ne
                 _fillForm() {
                     calls.push('fill');
                 },
-                _renderPresetList() {
-                    calls.push('preset-list');
-                },
                 _renderHero() {
                     calls.push('hero');
                 },
@@ -118,9 +155,6 @@ test('runtime-sync loadSettings refreshes page state and schedules audit when ne
                 },
                 _renderLoadError(message) {
                     calls.push(`load-error:${message}`);
-                },
-                _warmOllamaModels() {
-                    calls.push('warm-models');
                 },
                 _loadConfigAudit(options) {
                     calls.push(`audit:${options.force ? 'forced' : 'normal'}`);
@@ -134,14 +168,9 @@ test('runtime-sync loadSettings refreshes page state and schedules audit when ne
             });
 
             assert.equal(page._loaded, true);
-            assert.equal(page._activePreset, 'default');
-            assert.equal(page._presetDrafts.length, 1);
-            assert.equal(page._providersById.get('openai')?.label, 'OpenAI');
             assert.equal(page._lastConfigVersion, 4);
             assert.deepEqual(calls, [
-                'warm-models',
                 'fill',
-                'preset-list',
                 'hero',
                 'export-rag',
                 'hide-feedback',
@@ -210,6 +239,56 @@ test('runtime-sync scheduleAutoSave debounces and preserves immediate path', () 
         }
     }
 });
+
+test('backup panel renders backup summary, restore status and eval state', async () => withDom(async ({ document, registerElement }) => {
+    const summary = registerElement('settings-backup-summary', document.createElement('div'));
+    const evalSummary = registerElement('settings-eval-summary', document.createElement('div'));
+    const select = registerElement('settings-backup-select', document.createElement('select'));
+    const feedback = registerElement('settings-backup-restore-feedback', document.createElement('div'));
+    const list = registerElement('settings-backup-list', document.createElement('div'));
+
+    const page = {
+        _backupState: {
+            backups: [
+                {
+                    id: '20260325-quick',
+                    mode: 'quick',
+                    created_at: 1_700_000_000,
+                    size_bytes: 4096,
+                    included_files: ['app_config.json', 'chat_memory.db'],
+                },
+            ],
+            summary: {
+                latest_quick_backup_at: 1_700_000_000,
+                latest_full_backup_at: 1_700_001_000,
+                last_restore_result: {
+                    success: true,
+                    pre_restore_backup: { id: 'pre-restore-1' },
+                },
+            },
+            latestEval: {
+                summary: {
+                    passed: true,
+                    total_cases: 20,
+                    retrieval_hit_rate: 0.5,
+                },
+            },
+            restoreFeedback: '',
+        },
+        $(selector) {
+            return document.getElementById(selector.slice(1));
+        },
+    };
+
+    renderBackupPanel(page);
+
+    assert.equal(summary.textContent.includes('最近快速备份'), true);
+    assert.equal(evalSummary.textContent.includes('20'), true);
+    assert.equal(select.children.length, 1);
+    assert.equal(feedback.textContent.includes('保险备份'), true);
+    assert.equal(list.textContent.includes('快速备份'), true);
+    assert.equal(list.textContent.includes('20260325-quick'), true);
+}));
 
 test('preset-controller keeps modal flow and draft commit behavior stable', async () => withDom(async ({ document, registerElement }) => {
     const modal = document.createElement('div');
@@ -329,6 +408,24 @@ function createToastRecorder() {
         },
         getErrorMessage(error, fallback) {
             return error?.message || fallback;
+        },
+    };
+}
+
+function createClassList() {
+    const tokens = new Set();
+    return {
+        contains(token) {
+            return tokens.has(token);
+        },
+        toggle(token, force) {
+            const shouldAdd = force === undefined ? !tokens.has(token) : !!force;
+            if (shouldAdd) {
+                tokens.add(token);
+            } else {
+                tokens.delete(token);
+            }
+            return shouldAdd;
         },
     };
 }
@@ -493,19 +590,22 @@ test('settings action helpers handle preview and updater flows', async () => wit
 }));
 
 test('settings page shell binds events and auto save routing stably', async () => withDom(async ({ document, registerElement }) => {
-    const providerSelect = {
-        listeners: {},
-        addEventListener(type, handler) {
-            this.listeners[type] = handler;
-        },
-    };
-    const modelSelect = {
-        listeners: {},
-        addEventListener(type, handler) {
-            this.listeners[type] = handler;
-        },
-    };
-    const modal = registerElement('preset-modal', document.createElement('div'));
+    const controls = new Map();
+    [
+        'btn-refresh-config',
+        'btn-save-settings',
+        'btn-preview-prompt',
+        'btn-reset-close-behavior',
+        'btn-settings-scroll-top',
+        'btn-create-quick-backup',
+        'btn-create-full-backup',
+        'btn-restore-backup-dry-run',
+        'btn-restore-backup-apply',
+        'btn-cleanup-backup-dry-run',
+        'btn-cleanup-backup-apply',
+    ].forEach((id) => {
+        controls.set(`#${id}`, registerElement(id, document.createElement('button')));
+    });
     const rootListeners = {};
     const root = {
         addEventListener(type, handler) {
@@ -529,51 +629,35 @@ test('settings page shell binds events and auto save routing stably', async () =
         _previewPrompt() {
             this.calls.push('preview');
         },
-        _checkUpdates() {
-            this.calls.push('check');
-        },
-        _openUpdateDownload() {
-            this.calls.push('download');
-        },
         _resetCloseBehavior() {
             this.calls.push('reset');
         },
         _scrollToTop() {
             this.calls.push('top');
         },
-        _openPresetModal() {
-            this.calls.push('open-modal');
+        _createWorkspaceBackup(mode) {
+            this.calls.push(`backup-create:${mode}`);
         },
-        _closePresetModal() {
-            this.calls.push('close-modal');
+        _restoreWorkspaceBackup(dryRun) {
+            this.calls.push(`backup-restore:${dryRun}`);
         },
-        _commitPresetModal() {
-            this.calls.push('commit-modal');
-        },
-        _togglePresetKeyVisibility() {
-            this.calls.push('toggle-key');
-        },
-        _handlePresetProviderChange() {
-            this.calls.push('provider-change');
-        },
-        _syncPresetModelInput() {
-            this.calls.push('model-sync');
+        _cleanupWorkspaceBackups(dryRun) {
+            this.calls.push(`backup-cleanup:${dryRun}`);
         },
         _scheduleAutoSave(options) {
             this.calls.push(`autosave:${options.immediate}`);
         },
+        emit(event, payload) {
+            this.calls.push(`${event}:${payload}`);
+        },
         calls: [],
         $(selector) {
-            return {
-                '#edit-preset-provider': providerSelect,
-                '#edit-preset-model-select': modelSelect,
-            }[selector] || null;
+            return controls.get(selector) || null;
         },
     };
 
     bindSettingsEvents(page, {
         documentObj: document,
-        windowObj: {},
     });
     bindSettingsAutoSave(page, {
         rootElement: root,
@@ -585,10 +669,14 @@ test('settings page shell binds events and auto save routing stably', async () =
     page.bindings[0].handler();
     page.bindings[1].handler();
     page.bindings[2].handler();
-    providerSelect.listeners.change();
-    modelSelect.listeners.change();
-    modal.classList.add('active');
-    page.bindings.at(-1).handler({ key: 'Escape' });
+    page.bindings[3].handler();
+    page.bindings[4].handler();
+    page.bindings[5].handler();
+    page.bindings[6].handler();
+    page.bindings[7].handler();
+    page.bindings[8].handler();
+    page.bindings[9].handler();
+    page.bindings[10].handler();
     rootListeners.input({ target: { id: 'setting-group-at-only', tagName: 'INPUT', type: 'checkbox' } });
     rootListeners.change({ target: { id: 'setting-log-level', tagName: 'SELECT' } });
     rootListeners.input({ target: { id: 'unknown-field', tagName: 'INPUT', type: 'text' } });
@@ -597,10 +685,1120 @@ test('settings page shell binds events and auto save routing stably', async () =
         'load',
         'save',
         'preview',
-        'provider-change',
-        'model-sync',
-        'close-modal',
+        'reset',
+        'top',
+        'backup-create:quick',
+        'backup-create:full',
+        'backup-restore:true',
+        'backup-restore:false',
+        'backup-cleanup:true',
+        'backup-cleanup:false',
         'autosave:true',
         'autosave:true',
     ]);
 }));
+
+test('runtime-sync model summary prefers model auth overview before legacy preset projection', () => {
+    const summary = buildModelSummaryView(
+        {
+            active_provider_id: 'qwen',
+            cards: [
+                {
+                    provider: { id: 'qwen', label: 'Qwen', default_model: 'qwen3-coder-plus' },
+                    selected_label: 'Coding Plan API Key',
+                    summary: 'API Key 已配置',
+                    metadata: {
+                        is_active_provider: true,
+                        default_model: 'qwen3-coder-plus',
+                    },
+                },
+            ],
+        },
+        {
+            api: {
+                active_preset: 'OpenAI',
+                presets: [{ name: 'OpenAI', provider_id: 'openai', model: 'gpt-4.1', auth_mode: 'api_key' }],
+            },
+        },
+    );
+
+    assert.deepEqual(summary, {
+        title: 'Qwen · qwen3-coder-plus',
+        meta: 'Coding Plan API Key · API Key 已配置',
+    });
+});
+
+test('models page groups shared auth sources by source group and prefers full email display', () => {
+    const provider = {
+        id: 'google',
+        auth_methods: [
+            { id: 'google_oauth', type: 'oauth', label: 'Google OAuth' },
+            { id: 'gemini_cli_local', type: 'local_import', label: 'Gemini CLI 本机登录' },
+            { id: 'api_key', type: 'api_key', label: 'Gemini API Key' },
+        ],
+    };
+    const groups = groupAuthStates(
+        {
+            auth_states: [
+                {
+                    method_id: 'google_oauth',
+                    status: 'connected',
+                    default_selected: true,
+                    account_label: 'Google 工作账号',
+                    account_email: 'work@example.com',
+                    metadata: {
+                        profile_id: 'google:google_oauth:work',
+                        source_group: {
+                            id: 'google_gemini_cli:work@example.com',
+                            label: 'Google / Gemini 登录态',
+                            kind: 'shared_auth_provider',
+                            shared_auth_provider_id: 'google_gemini_cli',
+                            account_key: 'work@example.com',
+                        },
+                    },
+                    actions: [{ id: 'set_default_profile' }, { id: 'start_browser_auth' }],
+                },
+                {
+                    method_id: 'gemini_cli_local',
+                    status: 'available_to_import',
+                    account_label: 'Gemini 本机账号',
+                    account_email: 'work@example.com',
+                    metadata: {
+                        source_group: {
+                            id: 'google_gemini_cli:work@example.com',
+                            label: 'Google / Gemini 登录态',
+                            kind: 'shared_auth_provider',
+                            shared_auth_provider_id: 'google_gemini_cli',
+                            account_key: 'work@example.com',
+                        },
+                    },
+                    actions: [{ id: 'bind_local_auth' }],
+                },
+                {
+                    method_id: 'google_oauth',
+                    status: 'connected',
+                    account_label: 'Google 备用账号',
+                    account_email: 'other@example.com',
+                    metadata: {
+                        profile_id: 'google:google_oauth:other',
+                        source_group: {
+                            id: 'google_gemini_cli:other@example.com',
+                            label: 'Google / Gemini 登录态',
+                            kind: 'shared_auth_provider',
+                            shared_auth_provider_id: 'google_gemini_cli',
+                            account_key: 'other@example.com',
+                        },
+                    },
+                    actions: [{ id: 'set_default_profile' }],
+                },
+            ],
+        },
+        provider,
+    );
+
+    assert.equal(groups.length, 2);
+    assert.equal(groups[0].group_label, 'Google / Gemini 登录态');
+    assert.equal(groups[0].account_display, 'work@example.com');
+    assert.equal(groups[0].default_selected, true);
+    assert.deepEqual(
+        groups[0].actions.map((item) => item.id),
+        ['set_default_profile', 'start_browser_auth', 'bind_local_auth'],
+    );
+    assert.equal(groups[1].account_display, 'other@example.com');
+});
+
+test('models page toggles between full and masked email display', async () => {
+    await withMockStorage({}, async ({ state }) => {
+        const page = new ModelsPage();
+        const maskedEmail = maskEmailAddress('work@example.com');
+        page.render = () => {};
+
+        assert.equal(page.renderFilterRow().includes('显示脱敏邮箱'), true);
+        assert.equal(page.renderProviderListItem({
+            provider: { id: 'openai', label: 'OpenAI' },
+            selected_label: 'work@example.com',
+            state: 'connected',
+            metadata: {},
+        }).includes('work@example.com'), true);
+
+        await page.handleButtonAction({
+            dataset: {
+                modelAuthUi: 'toggle_email_visibility',
+            },
+        });
+
+        assert.equal(state.get(EMAIL_VISIBILITY_STORAGE_KEY), 'masked');
+        assert.equal(page.renderFilterRow().includes('显示完整邮箱'), true);
+        assert.equal(page.getSyncDetail({
+            metadata: {
+                provider_sync: {
+                    source_message: '已同步 work@example.com',
+                },
+            },
+        }), `已同步 ${maskedEmail}`);
+
+        const rowMarkup = page.renderWorkbenchAuthRow(
+            {},
+            { id: 'openai' },
+            { id: 'chatgpt_local', label: 'ChatGPT 本机登录' },
+            {
+                method_id: 'chatgpt_local',
+                status: 'following_local_auth',
+                actions: [],
+            },
+            {
+                account_display: 'work@example.com',
+                grouped_method_labels: ['ChatGPT 本机登录'],
+                status: 'following_local_auth',
+                actions: [],
+            },
+        );
+        assert.equal(rowMarkup.includes(maskedEmail), true);
+        assert.equal(rowMarkup.includes('work@example.com'), false);
+    });
+});
+
+test('runtime-sync model summary masks auth email when preference is masked', async () => {
+    await withMockStorage({
+        [EMAIL_VISIBILITY_STORAGE_KEY]: 'masked',
+    }, async () => {
+        const summary = buildModelSummaryView(
+            {
+                active_provider_id: 'openai',
+                cards: [
+                    {
+                        provider: { id: 'openai', label: 'OpenAI', default_model: 'gpt-5.4' },
+                        selected_label: 'work@example.com',
+                        summary: '已连接',
+                        metadata: {
+                            is_active_provider: true,
+                            default_model: 'gpt-5.4',
+                        },
+                    },
+                ],
+            },
+            null,
+        );
+
+        assert.equal(summary.meta.includes(maskEmailAddress('work@example.com')), true);
+        assert.equal(summary.meta.includes('work@example.com'), false);
+    });
+});
+
+test('settings shell keeps workbench structure balanced for section switching', () => {
+    const markup = renderSettingsPageShell();
+    assert.equal(markup.includes('id="settings-section-nav"'), true);
+    assert.equal((markup.match(/<div\b/g) || []).length, (markup.match(/<\/div>/g) || []).length);
+});
+
+test('settings shell removes duplicated model summary block from config center', () => {
+    const markup = renderSettingsPageShell();
+    assert.equal(markup.includes('model-summary-card'), false);
+    assert.equal(markup.includes('settings-model-summary-title'), false);
+});
+
+test('settings hero stays focused on generic config status instead of model testing', async () => {
+    await withDom(async () => {
+        const container = document.createElement('div');
+        const page = {
+            _config: {
+                agent: {
+                    langsmith_api_key_configured: false,
+                },
+            },
+            _configAudit: {
+                version: 3,
+                loaded_at: '2026-03-26T10:00:00',
+                audit: {
+                    unknown_override_paths: ['a'],
+                    dormant_paths: ['b', 'c'],
+                },
+            },
+            _auditStatus: 'ready',
+            _auditMessage: '',
+            _hasPendingChanges: false,
+            getState(path) {
+                if (path === 'bot.connected') {
+                    return true;
+                }
+                if (path === 'bot.status.config_snapshot.version') {
+                    return 9;
+                }
+                return undefined;
+            },
+            $(selector) {
+                if (selector === '#current-config-hero') {
+                    return container;
+                }
+                return null;
+            },
+        };
+
+        renderSettingsHero(page);
+        const renderedText = String(container.textContent || '');
+
+        assert.equal(renderedText.includes('测试当前连接'), false);
+        assert.equal(renderedText.includes('当前运行预设'), false);
+        assert.equal(renderedText.includes('API Key'), false);
+        assert.equal(renderedText.includes('Ollama'), false);
+        assert.equal(renderedText.includes('LangSmith'), true);
+    });
+});
+
+test('settings shell exposes common section as the default entry', () => {
+    const markup = renderSettingsPageShell();
+    assert.equal(markup.includes('data-settings-section="common"'), true);
+    assert.equal(markup.includes('data-settings-section="common" aria-pressed="true">常用'), true);
+});
+
+test('settings page full payload excludes api preset state after model center split', () => {
+    const page = new SettingsPage();
+    const selectors = {
+        '#setting-self-name': { value: '???' },
+    };
+
+    page.$ = (selector) => selectors[selector] || null;
+
+    const payload = page._collectPayload();
+
+    assert.equal(payload.bot?.self_name, '???');
+    assert.equal(payload.api, undefined);
+});
+
+test('settings page hydrates shared groups and card order for common modules', () => {
+    const page = new SettingsPage();
+    const makeCard = (title) => ({
+        dataset: {},
+        style: {},
+        querySelector(selector) {
+            if (selector === '.settings-card-title') {
+                return { textContent: title };
+            }
+            return null;
+        },
+    });
+    const cards = [
+        makeCard('模型与认证'),
+        makeCard('备份与恢复'),
+        makeCard('白名单管理'),
+    ];
+
+    page.$$ = (selector) => selector === '.settings-card' ? cards : [];
+
+    page._hydrateSettingsSections();
+
+    assert.equal(cards[0].dataset.settingsGroup, 'workspace');
+    assert.equal(cards[0].dataset.settingsGroups, 'workspace common');
+    assert.equal(cards[0].style.order, '10');
+    assert.equal(cards[1].dataset.settingsGroups, 'workspace');
+    assert.equal(cards[2].dataset.settingsGroups, 'guard common');
+});
+
+test('settings page switches section cards and nav state consistently', () => {
+    const page = new SettingsPage();
+    const workspaceButton = {
+        dataset: { settingsSection: 'workspace' },
+        classList: createClassList(),
+        setAttribute(name, value) {
+            this[name] = value;
+        },
+    };
+    const promptButton = {
+        dataset: { settingsSection: 'prompt' },
+        classList: createClassList(),
+        setAttribute(name, value) {
+            this[name] = value;
+        },
+    };
+    const workspaceCard = {
+        dataset: { settingsGroup: 'workspace' },
+        hidden: false,
+    };
+    const promptCard = {
+        dataset: { settingsGroup: 'prompt' },
+        hidden: false,
+    };
+
+    page.$$ = (selector) => {
+        if (selector === '#settings-section-nav [data-settings-section]') {
+            return [workspaceButton, promptButton];
+        }
+        if (selector === '.settings-card') {
+            return [workspaceCard, promptCard];
+        }
+        return [];
+    };
+
+    page._setSettingsSection('prompt');
+
+    assert.equal(page._activeSettingsSection, 'prompt');
+    assert.equal(workspaceButton.classList.contains('active'), false);
+    assert.equal(promptButton.classList.contains('active'), true);
+    assert.equal(workspaceButton['aria-pressed'], 'false');
+    assert.equal(promptButton['aria-pressed'], 'true');
+    assert.equal(workspaceCard.hidden, true);
+    assert.equal(promptCard.hidden, false);
+});
+
+test('settings page keeps shared cards visible in common and original sections', () => {
+    const page = new SettingsPage();
+    const commonButton = {
+        dataset: { settingsSection: 'common' },
+        classList: createClassList(),
+        setAttribute(name, value) {
+            this[name] = value;
+        },
+    };
+    const botButton = {
+        dataset: { settingsSection: 'bot' },
+        classList: createClassList(),
+        setAttribute(name, value) {
+            this[name] = value;
+        },
+    };
+    const sharedCard = {
+        dataset: { settingsGroups: 'bot common' },
+        hidden: false,
+    };
+    const guardCard = {
+        dataset: { settingsGroups: 'guard' },
+        hidden: false,
+    };
+
+    page.$$ = (selector) => {
+        if (selector === '#settings-section-nav [data-settings-section]') {
+            return [commonButton, botButton];
+        }
+        if (selector === '.settings-card') {
+            return [sharedCard, guardCard];
+        }
+        return [];
+    };
+
+    page._setSettingsSection('common');
+    assert.equal(sharedCard.hidden, false);
+    assert.equal(guardCard.hidden, true);
+
+    page._setSettingsSection('bot');
+    assert.equal(sharedCard.hidden, false);
+    assert.equal(guardCard.hidden, true);
+});
+
+test('models page callback payload parser keeps JSON and wraps plain text safely', () => {
+    assert.deepEqual(parseCallbackPayload('{"code":"abc","state":"123"}'), { code: 'abc', state: '123' });
+    assert.deepEqual(parseCallbackPayload('plain-code'), { raw_payload: 'plain-code' });
+    assert.deepEqual(parseCallbackPayload(''), {});
+});
+
+test('models page localizes core actions and switches between wizard and workbench modes', async () => {
+    assert.equal(getLocalizedActionLabel('start_browser_auth'), '\u524d\u5f80\u767b\u5f55\u9875');
+    assert.equal(getLocalizedActionLabel('set_active_provider'), '\u8bbe\u4e3a\u5f53\u524d\u56de\u590d\u6a21\u578b');
+    assert.equal(getLocalizedActionLabel('unknown_action'), 'unknown_action');
+    assert.equal(getActionWorkflowKind('start_browser_auth', { type: 'web_session' }), 'browser');
+    assert.equal(getActionWorkflowKind('show_session_form', { type: 'web_session' }), 'session');
+    assert.equal(getActionWorkflowKind('bind_local_auth', { type: 'web_session' }), 'local');
+
+    assert.equal(resolveCardViewMode({ metadata: { can_set_active_provider: true } }), 'workbench');
+    assert.equal(resolveCardViewMode({ metadata: { can_set_active_provider: false } }), 'wizard');
+
+    const page = new ModelsPage();
+    page.renderWorkflowModal = () => {};
+
+    await page.openWorkflow({
+        kind: 'api_key',
+        providerId: 'openai',
+        methodId: 'api_key',
+    });
+    assert.equal(page._activeWorkflow?.kind, 'onboarding');
+    assert.equal(page._activeWorkflow?.onboardingType, 'api_key');
+
+    page.markOnboardingSeen('api_key');
+    await page.openWorkflow({
+        kind: 'api_key',
+        providerId: 'openai',
+        methodId: 'api_key',
+    });
+    assert.equal(page._activeWorkflow?.kind, 'api_key');
+});
+
+test('models page preserves full auth methods from overview providers and routes doubao browser actions correctly', () => {
+    const page = new ModelsPage();
+    page.applyModelCatalog({
+        providers: [
+            {
+                id: 'doubao',
+                label: 'Doubao',
+                models: ['doubao-seed-1-6-flash-250715'],
+                auth_methods: [
+                    {
+                        id: 'api_key',
+                        type: 'api_key',
+                        label: 'Ark API Key',
+                    },
+                ],
+            },
+        ],
+    });
+
+    const mergedProvider = page.getProvider('doubao', {
+        id: 'doubao',
+        label: 'Doubao',
+        supported_models: ['doubao-seed-1-8-251228'],
+        auth_methods: [
+            {
+                id: 'api_key',
+                type: 'api_key',
+                label: 'Ark API Key',
+            },
+            {
+                id: 'doubao_web_session',
+                type: 'web_session',
+                label: 'Doubao Web Session',
+            },
+        ],
+    });
+
+    assert.deepEqual(
+        mergedProvider.auth_methods.map((item) => item.id),
+        ['api_key', 'doubao_web_session'],
+    );
+    assert.deepEqual(
+        mergedProvider.models,
+        ['doubao-seed-1-6-flash-250715', 'doubao-seed-1-8-251228'],
+    );
+
+    const browserButton = page.renderWorkbenchActionButton(
+        { id: 'doubao' },
+        { id: 'doubao_web_session', type: 'web_session', label: 'Doubao Web Session' },
+        { method_id: 'doubao_web_session' },
+        { id: 'start_browser_auth' },
+    );
+    assert.equal(browserButton.includes('data-model-auth-ui="workflow_start_browser"'), true);
+    assert.equal(browserButton.includes('data-workflow-kind="session"'), false);
+
+    const wizardMarkup = page.renderWizardAuthCard(
+        {},
+        { id: 'doubao' },
+        { id: 'doubao_web_session', type: 'web_session', label: 'Doubao Web Session' },
+        {
+            method_id: 'doubao_web_session',
+            status: 'available_to_import',
+            actions: [
+                { id: 'bind_local_auth' },
+                { id: 'show_session_form' },
+                { id: 'start_browser_auth' },
+            ],
+        },
+    );
+    assert.equal(wizardMarkup.includes('同步本机登录'), true);
+    assert.equal(wizardMarkup.includes('导入会话'), true);
+    assert.equal(wizardMarkup.includes('前往登录页'), true);
+});
+
+test('models page advanced panel renders provider description, local paths and notes', () => {
+    const page = new ModelsPage();
+    const markup = page.renderAdvancedPanel(
+        { metadata: {} },
+        {
+            id: 'google',
+            label: 'Google / Gemini',
+            description: '支持从本机 Gemini CLI 配置目录导入、粘贴 JWT 令牌或通过 OAuth 登录来管理 Gemini CLI 账号。',
+            metadata: {
+                research_summary: '支持从本机 Gemini CLI 配置目录导入、粘贴 JWT 令牌，或通过 Google OAuth 登录来管理 Gemini CLI 账号。',
+                local_auth_paths: [
+                    '~/.gemini/oauth_creds.json',
+                    '$GEMINI_CLI_HOME/.gemini/settings.json',
+                ],
+                notes: [
+                    '权限范围：读取并写入默认 ~/.gemini 或实例目录（$GEMINI_CLI_HOME/.gemini）下的配置文件。',
+                    '网络请求范围：仅访问 Google / Gemini 官方接口。',
+                ],
+            },
+            auth_methods: [],
+        },
+    );
+
+    assert.equal(markup.includes('服务说明'), true);
+    assert.equal(markup.includes('本地配置路径'), true);
+    assert.equal(markup.includes('补充说明'), true);
+    assert.equal(markup.includes('~/.gemini/oauth_creds.json'), true);
+    assert.equal(markup.includes('$GEMINI_CLI_HOME/.gemini/settings.json'), true);
+});
+
+test('models page browser callback form submits structured payload to the model auth center', async () => {
+    const originalFormData = globalThis.FormData;
+    const page = new ModelsPage();
+    let captured = null;
+    globalThis.FormData = class {
+        constructor(form) {
+            this.map = form._data || {};
+        }
+
+        get(name) {
+            return this.map[name] ?? null;
+        }
+    };
+    page.runAction = async (action, payload, options) => {
+        captured = { action, payload, options };
+        return { success: true };
+    };
+    page.closeWorkflowModal = () => {};
+
+    try {
+        await page.handleFormSubmit({
+            dataset: {
+                modelAuthForm: 'browser_callback',
+                providerId: 'qwen',
+                methodId: 'qwen_oauth',
+                flowId: 'flow-1',
+            },
+            _data: {
+                flow_id: 'flow-1',
+                label: 'Qwen OAuth',
+                callback_payload: '{"code":"abc"}',
+                set_default: 'on',
+            },
+        });
+    } finally {
+        globalThis.FormData = originalFormData;
+    }
+
+    assert.equal(captured.action, 'complete_browser_auth');
+    assert.deepEqual(captured.payload, {
+        provider_id: 'qwen',
+        method_id: 'qwen_oauth',
+        flow_id: 'flow-1',
+        label: 'Qwen OAuth',
+        callback_payload: { code: 'abc' },
+        set_default: true,
+    });
+});
+
+test('models page renders and submits flowless browser auth continuation via local rescan', async () => {
+    const originalFormData = globalThis.FormData;
+    const page = new ModelsPage();
+    let captured = null;
+    globalThis.FormData = class {
+        constructor(form) {
+            this.map = form._data || {};
+        }
+
+        get(name) {
+            return this.map[name] ?? null;
+        }
+    };
+    page.runAction = async (action, payload, options) => {
+        captured = { action, payload, options };
+        return { success: true };
+    };
+    page.closeWorkflowModal = () => {};
+
+    try {
+        const markup = page.renderBrowserAuthForm(
+            { selected_method_id: '', selected_label: '' },
+            { id: 'doubao' },
+            { id: 'doubao_web_session', label: 'Doubao Web Session', type: 'web_session', metadata: {} },
+            { metadata: { pending_flow: { started_at: 123, browser_entry_url: 'https://www.doubao.com/' } } },
+        );
+
+        assert.equal(markup.includes('Flowless Rescan'), false);
+        assert.equal(markup.includes('\u53ef\u9009\u9879'), true);
+        assert.equal(markup.includes('__local_rescan__'), true);
+
+        await page.handleFormSubmit({
+            dataset: {
+                modelAuthForm: 'browser_callback',
+                providerId: 'doubao',
+                methodId: 'doubao_web_session',
+                flowId: '__local_rescan__',
+            },
+            _data: {
+                label: 'Doubao Browser',
+                callback_payload: '',
+                set_default: 'on',
+            },
+        });
+    } finally {
+        globalThis.FormData = originalFormData;
+    }
+
+    assert.equal(captured.action, 'complete_browser_auth');
+    assert.deepEqual(captured.payload, {
+        provider_id: 'doubao',
+        method_id: 'doubao_web_session',
+        flow_id: '__local_rescan__',
+        label: 'Doubao Browser',
+        callback_payload: {},
+        set_default: true,
+    });
+});
+
+test('models page keeps existing effective auth when deciding default selection', () => {
+    const page = new ModelsPage();
+
+    assert.equal(page.shouldSetDefaultByDefault({
+        auth_states: [
+            { metadata: { profile_id: 'openai:api_key:default' } },
+        ],
+    }), false);
+    assert.equal(page.shouldSetDefaultByDefault({
+        auth_states: [
+            { metadata: {} },
+        ],
+    }), true);
+});
+
+test('models page bind local auth does not override existing effective auth by default', async () => {
+    const page = new ModelsPage();
+    let captured = null;
+    page.getCardByProviderId = () => ({
+        auth_states: [
+            { metadata: { profile_id: 'openai:api_key:default' } },
+        ],
+    });
+    page.getSelectedCard = () => ({});
+    page.runAction = async (action, payload) => {
+        captured = { action, payload };
+        return { success: true };
+    };
+
+    await page.handleButtonAction({
+        dataset: {
+            modelAuthAction: 'bind_local_auth',
+            providerId: 'openai',
+            methodId: 'codex_local',
+        },
+    });
+
+    assert.equal(captured.action, 'bind_local_auth');
+    assert.equal(captured.payload.set_default, false);
+});
+
+test('models page api key form keeps existing effective auth when set_default is omitted', async () => {
+    const originalFormData = globalThis.FormData;
+    const page = new ModelsPage();
+    let captured = null;
+    globalThis.FormData = class {
+        constructor(form) {
+            this.map = form._data || {};
+        }
+
+        get(name) {
+            return this.map[name] ?? null;
+        }
+    };
+    page.getCardByProviderId = () => ({
+        auth_states: [
+            { metadata: { profile_id: 'openai:codex_local:chatgpt' } },
+        ],
+    });
+    page.getSelectedCard = () => ({});
+    page.runAction = async (action, payload, options) => {
+        captured = { action, payload, options };
+        return { success: true };
+    };
+    page.closeWorkflowModal = () => {};
+
+    try {
+        await page.handleFormSubmit({
+            dataset: {
+                modelAuthForm: 'api_key',
+                providerId: 'openai',
+                methodId: 'api_key',
+            },
+            _data: {
+                api_key: 'demo-openai-test-key',
+                label: 'OpenAI API Key',
+            },
+        });
+    } finally {
+        globalThis.FormData = originalFormData;
+    }
+
+    assert.equal(captured.action, 'save_api_key');
+    assert.equal(captured.payload.set_default, false);
+});
+
+test('models page provider model form saves defaults and can immediately switch the active model', async () => {
+    const originalFormData = globalThis.FormData;
+    const page = new ModelsPage();
+    const calls = [];
+    let closeCalls = 0;
+    globalThis.FormData = class {
+        constructor(form) {
+            this.map = form._data || {};
+        }
+
+        get(name) {
+            return this.map[name] ?? null;
+        }
+    };
+    page.runAction = async (action, payload, options) => {
+        calls.push({ action, payload, options });
+        return { success: true };
+    };
+    page.closeWorkflowModal = () => {
+        closeCalls += 1;
+    };
+
+    try {
+        await page.handleFormSubmit({
+            dataset: {
+                modelAuthForm: 'provider_model',
+                providerId: 'openai',
+            },
+            _data: {
+                default_model_select: 'gpt-4.1',
+                custom_model: '',
+            },
+        });
+
+        await page.handleFormSubmit(
+            {
+                dataset: {
+                    modelAuthForm: 'workflow_model',
+                    providerId: 'qwen',
+                },
+                _data: {
+                    default_model_select: '__custom__',
+                    custom_model: 'qwen-max-latest',
+                },
+            },
+            {
+                dataset: {
+                    modelAuthSubmitAction: 'save_and_activate',
+                },
+            },
+        );
+    } finally {
+        globalThis.FormData = originalFormData;
+    }
+
+    assert.deepEqual(calls, [
+        {
+            action: 'update_provider_defaults',
+            payload: {
+                provider_id: 'openai',
+                default_model: 'gpt-4.1',
+            },
+            options: {
+                preserveSelection: true,
+                providerId: 'openai',
+            },
+        },
+        {
+            action: 'update_provider_defaults',
+            payload: {
+                provider_id: 'qwen',
+                default_model: 'qwen-max-latest',
+            },
+            options: {
+                preserveSelection: true,
+                providerId: 'qwen',
+            },
+        },
+        {
+            action: 'set_active_provider',
+            payload: {
+                provider_id: 'qwen',
+            },
+            options: {
+                preserveSelection: true,
+                providerId: 'qwen',
+            },
+        },
+    ]);
+    assert.equal(closeCalls, 1);
+});
+
+test('models page summary counters and dangerous actions stay in the unified flow', async () => {
+    assert.deepEqual(
+        summarizeCards([
+            { state: 'connected' },
+            { state: 'following_local_auth' },
+            { state: 'available_to_import' },
+            { state: 'error' },
+        ]),
+        { connected: 2, localReady: 2, attention: 1 },
+    );
+
+    const page = new ModelsPage();
+    let confirmCalls = 0;
+    let actionCalls = 0;
+    page.confirmAction = async () => {
+        confirmCalls += 1;
+        return false;
+    };
+    page.runAction = async () => {
+        actionCalls += 1;
+    };
+
+    await page.handleButtonAction({
+        dataset: {
+            modelAuthAction: 'disconnect_profile',
+            providerId: 'openai',
+            methodId: 'api_key',
+            profileId: 'openai:api_key:default',
+        },
+    });
+
+    assert.equal(confirmCalls, 1);
+    assert.equal(actionCalls, 0);
+});
+
+test('models page sorts cards by active, ready, local, attention and fallback name', () => {
+    const cards = [
+        { provider: { id: 'zhipu', label: 'GLM' }, state: 'not_configured', metadata: {} },
+        { provider: { id: 'deepseek', label: 'DeepSeek' }, state: 'error', metadata: {} },
+        { provider: { id: 'ollama', label: 'Ollama' }, state: 'available_to_import', metadata: {} },
+        { provider: { id: 'claude', label: 'Claude' }, state: 'not_configured', metadata: { can_set_active_provider: true } },
+        { provider: { id: 'openai', label: 'OpenAI' }, state: 'connected', metadata: { is_active_provider: true, can_set_active_provider: true } },
+    ];
+
+    assert.deepEqual(
+        sortCardsForDisplay(cards).map((card) => card.provider.id),
+        ['openai', 'claude', 'ollama', 'deepseek', 'zhipu'],
+    );
+
+    const page = new ModelsPage();
+    page._overview = { cards };
+    page._listFilter = 'all';
+    page._searchQuery = '';
+
+    assert.deepEqual(
+        page.getVisibleCards().map((card) => card.provider.id),
+        ['openai', 'claude', 'ollama', 'deepseek', 'zhipu'],
+    );
+});
+
+test('models page falls back to the first sorted visible provider when current selection is filtered out', () => {
+    const page = new ModelsPage();
+    page.renderWorkflowModal = () => {};
+    page._overview = {
+        cards: [
+            { provider: { id: 'zhipu', label: 'GLM' }, state: 'not_configured', metadata: {} },
+            { provider: { id: 'openai', label: 'OpenAI' }, state: 'connected', metadata: { is_active_provider: true, can_set_active_provider: true } },
+            { provider: { id: 'claude', label: 'Claude' }, state: 'not_configured', metadata: { can_set_active_provider: true } },
+        ],
+    };
+    page._selectedProviderId = 'zhipu';
+    page._listFilter = 'ready';
+    page._searchQuery = '';
+
+    const nodes = {
+        '#model-auth-hero': { innerHTML: '' },
+        '#model-auth-filter-row': { innerHTML: '' },
+        '#model-auth-provider-grid': { innerHTML: '' },
+        '#model-auth-detail-panel': { innerHTML: '' },
+        '#model-auth-sidebar-meta': { textContent: '' },
+    };
+    page.$ = (selector) => nodes[selector] || null;
+
+    page.render();
+
+    assert.equal(page._selectedProviderId, 'openai');
+    assert.match(nodes['#model-auth-provider-grid'].innerHTML, /OpenAI/);
+});
+
+test('models page renders compact detail sections with the new fold structure', () => {
+    const page = new ModelsPage();
+    page.applyModelCatalog({
+        providers: [
+            {
+                id: 'openai',
+                label: 'OpenAI',
+                models: ['gpt-5.4'],
+                auth_methods: [
+                    { id: 'api_key', type: 'api_key', label: 'API Key' },
+                ],
+            },
+        ],
+    });
+
+    const markup = page.renderProviderDetail({
+        provider: { id: 'openai', label: 'OpenAI' },
+        state: 'connected',
+        selected_label: 'Work API Key',
+        auth_states: [
+            {
+                method_id: 'api_key',
+                status: 'connected',
+                default_selected: true,
+                actions: [{ id: 'show_api_key_form' }],
+                metadata: {
+                    profile_id: 'openai:api_key:default',
+                    runtime_ready: true,
+                    model: 'gpt-5.4',
+                },
+            },
+        ],
+        metadata: {
+            is_active_provider: true,
+            can_set_active_provider: true,
+            default_model: 'gpt-5.4',
+            provider_sync: { code: 'following_local_auth', source_message: '本机已同步' },
+            provider_health: { code: 'healthy', message: '连接正常' },
+        },
+    });
+
+    assert.match(markup, /快速操作/);
+    assert.match(markup, /认证方式/);
+    assert.match(markup, /运行状态/);
+    assert.match(markup, /更多设置/);
+    assert.equal(markup.includes('model-center-detail-section model-center-detail-section-primary" open'), true);
+});
+
+test('models page summary bar exposes focus and connection actions for the active provider', () => {
+    const page = new ModelsPage();
+    page._selectedProviderId = 'anthropic';
+    page.applyModelCatalog({
+        providers: [
+            {
+                id: 'openai',
+                label: 'OpenAI',
+                models: ['gpt-5.4'],
+                auth_methods: [
+                    { id: 'api_key', type: 'api_key', label: 'API Key' },
+                ],
+            },
+        ],
+    });
+
+    const cards = [
+        {
+            provider: { id: 'openai', label: 'OpenAI', default_model: 'gpt-5.4' },
+            state: 'connected',
+            selected_label: 'Work API Key',
+            auth_states: [
+                {
+                    method_id: 'api_key',
+                    status: 'connected',
+                    default_selected: true,
+                    metadata: {
+                        profile_id: 'openai:api_key:default',
+                        runtime_ready: true,
+                        account_email: 'work@example.com',
+                        model: 'gpt-5.4',
+                    },
+                },
+            ],
+            metadata: {
+                is_active_provider: true,
+                can_set_active_provider: true,
+                default_model: 'gpt-5.4',
+                provider_sync: { code: 'following_local_auth', source_message: '本机已同步' },
+                provider_health: { code: 'healthy', message: '连接正常', checked_at: 1_700_000_000 },
+            },
+        },
+    ];
+
+    const markup = page.renderSummaryBar(cards, summarizeCards(cards), cards[0]);
+
+    assert.match(markup, /查看当前服务方/);
+    assert.match(markup, /测试当前连接/);
+    assert.match(markup, /默认认证/);
+    assert.match(markup, /连接健康/);
+});
+test('models page keeps a current-connection test button for active legacy preset fallback', () => {
+    const page = new ModelsPage();
+
+    const card = {
+        provider: { id: 'ollama', label: 'Ollama', default_model: 'deepseek-v3.2:cloud' },
+        state: 'connected',
+        selected_profile_id: '',
+        selected_method_id: '',
+        selected_label: 'API Key',
+        auth_states: [
+            {
+                method_id: 'api_key',
+                status: 'connected',
+                actions: [{ id: 'show_api_key_form' }],
+                metadata: {
+                    runtime_ready: true,
+                    model: 'deepseek-v3.2:cloud',
+                },
+            },
+        ],
+        metadata: {
+            is_active_provider: true,
+            can_set_active_provider: false,
+            legacy_preset_name: 'Ollama',
+            default_model: 'deepseek-v3.2:cloud',
+            provider_sync: { code: 'unsupported' },
+            provider_health: { code: 'idle', message: '' },
+        },
+    };
+
+    const summaryMarkup = page.renderSummaryBar([card], summarizeCards([card]), card);
+    const detailMarkup = page.renderProviderDetail(card);
+
+    assert.match(summaryMarkup, /测试当前连接/);
+    assert.match(detailMarkup, /测试连接/);
+    assert.match(summaryMarkup, /data-model-auth-ui="test_current_connection"/);
+    assert.equal(page.getHealthSummary(card), '待绑定');
+    assert.match(page.getHealthDetail(card), /先测试一次连接|完成认证绑定/);
+});
+
+test('models page current connection test falls back to legacy preset probing when no profile is selected', async () => {
+    const originalTestConnection = apiService.testConnection;
+    const originalToastSuccess = toast.success;
+    const originalToastError = toast.error;
+    const page = new ModelsPage();
+    const calls = [];
+
+    apiService.testConnection = async (presetName) => {
+        calls.push(presetName);
+        return {
+            success: true,
+            message: 'Ollama 当前连接测试成功',
+        };
+    };
+    toast.success = (message) => {
+        calls.push(`toast:${message}`);
+    };
+    toast.error = (message) => {
+        calls.push(`error:${message}`);
+    };
+    page.renderFeedback = (message, type = 'success') => {
+        calls.push(`feedback:${type}:${message}`);
+    };
+    page.getCardByProviderId = () => ({
+        provider: { id: 'ollama', label: 'Ollama' },
+        selected_profile_id: '',
+        auth_states: [
+            {
+                method_id: 'api_key',
+                status: 'connected',
+                actions: [{ id: 'show_api_key_form' }],
+                metadata: {
+                    runtime_ready: true,
+                },
+            },
+        ],
+        metadata: {
+            is_active_provider: true,
+            legacy_preset_name: 'Ollama',
+            provider_health: { code: 'idle', message: '' },
+        },
+    });
+    page.getSelectedCard = () => ({});
+
+    try {
+        await page.handleButtonAction({
+            dataset: {
+                modelAuthUi: 'test_current_connection',
+                providerId: 'ollama',
+            },
+        });
+    } finally {
+        apiService.testConnection = originalTestConnection;
+        toast.success = originalToastSuccess;
+        toast.error = originalToastError;
+    }
+
+    assert.deepEqual(calls, [
+        'Ollama',
+        'feedback:success:Ollama 当前连接测试成功',
+        'toast:Ollama 当前连接测试成功',
+    ]);
+});

@@ -6,8 +6,8 @@ from backend.core.ai_client import AIClient
 
 
 class _FakeResp:
-    def __init__(self, payload: dict):
-        self.status_code = 200
+    def __init__(self, payload: dict, status_code: int = 200):
+        self.status_code = status_code
         self._payload = payload
         self.text = json.dumps(payload, ensure_ascii=False)
 
@@ -188,3 +188,164 @@ async def test_ai_client_probe_fast_falls_back_to_completion(monkeypatch):
     assert ok is True
     assert mode == "completion"
     assert observed_post
+
+
+@pytest.mark.asyncio
+async def test_ai_client_anthropic_native_uses_messages_endpoint_and_headers(monkeypatch):
+    observed = []
+    payload = {
+        "type": "message",
+        "content": [{"type": "text", "text": "anthropic ok"}],
+        "stop_reason": "end_turn",
+    }
+    client = AIClient(
+        base_url="https://api.anthropic.com/v1",
+        api_key="anthropic-test-key",
+        auth_transport="anthropic_native",
+        model="claude-sonnet-4-5",
+        max_retries=0,
+    )
+
+    class _AnthropicHttpClient:
+        async def post(self, url, headers=None, json=None, timeout=None):
+            observed.append({"url": url, "headers": headers, "json": json, "timeout": timeout})
+            return _FakeResp(payload)
+
+    monkeypatch.setattr(client, "_get_http_client", lambda: _AnthropicHttpClient())
+
+    reply = await client.generate_reply("friend:alice", "hello anthropic")
+
+    assert reply == "anthropic ok"
+    assert observed[0]["url"].endswith("/messages")
+    assert observed[0]["headers"]["x-api-key"] == "anthropic-test-key"
+    assert observed[0]["headers"]["anthropic-version"] == "2023-06-01"
+    assert observed[0]["json"]["messages"][0]["role"] == "user"
+    assert observed[0]["json"]["messages"][0]["content"][0]["text"] == "hello anthropic"
+
+
+@pytest.mark.asyncio
+async def test_ai_client_anthropic_native_refreshes_auth_on_401(monkeypatch):
+    observed = []
+    auth_state = {"api_key": "anthropic-stale-key", "refresh_calls": 0}
+
+    def _refresh_auth():
+        auth_state["refresh_calls"] += 1
+        auth_state["api_key"] = "anthropic-fresh-key"
+
+    client = AIClient(
+        base_url="https://api.anthropic.com/v1",
+        api_key=lambda: auth_state["api_key"],
+        auth_transport="anthropic_native",
+        auth_refresh_hook=_refresh_auth,
+        model="claude-sonnet-4-5",
+        max_retries=0,
+    )
+
+    class _AnthropicHttpClient:
+        def __init__(self):
+            self.calls = 0
+
+        async def post(self, url, headers=None, json=None, timeout=None):
+            self.calls += 1
+            observed.append({"url": url, "headers": headers, "json": json, "timeout": timeout})
+            if self.calls == 1:
+                return _FakeResp({"error": {"message": "expired"}}, status_code=401)
+            return _FakeResp({"type": "message", "content": [{"type": "text", "text": "anthropic refreshed"}]})
+
+    http_client = _AnthropicHttpClient()
+    monkeypatch.setattr(client, "_get_http_client", lambda: http_client)
+
+    reply = await client.generate_reply("friend:alice", "refresh anthropic")
+
+    assert reply == "anthropic refreshed"
+    assert auth_state["refresh_calls"] == 1
+    assert observed[0]["headers"]["x-api-key"] == "anthropic-stale-key"
+    assert observed[1]["headers"]["x-api-key"] == "anthropic-fresh-key"
+
+
+@pytest.mark.asyncio
+async def test_ai_client_anthropic_probe_fast_uses_messages_mode(monkeypatch):
+    observed = []
+    client = AIClient(
+        base_url="https://api.anthropic.com/v1",
+        api_key="anthropic-test-key",
+        auth_transport="anthropic_native",
+        model="claude-sonnet-4-5",
+        max_retries=0,
+        timeout_sec=20,
+    )
+
+    class _AnthropicHttpClient:
+        async def post(self, url, headers=None, json=None, timeout=None):
+            observed.append({"url": url, "headers": headers, "json": json, "timeout": timeout})
+            return _FakeResp({"type": "message", "content": [{"type": "text", "text": "pong"}]})
+
+    monkeypatch.setattr(client, "_get_http_client", lambda: _AnthropicHttpClient())
+
+    ok, mode = await client.probe_fast()
+
+    assert ok is True
+    assert mode == "messages"
+    assert observed[0]["url"].endswith("/messages")
+
+
+@pytest.mark.asyncio
+async def test_ai_client_codex_oauth_generate_reply_uses_responses_transport(monkeypatch):
+    observed = {}
+    client = AIClient(
+        base_url="https://chatgpt.com/backend-api",
+        api_key="codex-access-token",
+        auth_transport="openai_codex_responses",
+        model="gpt-5.4",
+        max_retries=0,
+    )
+
+    async def _fake_request(messages, *, timeout_sec=None):
+        observed["messages"] = list(messages)
+        observed["timeout_sec"] = timeout_sec
+        return {
+            "content": [{"type": "output_text", "text": "codex ok"}],
+            "reasoning_content": [{"type": "output_text", "text": "reasoning"}],
+            "finish_reason": "completed",
+        }
+
+    monkeypatch.setattr(client, "_request_openai_codex_response", _fake_request)
+
+    reply = await client.generate_reply("friend:alice", "hello codex")
+    ok, mode = await client.probe_fast()
+
+    assert reply == "codex ok"
+    assert ok is True
+    assert mode == "responses"
+    assert observed["messages"][-1]["content"] == "ping"
+
+
+@pytest.mark.asyncio
+async def test_ai_client_google_code_assist_generate_reply_uses_native_transport(monkeypatch):
+    observed = {}
+    client = AIClient(
+        base_url="https://cloudcode-pa.googleapis.com",
+        api_key="google-access-token",
+        auth_transport="google_code_assist",
+        transport_metadata={"project_id": "gemini-project-001"},
+        model="gemini-2.5-flash",
+        max_retries=0,
+    )
+
+    async def _fake_request(messages, *, timeout_sec=None):
+        observed["messages"] = list(messages)
+        observed["timeout_sec"] = timeout_sec
+        return {
+            "content": [{"type": "text", "text": "gemini ok"}],
+            "finish_reason": "STOP",
+        }
+
+    monkeypatch.setattr(client, "_request_google_code_assist_response", _fake_request)
+
+    reply = await client.generate_reply("friend:alice", "hello gemini")
+    ok, mode = await client.probe_fast()
+
+    assert reply == "gemini ok"
+    assert ok is True
+    assert mode == "code_assist"
+    assert observed["messages"][-1]["content"] == "ping"

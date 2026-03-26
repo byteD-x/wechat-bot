@@ -41,6 +41,44 @@ def build_outgoing_broadcast_payload(
     }
 
 
+async def maybe_queue_manual_reply(
+    bot: Any,
+    *,
+    prepared: Any,
+    event: MessageEvent,
+    user_text: str,
+    chat_id: str,
+    reply_text: str,
+    trace_id: Optional[str],
+) -> bool:
+    policy_result = await bot.evaluate_outgoing_reply_policy(
+        event=event,
+        user_text=user_text,
+        reply_text=reply_text,
+    )
+    if not bool(policy_result.get("should_queue")):
+        return False
+
+    bot._log_flow(
+        logging.INFO,
+        "AI.REPLY_QUEUED_FOR_APPROVAL",
+        event=event,
+        trace_id=trace_id,
+        chat_id=chat_id,
+        reason=str(policy_result.get("trigger_reason") or "manual_review"),
+    )
+    await bot.queue_pending_reply(
+        prepared=prepared,
+        event=event,
+        chat_id=chat_id,
+        user_text=user_text,
+        reply_text=reply_text,
+        trace_id=trace_id,
+        policy_result=policy_result,
+    )
+    return True
+
+
 async def finalize_reply_delivery(
     bot: Any,
     *,
@@ -206,6 +244,16 @@ async def complete_delayed_reply(
 
     try:
         async with bot._get_chat_lock(chat_id):
+            if await maybe_queue_manual_reply(
+                bot,
+                prepared=prepared,
+                event=event,
+                user_text=user_text,
+                chat_id=chat_id,
+                reply_text=invoke_reply,
+                trace_id=trace_id,
+            ):
+                return
             reply_text = await bot._send_smart_reply(
                 wx,
                 event,
@@ -455,6 +503,16 @@ async def process_and_reply(
                 chat_id=chat_id,
                 reply=bot._reply_preview(invoke_reply),
             )
+            if await maybe_queue_manual_reply(
+                bot,
+                prepared=prepared,
+                event=event,
+                user_text=user_text,
+                chat_id=chat_id,
+                reply_text=invoke_reply,
+                trace_id=trace_id,
+            ):
+                return
             reply_text = await bot._send_smart_reply(
                 wx,
                 event,

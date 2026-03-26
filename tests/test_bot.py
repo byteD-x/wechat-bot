@@ -12,6 +12,8 @@ from backend.bot_event_flow import build_incoming_broadcast_payload
 from backend.bot_reply_flow import build_outgoing_broadcast_payload
 from backend.config_schemas import BotConfig
 
+TEST_LOG_PATH = "data/runtime/test/test.log"
+
 
 def _build_mock_bot_manager():
     manager = MagicMock()
@@ -49,6 +51,24 @@ def _build_config_service(config=None, *, error=None):
     return service
 
 
+def _build_pending_reply_memory():
+    memory = MagicMock()
+    memory.expire_pending_replies = AsyncMock(return_value=0)
+    memory.get_pending_reply_stats = AsyncMock(
+        return_value={
+            "total": 0,
+            "pending": 0,
+            "approved": 0,
+            "rejected": 0,
+            "expired": 0,
+            "failed": 0,
+            "latest_created_at": 0,
+            "by_status": {},
+        }
+    )
+    return memory
+
+
 def test_bot_schema_allows_zero_reply_deadline():
     assert BotConfig(reply_deadline_sec=0).reply_deadline_sec == 0
 
@@ -60,7 +80,7 @@ async def test_bot_initialization(mock_config):
             bot = WeChatBot("config.yaml")
 
             # Mock internal components
-            bot.memory = MagicMock()
+            bot.memory = _build_pending_reply_memory()
 
             # Mock select_ai_client
             with patch("backend.bot.select_ai_client", return_value=(AsyncMock(), "default")):
@@ -121,7 +141,7 @@ async def test_bot_initialization_vector_memory_error(mock_config):
     with patch("backend.bot.get_config_service", return_value=mock_service):
         with patch("backend.bot.get_file_mtime", return_value=123456.0):
             bot = WeChatBot("config.yaml")
-            bot.memory = MagicMock()
+            bot.memory = _build_pending_reply_memory()
             
             # Mock VectorMemory to raise exception
             with patch("backend.bot.VectorMemory", side_effect=Exception("VectorDB failed")):
@@ -172,7 +192,7 @@ async def test_bot_run_loop(mock_config):
          patch("backend.bot.get_bot_manager", return_value=mock_bot_manager):
          
         bot = WeChatBot("config.yaml")
-        bot.memory = MagicMock()
+        bot.memory = _build_pending_reply_memory()
         bot.memory.close = AsyncMock()
         await bot.initialize()
         
@@ -207,7 +227,7 @@ async def test_bot_run_loop_wx_exception(mock_config):
          patch("backend.bot.get_bot_manager", return_value=mock_bot_manager):
          
         bot = WeChatBot("config.yaml")
-        bot.memory = MagicMock()
+        bot.memory = _build_pending_reply_memory()
         bot.memory.close = AsyncMock()
         # No need to call initialize here as run() calls it
         
@@ -249,7 +269,7 @@ async def test_reload_runtime_config_refreshes_watcher_for_non_ai_changes():
         },
         "api": {"base_url": "http://localhost", "api_key": "sk-test", "model": "gpt-4o"},
         "agent": {"enabled": True},
-        "logging": {"level": "INFO", "file": "test.log", "max_bytes": 1024, "backup_count": 1, "format": "text"},
+        "logging": {"level": "INFO", "file": TEST_LOG_PATH, "max_bytes": 1024, "backup_count": 1, "format": "text"},
     }
     mock_service = _build_config_service(config)
     with patch("backend.bot.get_config_service", return_value=mock_service):
@@ -271,7 +291,7 @@ async def test_reload_runtime_config_refreshes_watcher_for_non_ai_changes():
         },
         "api": {"base_url": "http://localhost", "api_key": "sk-test", "model": "gpt-4o"},
         "agent": {"enabled": True},
-        "logging": {"level": "INFO", "file": "test.log", "max_bytes": 1024, "backup_count": 1, "format": "text"},
+        "logging": {"level": "INFO", "file": TEST_LOG_PATH, "max_bytes": 1024, "backup_count": 1, "format": "text"},
     }
 
     with patch("backend.bot.compute_api_signature", return_value="same-signature"):
@@ -296,7 +316,7 @@ async def test_reload_runtime_config_honors_reload_ai_client_module():
             "model": "gpt-4o",
         },
         "agent": {"enabled": True},
-        "logging": {"level": "INFO", "file": "test.log", "max_bytes": 1024, "backup_count": 1, "format": "text"},
+        "logging": {"level": "INFO", "file": TEST_LOG_PATH, "max_bytes": 1024, "backup_count": 1, "format": "text"},
     }
     mock_service = _build_config_service(config)
     with patch("backend.bot.get_config_service", return_value=mock_service):
@@ -340,7 +360,7 @@ async def test_reload_runtime_config_reconnects_transport_for_transport_changes(
             "model": "gpt-4o",
         },
         "agent": {"enabled": True},
-        "logging": {"level": "INFO", "file": "test.log", "max_bytes": 1024, "backup_count": 1, "format": "text"},
+        "logging": {"level": "INFO", "file": TEST_LOG_PATH, "max_bytes": 1024, "backup_count": 1, "format": "text"},
     }
     next_config = {
         "bot": {
@@ -353,7 +373,7 @@ async def test_reload_runtime_config_reconnects_transport_for_transport_changes(
             "model": "gpt-4o",
         },
         "agent": {"enabled": True},
-        "logging": {"level": "INFO", "file": "test.log", "max_bytes": 1024, "backup_count": 1, "format": "text"},
+        "logging": {"level": "INFO", "file": TEST_LOG_PATH, "max_bytes": 1024, "backup_count": 1, "format": "text"},
     }
     mock_service = _build_config_service(config)
     with patch("backend.bot.get_config_service", return_value=mock_service):
@@ -414,7 +434,7 @@ async def test_reload_runtime_config_without_new_config_uses_config_service_relo
         },
         "api": {"base_url": "http://localhost", "api_key": "sk-test", "model": "gpt-4o"},
         "agent": {"enabled": True},
-        "logging": {"level": "INFO", "file": "test.log", "max_bytes": 1024, "backup_count": 1, "format": "text"},
+        "logging": {"level": "INFO", "file": TEST_LOG_PATH, "max_bytes": 1024, "backup_count": 1, "format": "text"},
     }
     next_config = {
         "bot": {
@@ -424,7 +444,7 @@ async def test_reload_runtime_config_without_new_config_uses_config_service_relo
         },
         "api": {"base_url": "http://localhost", "api_key": "sk-test", "model": "gpt-4o"},
         "agent": {"enabled": True},
-        "logging": {"level": "INFO", "file": "test.log", "max_bytes": 1024, "backup_count": 1, "format": "text"},
+        "logging": {"level": "INFO", "file": TEST_LOG_PATH, "max_bytes": 1024, "backup_count": 1, "format": "text"},
     }
     mock_service = _build_config_service(current_config)
     mock_service.reload.return_value = _build_snapshot(next_config)
@@ -782,6 +802,7 @@ async def test_process_and_reply_uses_direct_reply_when_invoke_has_content():
     bot._send_smart_reply = AsyncMock(return_value="direct reply")
     bot.ipc = MagicMock()
     bot.bot_manager = _build_mock_bot_manager()
+    bot.evaluate_outgoing_reply_policy = AsyncMock(return_value={"should_queue": False})
 
     event = SimpleNamespace(
         chat_name="文件传输助手",
@@ -830,6 +851,7 @@ async def test_process_and_reply_uses_direct_reply_when_deadline_disabled():
     bot._send_smart_reply = AsyncMock(return_value="direct reply")
     bot.ipc = MagicMock()
     bot.bot_manager = _build_mock_bot_manager()
+    bot.evaluate_outgoing_reply_policy = AsyncMock(return_value={"should_queue": False})
 
     event = SimpleNamespace(
         chat_name="chat",
@@ -934,6 +956,57 @@ async def test_send_smart_reply_raises_when_send_reply_chunks_fails():
 
 
 @pytest.mark.asyncio
+async def test_approve_pending_reply_keeps_pending_when_send_fails():
+    bot = WeChatBot("config.yaml")
+    bot.bot_manager = _build_mock_bot_manager()
+    bot.memory = MagicMock()
+    bot.memory.get_pending_reply = AsyncMock(
+        return_value={
+            "id": 7,
+            "chat_id": "friend:alice",
+            "draft_reply": "draft",
+            "metadata": {"trace_id": "trace-1"},
+            "status": "pending",
+        }
+    )
+    bot.memory.update_pending_reply = AsyncMock(
+        return_value={
+            "id": 7,
+            "chat_id": "friend:alice",
+            "draft_reply": "edited reply",
+            "metadata": {"trace_id": "trace-1", "approval_error": "transport down"},
+            "status": "pending",
+        }
+    )
+    bot.memory.resolve_pending_reply = AsyncMock()
+    bot.expire_stale_pending_replies = AsyncMock()
+    bot.refresh_pending_reply_stats = AsyncMock(return_value={"pending": 1})
+    bot._notify_runtime_status_changed = MagicMock()
+    bot._record_pending_reply_resolved = MagicMock()
+    bot._record_reply_attempt = MagicMock()
+    bot._rehydrate_pending_prepared_request = MagicMock(
+        return_value=SimpleNamespace(
+            event=SimpleNamespace(chat_name="alice", sender="alice"),
+            user_text="hello",
+        )
+    )
+    bot._send_smart_reply = AsyncMock(side_effect=RuntimeError("transport down"))
+    bot._finalize_reply_delivery = AsyncMock()
+    bot.wx = MagicMock()
+    bot.ai_client = MagicMock()
+
+    result = await bot.approve_pending_reply(7, edited_reply="edited reply")
+
+    assert result["success"] is False
+    assert "approve failed" in result["message"]
+    bot.memory.update_pending_reply.assert_awaited_once()
+    bot.memory.resolve_pending_reply.assert_not_awaited()
+    bot._record_pending_reply_resolved.assert_not_called()
+    bot._record_reply_attempt.assert_not_called()
+    bot._finalize_reply_delivery.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_process_and_reply_schedules_delayed_reply_when_invoke_exceeds_deadline():
     bot = WeChatBot("config.yaml")
     bot.bot_cfg = {"reply_deadline_sec": 0.01}
@@ -967,6 +1040,7 @@ async def test_process_and_reply_schedules_delayed_reply_when_invoke_exceeds_dea
         model="test-model",
     )
     bot._send_smart_reply = AsyncMock(return_value="late reply")
+    bot.evaluate_outgoing_reply_policy = AsyncMock(return_value={"should_queue": False})
 
     event = SimpleNamespace(
         chat_name="chat",

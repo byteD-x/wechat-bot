@@ -1,0 +1,20 @@
+.log-container {
+    padding: 0;
+    overflow: hidden;
+}
+
+.log-meta {
+    margin-bottom: 12px;
+    padding: 0 4px;
+}
+
+.about-stage .card,
+.about-link-card {
+    border-radius: 14px;
+}
+
+@media (max-width: 960px) {
+    .sidebar {
+        width: 204px;
+    }
+}

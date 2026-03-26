@@ -28,8 +28,8 @@ export async function runPresetConnectionTest(page, preset, detailElement) {
                 presetName: preset.name,
                 patch: {
                     api: {
-                        active_preset: page._activePreset,
-                        presets: deepClone(page._presetDrafts),
+                        active_preset: page._activePresetName || page._activePreset,
+                        presets: deepClone(page._apiPresetsSnapshot || page._presetDrafts || []),
                     },
                 },
             })
@@ -56,7 +56,7 @@ export async function runPresetConnectionTest(page, preset, detailElement) {
 }
 
 export async function testPreset(page, index, detailElement) {
-    const preset = page._presetDrafts[index];
+    const preset = (page._apiPresetsSnapshot || page._presetDrafts || [])[index];
     if (!preset?.name) {
         return;
     }

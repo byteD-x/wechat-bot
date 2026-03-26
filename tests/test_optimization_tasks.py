@@ -14,6 +14,8 @@ from backend.config_schemas import BotConfig
 from backend.core.agent_runtime import AgentRuntime
 from backend.core.ai_client import AIClient
 from backend.core.memory import MemoryManager
+from backend.model_auth.services.migration import ensure_provider_auth_center_config, project_provider_auth_center
+from backend.model_auth.storage.credential_store import CredentialStore
 from backend.transports import BaseTransport, WcferryTransport
 from backend.transports.wcferry_adapter import (
     TransportUnavailableError,
@@ -110,6 +112,56 @@ def _fake_integrations(self):
         "END": "__end__",
         "StateGraph": _FakeStateGraph,
     }
+
+
+def _build_provider_auth_openai_api_cfg(tmp_path, *, selection_mode="auto", selected_method="api_key"):
+    store = CredentialStore(str(tmp_path / "provider-auth-creds.json"))
+    config = ensure_provider_auth_center_config(
+        {
+            "api": {
+                "active_preset": "OpenAI",
+                "presets": [
+                    {
+                        "name": "OpenAI",
+                        "provider_id": "openai",
+                        "base_url": "https://api.openai.com/v1",
+                        "api_key": "demo-openai-test-key-123456",
+                        "auth_mode": "api_key",
+                        "model": "gpt-5-mini",
+                    }
+                ],
+            }
+        },
+        credential_store=store,
+    )
+    entry = config["api"]["provider_auth_center"]["providers"]["openai"]
+    api_profile = next(item for item in entry["auth_profiles"] if item["method_id"] == "api_key")
+    oauth_profile = {
+        "id": "openai:codex_local:chatgpt",
+        "provider_id": "openai",
+        "method_id": "codex_local",
+        "method_type": "local_import",
+        "label": "ChatGPT OAuth",
+        "credential_ref": "",
+        "credential_source": "local_config_file",
+        "binding": {
+            "source": "codex_auth_json",
+            "source_type": "openai_codex",
+            "credential_source": "local_config_file",
+            "sync_policy": "follow",
+            "follow_local_auth": True,
+        },
+        "metadata": {
+            "runtime_ready": True,
+            "base_url": "https://chatgpt.com/backend-api",
+            "model": "gpt-5.4",
+        },
+    }
+    entry["auth_profiles"].append(oauth_profile)
+    entry.setdefault("metadata", {})
+    entry["metadata"]["selection_mode"] = selection_mode
+    entry["selected_profile_id"] = oauth_profile["id"] if selected_method == "oauth" else api_profile["id"]
+    return project_provider_auth_center(config["api"]), api_profile["id"], oauth_profile["id"]
 
 
 @pytest.mark.asyncio
@@ -501,13 +553,13 @@ async def test_select_ai_client_falls_back_to_other_presets(monkeypatch):
                 {
                     "name": "Broken",
                     "base_url": "https://broken.example/v1",
-                    "api_key": "sk-broken-123456",
+                    "api_key": "demo-broken-key-123456",
                     "model": "broken-model",
                 },
                 {
                     "name": "Healthy",
                     "base_url": "https://healthy.example/v1",
-                    "api_key": "sk-healthy-123456",
+                    "api_key": "demo-healthy-key-123456",
                     "model": "healthy-model",
                 },
             ],
@@ -519,6 +571,123 @@ async def test_select_ai_client_falls_back_to_other_presets(monkeypatch):
     assert client is not None
     assert preset_name == "Healthy"
     assert attempted == ["Broken", "Healthy"]
+
+
+@pytest.mark.asyncio
+async def test_select_ai_client_falls_back_to_api_key_when_same_provider_oauth_resolution_fails(tmp_path, monkeypatch):
+    api_cfg, api_profile_id, oauth_profile_id = _build_provider_auth_openai_api_cfg(
+        tmp_path,
+        selection_mode="auto",
+        selected_method="api_key",
+    )
+    attempted = []
+
+    class _FakeRuntimeClient:
+        def __init__(self, settings):
+            self.settings = dict(settings)
+
+        async def probe(self):
+            attempted.append(self.settings["provider_auth_profile_id"])
+            return True
+
+    def _build_fake_runtime(settings, bot_cfg, agent_cfg=None):
+        return _FakeRuntimeClient(settings)
+
+    def _resolve_fake_oauth(settings):
+        if settings.get("provider_auth_profile_id") == oauth_profile_id:
+            raise factory_module.OAuthSupportError("oauth unavailable")
+        return SimpleNamespace(settings=dict(settings))
+
+    monkeypatch.setattr(factory_module, "build_agent_runtime", _build_fake_runtime)
+    monkeypatch.setattr(factory_module, "resolve_oauth_settings", _resolve_fake_oauth)
+
+    client, preset_name = await factory_module.select_ai_client(
+        api_cfg,
+        {},
+        {"enabled": True},
+    )
+
+    assert client is not None
+    assert preset_name == "OpenAI"
+    assert attempted == [api_profile_id]
+
+
+@pytest.mark.asyncio
+async def test_select_ai_client_honors_manual_profile_then_falls_back_to_other_auth(tmp_path, monkeypatch):
+    api_cfg, api_profile_id, oauth_profile_id = _build_provider_auth_openai_api_cfg(
+        tmp_path,
+        selection_mode="manual",
+        selected_method="api_key",
+    )
+    attempted = []
+
+    class _FakeRuntimeClient:
+        def __init__(self, settings):
+            self.settings = dict(settings)
+
+        async def probe(self):
+            attempted.append(self.settings["provider_auth_profile_id"])
+            return self.settings["provider_auth_profile_id"] == oauth_profile_id
+
+    def _build_fake_runtime(settings, bot_cfg, agent_cfg=None):
+        return _FakeRuntimeClient(settings)
+
+    monkeypatch.setattr(factory_module, "build_agent_runtime", _build_fake_runtime)
+    monkeypatch.setattr(
+        factory_module,
+        "resolve_oauth_settings",
+        lambda settings: SimpleNamespace(settings=dict(settings)),
+    )
+
+    client, preset_name = await factory_module.select_ai_client(
+        api_cfg,
+        {},
+        {"enabled": True},
+    )
+
+    assert client is not None
+    assert preset_name == "OpenAI"
+    assert attempted == [api_profile_id, oauth_profile_id]
+
+
+@pytest.mark.asyncio
+async def test_select_specific_ai_client_uses_same_provider_fallback_chain(tmp_path, monkeypatch):
+    api_cfg, api_profile_id, oauth_profile_id = _build_provider_auth_openai_api_cfg(
+        tmp_path,
+        selection_mode="auto",
+        selected_method="api_key",
+    )
+    attempted = []
+
+    class _FakeRuntimeClient:
+        def __init__(self, settings):
+            self.settings = dict(settings)
+
+        async def probe(self):
+            attempted.append(self.settings["provider_auth_profile_id"])
+            return self.settings["provider_auth_profile_id"] == api_profile_id
+
+    def _build_fake_runtime(settings, bot_cfg, agent_cfg=None):
+        return _FakeRuntimeClient(settings)
+
+    def _resolve_fake_oauth(settings):
+        if settings.get("provider_auth_profile_id") == oauth_profile_id:
+            raise factory_module.OAuthSupportError("oauth unavailable")
+        return SimpleNamespace(settings=dict(settings))
+
+    monkeypatch.setattr(factory_module, "build_agent_runtime", _build_fake_runtime)
+    monkeypatch.setattr(factory_module, "resolve_oauth_settings", _resolve_fake_oauth)
+
+    client, preset_name = await factory_module.select_specific_ai_client(
+        api_cfg,
+        {},
+        "OpenAI",
+        {"enabled": True},
+    )
+
+    assert client is not None
+    assert preset_name == "OpenAI"
+    assert attempted == [api_profile_id]
 
 
 @pytest.mark.asyncio

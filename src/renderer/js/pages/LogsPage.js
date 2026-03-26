@@ -10,6 +10,7 @@ import {
     clearRefreshTimer,
     setupAutoRefresh,
 } from './logs/runtime-controller.js';
+import { renderLogsPageShell } from '../app-shell/pages/index.js';
 
 export class LogsPage extends PageController {
     constructor() {
@@ -24,6 +25,10 @@ export class LogsPage extends PageController {
 
     async onInit() {
         await super.onInit();
+        const container = this.container || (typeof document !== 'undefined' ? this.getContainer() : null);
+        if (container) {
+            container.innerHTML = renderLogsPageShell();
+        }
         bindLogsEvents(this);
         syncLogsPageOptions(this);
     }

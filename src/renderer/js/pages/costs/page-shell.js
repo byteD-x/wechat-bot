@@ -3,6 +3,18 @@ import {
     exportCostReviewQueue,
     refreshPricingCatalog,
 } from './data-controller.js';
+import { syncCostFilters } from './filter-sync.js';
+
+const DEFAULT_COST_FILTERS = Object.freeze({
+    period: '30d',
+    provider_id: '',
+    model: '',
+    preset: '',
+    review_reason: '',
+    suggested_action: '',
+    only_priced: false,
+    include_estimated: true,
+});
 
 export function bindCostsPage(page, deps = {}) {
     const runRefreshCosts = deps.refreshCosts || ((targetPage) => refreshCosts(targetPage, deps));
@@ -21,6 +33,14 @@ export function bindCostsPage(page, deps = {}) {
 
     page.bindEvent('#btn-export-cost-review', 'click', () => {
         void (deps.exportCostReviewQueue || ((targetPage) => exportCostReviewQueue(targetPage, deps)))(page);
+    });
+
+    page.bindEvent('#btn-reset-cost-filters', 'click', () => {
+        page._filters = { ...DEFAULT_COST_FILTERS };
+        if (typeof page.$ === 'function') {
+            syncCostFilters(page);
+        }
+        void runRefreshCosts(page);
     });
 
     page._applySuggestedActionFilter = (action) => {

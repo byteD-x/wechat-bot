@@ -310,7 +310,7 @@ test('logs page shell binds controls and watcher side effects stably', async () 
         },
     });
 
-    assert.equal(page.bindings.length, 4);
+    assert.equal(page.bindings.length, 5);
     assert.equal(page.watchers.length, 1);
 
     searchInput.value = 'Err';

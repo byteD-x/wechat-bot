@@ -115,8 +115,10 @@ def build_default_config(*, data_root: Optional[Path] = None) -> Dict[str, Any]:
 
 def validate_shared_config(config: Dict[str, Any], *, data_root: Optional[Path] = None) -> Dict[str, Any]:
     from backend.config_schemas import AppConfig
+    from backend.model_auth.services import ensure_provider_auth_center_config
 
     validated = AppConfig(**deepcopy(config or {})).model_dump(mode="json")
+    validated = ensure_provider_auth_center_config(validated)
     validated["schema_version"] = int(validated.get("schema_version") or SCHEMA_VERSION)
     validated["services"] = {
         "growth_tasks_enabled": bool((validated.get("services") or {}).get("growth_tasks_enabled", False))

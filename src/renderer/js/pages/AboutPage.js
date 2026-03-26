@@ -3,6 +3,7 @@ import { toast } from '../services/NotificationService.js';
 import { checkUpdates, openUpdateDownload } from './settings/action-controller.js';
 import { renderUpdatePanel } from './settings/renderers.js';
 import { watchUpdatePanelState } from './settings/runtime-sync.js';
+import { renderAboutPageShell } from '../app-shell/pages/index.js';
 
 const FALLBACK_OPEN_OPTIONS = 'noopener,noreferrer';
 const TEXT = {
@@ -16,6 +17,10 @@ export class AboutPage extends PageController {
 
     async onInit() {
         await super.onInit();
+        const container = this.container || (typeof document !== 'undefined' ? this.getContainer() : null);
+        if (container) {
+            container.innerHTML = renderAboutPageShell();
+        }
         this._bindEvents();
         this._watchUpdateState();
     }

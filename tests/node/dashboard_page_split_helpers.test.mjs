@@ -1,12 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
+import { Events } from '../../src/renderer/js/core/EventBus.js';
 import { getGrowthTaskLabel } from '../../src/renderer/js/pages/dashboard/formatters.js';
 import { renderDashboardCost, renderMessages } from '../../src/renderer/js/pages/dashboard/renderers.js';
 import {
     confirmAction,
     handleGrowthTaskAction,
+    recoverBot,
     restartBot,
+    runReadinessAction,
     toggleBot,
 } from '../../src/renderer/js/pages/dashboard/actions.js';
 import {
@@ -30,6 +34,9 @@ import {
 } from '../../src/renderer/js/pages/dashboard/status-presenter.js';
 import {
     bindDashboardEvents,
+    exportDiagnosticsSnapshot,
+    handleDashboardSectionTabClick,
+    handleReadinessAction,
     handleRefreshStatus,
     openWeChatClient,
 } from '../../src/renderer/js/pages/dashboard/page-shell.js';
@@ -200,6 +207,10 @@ function createBindingPage(overrides = {}) {
         _clearOfflineData() {
             this.clearCalls = (this.clearCalls || 0) + 1;
         },
+        _setDashboardSection(section) {
+            this.sectionCalls = (this.sectionCalls || []);
+            this.sectionCalls.push(section);
+        },
         _loadRecentMessages() {
             this.messageLoads = (this.messageLoads || 0) + 1;
             return Promise.resolve();
@@ -207,6 +218,15 @@ function createBindingPage(overrides = {}) {
         ...overrides,
     };
 }
+
+test('dashboard stylesheet keeps the overview stage on a two-column desktop grid', () => {
+    const css = readFileSync(new URL('../../src/renderer/css/pages/dashboard.css', import.meta.url), 'utf8');
+    assert.match(css, /\.dashboard-stage-grid\s*\{\s*grid-template-columns:\s*minmax\(0,\s*1\.08fr\)\s+minmax\(360px,\s*0\.92fr\);/s);
+    assert.equal(
+        /\.dashboard-stage-grid\s*\{\s*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\);/s.test(css),
+        false,
+    );
+});
 
 test('dashboard actions helper toggles bot start and records startup status', async () => withDom(async ({ document }) => {
     const toggleButton = createButton(document, 'btn-toggle-bot', '启动机器人');
@@ -303,13 +323,14 @@ test('dashboard page shell binds events and watchers with stable side effects', 
         },
     });
 
-    assert.equal(page.bindings.length, 13);
-    assert.equal(page.watchers.length, 5);
+    assert.equal(page.bindings.length, 16);
+    assert.equal(page.watchers.length, 6);
 
     const refreshBinding = page.bindings.find((item) => item.selector === '#btn-refresh-status');
     assert.ok(refreshBinding);
     refreshBinding.handler();
     assert.equal(page.emitted.length, 1);
+    assert.deepEqual(page.emitted[0].payload, { force: true, refreshReadiness: true });
     assert.deepEqual(page.refreshCalls, [true]);
 
     const connectedWatcher = page.watchers.find((item) => item.path === 'bot.connected');
@@ -321,6 +342,27 @@ test('dashboard page shell binds events and watchers with stable side effects', 
     connectedWatcher.handler(true);
     assert.equal(page.messageLoads, 1);
     assert.deepEqual(page.refreshCalls, [true, true]);
+
+    const readinessWatcher = page.watchers.find((item) => item.path === 'readiness.report');
+    assert.ok(readinessWatcher);
+
+    const sectionBinding = page.bindings.find((item) => item.selector === '#dashboard-section-tabs');
+    assert.ok(sectionBinding);
+    sectionBinding.handler({
+        target: {
+            closest(selector) {
+                if (selector !== '[data-dashboard-section-button]') {
+                    return null;
+                }
+                return {
+                    dataset: {
+                        dashboardSectionButton: 'messages',
+                    },
+                };
+            },
+        },
+    });
+    assert.deepEqual(page.sectionCalls, ['messages']);
 });
 
 test('dashboard page shell handles refresh wake-up and wechat open feedback', async () => {
@@ -347,6 +389,48 @@ test('dashboard page shell handles refresh wake-up and wechat open feedback', as
 
     await openWeChatClient({ toast, windowApi: {} });
     assert.equal(toast.calls.at(-1)?.message, '请手动打开微信客户端');
+});
+
+test('dashboard page shell routes readiness actions and snapshot export', async () => {
+    const toast = createToastRecorder();
+    const page = createBindingPage();
+
+    await handleReadinessAction(page, 'open_settings', { toast });
+    assert.deepEqual(page.emitted?.[0], { event: Events.PAGE_CHANGE, payload: 'settings' });
+
+    await handleReadinessAction(page, 'open_wechat', {
+        toast,
+        windowApi: {
+            openWeChat: async () => {},
+        },
+    });
+    assert.equal(
+        page.emitted.some((entry) => entry.event === Events.BOT_STATUS_CHANGE),
+        true
+    );
+
+    await exportDiagnosticsSnapshot({
+        toast,
+        windowApi: {
+            exportDiagnosticsSnapshot: async () => ({
+                success: true,
+                message: '诊断快照已导出',
+            }),
+        },
+    });
+    assert.equal(toast.calls.at(-1)?.message, '诊断快照已导出');
+});
+
+test('dashboard page shell ignores invalid section tab clicks', () => {
+    const page = createBindingPage();
+    handleDashboardSectionTabClick(page, {
+        target: {
+            closest() {
+                return null;
+            },
+        },
+    });
+    assert.equal(page.sectionCalls, undefined);
 });
 
 test('dashboard runtime helper manages idle timer and wake flow', async () => {
@@ -598,6 +682,20 @@ test('dashboard status presenter updates summary stats and delegates detailed pa
     const page = {
         _lastStats: null,
         $: (selector) => selectors[selector] || null,
+        getState(path) {
+            if (path === 'readiness.report') {
+                return {
+                    ready: false,
+                    blockingCount: 1,
+                    checks: [],
+                    summary: {
+                        title: '还有 1 项准备未完成',
+                        detail: '请先处理阻塞项。',
+                    },
+                };
+            }
+            return undefined;
+        },
     };
 
     updateStats(page, {

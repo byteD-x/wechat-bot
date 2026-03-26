@@ -39,6 +39,13 @@ ALLOWED_ROLES: frozenset = frozenset({"user", "assistant", "system"})
 
 # JSON 字段集合（优化 update_user_profile 中的字段类型检查）
 _JSON_FIELDS: frozenset = frozenset({"preferences", "context_facts", "emotion_history"})
+_PENDING_REPLY_STATUSES: frozenset = frozenset({
+    "pending",
+    "approved",
+    "rejected",
+    "expired",
+    "failed",
+})
 
 # 默认用户画像模板
 DEFAULT_USER_PROFILE = {
@@ -197,8 +204,29 @@ class MemoryManager:
             ")"
         )
         await self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS pending_replies ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "chat_id TEXT NOT NULL,"
+            "source_message_id TEXT DEFAULT '',"
+            "trigger_reason TEXT NOT NULL,"
+            "draft_reply TEXT NOT NULL,"
+            "metadata_json TEXT DEFAULT '{}',"
+            "status TEXT NOT NULL DEFAULT 'pending',"
+            "created_at INTEGER NOT NULL,"
+            "resolved_at INTEGER DEFAULT NULL"
+            ")"
+        )
+        await self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_background_backlog_updated_at "
             "ON background_backlog (updated_at)"
+        )
+        await self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pending_replies_status_created_at "
+            "ON pending_replies (status, created_at DESC)"
+        )
+        await self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pending_replies_chat_id "
+            "ON pending_replies (chat_id, created_at DESC)"
         )
         # 启用 WAL 模式提升并发性能
         await self._conn.execute("PRAGMA journal_mode=WAL")
@@ -248,6 +276,24 @@ class MemoryManager:
         except (TypeError, ValueError, json.JSONDecodeError):
             return {}
         return data if isinstance(data, dict) else {}
+
+    @staticmethod
+    def _normalize_pending_reply_status(value: Any) -> str:
+        status = str(value or "pending").strip().lower() or "pending"
+        return status if status in _PENDING_REPLY_STATUSES else "pending"
+
+    def _row_to_pending_reply(self, row: Any) -> Dict[str, Any]:
+        return {
+            "id": int(row["id"] or 0),
+            "chat_id": str(row["chat_id"] or ""),
+            "source_message_id": str(row["source_message_id"] or ""),
+            "trigger_reason": str(row["trigger_reason"] or ""),
+            "draft_reply": str(row["draft_reply"] or ""),
+            "metadata": self._deserialize_metadata(row["metadata_json"]),
+            "status": self._normalize_pending_reply_status(row["status"]),
+            "created_at": int(row["created_at"] or 0),
+            "resolved_at": int(row["resolved_at"] or 0) if row["resolved_at"] is not None else None,
+        }
 
     @staticmethod
     def _normalize_ttl(value: Optional[float]) -> Optional[float]:
@@ -428,6 +474,205 @@ class MemoryManager:
             "total": total,
             "by_task_type": by_task_type,
             "latest_updated_at": latest_updated_at,
+        }
+
+    async def create_pending_reply(
+        self,
+        *,
+        chat_id: str,
+        source_message_id: str,
+        trigger_reason: str,
+        draft_reply: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        chat_id_val = str(chat_id or "").strip()
+        trigger_reason_val = str(trigger_reason or "").strip()
+        draft_reply_val = str(draft_reply or "").strip()
+        if not chat_id_val:
+            raise ValueError("chat_id is required")
+        if not trigger_reason_val:
+            raise ValueError("trigger_reason is required")
+        if not draft_reply_val:
+            raise ValueError("draft_reply is required")
+
+        db = await self._get_db()
+        created_at = int(time.time())
+        cursor = await db.execute(
+            "INSERT INTO pending_replies ("
+            "chat_id, source_message_id, trigger_reason, draft_reply, metadata_json, status, created_at, resolved_at"
+            ") VALUES (?, ?, ?, ?, ?, 'pending', ?, NULL)",
+            (
+                chat_id_val,
+                str(source_message_id or "").strip(),
+                trigger_reason_val,
+                draft_reply_val,
+                self._serialize_metadata(metadata),
+                created_at,
+            ),
+        )
+        await db.commit()
+        return await self.get_pending_reply(int(cursor.lastrowid or 0)) or {}
+
+    async def get_pending_reply(self, pending_id: int) -> Optional[Dict[str, Any]]:
+        try:
+            pending_id_val = int(pending_id)
+        except (TypeError, ValueError):
+            return None
+        if pending_id_val <= 0:
+            return None
+
+        db = await self._get_db()
+        async with db.execute(
+            "SELECT id, chat_id, source_message_id, trigger_reason, draft_reply, metadata_json, status, created_at, resolved_at "
+            "FROM pending_replies WHERE id = ? LIMIT 1",
+            (pending_id_val,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_pending_reply(row)
+
+    async def list_pending_replies(
+        self,
+        *,
+        chat_id: str = "",
+        status: Optional[str] = "pending",
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        try:
+            limit_val = int(limit)
+        except (TypeError, ValueError):
+            limit_val = 50
+        limit_val = max(1, min(limit_val, 200))
+
+        where_clauses: List[str] = []
+        params: List[Any] = []
+        chat_id_val = str(chat_id or "").strip()
+        if chat_id_val:
+            where_clauses.append("chat_id = ?")
+            params.append(chat_id_val)
+
+        status_val = None if status is None else self._normalize_pending_reply_status(status)
+        if status is not None:
+            where_clauses.append("status = ?")
+            params.append(status_val)
+
+        where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+        db = await self._get_db()
+        async with db.execute(
+            "SELECT id, chat_id, source_message_id, trigger_reason, draft_reply, metadata_json, status, created_at, resolved_at "
+            f"FROM pending_replies {where_sql} ORDER BY created_at DESC LIMIT ?",
+            (*params, limit_val),
+        ) as cursor:
+            rows = await cursor.fetchall()
+        return [self._row_to_pending_reply(row) for row in rows]
+
+    async def resolve_pending_reply(
+        self,
+        pending_id: int,
+        *,
+        status: str,
+        draft_reply: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        status_val = self._normalize_pending_reply_status(status)
+        if status_val == "pending":
+            raise ValueError("resolved status cannot be pending")
+
+        current = await self.get_pending_reply(pending_id)
+        if current is None:
+            return None
+
+        next_draft_reply = str(draft_reply or current.get("draft_reply") or "").strip()
+        if not next_draft_reply:
+            next_draft_reply = str(current.get("draft_reply") or "")
+        next_metadata = dict(current.get("metadata") or {})
+        if isinstance(metadata, dict) and metadata:
+            next_metadata.update(metadata)
+
+        db = await self._get_db()
+        await db.execute(
+            "UPDATE pending_replies SET draft_reply = ?, metadata_json = ?, status = ?, resolved_at = ? WHERE id = ?",
+            (
+                next_draft_reply,
+                self._serialize_metadata(next_metadata),
+                status_val,
+                int(time.time()),
+                int(pending_id),
+            ),
+        )
+        await db.commit()
+        return await self.get_pending_reply(pending_id)
+
+    async def update_pending_reply(
+        self,
+        pending_id: int,
+        *,
+        draft_reply: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        current = await self.get_pending_reply(pending_id)
+        if current is None:
+            return None
+
+        next_draft_reply = str(draft_reply or current.get("draft_reply") or "").strip()
+        if not next_draft_reply:
+            next_draft_reply = str(current.get("draft_reply") or "")
+        next_metadata = dict(current.get("metadata") or {})
+        if isinstance(metadata, dict) and metadata:
+            next_metadata.update(metadata)
+
+        db = await self._get_db()
+        await db.execute(
+            "UPDATE pending_replies SET draft_reply = ?, metadata_json = ? WHERE id = ?",
+            (
+                next_draft_reply,
+                self._serialize_metadata(next_metadata),
+                int(pending_id),
+            ),
+        )
+        await db.commit()
+        return await self.get_pending_reply(pending_id)
+
+    async def expire_pending_replies(self, *, created_before: int) -> int:
+        try:
+            cutoff = int(created_before)
+        except (TypeError, ValueError):
+            return 0
+        db = await self._get_db()
+        cursor = await db.execute(
+            "UPDATE pending_replies SET status = 'expired', resolved_at = ? "
+            "WHERE status = 'pending' AND created_at < ?",
+            (int(time.time()), cutoff),
+        )
+        await db.commit()
+        return int(getattr(cursor, "rowcount", 0) or 0)
+
+    async def get_pending_reply_stats(self) -> Dict[str, Any]:
+        db = await self._get_db()
+        async with db.execute(
+            "SELECT status, COUNT(*) AS total, MAX(created_at) AS latest_created_at "
+            "FROM pending_replies GROUP BY status"
+        ) as cursor:
+            rows = await cursor.fetchall()
+        by_status: Dict[str, int] = {}
+        latest_created_at = 0
+        total = 0
+        for row in rows:
+            status = self._normalize_pending_reply_status(row["status"])
+            count = int(row["total"] or 0)
+            by_status[status] = count
+            total += count
+            latest_created_at = max(latest_created_at, int(row["latest_created_at"] or 0))
+        return {
+            "total": total,
+            "pending": int(by_status.get("pending", 0) or 0),
+            "approved": int(by_status.get("approved", 0) or 0),
+            "rejected": int(by_status.get("rejected", 0) or 0),
+            "expired": int(by_status.get("expired", 0) or 0),
+            "failed": int(by_status.get("failed", 0) or 0),
+            "by_status": by_status,
+            "latest_created_at": latest_created_at,
         }
 
     async def has_messages(self, wx_id: str) -> bool:

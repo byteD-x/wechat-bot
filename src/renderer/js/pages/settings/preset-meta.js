@@ -1,11 +1,17 @@
 import { createElement } from './form-codec.js';
 
+function getPresetSnapshot(page) {
+    return Array.isArray(page?._apiPresetsSnapshot)
+        ? page._apiPresetsSnapshot
+        : (Array.isArray(page?._presetDrafts) ? page._presetDrafts : []);
+}
+
 export function getPresetByName(page, name) {
     const wanted = String(name || '').trim();
     if (!wanted) {
         return null;
     }
-    return page._presetDrafts.find((preset) => String(preset?.name || '').trim() === wanted) || null;
+    return getPresetSnapshot(page).find((preset) => String(preset?.name || '').trim() === wanted) || null;
 }
 
 export function getRuntimePresetDraft(page) {
@@ -13,11 +19,11 @@ export function getRuntimePresetDraft(page) {
 }
 
 export function getActivePresetDraft(page) {
-    return getPresetByName(page, page._activePreset);
+    return getPresetByName(page, page._activePresetName || page._activePreset);
 }
 
 export function getEffectivePreset(page) {
-    return getRuntimePresetDraft(page) || getActivePresetDraft(page) || page._presetDrafts[0] || null;
+    return getRuntimePresetDraft(page) || getActivePresetDraft(page) || getPresetSnapshot(page)[0] || null;
 }
 
 export function getProviderLabel(page, providerId) {

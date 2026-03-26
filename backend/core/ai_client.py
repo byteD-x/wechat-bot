@@ -31,13 +31,17 @@ import time
 from collections import OrderedDict, deque
 from functools import lru_cache
 from threading import Lock
-from typing import AsyncIterator, Deque, Dict, Iterable, List, Optional, Tuple
+from typing import Any, AsyncIterator, Callable, Deque, Dict, Iterable, List, Optional, Tuple
 
 import httpx
 from tenacity import AsyncRetrying, stop_after_attempt, wait_exponential, retry_if_exception_type, RetryError
 
 from .provider_compat import (
+    build_anthropic_headers,
+    build_anthropic_messages_payload,
+    infer_auth_transport,
     build_openai_chat_payload,
+    build_openai_responses_payload,
     normalize_chat_result,
     normalize_provider_error,
 )
@@ -235,8 +239,12 @@ class AIClient:
     def __init__(
         self,
         base_url: str,
-        api_key: str,
+        api_key: str | Callable[[], str],
         model: str,
+        extra_headers: dict | Callable[[], dict] | None = None,
+        auth_refresh_hook: Callable[[], None] | None = None,
+        auth_transport: Optional[str] = None,
+        transport_metadata: Optional[dict] = None,
         timeout_sec: float = DEFAULT_TIMEOUT_SEC,
         max_retries: int = MAX_RETRIES,
         context_rounds: int = 5,
@@ -253,6 +261,10 @@ class AIClient:
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
+        self.extra_headers = extra_headers
+        self.auth_refresh_hook = auth_refresh_hook if callable(auth_refresh_hook) else None
+        self.auth_transport = infer_auth_transport(self.base_url, auth_transport)
+        self.transport_metadata = dict(transport_metadata or {})
         self.model = model
         # Do not enable embeddings implicitly for local presets without keys.
         value = "" if embedding_model is None else str(embedding_model).strip()
@@ -335,11 +347,303 @@ class AIClient:
             cls._request_counter += 1
             return f"req-{cls._request_counter:06d}"
 
+    def _resolve_api_key(self) -> str:
+        if callable(self.api_key):
+            try:
+                return str(self.api_key() or "").strip()
+            except Exception as exc:
+                logging.warning("Failed to resolve dynamic API key: %s", exc)
+                return ""
+        return str(self.api_key or "").strip()
+
+    def _resolve_extra_headers(self) -> dict:
+        raw_headers = self.extra_headers
+        if callable(raw_headers):
+            try:
+                raw_headers = raw_headers()
+            except Exception as exc:
+                logging.warning("Failed to resolve dynamic extra headers: %s", exc)
+                raw_headers = {}
+        if not isinstance(raw_headers, dict):
+            return {}
+        resolved: dict = {}
+        for key, value in raw_headers.items():
+            header_key = str(key or "").strip()
+            header_value = "" if value is None else str(value).strip()
+            if header_key and header_value:
+                resolved[header_key] = header_value
+        return resolved
+
     def _build_headers(self) -> dict:
+        extra_headers = self._resolve_extra_headers()
+        api_key = self._resolve_api_key()
+        if self.auth_transport == "anthropic_native":
+            return build_anthropic_headers(api_key=api_key, extra_headers=extra_headers)
         headers = {"Content-Type": "application/json"}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        headers.update(extra_headers)
         return headers
+
+    def _is_openai_codex_responses_transport(self) -> bool:
+        return self.auth_transport == "openai_codex_responses"
+
+    def _is_google_code_assist_transport(self) -> bool:
+        return self.auth_transport == "google_code_assist"
+
+    def _serialize_messages_for_google(self, messages: Iterable[dict]) -> tuple[List[dict], str]:
+        contents: List[dict] = []
+        system_parts: List[str] = []
+        for item in messages or []:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role") or "").strip().lower()
+            content = item.get("content")
+            if isinstance(content, list):
+                text_parts = []
+                for part in content:
+                    if isinstance(part, dict):
+                        text = str(part.get("text") or "").strip()
+                        if text:
+                            text_parts.append(text)
+                    elif part:
+                        text_parts.append(str(part).strip())
+                text = "\n".join(part for part in text_parts if part).strip()
+            else:
+                text = str(content or "").strip()
+            if not text:
+                continue
+            if role == "system":
+                system_parts.append(text)
+                continue
+            if role == "assistant":
+                google_role = "model"
+            else:
+                google_role = "user"
+            contents.append({"role": google_role, "parts": [{"text": text}]})
+        return contents, "\n\n".join(part for part in system_parts if part).strip()
+
+    def _build_openai_codex_payload(self, messages: Iterable[dict]) -> dict:
+        return build_openai_responses_payload(
+            model=self.model,
+            messages=messages,
+            stream=True,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+            max_completion_tokens=self.max_completion_tokens,
+            reasoning_effort=self.reasoning_effort,
+        )
+
+    def _build_google_code_assist_payload(self, messages: Iterable[dict]) -> dict:
+        contents, system_prompt = self._serialize_messages_for_google(messages)
+        project_id = str(self.transport_metadata.get("project_id") or "").strip()
+        if not project_id:
+            raise RuntimeError("Google Code Assist 运行时缺少 project_id。")
+        request: Dict[str, Any] = {
+            "contents": contents,
+        }
+        generation_config: Dict[str, Any] = {}
+        if self.temperature is not None:
+            generation_config["temperature"] = self.temperature
+        if self.max_completion_tokens is not None:
+            generation_config["maxOutputTokens"] = self.max_completion_tokens
+        elif self.max_tokens is not None:
+            generation_config["maxOutputTokens"] = self.max_tokens
+        if generation_config:
+            request["generationConfig"] = generation_config
+        if system_prompt:
+            request["systemInstruction"] = {"parts": [{"text": system_prompt}]}
+        return {
+            "project": project_id,
+            "model": self.model,
+            "request": request,
+            "userAgent": "wechat-chat",
+            "requestId": f"wechat-chat-{int(time.time() * 1000)}",
+        }
+
+    async def _parse_sse_json_events(self, response: httpx.Response) -> List[Dict[str, Any]]:
+        events: List[Dict[str, Any]] = []
+        async for line in response.aiter_lines():
+            if not line or not line.startswith("data:"):
+                continue
+            payload = line[5:].strip()
+            if not payload or payload == "[DONE]":
+                continue
+            try:
+                parsed = json.loads(payload)
+            except Exception:
+                continue
+            if isinstance(parsed, dict):
+                events.append(parsed)
+        return events
+
+    def _normalize_codex_events(self, events: List[Dict[str, Any]]) -> Dict[str, Any]:
+        text_parts: List[str] = []
+        reasoning_parts: List[str] = []
+        finish_reason = ""
+        for event in events:
+            event_type = str(event.get("type") or "").strip()
+            if event_type == "response.output_text.delta":
+                delta = str(event.get("delta") or "").strip()
+                if delta:
+                    text_parts.append(delta)
+            elif event_type == "response.output_text.done":
+                text = str(event.get("text") or "").strip()
+                if text:
+                    text_parts = [text]
+            elif event_type in {"response.reasoning_summary_text.delta", "response.reasoning_summary_text.done"}:
+                text = str(event.get("delta") or event.get("text") or "").strip()
+                if text:
+                    reasoning_parts.append(text)
+            elif event_type in {"response.completed", "response.done"}:
+                response_payload = event.get("response") if isinstance(event.get("response"), dict) else {}
+                finish_reason = str(
+                    response_payload.get("status")
+                    or response_payload.get("finish_reason")
+                    or response_payload.get("stop_reason")
+                    or finish_reason
+                ).strip()
+        return {
+            "content": [{"type": "output_text", "text": "".join(text_parts).strip()}],
+            "reasoning_content": [{"type": "output_text", "text": "".join(reasoning_parts).strip()}],
+            "finish_reason": finish_reason,
+        }
+
+    def _normalize_google_code_assist_events(self, events: List[Dict[str, Any]]) -> Dict[str, Any]:
+        text_parts: List[str] = []
+        finish_reason = ""
+        for event in events:
+            response_payload = event.get("response") if isinstance(event.get("response"), dict) else {}
+            candidates = response_payload.get("candidates") if isinstance(response_payload.get("candidates"), list) else []
+            if candidates:
+                first = candidates[0] if isinstance(candidates[0], dict) else {}
+                finish_reason = str(first.get("finishReason") or finish_reason).strip()
+                content = first.get("content") if isinstance(first.get("content"), dict) else {}
+                parts = content.get("parts") if isinstance(content.get("parts"), list) else []
+                for part in parts:
+                    if not isinstance(part, dict):
+                        continue
+                    text = str(part.get("text") or "").strip()
+                    if text:
+                        text_parts.append(text)
+        return {
+            "content": [{"type": "text", "text": "".join(text_parts).strip()}],
+            "finish_reason": finish_reason,
+        }
+
+    async def _request_native_sse_json(
+        self,
+        *,
+        url: str,
+        payload: Dict[str, Any],
+        refresh_reason: str,
+        timeout_sec: Optional[float] = None,
+    ) -> List[Dict[str, Any]]:
+        client = self._get_http_client()
+        timeout = timeout_sec or self.timeout_sec
+        headers = self._build_headers()
+        async with client.stream("POST", url, headers=headers, json=payload, timeout=timeout) as response:
+            if response.status_code == 401 and self._force_refresh_auth(reason=refresh_reason):
+                headers = self._build_headers()
+                async with client.stream("POST", url, headers=headers, json=payload, timeout=timeout) as retried:
+                    if retried.status_code >= 400:
+                        normalized_error = normalize_provider_error(response=retried, payload=await retried.aread())
+                        raise RuntimeError(normalized_error.message)
+                    return await self._parse_sse_json_events(retried)
+            if response.status_code >= 400:
+                normalized_error = normalize_provider_error(response=response, payload=await response.aread())
+                raise RuntimeError(normalized_error.message)
+            return await self._parse_sse_json_events(response)
+
+    async def _request_openai_codex_response(
+        self,
+        messages: Iterable[dict],
+        *,
+        timeout_sec: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        events = await self._request_native_sse_json(
+            url=f"{self.base_url}/codex/responses",
+            payload=self._build_openai_codex_payload(messages),
+            refresh_reason="codex_responses_401",
+            timeout_sec=timeout_sec,
+        )
+        return self._normalize_codex_events(events)
+
+    async def _request_google_code_assist_response(
+        self,
+        messages: Iterable[dict],
+        *,
+        timeout_sec: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        events = await self._request_native_sse_json(
+            url=f"{self.base_url}/v1internal:streamGenerateContent?alt=sse",
+            payload=self._build_google_code_assist_payload(messages),
+            refresh_reason="google_code_assist_401",
+            timeout_sec=timeout_sec,
+        )
+        return self._normalize_google_code_assist_events(events)
+
+    def _force_refresh_auth(self, *, reason: str) -> bool:
+        if not callable(self.auth_refresh_hook):
+            return False
+        try:
+            self.auth_refresh_hook()
+            logging.info("Forced runtime auth refresh for %s", reason)
+            return True
+        except Exception as exc:
+            logging.warning("Forced runtime auth refresh failed for %s: %s", reason, exc)
+            return False
+
+    async def _request_with_auth_refresh(
+        self,
+        client: httpx.AsyncClient,
+        method: str,
+        url: str,
+        *,
+        timeout: float,
+        refresh_reason: str,
+        **kwargs,
+    ):
+        request = getattr(client, str(method or "post").lower())
+        headers = kwargs.pop("headers", None) or self._build_headers()
+        response = await request(url, headers=headers, timeout=timeout, **kwargs)
+        if response.status_code == 401 and self._force_refresh_auth(reason=refresh_reason):
+            response = await request(url, headers=self._build_headers(), timeout=timeout, **kwargs)
+        return response
+
+    def _build_anthropic_payload(
+        self,
+        messages: Iterable[dict],
+        *,
+        max_completion_tokens: Optional[int] = None,
+    ) -> dict:
+        return build_anthropic_messages_payload(
+            model=self.model,
+            messages=messages,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+            max_completion_tokens=max_completion_tokens if max_completion_tokens is not None else self.max_completion_tokens,
+            stream=False,
+        )
+
+    async def _request_anthropic_message(
+        self,
+        messages: Iterable[dict],
+        *,
+        timeout_sec: Optional[float] = None,
+        max_completion_tokens: Optional[int] = None,
+    ):
+        url = f"{self.base_url}/messages"
+        client = self._get_http_client()
+        response = await self._request_with_auth_refresh(
+            client,
+            "post",
+            url,
+            json=self._build_anthropic_payload(messages, max_completion_tokens=max_completion_tokens),
+            timeout=timeout_sec or self.timeout_sec,
+            refresh_reason="anthropic_message_401",
+        )
+        return response
 
     def _get_chat_lock(self, chat_id: str) -> asyncio.Lock:
         lock = self._chat_locks.get(chat_id)
@@ -349,6 +653,48 @@ class AIClient:
         return lock
 
     async def _probe_completion(self, *, timeout_sec: Optional[float] = None) -> bool:
+        if self.auth_transport == "anthropic_native":
+            try:
+                resp = await self._request_anthropic_message(
+                    [{"role": "user", "content": "ping"}],
+                    timeout_sec=timeout_sec,
+                    max_completion_tokens=1,
+                )
+                if resp.status_code >= 400:
+                    logging.warning(
+                        "Anthropic probe failed (HTTP %s): %s",
+                        resp.status_code,
+                        resp.text[:200],
+                    )
+                    return False
+                data = resp.json()
+                normalized = normalize_chat_result(data)
+                return bool(normalized.text or normalized.reasoning or data.get("content"))
+            except Exception as exc:
+                logging.warning("Anthropic probe failed: %s", exc)
+                return False
+        if self._is_openai_codex_responses_transport():
+            try:
+                data = await self._request_openai_codex_response(
+                    [{"role": "user", "content": "ping"}],
+                    timeout_sec=timeout_sec,
+                )
+                normalized = normalize_chat_result(data)
+                return bool(normalized.text or normalized.reasoning)
+            except Exception as exc:
+                logging.warning("Codex OAuth probe failed: %s", exc)
+                return False
+        if self._is_google_code_assist_transport():
+            try:
+                data = await self._request_google_code_assist_response(
+                    [{"role": "user", "content": "ping"}],
+                    timeout_sec=timeout_sec,
+                )
+                normalized = normalize_chat_result(data)
+                return bool(normalized.text or normalized.reasoning or data.get("content"))
+            except Exception as exc:
+                logging.warning("Google Code Assist probe failed: %s", exc)
+                return False
         url = f"{self.base_url}/chat/completions"
         payload = {
             "model": self.model,
@@ -391,14 +737,25 @@ class AIClient:
 
     async def probe_fast(self) -> Tuple[bool, str]:
         """快速探测服务联通性，必要时回退到一次极小的补全请求。"""
+        if self.auth_transport == "anthropic_native":
+            ok = await self._probe_completion(timeout_sec=min(self.timeout_sec, FAST_PROBE_TIMEOUT_SEC))
+            return ok, "messages"
+        if self._is_openai_codex_responses_transport():
+            ok = await self._probe_completion(timeout_sec=min(self.timeout_sec, FAST_PROBE_TIMEOUT_SEC))
+            return ok, "responses"
+        if self._is_google_code_assist_transport():
+            ok = await self._probe_completion(timeout_sec=min(self.timeout_sec, FAST_PROBE_TIMEOUT_SEC))
+            return ok, "code_assist"
         client = self._get_http_client()
         timeout_sec = min(self.timeout_sec, FAST_PROBE_TIMEOUT_SEC)
 
         try:
-            resp = await client.get(
+            resp = await self._request_with_auth_refresh(
+                client,
+                "get",
                 f"{self.base_url}/models",
-                headers=self._build_headers(),
                 timeout=timeout_sec,
+                refresh_reason="models_probe_401",
             )
         except Exception as exc:
             logging.warning("快速探测失败：%s", exc)
@@ -455,20 +812,6 @@ class AIClient:
                 messages = self._build_messages(
                     chat_id, user_text, system_prompt, memory_context, image_path
                 )
-                payload = build_openai_chat_payload(
-                    model=self.model,
-                    messages=messages,
-                    stream=False,
-                    temperature=self.temperature,
-                    max_tokens=self.max_tokens,
-                    max_completion_tokens=self.max_completion_tokens,
-                    reasoning_effort=self.reasoning_effort,
-                )
-
-                url = f"{self.base_url}/chat/completions"
-                headers = self._build_headers()
-                client = self._get_http_client()
-
                 try:
                     async for attempt in AsyncRetrying(
                         stop=stop_after_attempt(self.max_retries + 1),
@@ -478,22 +821,57 @@ class AIClient:
                     ):
                         with attempt:
                             try:
-                                resp = await client.post(
-                                    url, headers=headers, json=payload, timeout=self.timeout_sec
-                                )
-                                if resp.status_code >= 400:
-                                    normalized_error = normalize_provider_error(response=resp)
-                                    raise RuntimeError(normalized_error.message)
-
-                                try:
-                                    data = resp.json()
-                                except ValueError as exc:
-                                    normalized_error = normalize_provider_error(
-                                        exc=exc,
-                                        response=resp,
-                                        payload=resp.text[:200],
+                                if self._is_openai_codex_responses_transport():
+                                    data = await self._request_openai_codex_response(messages)
+                                elif self._is_google_code_assist_transport():
+                                    data = await self._request_google_code_assist_response(messages)
+                                elif self.auth_transport == "anthropic_native":
+                                    resp = await self._request_anthropic_message(messages)
+                                    if resp.status_code >= 400:
+                                        normalized_error = normalize_provider_error(response=resp)
+                                        raise RuntimeError(normalized_error.message)
+                                    try:
+                                        data = resp.json()
+                                    except ValueError as exc:
+                                        normalized_error = normalize_provider_error(
+                                            exc=exc,
+                                            response=resp,
+                                            payload=resp.text[:200],
+                                        )
+                                        raise RuntimeError(normalized_error.message) from exc
+                                else:
+                                    payload = build_openai_chat_payload(
+                                        model=self.model,
+                                        messages=messages,
+                                        stream=False,
+                                        temperature=self.temperature,
+                                        max_tokens=self.max_tokens,
+                                        max_completion_tokens=self.max_completion_tokens,
+                                        reasoning_effort=self.reasoning_effort,
                                     )
-                                    raise RuntimeError(normalized_error.message) from exc
+                                    headers = self._build_headers()
+                                    client = self._get_http_client()
+                                    url = f"{self.base_url}/chat/completions"
+                                    resp = await client.post(
+                                        url, headers=headers, json=payload, timeout=self.timeout_sec
+                                    )
+                                    if resp.status_code == 401 and self._force_refresh_auth(reason="generate_reply_401"):
+                                        headers = self._build_headers()
+                                        resp = await client.post(
+                                            url, headers=headers, json=payload, timeout=self.timeout_sec
+                                        )
+                                    if resp.status_code >= 400:
+                                        normalized_error = normalize_provider_error(response=resp)
+                                        raise RuntimeError(normalized_error.message)
+                                    try:
+                                        data = resp.json()
+                                    except ValueError as exc:
+                                        normalized_error = normalize_provider_error(
+                                            exc=exc,
+                                            response=resp,
+                                            payload=resp.text[:200],
+                                        )
+                                        raise RuntimeError(normalized_error.message) from exc
                                 normalized = normalize_chat_result(data)
                                 reply = normalized.text
                                 if not reply and _is_internal_task_chat_id(chat_id):
@@ -554,6 +932,9 @@ class AIClient:
         """获取文本 Embedding 向量"""
         # 请求去重
         # ... (可以使用类似 generate_reply 的去重逻辑，但 embedding 通常很快)
+        if self.auth_transport in {"anthropic_native", "openai_codex_responses", "google_code_assist"}:
+            logging.info("Embedding skipped: anthropic_native transport does not expose OpenAI-compatible embeddings.")
+            return None
         if not self.embedding_model:
             return None
         
@@ -569,6 +950,12 @@ class AIClient:
             resp = await client.post(
                 url, headers=headers, json=payload, timeout=self.timeout_sec
             )
+            
+            if resp.status_code == 401 and self._force_refresh_auth(reason="embedding_401"):
+                headers = self._build_headers()
+                resp = await client.post(
+                    url, headers=headers, json=payload, timeout=self.timeout_sec
+                )
             
             if resp.status_code >= 400:
                 logging.warning(f"Embedding failed: {resp.status_code} {resp.text[:100]}")

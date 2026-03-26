@@ -8,6 +8,14 @@ const {
     buildRendererConfigPayload,
     createSharedConfigService,
 } = require('../src/main/shared-config');
+const {
+    buildDiagnosticsSnapshot,
+} = require('../src/main/diagnostics-snapshot');
+const {
+    buildElevatedLaunchPlan,
+    buildElevatedPowerShellScript,
+    launchElevatedApp,
+} = require('../src/main/elevated-relaunch');
 
 test('buildRendererConfigPayload masks secrets and drops runtime-only fields', () => {
     const payload = buildRendererConfigPayload({
@@ -15,7 +23,7 @@ test('buildRendererConfigPayload masks secrets and drops runtime-only fields', (
             presets: [
                 {
                     name: 'OpenAI',
-                    api_key: 'sk-1234567890abcdef',
+                    api_key: 'demo-openai-key-123456',
                     base_url: 'https://api.openai.com/v1',
                 },
             ],
@@ -112,4 +120,100 @@ test('createSharedConfigService.patch persists config and broadcasts changes', a
     assert.equal(persisted.bot.memory_context_limit, 8);
 
     fs.unwatchFile(configPath);
+});
+
+test('buildDiagnosticsSnapshot keeps masked fields and strips secrets', () => {
+    const snapshot = buildDiagnosticsSnapshot({
+        appVersion: '1.0.0',
+        status: {
+            running: false,
+            token: 'secret-token',
+        },
+        readiness: {
+            ready: false,
+        },
+        configAudit: {
+            loaded: true,
+        },
+        configPayload: {
+            api: {
+                presets: [
+                    {
+                        name: 'OpenAI',
+                        api_key: 'demo-secret-key',
+                        api_key_configured: true,
+                        api_key_masked: 'sk-****',
+                    },
+                ],
+            },
+            services: {
+                webhook_token: 'webhook-secret',
+            },
+        },
+        logs: ['line1'],
+        updateState: {
+            latestVersion: '1.1.0',
+        },
+        collectionErrors: ['backend unavailable'],
+    });
+
+    assert.equal(snapshot.runtime.status.token, undefined);
+    assert.equal(snapshot.config.effective.api.presets[0].api_key, undefined);
+    assert.equal(snapshot.config.effective.api.presets[0].api_key_configured, true);
+    assert.equal(snapshot.config.effective.api.presets[0].api_key_masked, 'sk-****');
+    assert.equal(snapshot.config.effective.services.webhook_token, undefined);
+    assert.deepEqual(snapshot.logs, ['line1']);
+});
+
+test('elevated relaunch helpers preserve default app arguments and PowerShell quoting', () => {
+    const plan = buildElevatedLaunchPlan({
+        processLike: {
+            execPath: 'C:\\Program Files\\Electron\\electron.exe',
+            defaultApp: true,
+            argv: [
+                'C:\\Program Files\\Electron\\electron.exe',
+                '.',
+                '--dev',
+                "--profile=O'Reilly",
+            ],
+        },
+        appPath: 'E:\\Project\\wechat-chat',
+    });
+
+    assert.equal(plan.filePath, 'C:\\Program Files\\Electron\\electron.exe');
+    assert.deepEqual(plan.args, [
+        'E:\\Project\\wechat-chat',
+        '--dev',
+        "--profile=O'Reilly",
+    ]);
+
+    const script = buildElevatedPowerShellScript(plan);
+    assert.match(script, /Start-Process/);
+    assert.match(script, /-Verb RunAs/);
+    assert.match(script, /O''Reilly/);
+});
+
+test('launchElevatedApp invokes PowerShell with encoded command and returns launch plan', async () => {
+    const calls = [];
+    const result = await launchElevatedApp({
+        execFileImpl(file, args, callback) {
+            calls.push({ file, args });
+            callback(null, '', '');
+        },
+        processLike: {
+            execPath: 'C:\\Program Files\\wechat-ai-assistant.exe',
+            defaultApp: false,
+            argv: [
+                'C:\\Program Files\\wechat-ai-assistant.exe',
+                '--dev',
+            ],
+        },
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(result.filePath, 'C:\\Program Files\\wechat-ai-assistant.exe');
+    assert.deepEqual(result.args, ['--dev']);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].file, 'powershell.exe');
+    assert.equal(calls[0].args.includes('-EncodedCommand'), true);
 });

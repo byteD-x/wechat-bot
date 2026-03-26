@@ -23,9 +23,6 @@ export async function saveSettings(page, options = {}, text = {}, deps = {}) {
 
     try {
         const payload = page._collectPayload(scope);
-        if (payload.api && !page._presetDrafts.length) {
-            throw new Error(text.presetMissing);
-        }
         if (!Object.keys(payload).length) {
             currentToast.info('未检测到需要保存的配置变更');
             return;
@@ -44,6 +41,7 @@ export async function saveSettings(page, options = {}, text = {}, deps = {}) {
         page._renderHero(true);
         page._renderSaveFeedback(result);
         page._renderExportRagStatus();
+        page._resetDirtyState?.();
         page._setSavingState(false, triggerButton);
         if (!silentToast) {
             currentToast.success(result?.runtime_apply?.message || result?.message || '配置已保存');
@@ -52,6 +50,7 @@ export async function saveSettings(page, options = {}, text = {}, deps = {}) {
         console.error('[SettingsPage] save failed:', error);
         page._renderSaveFeedback({ success: false, message: currentToast.getErrorMessage(error, text.saveFailed) });
         page._setSavingState(false, triggerButton);
+        page._renderWorkbenchState?.();
         if (!silentToast) {
             currentToast.error(currentToast.getErrorMessage(error, text.saveFailed));
         }

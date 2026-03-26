@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Any, Dict, Optional, Tuple
 
 from backend.core.factory import build_ai_client, _validate_ollama_candidate
+from backend.model_auth.services import hydrate_runtime_settings
+from backend.core.oauth_support import OAuthSupportError, resolve_oauth_settings
 from backend.utils.config import build_api_candidates, is_placeholder_key
 
 PROBE_TIMEOUT_CAP_SEC = 8.0
@@ -13,6 +15,15 @@ def _build_root_candidate(api_cfg: Dict[str, Any]) -> Dict[str, Any]:
         "name": "root_config",
         "base_url": api_cfg.get("base_url"),
         "api_key": api_cfg.get("api_key"),
+        "credential_ref": api_cfg.get("credential_ref"),
+        "provider_auth_profile_id": api_cfg.get("provider_auth_profile_id"),
+        "auth_mode": api_cfg.get("auth_mode"),
+        "oauth_provider": api_cfg.get("oauth_provider"),
+        "oauth_source": api_cfg.get("oauth_source"),
+        "oauth_binding": api_cfg.get("oauth_binding"),
+        "oauth_experimental_ack": api_cfg.get("oauth_experimental_ack"),
+        "oauth_project_id": api_cfg.get("oauth_project_id"),
+        "oauth_location": api_cfg.get("oauth_location"),
         "model": api_cfg.get("model"),
         "embedding_model": api_cfg.get("embedding_model"),
         "timeout_sec": api_cfg.get("timeout_sec"),
@@ -59,14 +70,22 @@ def _normalize_probe_settings(settings: Dict[str, Any]) -> Tuple[Optional[Dict[s
     normalized["name"] = str(normalized.get("name") or "").strip()
     normalized["base_url"] = str(normalized.get("base_url") or "").strip()
     normalized["model"] = str(normalized.get("model") or "").strip()
+    normalized["auth_mode"] = str(normalized.get("auth_mode") or "api_key").strip().lower() or "api_key"
 
     api_key_raw = normalized.get("api_key")
     normalized["api_key"] = "" if api_key_raw is None else str(api_key_raw).strip()
     normalized["allow_empty_key"] = bool(normalized.get("allow_empty_key", False))
+    normalized = hydrate_runtime_settings(normalized)
 
-    if not normalized["base_url"] or not normalized["model"]:
-        return None, "预设缺少 base_url 或 model，无法测试连接"
-    if is_placeholder_key(normalized["api_key"]) and not normalized["allow_empty_key"]:
+    if not normalized["model"]:
+        return None, "预设缺少 model，无法测试连接"
+    if normalized["auth_mode"] != "oauth" and not normalized["base_url"]:
+        return None, "预设缺少 base_url，无法测试连接"
+    if (
+        normalized["auth_mode"] != "oauth"
+        and is_placeholder_key(normalized["api_key"])
+        and not normalized["allow_empty_key"]
+    ):
         return None, "API Key 未配置，无法测试连接"
 
     timeout_raw = normalized.get("timeout_sec")
@@ -81,6 +100,13 @@ def _normalize_probe_settings(settings: Dict[str, Any]) -> Tuple[Optional[Dict[s
 
     normalized["timeout_sec"] = min(timeout_sec, PROBE_TIMEOUT_CAP_SEC)
     normalized["max_retries"] = 0
+    try:
+        normalized = resolve_oauth_settings(normalized).settings
+    except OAuthSupportError as exc:
+        return None, str(exc)
+    normalized["base_url"] = str(normalized.get("base_url") or "").strip()
+    if not normalized["base_url"]:
+        return None, "预设缺少 base_url，无法测试连接"
     return normalized, ""
 
 

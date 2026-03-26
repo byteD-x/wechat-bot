@@ -39,7 +39,7 @@ export async function warmOllamaModels(page) {
     if (provider) {
         candidates.add(getOllamaBaseUrl(provider));
     }
-    page._presetDrafts
+    (page._apiPresetsSnapshot || page._presetDrafts || [])
         .filter((preset) => isOllamaPreset(preset))
         .forEach((preset) => candidates.add(getOllamaBaseUrl(preset)));
     if (!candidates.size) {
@@ -47,7 +47,6 @@ export async function warmOllamaModels(page) {
     }
     await Promise.allSettled([...candidates].map((baseUrl) => loadOllamaModels(page, baseUrl)));
     if (page.isActive()) {
-        page._renderPresetList();
         page._renderHero();
     }
 }

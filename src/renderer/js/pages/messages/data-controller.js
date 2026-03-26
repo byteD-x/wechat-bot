@@ -36,6 +36,7 @@ function renderSummary(page) {
         searchKeyword: page._searchKeyword,
         messageCount: page._messages.length,
         total: page._total,
+        lastLoadedAt: page._lastLoadedAt,
     });
 }
 
@@ -46,6 +47,50 @@ function renderMessages(page, deps = {}) {
 
 function renderLoadMore(page) {
     renderMessageLoadMore(page, page._hasMore);
+}
+
+function renderMessageFailureState(page, message, deps = {}) {
+    const container = page.$('#all-messages');
+    if (!container) {
+        return;
+    }
+    container.textContent = '';
+    container.appendChild(createMessageStateBlock(message, 'empty-state'));
+
+    const actions = document.createElement('div');
+    actions.className = 'state-actions';
+
+    const retryButton = document.createElement('button');
+    retryButton.type = 'button';
+    retryButton.className = 'btn btn-primary btn-sm';
+    retryButton.textContent = '重试';
+    retryButton.addEventListener('click', () => {
+        void refreshMessages(page, deps);
+    });
+    actions.appendChild(retryButton);
+
+    if (page._searchKeyword || page._selectedChatId) {
+        const resetButton = document.createElement('button');
+        resetButton.type = 'button';
+        resetButton.className = 'btn btn-secondary btn-sm';
+        resetButton.textContent = '清空筛选';
+        resetButton.addEventListener('click', () => {
+            page._searchKeyword = '';
+            page._selectedChatId = '';
+            const searchInput = page.$('#message-search');
+            const chatFilter = page.$('#message-chat-filter');
+            if (searchInput) {
+                searchInput.value = '';
+            }
+            if (chatFilter) {
+                chatFilter.value = '';
+            }
+            void refreshMessages(page, deps);
+        });
+        actions.appendChild(resetButton);
+    }
+
+    container.appendChild(actions);
 }
 
 export function renderMessagesPage(page, deps = {}) {
@@ -110,6 +155,7 @@ export async function fetchMessages(page, { append }, deps = {}) {
         page._total = Number(result.total || 0);
         page._hasMore = Boolean(result.has_more);
         page._offset = page._messages.length;
+        page._lastLoadedAt = Date.now();
 
         renderChatFilter(page);
         renderMessagesPage(page, deps);
@@ -120,12 +166,7 @@ export async function fetchMessages(page, { append }, deps = {}) {
         });
     } catch (error) {
         console.error('[MessagesPage] load failed:', error);
-        if (container) {
-            container.textContent = '';
-            container.appendChild(
-                createMessageStateBlock(currentToast.getErrorMessage(error, MESSAGE_TEXT.loadFailed), 'empty-state')
-            );
-        }
+        renderMessageFailureState(page, currentToast.getErrorMessage(error, MESSAGE_TEXT.loadFailed), deps);
         currentToast.error(currentToast.getErrorMessage(error, MESSAGE_TEXT.loadFailed));
     }
 }

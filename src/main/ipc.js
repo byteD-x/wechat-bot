@@ -1,3 +1,9 @@
+const {
+    buildDiagnosticsSnapshot,
+    buildSnapshotFilename,
+} = require('./diagnostics-snapshot');
+const { launchElevatedApp } = require('./elevated-relaunch');
+
 function registerIpcHandlers({
     ipcMain,
     GLOBAL_STATE,
@@ -11,6 +17,7 @@ function registerIpcHandlers({
     shell,
     app,
     exec,
+    execFile,
     fs,
     path,
     getMainWindowSafe,
@@ -18,6 +25,7 @@ function registerIpcHandlers({
     installDownloadedUpdateAndQuit,
     showMainWindowSafe,
     store,
+    dialog,
 }) {
     ipcMain.handle('get-flask-url', () => GLOBAL_STATE.flaskUrl);
     ipcMain.handle('get-api-token', () => GLOBAL_STATE.apiToken);
@@ -124,6 +132,53 @@ function registerIpcHandlers({
         }
     });
 
+    ipcMain.handle('restart-app-as-admin', async () => {
+        if (process.platform !== 'win32') {
+            return { success: false, message: '仅支持 Windows 自动提权重启' };
+        }
+
+        try {
+            await launchElevatedApp({
+                execFileImpl: execFile,
+                processLike: process,
+                appPath: app.getAppPath ? app.getAppPath() : '',
+            });
+        } catch (error) {
+            const canceled = error?.code === 'uac_cancelled';
+            return {
+                success: false,
+                canceled,
+                message: canceled
+                    ? '已取消管理员权限授权'
+                    : `管理员重启失败: ${error?.message || error}`,
+            };
+        }
+
+        setTimeout(async () => {
+            GLOBAL_STATE.isQuitting = true;
+            if (GLOBAL_STATE.tray) {
+                try {
+                    GLOBAL_STATE.tray.destroy();
+                } catch (_) {}
+                GLOBAL_STATE.tray = null;
+            }
+
+            try {
+                await BackendManager.stop('restart-as-admin');
+            } catch (error) {
+                console.warn('[RestartAsAdmin] stop backend failed:', error?.message || error);
+            }
+
+            app.quit();
+        }, 150);
+
+        return {
+            success: true,
+            pendingRestart: true,
+            message: '正在以管理员身份重新启动应用...',
+        };
+    });
+
     ipcMain.handle('minimize-to-tray', () => {
         const win = getMainWindowSafe();
         try { win?.hide(); } catch (_) {}
@@ -206,6 +261,88 @@ function registerIpcHandlers({
     ipcMain.handle('open-update-download', () => (
         GLOBAL_STATE.updateManager?.openDownloadPage() || { success: false, error: 'download url unavailable' }
     ));
+
+    ipcMain.handle('export-diagnostics-snapshot', async () => {
+        const collectionErrors = [];
+        const backendJson = async (endpoint) => {
+            try {
+                return await BackendManager.requestJson('GET', endpoint, null, 12000);
+            } catch (error) {
+                collectionErrors.push(`${endpoint}: ${error.message || error}`);
+                return null;
+            }
+        };
+
+        try {
+            await BackendManager.ensureReady(12000);
+        } catch (error) {
+            collectionErrors.push(`backend: ${error.message || error}`);
+        }
+
+        let configPayload = {};
+        try {
+            const configResult = await SharedConfigService.get();
+            configPayload = {
+                api: configResult?.api || {},
+                bot: configResult?.bot || {},
+                logging: configResult?.logging || {},
+                agent: configResult?.agent || {},
+                services: configResult?.services || {},
+            };
+        } catch (error) {
+            collectionErrors.push(`config: ${error.message || error}`);
+        }
+
+        const status = await backendJson('/api/status');
+        const readiness = await backendJson('/api/readiness?refresh=true');
+        const configAudit = await backendJson('/api/config/audit');
+        const logsResult = await backendJson('/api/logs?lines=120');
+
+        const snapshot = buildDiagnosticsSnapshot({
+            appVersion: app.getVersion(),
+            appName: app.getName ? app.getName() : 'wechat-ai-assistant',
+            status,
+            readiness,
+            configAudit,
+            configPayload,
+            logs: Array.isArray(logsResult?.logs) ? logsResult.logs : [],
+            updateState: GLOBAL_STATE.updateManager?.getState() || {},
+            idleState: getRuntimeIdleState(),
+            platform: {
+                process_platform: process.platform,
+                process_arch: process.arch,
+            },
+            collectionErrors,
+        });
+
+        const win = getMainWindowSafe() || undefined;
+        const defaultPath = path.join(
+            app.getPath('documents'),
+            buildSnapshotFilename(new Date()),
+        );
+        const saveResult = await dialog.showSaveDialog(win, {
+            title: '导出诊断快照',
+            defaultPath,
+            filters: [
+                { name: 'JSON 文件', extensions: ['json'] },
+            ],
+        });
+        if (saveResult.canceled || !saveResult.filePath) {
+            return { success: false, canceled: true, message: '用户取消导出' };
+        }
+
+        fs.mkdirSync(path.dirname(saveResult.filePath), { recursive: true });
+        fs.writeFileSync(
+            saveResult.filePath,
+            `${JSON.stringify(snapshot, null, 2)}\n`,
+            'utf8',
+        );
+        return {
+            success: true,
+            filePath: saveResult.filePath,
+            message: '诊断快照已导出',
+        };
+    });
 
     ipcMain.handle('is-first-run', () => store.get('isFirstRun'));
     ipcMain.handle('set-first-run-complete', () => {

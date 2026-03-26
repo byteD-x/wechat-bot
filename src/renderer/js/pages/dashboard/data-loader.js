@@ -15,15 +15,24 @@ function createEmptyDashboardCost() {
     };
 }
 
+function createEmptyStabilityState() {
+    return {
+        backups: null,
+        latestEval: null,
+    };
+}
+
 export function clearOfflineData(page) {
     page._recentMessages = [];
     page._dashboardCost = createEmptyDashboardCost();
+    page._stability = createEmptyStabilityState();
 
     const container = page.$('#recent-messages');
     if (container) {
         renderMessages(container, page._recentMessages);
     }
     renderDashboardCost(page, page._dashboardCost);
+    page._renderStability?.();
 }
 
 export async function loadRecentMessages(page, deps = {}) {
@@ -40,7 +49,7 @@ export async function loadRecentMessages(page, deps = {}) {
             renderMessages(container, page._recentMessages);
         }
     } catch (error) {
-        console.error('[DashboardPage] 加载最近消息失败:', error);
+        console.error('[DashboardPage] load recent messages failed:', error);
     }
 }
 
@@ -100,6 +109,39 @@ export async function refreshDashboardCost(page, force = false, deps = {}) {
 
         renderDashboardCost(page, page._dashboardCost);
     } catch (error) {
-        console.error('[DashboardPage] 加载成本概览失败:', error);
+        console.error('[DashboardPage] load dashboard cost failed:', error);
+    }
+}
+
+export async function refreshDashboardStability(page, force = false, deps = {}) {
+    if (!page || typeof page.getState !== 'function') {
+        return;
+    }
+    if (!page.getState('bot.connected')) {
+        page._stability = createEmptyStabilityState();
+        page._renderStability?.();
+        return;
+    }
+
+    const now = Date.now();
+    if (!force && now - page._lastStabilityFetchAt < 15000) {
+        return;
+    }
+    page._lastStabilityFetchAt = now;
+
+    try {
+        const currentApiService = getApiService(deps);
+        const [backups, latestEval] = await Promise.all([
+            currentApiService.getBackups(10),
+            currentApiService.getLatestEvalReport(),
+        ]);
+
+        page._stability = {
+            backups: backups?.success ? backups : null,
+            latestEval: latestEval?.success ? latestEval : null,
+        };
+        page._renderStability?.();
+    } catch (error) {
+        console.error('[DashboardPage] load dashboard stability failed:', error);
     }
 }

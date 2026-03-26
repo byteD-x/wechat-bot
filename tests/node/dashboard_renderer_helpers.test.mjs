@@ -12,7 +12,9 @@ import {
     renderGrowthTasks,
     renderHealthMetrics,
     renderIdlePanel,
+    renderReadiness,
     renderRetrieval,
+    renderStabilitySummary,
 } from '../../src/renderer/js/pages/dashboard/renderers.js';
 import { installDomStub } from './dom-stub.mjs';
 
@@ -266,4 +268,95 @@ test('renderRetrieval and renderDashboardCost render structured metrics', () => 
     assert.equal(selectors['#dashboard-cost-top-models'].children.length, 2);
     assert.match(selectors['#dashboard-cost-top-models'].children[0].textContent, /gpt-4\.1/);
     assert.match(selectors['#dashboard-cost-top-models'].children[0].textContent, /1\.2K/);
+}));
+
+test('renderStabilitySummary renders pending approvals, backup summary and eval status', () => withDom(({ document, createPage }) => {
+    const selectors = {
+        '#dashboard-pending-replies': document.createElement('div'),
+        '#dashboard-backup-summary': document.createElement('div'),
+        '#dashboard-eval-status': document.createElement('div'),
+        '#dashboard-restore-summary': document.createElement('div'),
+    };
+    const page = createPage(selectors);
+
+    renderStabilitySummary(page, {
+        pending: 3,
+    }, {
+        backups: {
+            summary: {
+                latest_quick_backup_at: 1_700_000_000,
+                last_restore_result: {
+                    success: true,
+                    pre_restore_backup: { id: 'pre-1' },
+                },
+            },
+        },
+        latestEval: {
+            report: {
+                summary: {
+                    passed: true,
+                    total_cases: 20,
+                    empty_reply_rate: 0,
+                    retrieval_hit_rate: 0.5,
+                },
+            },
+        },
+    });
+
+    assert.equal(selectors['#dashboard-pending-replies'].textContent, '3');
+    assert.equal(selectors['#dashboard-backup-summary'].textContent.includes('/'), true);
+    assert.equal(selectors['#dashboard-eval-status'].textContent, '已通过');
+    assert.equal(selectors['#dashboard-restore-summary'].textContent.includes('最近一次质量检查已通过'), true);
+    assert.equal(selectors['#dashboard-restore-summary'].textContent.includes('保险备份 pre-1'), true);
+}));
+
+test('renderReadiness renders blocking checks and actions', () => withDom(({ document, createPage }) => {
+    const selectors = {
+        '#bot-readiness': document.createElement('div'),
+        '#bot-readiness-badge': document.createElement('div'),
+        '#bot-readiness-title': document.createElement('div'),
+        '#bot-readiness-detail': document.createElement('div'),
+        '#bot-readiness-list': document.createElement('ul'),
+    };
+    const page = createPage(selectors);
+
+    renderReadiness(page, {
+        success: true,
+        ready: false,
+        blocking_count: 2,
+        checks: [
+            {
+                key: 'wechat_process',
+                label: '微信进程',
+                status: 'failed',
+                blocking: true,
+                message: '未检测到微信客户端',
+                hint: '请先打开并登录微信。',
+                action: 'open_wechat',
+                action_label: '打开微信',
+            },
+            {
+                key: 'api_config',
+                label: 'API 配置',
+                status: 'failed',
+                blocking: true,
+                message: '暂无可用预设',
+                action: 'open_settings',
+                action_label: '前往设置',
+            },
+        ],
+        summary: {
+            title: '还有 2 项准备未完成',
+            detail: '请先处理阻塞项。',
+        },
+    });
+
+    assert.equal(selectors['#bot-readiness'].hidden, false);
+    assert.equal(selectors['#bot-readiness'].dataset.state, 'blocked');
+    assert.equal(selectors['#bot-readiness-badge'].textContent, '阻塞 2');
+    assert.equal(selectors['#bot-readiness-list'].children.length, 2);
+    assert.equal(
+        selectors['#bot-readiness-list'].children[0].children[1]?.dataset.readinessAction,
+        'open_wechat'
+    );
 }));

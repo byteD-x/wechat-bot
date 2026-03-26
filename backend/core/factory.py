@@ -15,8 +15,11 @@ from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
 
 import httpx
 
+from backend.model_auth.services import hydrate_runtime_settings
+from backend.model_auth.services.migration import _build_runtime_preset, _iter_runtime_profiles, _provider_map
 from ..types import ReconnectPolicy
 from .config_service import get_config_service
+from .oauth_support import OAuthSupportError, resolve_oauth_settings
 from ..utils.common import as_int, as_float, as_optional_int, as_optional_str
 from ..utils.config import normalize_system_prompt, build_api_candidates, get_setting, is_placeholder_key
 
@@ -144,9 +147,11 @@ def _validate_ollama_candidate(settings: Dict[str, Any]) -> str:
     if not _is_ollama_candidate(settings):
         return ""
 
+    settings = dict(settings)
+    auth_mode = str(settings.get("auth_mode") or "api_key").strip().lower() or "api_key"
     base_url = str(settings.get("base_url") or "").strip()
     model = str(settings.get("model") or "").strip()
-    if not base_url or not model:
+    if auth_mode != "oauth" and (not base_url or not model):
         return ""
 
     try:
@@ -176,6 +181,145 @@ def _validate_ollama_candidate(settings: Dict[str, Any]) -> str:
     return ""
 
 
+def _describe_runtime_candidate(settings: Dict[str, Any]) -> str:
+    name = str(settings.get("name") or "preset").strip() or "preset"
+    profile_id = str(settings.get("provider_auth_profile_id") or "").strip()
+    if profile_id:
+        return f"{name} [{profile_id}]"
+    return name
+
+
+def _expand_provider_auth_runtime_variants(
+    api_cfg: Dict[str, Any],
+    settings: Dict[str, Any],
+) -> list[Dict[str, Any]]:
+    candidate = dict(settings or {})
+    if str(candidate.get("name") or "").strip() == "root_config":
+        return [candidate]
+    center = api_cfg.get("provider_auth_center") if isinstance(api_cfg.get("provider_auth_center"), dict) else {}
+    provider_id = str(candidate.get("provider_id") or "").strip().lower()
+    if not center or not provider_id:
+        return [candidate]
+    entry = _provider_map(center).get(provider_id) or {}
+    if not bool((entry.get("metadata") or {}).get("project_to_runtime")):
+        return [candidate]
+    variants: list[Dict[str, Any]] = []
+    runtime_name = str(candidate.get("name") or entry.get("legacy_preset_name") or provider_id).strip() or provider_id
+    for profile, context in _iter_runtime_profiles(entry):
+        variant = _build_runtime_preset(entry, profile, context)
+        variant["name"] = runtime_name
+        variants.append(variant)
+    if not variants:
+        return [candidate]
+    requested_profile_id = str(candidate.get("provider_auth_profile_id") or "").strip()
+    if requested_profile_id:
+        variants.sort(
+            key=lambda item: 0 if str(item.get("provider_auth_profile_id") or "").strip() == requested_profile_id else 1
+        )
+    return variants
+
+
+def _prepare_runtime_settings_candidate(
+    settings: Dict[str, Any],
+    api_cfg: Dict[str, Any],
+    bot_cfg: Dict[str, Any],
+) -> Dict[str, Any]:
+    prepared = hydrate_runtime_settings(dict(settings or {}))
+    candidate_name = _describe_runtime_candidate(prepared)
+    auth_mode = str(prepared.get("auth_mode") or "api_key").strip().lower() or "api_key"
+    runtime_api_key = prepared.get("api_key")
+    if runtime_api_key is None:
+        runtime_api_key = ""
+    elif not callable(runtime_api_key):
+        runtime_api_key = str(runtime_api_key).strip()
+    allow_empty_key = bool(prepared.get("allow_empty_key", False))
+    base_url = str(prepared.get("base_url") or "").strip()
+    model = str(prepared.get("model") or "").strip()
+
+    if auth_mode != "oauth" and (not base_url or not model):
+        raise ValueError(f"\u9884\u8bbe {candidate_name} \u7f3a\u5c11 base_url \u6216 model")
+    if auth_mode != "oauth" and not callable(runtime_api_key) and is_placeholder_key(runtime_api_key) and not allow_empty_key:
+        raise ValueError(f"\u9884\u8bbe {candidate_name} \u7684 api_key \u672a\u914d\u7f6e\u6216\u4ecd\u4e3a\u5360\u4f4d\u7b26")
+
+    prepared["base_url"] = base_url
+    prepared["model"] = model
+    prepared["api_key"] = runtime_api_key
+    prepared["embedding_model"] = _resolve_embedding_model(prepared, api_cfg, bot_cfg)
+    if "embedding_model" not in prepared:
+        prepared["embedding_model"] = str(api_cfg.get("embedding_model") or "")
+
+    try:
+        prepared = resolve_oauth_settings(prepared).settings
+    except OAuthSupportError as exc:
+        raise ValueError(f"\u9884\u8bbe {candidate_name} OAuth \u4e0d\u53ef\u7528\uff1a{exc}") from exc
+
+    base_url = str(prepared.get("base_url") or "").strip()
+    model = str(prepared.get("model") or "").strip()
+    if not base_url or not model:
+        raise ValueError(f"\u9884\u8bbe {candidate_name} \u5728\u8ba4\u8bc1\u89e3\u6790\u540e\u4ecd\u7f3a\u5c11 base_url \u6216 model")
+    prepared["base_url"] = base_url
+    prepared["model"] = model
+
+    candidate_issue = _validate_ollama_candidate(prepared)
+    if candidate_issue:
+        raise ValueError(candidate_issue)
+    return prepared
+
+
+def _build_runtime_client_for_settings(
+    settings: Dict[str, Any],
+    bot_cfg: Dict[str, Any],
+    agent_cfg: Optional[Dict[str, Any]] = None,
+) -> Any:
+    runtime_enabled = True if agent_cfg is None else bool(agent_cfg.get("enabled", True))
+    return (
+        build_agent_runtime(settings, bot_cfg, agent_cfg)
+        if runtime_enabled
+        else build_ai_client(settings, bot_cfg)
+    )
+
+
+async def _select_specific_candidate_variants(
+    api_cfg: Dict[str, Any],
+    bot_cfg: Dict[str, Any],
+    settings: Dict[str, Any],
+    preset_name: str,
+    agent_cfg: Optional[Dict[str, Any]] = None,
+) -> Tuple[Optional[Any], Optional[str]]:
+    for variant in _expand_provider_auth_runtime_variants(api_cfg, settings):
+        candidate_name = _describe_runtime_candidate(variant)
+        try:
+            variant = _prepare_runtime_settings_candidate(variant, api_cfg, bot_cfg)
+        except ValueError as exc:
+            _set_last_ai_client_error(str(exc))
+            logging.error("\u6307\u5b9a\u9884\u8bbe %s \u4e0d\u53ef\u7528\uff1a%s", candidate_name, exc)
+            continue
+        try:
+            client = _build_runtime_client_for_settings(variant, bot_cfg, agent_cfg)
+        except Exception as exc:
+            reason = f"\u6307\u5b9a\u9884\u8bbe {candidate_name} \u521d\u59cb\u5316\u5931\u8d25\uff1a{exc}"
+            _set_last_ai_client_error(reason)
+            logging.error("\u6307\u5b9a\u9884\u8bbe %s \u521d\u59cb\u5316\u5931\u8d25\uff1a%s", candidate_name, exc)
+            continue
+        logging.info("\u6b63\u5728\u4e25\u683c\u63a2\u6d4b\u6307\u5b9a\u9884\u8bbe\uff1a%s", candidate_name)
+        probe_ok = False
+        try:
+            probe_ok = bool(await client.probe())
+        except Exception as exc:
+            reason = f"\u6307\u5b9a\u9884\u8bbe {candidate_name} \u63a2\u6d4b\u5f02\u5e38\uff1a{exc}"
+            _set_last_ai_client_error(reason)
+            logging.error("\u6307\u5b9a\u9884\u8bbe %s \u63a2\u6d4b\u5f02\u5e38\uff1a%s", candidate_name, exc)
+        if probe_ok:
+            _set_last_ai_client_error("")
+            logging.info("\u5df2\u9009\u62e9\u6307\u5b9a\u9884\u8bbe\uff1a%s", candidate_name)
+            return client, preset_name
+        _set_last_ai_client_error(f"\u6307\u5b9a\u9884\u8bbe {candidate_name} \u63a2\u6d4b\u5931\u8d25")
+        logging.error("\u6307\u5b9a\u9884\u8bbe\u4e0d\u53ef\u7528\uff1a%s", candidate_name)
+        if hasattr(client, "close"):
+            await client.close()
+    return None, None
+
+
 def build_ai_client(settings: Dict[str, Any], bot_cfg: Dict[str, Any]) -> AIClient:
     """
     根据配置构建 AI 客户端实例。
@@ -199,9 +343,19 @@ def build_ai_client(settings: Dict[str, Any], bot_cfg: Dict[str, Any]) -> AIClie
             min_value=0.0,
         ) or None
 
+    runtime_api_key = settings.get("api_key")
+    if runtime_api_key is None:
+        runtime_api_key = ""
+    elif not callable(runtime_api_key):
+        runtime_api_key = str(runtime_api_key).strip()
+
     client = AIClient(
         base_url=str(settings.get("base_url") or "").strip(),
-        api_key=str(settings.get("api_key") or "").strip(),
+        api_key=runtime_api_key,
+        extra_headers=settings.get("extra_headers"),
+        auth_refresh_hook=settings.get("auth_refresh_hook"),
+        auth_transport=str(settings.get("auth_transport") or "").strip() or None,
+        transport_metadata=settings.get("resolved_auth_metadata"),
         model=str(settings.get("model") or "").strip(),
         timeout_sec=as_float(
             settings.get("timeout_sec", 10),
@@ -259,23 +413,66 @@ async def select_ai_client(
         logging.error("未找到可用的 API 配置。")
         return None, None
 
-    for settings in candidates:
-        name = settings.get("name", "preset")
-        base_url = str(settings.get("base_url") or "").strip()
-        model = str(settings.get("model") or "").strip()
+    for candidate in candidates:
+        preset_name = str(candidate.get("name") or "preset").strip() or "preset"
+        handled_variant = False
+        for settings in _expand_provider_auth_runtime_variants(api_cfg, candidate):
+            handled_variant = True
+            candidate_name = _describe_runtime_candidate(settings)
+            try:
+                settings = _prepare_runtime_settings_candidate(settings, api_cfg, bot_cfg)
+            except ValueError as exc:
+                _set_last_ai_client_error(str(exc))
+                logging.warning("\u8df3\u8fc7\u9884\u8bbe %s\uff1a%s", candidate_name, exc)
+                continue
+            try:
+                client = _build_runtime_client_for_settings(settings, bot_cfg, agent_cfg)
+            except Exception as exc:
+                reason = f"\u9884\u8bbe {candidate_name} \u521d\u59cb\u5316\u5931\u8d25\uff1a{exc}"
+                _set_last_ai_client_error(reason)
+                logging.warning("\u8df3\u8fc7\u9884\u8bbe %s\uff1a\u521d\u59cb\u5316\u5931\u8d25\uff1a%s", candidate_name, exc)
+                continue
+            logging.info("\u6b63\u5728\u63a2\u6d4b\u9884\u8bbe\uff1a%s", candidate_name)
+            probe_ok = False
+            try:
+                probe_ok = bool(await client.probe())
+            except Exception as exc:
+                reason = f"\u9884\u8bbe {candidate_name} \u63a2\u6d4b\u5f02\u5e38\uff1a{exc}"
+                _set_last_ai_client_error(reason)
+                logging.warning("\u9884\u8bbe %s \u63a2\u6d4b\u5f02\u5e38\uff1a%s", candidate_name, exc)
+            if probe_ok:
+                _set_last_ai_client_error("")
+                logging.info("\u5df2\u9009\u62e9\u9884\u8bbe\uff1a%s", candidate_name)
+                return client, preset_name
+            _set_last_ai_client_error(f"\u9884\u8bbe {candidate_name} \u63a2\u6d4b\u5931\u8d25")
+            logging.warning("\u9884\u8bbe %s \u4e0d\u53ef\u7528\uff0c\u5c1d\u8bd5\u4e0b\u4e00\u4e2a\u5019\u9009\u3002", candidate_name)
+            if hasattr(client, "close"):
+                await client.close()
+        if handled_variant:
+            continue
+        settings = dict(settings)
+        auth_mode = str(settings.get("auth_mode") or "api_key").strip().lower() or "api_key"
+        api_key = settings.get("api_key")
+        if api_key is None:
+            api_key = ""
+        else:
+            api_key = str(api_key).strip()
+        settings = hydrate_runtime_settings(settings)
         api_key = settings.get("api_key")
         if api_key is None:
             api_key = ""
         else:
             api_key = str(api_key).strip()
         allow_empty_key = bool(settings.get("allow_empty_key", False))
+        base_url = str(settings.get("base_url") or "").strip()
+        model = str(settings.get("model") or "").strip()
 
-        if not base_url or not model:
+        if auth_mode != "oauth" and (not base_url or not model):
             reason = f"预设 {name} 缺少 base_url 或 model"
             _set_last_ai_client_error(reason)
             logging.warning("跳过预设 %s：缺少 base_url 或 model", name)
             continue
-        if is_placeholder_key(api_key) and not allow_empty_key:
+        if auth_mode != "oauth" and is_placeholder_key(api_key) and not allow_empty_key:
             reason = f"预设 {name} 的 api_key 未配置或为占位符"
             _set_last_ai_client_error(reason)
             logging.warning("跳过预设 %s：api_key 未配置或为占位符", name)
@@ -288,7 +485,24 @@ async def select_ai_client(
         settings["embedding_model"] = _resolve_embedding_model(settings, api_cfg, bot_cfg)
         # 传递 embedding_model
         if "embedding_model" not in settings:
-             settings["embedding_model"] = str(api_cfg.get("embedding_model") or "")
+            settings["embedding_model"] = str(api_cfg.get("embedding_model") or "")
+        try:
+            settings = resolve_oauth_settings(settings).settings
+        except OAuthSupportError as exc:
+            reason = f"预设 {name} OAuth 不可用：{exc}"
+            _set_last_ai_client_error(reason)
+            logging.warning("跳过预设 %s：OAuth 不可用：%s", name, exc)
+            continue
+
+        base_url = str(settings.get("base_url") or "").strip()
+        model = str(settings.get("model") or "").strip()
+        if not base_url or not model:
+            reason = f"预设 {name} 在认证解析后仍缺少 base_url 或 model"
+            _set_last_ai_client_error(reason)
+            logging.warning("跳过预设 %s：认证解析后仍缺少 base_url 或 model", name)
+            continue
+        settings["base_url"] = base_url
+        settings["model"] = model
 
         candidate_issue = _validate_ollama_candidate(settings)
         if candidate_issue:
@@ -335,6 +549,8 @@ async def select_specific_ai_client(
         return None, None
 
     settings = next((p for p in presets if isinstance(p, dict) and p.get("name") == wanted), None)
+    if isinstance(settings, dict):
+        return await _select_specific_candidate_variants(api_cfg, bot_cfg, settings, wanted, agent_cfg)
     if not isinstance(settings, dict):
         _set_last_ai_client_error(f"指定预设不存在：{wanted}")
         logging.error("指定预设不存在：%s", wanted)
@@ -342,6 +558,7 @@ async def select_specific_ai_client(
 
     base_url = str(settings.get("base_url") or "").strip()
     model = str(settings.get("model") or "").strip()
+    auth_mode = str(settings.get("auth_mode") or "api_key").strip().lower() or "api_key"
     api_key = settings.get("api_key")
     if api_key is None:
         api_key = ""
@@ -349,11 +566,11 @@ async def select_specific_ai_client(
         api_key = str(api_key).strip()
     allow_empty_key = bool(settings.get("allow_empty_key", False))
 
-    if not base_url or not model:
+    if auth_mode != "oauth" and (not base_url or not model):
         _set_last_ai_client_error(f"指定预设 {wanted} 缺少 base_url 或 model")
         logging.error("指定预设 %s 缺少 base_url 或 model", wanted)
         return None, None
-    if is_placeholder_key(api_key) and not allow_empty_key:
+    if auth_mode != "oauth" and is_placeholder_key(api_key) and not allow_empty_key:
         _set_last_ai_client_error(f"指定预设 {wanted} 的 api_key 未配置或为占位符")
         logging.error("指定预设 %s 的 api_key 未配置或为占位符", wanted)
         return None, None
@@ -365,6 +582,54 @@ async def select_specific_ai_client(
     settings["embedding_model"] = _resolve_embedding_model(settings, api_cfg, bot_cfg)
     if "embedding_model" not in settings:
         settings["embedding_model"] = str(api_cfg.get("embedding_model") or "")
+    try:
+        settings = resolve_oauth_settings(settings).settings
+    except OAuthSupportError as exc:
+        _set_last_ai_client_error(f"指定预设 {wanted} OAuth 不可用：{exc}")
+        logging.error("指定预设 %s OAuth 不可用：%s", wanted, exc)
+        return None, None
+
+    for variant in _expand_provider_auth_runtime_variants(api_cfg, settings):
+        candidate_name = _describe_runtime_candidate(variant)
+        try:
+            variant = _prepare_runtime_settings_candidate(variant, api_cfg, bot_cfg)
+        except ValueError as exc:
+            _set_last_ai_client_error(str(exc))
+            logging.error("\u6307\u5b9a\u9884\u8bbe %s \u4e0d\u53ef\u7528\uff1a%s", candidate_name, exc)
+            continue
+        try:
+            client = _build_runtime_client_for_settings(variant, bot_cfg, agent_cfg)
+        except Exception as exc:
+            reason = f"\u6307\u5b9a\u9884\u8bbe {candidate_name} \u521d\u59cb\u5316\u5931\u8d25\uff1a{exc}"
+            _set_last_ai_client_error(reason)
+            logging.error("\u6307\u5b9a\u9884\u8bbe %s \u521d\u59cb\u5316\u5931\u8d25\uff1a%s", candidate_name, exc)
+            continue
+        logging.info("\u6b63\u5728\u4e25\u683c\u63a2\u6d4b\u6307\u5b9a\u9884\u8bbe\uff1a%s", candidate_name)
+        probe_ok = False
+        try:
+            probe_ok = bool(await client.probe())
+        except Exception as exc:
+            reason = f"\u6307\u5b9a\u9884\u8bbe {candidate_name} \u63a2\u6d4b\u5f02\u5e38\uff1a{exc}"
+            _set_last_ai_client_error(reason)
+            logging.error("\u6307\u5b9a\u9884\u8bbe %s \u63a2\u6d4b\u5f02\u5e38\uff1a%s", candidate_name, exc)
+        if probe_ok:
+            _set_last_ai_client_error("")
+            logging.info("\u5df2\u9009\u62e9\u6307\u5b9a\u9884\u8bbe\uff1a%s", candidate_name)
+            return client, wanted
+        _set_last_ai_client_error(f"\u6307\u5b9a\u9884\u8bbe {candidate_name} \u63a2\u6d4b\u5931\u8d25")
+        logging.error("\u6307\u5b9a\u9884\u8bbe\u4e0d\u53ef\u7528\uff1a%s", candidate_name)
+        if hasattr(client, "close"):
+            await client.close()
+    return None, None
+
+    base_url = str(settings.get("base_url") or "").strip()
+    model = str(settings.get("model") or "").strip()
+    if not base_url or not model:
+        _set_last_ai_client_error(f"指定预设 {wanted} 在认证解析后仍缺少 base_url 或 model")
+        logging.error("指定预设 %s 在认证解析后仍缺少 base_url 或 model", wanted)
+        return None, None
+    settings["base_url"] = base_url
+    settings["model"] = model
 
     candidate_issue = _validate_ollama_candidate(settings)
     if candidate_issue:

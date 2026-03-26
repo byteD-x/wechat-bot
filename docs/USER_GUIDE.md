@@ -15,6 +15,7 @@
 - [8. 配置说明](#8-配置说明)
 - [9. 常见问题](#9-常见问题)
 - [10. 开发与测试](#10-开发与测试)
+- [11. 模型与认证中心补充](#11-模型与认证中心补充)
 
 ## 系统链路说明
 
@@ -107,18 +108,22 @@ npm run dev
 
 ### 3.2 配置模型
 
-在设置页里完成：
+在独立的“模型”页里完成：
 
-1. 选择一个模型预设
-2. 填写 API Key
-3. 选择模型名称
-4. 点击测试连接
-5. 保存配置
+1. 选择一个 Provider
+2. 优先使用本机同步，或发起 OAuth 登录
+3. 如有需要，再填写 API Key / 导入 Session，作为备用认证
+4. 先点击测试连接；如果你希望固定某一种认证，再手动设为默认认证
+5. 回到设置页确认只读摘要即可
 
 补充说明：
 
 - 设置卡片右上角支持“保存本模块”，适合只修改单个主题后立即验证。
 - “微信连接与传输”卡片保存后会自动重连传输层；其它卡片会在界面上标出是立即生效还是仅运行中即时生效。
+- 只配置 `API Key` 也可以直接对话并使用完整功能。
+- 只配置 `OAuth / 本机同步` 也可以直接对话并使用完整功能。
+- 同时存在 `API Key` 与 `OAuth / 本机同步` 时，系统默认优先 `OAuth / 本机同步`；如果你手动点了“设为默认认证”，则优先按手动选择生效。
+- 当前认证在运行时不可用时，系统会自动回退到同一 Provider 下另一种可用认证，不需要先删掉旧认证再重配。
 - “系统提示”区域只允许编辑自定义规则；历史对话、用户画像、情绪/时间/风格等固定注入块会以只读方式展示，并由系统在运行时自动填充。
 - 会话提示覆盖和联系人专属 Prompt 只需要写额外规则；即使没有手动写入这些系统占位块，运行时也会自动补齐，不会因为 override 缺字段而丢失注入信息。
 - 在“消息详情”里编辑联系人专属 Prompt 时，也会以“自定义规则 + 固定注入块（只读）”的方式展示，避免把系统注入段直接改写进联系人 Prompt。
@@ -214,7 +219,7 @@ python run.py web
 
 建议按以下顺序验证：
 
-1. 打开设置页，确认当前预设和 Key 已配置。
+1. 打开“模型”页，确认当前回复 Provider、默认认证和连接状态已配置完成。
 2. 访问仪表盘，确认启动状态、健康检查和系统指标正常。
 3. 给允许回复的联系人发送一条简单文本。
 4. 查看 `data/logs/bot.log`。
@@ -250,7 +255,7 @@ Invoke-RestMethod -Headers @{ "X-Api-Token" = "your_token" } http://127.0.0.1:50
 - 当前会话是否被白名单或过滤规则限制
 - 如果使用“文件传输助手”做自测，确认“允许文件传输助手中的自发消息参与回复”已开启
 - API Key 是否有效
-- 激活预设是否可连通
+- 当前回复 Provider 的默认认证是否可连通
 - 传输后端是否已连接
 
 ## 7. LangChain / RAG 配置
@@ -480,6 +485,79 @@ python -m tools.prompt_gen.generator
 - 测试缓存：`data/runtime/test/pytest_cache/`
 - 覆盖率文件：`data/runtime/test/coverage/.coverage`
 
+### 8.7 稳定性产品化能力
+
+这一阶段新增的能力，不是单纯增加功能点，而是把“能不能安全长期用”补成闭环。
+
+#### 8.7.1 回复策略与待审批回复
+
+- 共享配置新增 `bot.reply_policy`，固定包含 `default_mode`、`new_contact_mode`、`group_mode`、`quiet_hours`、`sensitive_keywords`、`per_chat_overrides`、`pending_ttl_hours`。
+- 默认策略为 `default_mode = auto`、`new_contact_mode = manual`、`group_mode = whitelist_only`、`quiet_hours = 00:00-07:30 => manual`、`sensitive_keywords = []`、`per_chat_overrides = []`、`pending_ttl_hours = 24`。
+- 策略优先级固定为 `per_chat_override > sensitive_keyword > quiet_hours > new_contact/group rule > default_mode`。
+- 命中以下条件时，回复不会直接发出，而是进入 SQLite 持久化待审批队列：
+  - 新联系人
+  - 非白名单群
+  - 静音时段
+  - 敏感关键词
+  - 显式手动模式
+- 消息详情弹窗现在会显示：
+  - 当前会话审批模式
+  - 待审批回复列表
+  - 编辑后批准
+  - 拒绝丢弃
+
+#### 8.7.2 备份与恢复
+
+- 新增 API：
+  - `GET /api/backups`
+  - `POST /api/backups`
+  - `POST /api/backups/cleanup`
+  - `POST /api/backups/restore`
+- 新增 CLI：
+  - `python run.py backup list --json`
+  - `python run.py backup create --mode quick --label nightly`
+  - `python run.py backup verify --backup-id <backup-id> --json`
+  - `python run.py backup cleanup --keep-quick 5 --keep-full 3`
+  - `python run.py backup cleanup --keep-quick 5 --keep-full 3 --apply`
+  - `python run.py backup restore --backup-id <backup-id>`
+  - `python run.py backup restore --backup-id <backup-id> --apply`
+- `POST /api/backups` 仅接受 `mode = quick | full`
+- `POST /api/backups/cleanup` 默认 `dry_run = true`，可用 `keep_quick` / `keep_full` 调整保留策略
+- `POST /api/backups/restore` 支持 `dry_run = true | false`
+- `quick` 备份固定包含 `app_config.json`、`chat_memory.db`、`reply_quality_history.db`、`usage_history.db`、`pricing_catalog.json`、`export_rag_manifest.json`。
+- `full` 备份会额外包含 `data/chat_exports/`
+- 每个备份目录都会写入 `backup_manifest.json`，记录 `app_version`、`schema_version`、`mode`、`created_at`、`included_files`、`checksum_summary`。
+- `python run.py backup verify` 会校验清单中的文件存在性、路径合法性和 `checksum_summary` 一致性。
+- 旧备份清理默认保留最近 `5` 份 Quick 和 `3` 份 Full 备份，并保护最近一次恢复产生的 `pre_restore_backup`，防止误删回滚锚点。
+- 恢复固定流程为 `dry-run 校验 -> checksum 校验 -> 自动创建 pre-restore quick backup -> 停止 bot/backend 相关运行态 -> 应用恢复 -> 重启 backend -> 写入恢复结果摘要`。
+- 设置页的“数据与恢复”卡片会展示最近 quick/full 备份、备份大小、最近一次恢复结果和最近一次离线评测摘要。
+
+#### 8.7.3 离线评测与质量门禁
+
+- 新增 CLI：
+
+```bash
+python run.py eval --dataset tests/fixtures/evals/smoke_cases.json --preset smoke --report data/evals/smoke-report.json
+```
+
+- 评测报告 JSON 固定包含 `summary`、`cases`、`regressions`、`generated_at`、`preset`、`app_version`。
+- 当前确定性指标为 `empty_reply_rate`、`short_reply_rate`、`retrieval_hit_rate`、`manual_feedback_hit_rate`、`runtime_exception_count`。
+- 当前失败阈值为 `runtime_exception_count > 0` 直接失败、`empty_reply_rate > 0` 直接失败、`short_reply_rate` 不得高于基线 `+15%`、`retrieval_hit_rate` 不得低于基线 `-10%`。
+- 固定烟雾集位于 `tests/fixtures/evals/smoke_cases.json`
+- CI 现在会继续执行现有 pytest 和 Node 测试，并额外执行 `ruff check` 和 `python run.py eval` 烟雾门禁。
+
+#### 8.7.4 新增接口总览
+
+- `GET/POST /api/reply_policies`
+- `GET /api/pending_replies`
+- `POST /api/pending_replies/<id>/approve`
+- `POST /api/pending_replies/<id>/reject`
+- `GET /api/backups`
+- `POST /api/backups`
+- `POST /api/backups/cleanup`
+- `POST /api/backups/restore`
+- `GET /api/evals/latest`
+
 ## 9. 常见问题
 
 ### 9.1 `pip` 或 `python` 不存在
@@ -705,3 +783,129 @@ Release Notes 规则：
   - `POST /api/growth/tasks/<task_type>/resume`
   - `POST /api/growth/tasks/<task_type>/clear`
 - Windows Release 产物现在默认嵌入管理员权限清单，启动 `setup.exe` 或 `portable.exe` 时会请求 UAC 提权。
+
+## 附：首次运行与诊断快照
+
+桌面端首次打开时会自动显示“首次运行引导”，优先提示 4 类最常见阻塞项：
+
+- 是否以管理员身份启动
+- 微信客户端是否已经启动并登录
+- 当前微信版本是否与 `wcferry` 兼容
+- 是否已经存在至少一个可用的模型 Provider 认证配置
+
+这套检查逻辑与下面两个入口保持一致：
+
+- `python run.py check`
+- `python run.py check --json`
+- `GET /api/readiness`
+
+`/api/readiness` 会返回 `ready`、`blocking_count`、`checks[]`、`suggested_actions[]`，并带短 TTL 缓存，适合桌面端轮询而不重复做高成本进程探测。
+命令行侧可以通过 `python run.py check --json` 直接拿到同一份机读报告，适合自动化巡检、脚本集成和问题回传。
+
+仪表盘里的“运行准备度”卡片会常驻显示当前阻塞项；“运行诊断”区域则新增了“导出诊断快照”按钮。
+
+诊断快照会汇总：
+
+- 应用版本与更新器状态
+- `/api/status`
+- `/api/readiness`
+- `/api/config/audit`
+- 最近日志摘要
+
+安全约束：
+
+- 只保留 `api_key_configured`、`api_key_masked` 这类安全字段
+- 不会写入原始 API Key、token、authorization 或未脱敏配置
+- 与日志页的“导出纯文本日志”是两条不同能力，前者偏排障快照，后者偏原始日志分析
+
+## 附：自动提权重启与智能恢复
+
+在第二阶段里，桌面端新增了两条更直接的自愈路径：
+
+- 当 readiness 检查判定“未以管理员身份运行”时，首次运行引导、运行准备度卡片和运行诊断区都会优先提供“以管理员身份重新启动”。点击后会通过 UAC 重新拉起整个桌面应用。
+- 仪表盘里的“运行诊断”恢复按钮现在会优先执行 readiness 建议动作：先提权重启、先打开微信、或先跳转设置页；只有 readiness 没有阻塞项时，才会继续调用运行态 `/api/recover`。
+- `run.py check` 的管理员权限提示也同步更新，会明确提醒用户可以直接回到桌面端执行管理员重启。
+## 11. 模型与认证中心补充
+
+### 11.1 新的入口位置
+
+- “模型”已经从原来的设置页中拆出来，桌面端侧边栏会新增独立的“模型”页。
+- 设置页只保留当前生效模型的摘要和跳转入口；真正的模型预设新增、排序、测试、切换和认证操作，都在“模型”页完成。
+
+### 11.2 认证方式规则
+
+- 每个 Provider 可以并存多种认证方式：`API Key`、`OAuth`、`Local Import`、`Web Session`。
+- 模型中心会为每个 Provider 维护一组 `auth_profiles`，并区分“自动选择”和“手动指定”两种生效规则。
+- 只配置 `API Key` 时，可以直接对话并使用完整功能。
+- 只配置 `OAuth / 本机同步` 时，也可以直接对话并使用完整功能。
+- 同时存在 `API Key` 与 `OAuth / 本机同步` 时，默认优先 `OAuth / 本机同步`；手动点击“设为默认认证”后，运行时优先按你的手动选择。
+- 当前认证在运行时不可用时，系统会自动回退到同一 Provider 下另一种可用认证，避免单一认证波动直接中断对话。
+- 当前项目仍然只使用 `active_preset` 这一张卡片参与回复，因此切换回复模型时，本质上是在切换“当前激活的预设卡片”。
+- Provider 卡片上会直接显示三类高层摘要：本机同步、连接健康、认证数量概览；这些摘要都来自后端统一聚合。
+- 已绑定的认证方法会额外显示 `运行时可用 / 运行时未就绪`；当默认认证还不能真正进入运行时，请优先查看卡片里的阻塞原因，而不是重复点“测试连接”。
+
+### 11.3 OAuth 使用方式
+
+- 支持“同步本机登录”和“浏览器 OAuth 登录”两条路径。
+- 如果本机已经存在可同步的标准授权源，项目会优先绑定并直接同步。
+- 如果本机没有授权，则需要先走一次浏览器 OAuth 登录。
+- 对已经打通运行时链路的 Provider，完成 OAuth 后就可以直接对话，不需要再额外补一个 `API Key`。
+- 同一 Provider 同时存在 `API Key` 与 `OAuth / 本机同步` 时，默认优先 `OAuth / 本机同步`；如果当前认证短暂失效，系统会自动回退到另一种可用认证。
+- 对支持本机授权复用的 Provider，项目不会长期复制本地 Token；运行时会按需读取本地授权源，所以本机授权变化后，项目中的授权也会跟着变化。
+- 模型中心会维护一份后台本机认证快照；对已发现的本机认证文件会优先使用 watcher，失败时自动回退到 polling。手动点击“扫描本机认证”时，会强制刷新这份快照。
+- 当前新增的本机来源包括 `Claude Code` 的 `~/.claude.json` / `~/.claude/settings.json` / `~/.claude/.credentials.json` / `C:/ProgramData/ClaudeCode/managed-settings.json`、`Kimi Code` 的 `~/.kimi/config.toml` / `~/.kimi/credentials/*.json`，以及 `Doubao / Yuanbao` 的浏览器 Cookie 数据库、`IndexedDB / Local Storage`、桌面私有存储或显式导出 Session 文件。
+- 模型中心现在还会把 `system_keychain` 作为补充发现信号纳入统一状态机；当前主要用于 Windows Credential Manager target 发现与跟随提示。
+
+### 11.4 当前 Provider 分层
+
+- 已接入核心能力：
+  - `OpenAI / Codex / ChatGPT`：`api_key + oauth + local_import`
+  - `Google / Gemini / Gemini CLI`：`api_key + oauth + local_import`
+  - `Qwen / DashScope / Qwen Code`：`api_key + oauth + local_import`
+  - `Doubao / 火山方舟 / TRAE`：`api_key + web_session`
+  - `Yuanbao / 元宝`：`web_session`
+- 同一 Provider 下同时存在多种认证方式时，界面会同时展示“当前认证”和其它可用备用认证；未手动指定时默认优先 OAuth / 本机同步。
+- 其中 `Qwen` 会把 `DashScope API Key` 与 `Coding Plan API Key` 作为两条独立认证方法展示，避免用户把订阅型 Coding Plan Key 和通用百炼 Key 混用。
+- 预留扩展位：
+  - `Claude / Claude Code`
+  - `Kimi / Moonshot / Kimi Code`
+  - `GLM / 智谱`
+  - `MiniMax`
+  - `DeepSeek`
+- 注意：`Doubao / Yuanbao` 的网页登录当前按 `web_session` 建模，不伪装成标准 OAuth。
+- 注意：`Claude / Claude Code` 现在已经支持真实的本机凭据发现；当本地存在 `apiKeyHelper` 或可复用的 Claude API credential cache 时，会直接进入 `anthropic_native` 运行时。若本地只有订阅型 Claude.ai OAuth 状态，当前仍保守停留在 follow-mode discovery/status。
+- 注意：`Claude / Claude Code` 若通过 `apiKeyHelper` 或本地 Claude API credential cache 进入运行时，首次请求遇到 `401` 时会自动触发一次本地认证刷新并重试一次。
+- 注意：`Kimi / Kimi Code` 现在已经支持真实的本机凭据发现，并会优先跟随 `~/.kimi/config.toml` 中的本地 provider 配置；如果本地 provider 配置没有可用凭据，才会回退到 `~/.kimi/credentials/*.json`。
+- 注意：模型中心的后台同步器现在也会跟踪目录级浏览器存储目标与桌面私有存储路径，因此 `IndexedDB / Local Storage` 或本地客户端存储变化也会触发本机会话快照刷新。
+- 注意：系统钥匙串当前只进入“发现/状态/绑定元数据”链路，还没有接入真正的钥匙串事件监听与稳定运行时消费。
+
+### 11.5 模型与认证中心接口
+
+- `GET /api/model_auth/overview`
+- `POST /api/model_auth/action`
+- 旧的 `/api/auth/providers/*` 接口现在只剩兼容壳层；设置页、旧预设 modal 与模型页主流程都已经切到模型中心接口，不再直接调用这组旧入口。
+
+### 11.6 新版模型中心
+
+- 新版模型中心已经从设置页拆出，并重构为“左侧服务方列表 + 右侧详情工作区”的双栏结构。
+- 顶部只保留少量总览：当前用于回复的 Provider、可直接使用数量、待处理数量，以及帮助入口。
+- 左侧每个 Provider 只保留名称、当前状态和关键标记；详细说明、长表单和低频信息都移动到右侧详情区或弹窗。
+- 后端继续复用 `GET /api/model_auth/overview` 与 `POST /api/model_auth/action`，前端不再自行拼接 Provider 状态。
+- 详细架构、认证矩阵、扩展指南与安全边界请参考 `docs/MODEL_AUTH_CENTER.md`。
+
+### 11.7 新交互怎么用
+
+- 推荐顺序只有三步：先选模型，再选认证，最后设为回复模型。
+- 如果当前 Provider 还不能直接使用，右侧会显示三步向导：`选择模型`、`选择认证方式`、`设为回复模型`。
+- 如果当前 Provider 已可用，右侧会自动切换为紧凑工作台，只保留 `改模型`、`换认证`、`测试连接`、`设为回复模型` 等高频操作。
+- 在 `改模型` 里既可以只保存默认模型，也可以直接 `保存并用于回复`；如果当前已经在用这个 Provider，会显示 `切换当前模型`，保存后立即切到新模型。
+- 首次点击 `API Key`、`OAuth 登录`、`同步本机`、`导入会话` 时，会先弹一次极简说明；看过后不再重复自动弹出。
+- 认证配置不再在页面里堆长表单，而是统一进入弹窗：
+  - `配置 API Key`：默认只填 Key。
+  - `去登录` / `我已登录，继续`：用于手动完成 OAuth。
+  - `同步本机`：用于绑定本机已登录状态。
+  - `导入会话`：用于粘贴 Cookie、Session 或 Header。
+- 已经保存过的 `API Key`、`Web Session` 或本机同步方式，也可以在右侧认证行里直接重新设置，不需要先断开再重配；`去登录` 现在会直接打开对应网页登录页，再回到弹窗继续确认。
+- 如果同一 Provider 已经同时配置了多种认证，界面会优先显示当前生效方式；当前认证失效时，运行时会先尝试备用认证，不要求你先手动切换。
+- 低频信息如 `Base URL`、别名、研究结论、诊断路径等收进 `高级设置` 折叠区，普通使用时可以忽略。
+- 模型页操作按钮统一为中文，尽量只保留一个最推荐的下一步，减少学习成本。

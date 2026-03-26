@@ -1,6 +1,7 @@
 import { Events } from '../../core/EventBus.js';
 import { apiService } from '../../services/ApiService.js';
 import { toast } from '../../services/NotificationService.js';
+import { pickSuggestedSelfHealAction } from '../../app/self-heal.js';
 import { getGrowthTaskLabel } from './formatters.js';
 import { updateBotUI } from './status-presenter.js';
 
@@ -32,6 +33,63 @@ function emitStatusRefresh(page, options = {}) {
     followups.forEach((delayMs) => {
         setTimeout(() => page.emit(Events.BOT_STATUS_CHANGE, payload), delayMs);
     });
+}
+
+export async function runReadinessAction(page, action, deps = {}) {
+    const currentToast = getToast(deps);
+    const windowApi = getWindowApi(deps);
+    const normalizedAction = String(action || '').trim();
+    if (!normalizedAction) {
+        return;
+    }
+
+    if (normalizedAction === 'open_settings') {
+        page.emit(Events.PAGE_CHANGE, 'settings');
+        currentToast.info('已切换到设置页，请补齐配置后再重新检查。');
+        return;
+    }
+
+    if (normalizedAction === 'open_wechat') {
+        try {
+            if (windowApi?.openWeChat) {
+                await windowApi.openWeChat();
+                currentToast.success('正在打开微信客户端...');
+            } else {
+                currentToast.info('请手动打开并登录微信客户端。');
+            }
+        } catch (error) {
+            currentToast.error(currentToast.getErrorMessage(error, '打开微信客户端失败'));
+            return;
+        }
+        emitStatusRefresh(page, { followups: [800, 2200], payload: { force: true, refreshReadiness: true } });
+        return;
+    }
+
+    if (normalizedAction === 'restart_as_admin') {
+        if (!windowApi?.restartAppAsAdmin) {
+            currentToast.warning('当前环境暂不支持自动提权重启，请手动以管理员身份重新启动应用。');
+            return;
+        }
+
+        currentToast.info('正在请求管理员权限并重新启动应用...');
+        try {
+            const result = await windowApi.restartAppAsAdmin();
+            if (result?.success) {
+                currentToast.success(result.message || '正在以管理员身份重新启动应用...');
+                return;
+            }
+            if (result?.canceled) {
+                currentToast.info(result.message || '已取消管理员权限授权');
+                return;
+            }
+            currentToast.error(result?.message || '管理员重启失败');
+        } catch (error) {
+            currentToast.error(currentToast.getErrorMessage(error, '管理员重启失败'));
+        }
+        return;
+    }
+
+    emitStatusRefresh(page, { followups: [1000], payload: { force: true, refreshReadiness: true } });
 }
 
 export async function toggleBot(page, deps = {}) {
@@ -312,6 +370,12 @@ export async function restartBot(page, deps = {}) {
 export async function recoverBot(page, deps = {}) {
     const currentApiService = getApiService(deps);
     const currentToast = getToast(deps);
+    const readinessAction = pickSuggestedSelfHealAction(page.getState('readiness.report'));
+    if (readinessAction?.action) {
+        currentToast.info(`先处理启动前阻塞项：${readinessAction.label}`);
+        await runReadinessAction(page, readinessAction.action, deps);
+        return;
+    }
     try {
         currentToast.info('正在尝试恢复机器人...');
         const result = await currentApiService.recoverBot();

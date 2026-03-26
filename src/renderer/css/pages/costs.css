@@ -1,0 +1,24 @@
+.cost-toolbar-meta {
+    justify-content: space-between;
+}
+
+.cost-filter-bar {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.cost-filter-group {
+    display: grid;
+    gap: 8px;
+}
+
+.cost-kpi-grid {
+    margin-bottom: 16px;
+}
+
+.cost-session-card + .cost-session-card,
+.cost-kpi-grid + .card {
+    margin-top: 16px;
+}

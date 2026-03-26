@@ -15,11 +15,17 @@ FORBIDDEN_SEGMENTS = {
 
 FORBIDDEN_NAMES = {
     "api_keys.py",
+    "app_config.json",
     "app-update.yml",
     "builder-debug.yml",
     "config_override.json",
     "chat_history.jsonl",
     "latest.yml",
+    "provider_credentials.json",
+    "oauth_creds.json",
+    "google_accounts.json",
+    ".credentials.json",
+    "managed-settings.json",
 }
 
 FORBIDDEN_SUFFIXES = (

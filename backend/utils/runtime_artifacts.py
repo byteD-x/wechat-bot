@@ -14,6 +14,7 @@ RUNTIME_ROOT = ensure_data_root() / "runtime"
 WCFERRY_DIR = RUNTIME_ROOT / "wcferry"
 CHROMA_DIR = RUNTIME_ROOT / "chroma"
 LOCK_DIR = RUNTIME_ROOT / "locks"
+EVENT_IMAGES_DIR = RUNTIME_ROOT / "event-images"
 TEST_DIR = RUNTIME_ROOT / "test"
 COVERAGE_DIR = TEST_DIR / "coverage"
 PYTEST_CACHE_DIR = TEST_DIR / "pytest_cache"
@@ -25,6 +26,7 @@ def ensure_runtime_directories() -> None:
         WCFERRY_DIR,
         CHROMA_DIR,
         LOCK_DIR,
+        EVENT_IMAGES_DIR,
         TEST_DIR,
         COVERAGE_DIR,
         PYTEST_CACHE_DIR,
@@ -58,6 +60,7 @@ def relocate_known_root_artifacts() -> None:
         "injector.log": WCFERRY_DIR / "injector.log",
         ".ctx.lock": LOCK_DIR / ".ctx.lock",
         ".coverage": COVERAGE_DIR / ".coverage",
+        "temp_images": EVENT_IMAGES_DIR,
     }
     for name, destination in targets.items():
         source = PROJECT_ROOT / name

@@ -546,7 +546,7 @@ test('cost page shell binds review_reason refresh flow', async () => {
         },
     });
 
-    assert.equal(page.bindings.length, 11);
+    assert.equal(page.bindings.length, 12);
     assert.equal(page.watchers.length, 1);
 
     await page.bindings[0].handler();

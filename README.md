@@ -41,6 +41,8 @@
 
 ## Features
 
+- `Model Auth Center`: 独立模型与认证中心，统一管理 `api_key / oauth / local_import / web_session`。只配置 `API Key` 或只配置 `OAuth / 本机同步` 都可以直接对话并使用完整功能；同时配置时默认优先 `OAuth / 本机同步`，也支持手动切换，当前认证不可用时会自动回退到同一服务商下的另一种可用认证。
+
 - `Multi-provider`: 支持 OpenAI、DeepSeek、Qwen、Doubao、Ollama、OpenRouter、Groq 等 OpenAI-compatible 接口。
 - `LangGraph Runtime`: 用 LangChain/LangGraph 编排对话快路径；同步链只保留短期上下文和轻量画像注入，RAG、情绪、事实等高级能力统一后移到后台成长流水线。
 - `Memory`: SQLite 持久化短期记忆、用户画像、上下文事实和情绪历史。
@@ -50,6 +52,7 @@
 - `Provider Compatibility`: 后端统一标准化请求字段、响应正文、工具调用、错误结构与落盘元数据，避免为单一提供方写定向分支。
 - `Desktop + Web`: Electron 桌面客户端与 Quart Web API 并存。
 - `Observability`: `/api/status` 提供启动进度、诊断、健康检查、系统指标、回复质量、人工反馈与成长链状态，`/api/metrics` 提供 Prometheus 风格导出。
+- `Readiness & Recovery`: `run.py check`、`GET /api/readiness` 与桌面端首次运行引导共用同一套环境检查逻辑；仪表盘会常驻显示“运行准备度”，并支持导出自动脱敏的诊断快照。
 - `Hot Reload`: 配置热重载优先使用 `watchdog` 事件监听，缺失依赖时自动回退轮询，并带防抖。
 - `Config Snapshot`: 后端已引入中心化配置快照服务，`/api/config/audit` 可返回当前生效配置、已知未消费字段和配置变更影响摘要。
 
@@ -73,6 +76,7 @@ flowchart TD
     K --> L[Electron UI]
     K --> M["/api/status"]
     K --> N["/api/metrics"]
+    K --> O["/api/readiness"]
 ```
 
 核心路径：
@@ -117,19 +121,25 @@ cd wechat-bot
 pip install -r requirements.txt
 npm install
 python run.py check
+python run.py check --json
 npm run dev
 ```
 
-然后在桌面设置页中：
+首次打开桌面端时，应用会自动弹出“首次运行引导”，集中提示管理员权限、微信是否已启动、版本兼容和模型与认证是否就绪。
 
-1. 选择模型预设
-2. 填写 API Key
-3. 测试连接
-4. 保存配置
-5. 启动机器人
+如果仍然无法启动，可以直接在仪表盘诊断区导出“诊断快照”；导出的 JSON 会自动脱敏，不会包含原始 API Key、token 或未脱敏配置。
+
+然后在桌面端中按这个顺序完成：
+
+1. 打开独立的“模型”页
+2. 选择一个 Provider，并优先使用本机同步或 OAuth 登录
+3. 如有需要，再补充 API Key / Session，作为备用认证
+4. 测试连接；未手动指定时默认优先 OAuth，当前认证不可用时会自动回退到同一 Provider 下的另一种可用认证
+5. 回到设置页确认只读摘要，然后启动机器人
 
 补充说明：
 - 使用 `Ollama` 时可以不填写 `API Key`，聊天模型与 embedding 模型可以分别配置。
+- `OpenAI / Codex / ChatGPT` 与 `Google / Gemini / Gemini CLI` 已补齐纯 OAuth / 本机同步直连对话链路，不需要再额外补一个 `API Key` 才能开始对话。
 - 向量记忆 / RAG 现在有独立总开关；首次开启时会提示本地存储、资源占用和潜在调用成本。
 - 如需给向量记忆单独指定 embedding，可在“设置”页填写单独模型，或在预设里填写默认 embedding 模型；`Ollama` 可使用如 `nomic-embed-text` 之类的本地 embedding 模型。
 - “系统提示”现在拆成“自定义系统提示词”与“固定注入块（只读）”；历史对话、用户画像、情绪/时间/风格等系统注入内容不会再暴露给设置页直接改写。
@@ -223,6 +233,36 @@ python run.py web
 - 第三方运行时产物（如注入日志、锁文件）统一收口到 `data/runtime/`
 - 测试缓存与覆盖率产物统一收口到 `data/runtime/test/`
 
+## Stability-First Productization
+
+This phase turns the project from a demo-style assistant into a safer personal product by adding three production-facing loops: reply approval, workspace recovery, and deterministic quality gates.
+
+- `Reply Policy + Manual Approval`
+  - Shared config now supports `bot.reply_policy.default_mode`, `new_contact_mode`, `group_mode`, `quiet_hours`, `sensitive_keywords`, `per_chat_overrides`, and `pending_ttl_hours`.
+  - New contacts, non-whitelisted groups, quiet hours, sensitive keywords, or explicit manual mode can route replies into a persistent pending queue instead of sending immediately.
+  - The dashboard and message detail panel now expose pending approvals, and each contact can override reply mode directly from the existing message detail entry.
+- `Workspace Backup + Restore`
+  - New backup APIs support `quick` and `full` snapshots, write `backup_manifest.json`, and keep restore flows conservative.
+  - Restore now follows `dry-run -> checksum verification -> pre-restore quick backup -> stop runtime -> apply restore -> restart -> write result summary`.
+  - `run.py backup list/create/verify/restore` now exposes the same backup surface for headless maintenance and scripted drills.
+  - Settings now include a dedicated "数据与恢复" card with recent backups, restore feedback, and latest offline eval summary.
+- `Offline Eval + CI Gates`
+  - `python run.py eval --dataset <path> --preset <name> --report <path>` generates a deterministic JSON report with `summary`, `cases`, `regressions`, `generated_at`, `preset`, and `app_version`.
+  - The smoke dataset lives at `tests/fixtures/evals/smoke_cases.json`.
+  - CI now runs scoped `ruff`, targeted Python regressions, Node tests, and the offline eval smoke gate.
+
+Key APIs introduced in this phase:
+
+- `GET/POST /api/reply_policies`
+- `GET /api/pending_replies`
+- `POST /api/pending_replies/<id>/approve`
+- `POST /api/pending_replies/<id>/reject`
+- `GET /api/backups`
+- `POST /api/backups`
+- `POST /api/backups/cleanup`
+- `POST /api/backups/restore`
+- `GET /api/evals/latest`
+
 ## Development
 
 ```bash
@@ -241,12 +281,28 @@ python run.py web
 
 # 环境检查
 python run.py check
+python run.py check --json
+
+# 工作区备份
+python run.py backup list --json
+python run.py backup create --mode quick --label nightly
+python run.py backup verify --backup-id <backup-id> --json
+python run.py backup cleanup --keep-quick 5 --keep-full 3
+python run.py backup cleanup --keep-quick 5 --keep-full 3 --apply
+python run.py backup restore --backup-id <backup-id>
+python run.py backup restore --backup-id <backup-id> --apply
 
 # 语法检查
 python -m py_compile backend\\core\\agent_runtime.py backend\\bot.py backend\\bot_manager.py backend\\api.py
 
 # 重点测试
 python -m pytest tests\\test_runtime_observability.py -q
+
+# Scoped lint for the productization surface
+python -m ruff check backend\\api.py backend\\bot.py backend\\bot_reply_flow.py backend\\config_schemas.py backend\\core\\memory.py backend\\core\\reply_policy.py backend\\core\\workspace_backup.py backend\\core\\eval_runner.py run.py tests\\test_api.py tests\\test_reply_policy.py tests\\test_backup_service.py tests\\test_eval_runner.py
+
+# Offline eval smoke gate
+python run.py eval --dataset tests\\fixtures\\evals\\smoke_cases.json --preset smoke --report data\\evals\\smoke-report.json
 ```
 
 ## Release
@@ -360,3 +416,34 @@ POST /api/growth/tasks/<task_type>/clear
 ## Windows 权限升级
 
  Release 安装包（`setup.exe` / `portable.exe`）现在默认带管理员权限清单，首次运行时会请求 UAC 提权，确保需要系统级操作的功能正常工作。
+
+## Self-Heal Update
+
+- 如果“运行准备度”提示缺少管理员权限，桌面端现在可以直接执行“以管理员身份重新启动”，会通过 UAC 重新拉起应用，而不是只提示手动重开。
+- 仪表盘“运行诊断”的恢复按钮现在会优先处理启动前阻塞项：例如先提权重启、先打开微信、或引导到设置页；只有没有 readiness 阻塞项时，才回退到运行态 `/api/recover`。
+- `run.py check` 在管理员权限不足时也会给出新的排障提示，明确告诉用户可以直接在桌面端使用管理员重启。
+## Model And Auth Center Update
+
+- [Model Auth Center](docs/MODEL_AUTH_CENTER.md)
+
+- 桌面端新增独立的“模型”页，原来设置页里的 API 预设已经拆出去；设置页现在只保留机器人、提示词、日志、备份等通用配置，并展示当前生效模型的只读摘要。
+- 每个 Provider 现在可以并存多种认证方法，模型中心会为每个 Provider 维护一组 `auth_profiles`，并显式选择默认认证方式；运行时只投影当前选中的那一条到 `api.presets`。
+- 模型卡片会按 `当前激活 -> 认证可用 -> 检测到本机登录但未绑定 -> 未配置` 排序，并通过不同状态样式区分 `当前生效 / OAuth 可用 / API Key 可用 / 待授权 / 实验能力`。
+- 每张 Provider 卡片现在还会展示后端聚合出来的 `本机同步摘要 / 健康检查摘要 / 认证计数`，前端不再自己拼装这些高层状态。
+- 已绑定的认证方法现在会显式标出 `运行时可用 / 运行时未就绪`；如果默认认证还不能进入运行时，请求摘要会直接展示阻塞原因，而不是只给一个模糊失败态。
+- 新增模型与认证中心接口：
+  - `GET /api/model_auth/overview`
+  - `POST /api/model_auth/action`
+  - 旧的 `/api/auth/providers/*` 只剩兼容壳层，不再由设置页、旧预设 modal 或模型页主流程直接调用；前端统一走模型中心接口
+- 当前 Provider 策略：
+  - 已接入核心能力：`OpenAI / Codex / ChatGPT`、`Google / Gemini / Gemini CLI`、`Qwen / DashScope / Qwen Code`、`Doubao / 火山方舟 / TRAE`、`Yuanbao / 元宝`
+  - 扩展预留：`Claude / Claude Code`、`Kimi / Moonshot / Kimi Code`、`GLM / 智谱`、`MiniMax`、`DeepSeek`
+  - `Qwen` 现在会把 `DashScope API Key` 与 `Coding Plan API Key` 拆成两条独立认证方法，而不是继续共用一张泛化 API Key 表单
+  - `Doubao / Yuanbao` 的网页登录当前按 `web_session` 建模，不伪装成标准 OAuth
+- `Claude / Claude Code` 当前已接入 `~/.claude.json` / `~/.claude/settings.json` / `~/.claude/.credentials.json` / `C:/ProgramData/ClaudeCode/managed-settings.json` 的本地发现；当本地存在 `apiKeyHelper` 或可复用的 Claude API 凭据缓存时，会直接走 `anthropic_native` 运行时链路。`Kimi / Kimi Code` 已接入 `~/.kimi/config.toml` / `~/.kimi/credentials/*.json` 的本地发现。
+- `Claude / Claude Code` 的 helper / 本地 credential cache 进入运行时后，如果首次调用命中 `401`，当前会先强制刷新一次本地认证再自动重试，减少本地凭据刚轮换时的瞬时失败。
+- `Doubao / Yuanbao` 当前会优先尝试检测本机浏览器 Cookie 数据库、`IndexedDB / Local Storage`、桌面私有存储或显式导出 Session 文件，再提示用户绑定或导入。
+- 模型中心现在也会把 `system_keychain` 作为补充发现信号接入统一状态机；当前主要用于 Windows Credential Manager target 发现与跟随提示，不代表已经开放稳定运行时消费。
+- 对支持本机授权复用的 Provider，项目不会把本地认证源复制为长期真源；运行时会按需读取本地标准授权位置或本地凭据缓存，因此本机认证变化后，项目中的实际认证也会跟着变化。
+- `Kimi / Kimi Code` 的本地认证现在已经进入真实运行时链路：优先跟随 `~/.kimi/config.toml` 中由 `/login` 写入的 provider 配置，必要时再回退到 `~/.kimi/credentials/*.json` 的本地凭据缓存，因此默认不会再误投影到 Moonshot API Key 的 endpoint。
+- 模型中心还会启动后台本机认证同步器：对已发现的本机认证文件或目录级存储目标优先走路径级 watcher，监听不可用时自动回退到 polling；手动“扫描本机认证”会触发强制刷新。

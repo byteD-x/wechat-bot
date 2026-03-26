@@ -1,12 +1,4 @@
 import { createElement, formatDateTime } from './form-codec.js';
-import {
-    createModelKindBadge,
-    getActivePresetDraft,
-    getEffectivePreset,
-    getPresetModelMeta,
-    getProviderLabel,
-    getRuntimePresetDraft,
-} from './preset-meta.js';
 
 function getAuditStatusLabel(page) {
     switch (page._auditStatus) {
@@ -30,85 +22,72 @@ function createHeroDetail(label, value) {
     return wrap;
 }
 
+function createHeroAuditDisclosure(items = []) {
+    const disclosure = createElement('details', 'settings-hero-audit');
+    const summary = createElement('summary', 'settings-hero-audit-summary');
+    summary.appendChild(createElement('span', 'settings-hero-audit-title', '运行审计与诊断'));
+    summary.appendChild(createElement('span', 'settings-hero-audit-hint', '展开查看更多低频信息'));
+    disclosure.appendChild(summary);
+
+    const body = createElement('div', 'settings-hero-audit-grid');
+    items.forEach((item) => {
+        body.appendChild(createHeroDetail(item.label, item.value));
+    });
+    disclosure.appendChild(body);
+    return disclosure;
+}
+
 export function renderSettingsHero(page, highlight = false) {
     const container = page.$('#current-config-hero');
-    if (!container || !page._config) {
+    if (!container) {
         return;
     }
 
-    const runtimePresetName = String(page.getState('bot.status.runtime_preset') || '').trim();
-    const runtimePreset = getRuntimePresetDraft(page);
-    const activePreset = getActivePresetDraft(page);
-    const effectivePreset = getEffectivePreset(page);
-    const effectivePresetName = effectivePreset?.name || '未设置激活预设';
-    const effectiveProviderLabel = effectivePreset ? getProviderLabel(page, effectivePreset.provider_id) : '--';
-    const effectiveModel = String(page.getState('bot.status.model') || effectivePreset?.model || '').trim() || '--';
-    const effectiveAlias = String(effectivePreset?.alias || '').trim();
-    const effectiveModelMeta = getPresetModelMeta(page, effectivePreset, effectiveModel);
-    const effectiveScopeLabel = runtimePresetName
-        ? '当前运行中'
-        : (activePreset ? '当前保存配置' : '等待配置');
+    const connected = !!page.getState('bot.connected');
     const audit = page._configAudit?.audit || null;
-    const auditStatus = getAuditStatusLabel(page);
-    const hasAudit = !!audit;
-    const unknownCount = hasAudit ? (audit?.unknown_override_paths?.length || 0) : '--';
-    const dormantCount = hasAudit ? (audit?.dormant_paths?.length || 0) : '--';
-    const configuredPresets = page._presetDrafts.filter((preset) => preset.api_key_configured || preset.api_key_required === false).length;
-    const heroTestFeedback = page._heroTestFeedback && page._heroTestFeedback.presetName === effectivePreset?.name
-        ? page._heroTestFeedback
-        : null;
+    const runtimeVersion = Number(page.getState('bot.status.config_snapshot.version') || 0);
+    const unknownCount = Array.isArray(audit?.unknown_override_paths) ? audit.unknown_override_paths.length : 0;
+    const dormantCount = Array.isArray(audit?.dormant_paths) ? audit.dormant_paths.length : 0;
+    const summaryHint = page._auditMessage
+        || '模型、认证与连接测试已迁移到“模型”页；这里仅保留机器人、提示词、记忆、发送策略、日志与备份配置。';
 
     container.textContent = '';
     const card = createElement('div', `config-hero-card${highlight ? ' highlight-pulse' : ''}`);
     const content = createElement('div', 'hero-content');
     const title = createElement('div', 'hero-title');
-    title.appendChild(createElement('span', 'hero-name', effectivePresetName));
-    title.appendChild(createElement('span', 'hero-live-badge', effectiveScopeLabel));
-    if (effectiveModelMeta) {
-        title.appendChild(createModelKindBadge(effectiveModelMeta, 'is-hero'));
-    }
+    title.appendChild(createElement('span', 'hero-name', '配置工作台'));
+    title.appendChild(createElement(
+        'span',
+        'hero-live-badge',
+        page._hasPendingChanges ? '有未保存改动' : '当前内容已同步',
+    ));
     content.appendChild(title);
 
-    const subtitleParts = [effectiveProviderLabel, effectiveAlias || '未设置别名'].filter(Boolean);
-    content.appendChild(createElement('div', 'hero-subtitle', subtitleParts.join(' · ')));
-
-    const modelWrap = createElement('div', 'hero-model-row');
-    const modelText = createElement('div', 'hero-model-main');
-    modelText.appendChild(createElement('span', 'hero-model-label', '当前生效模型'));
-    modelText.appendChild(createElement('span', 'hero-model-value', effectiveModel));
-    modelWrap.appendChild(modelText);
-    if (effectiveModelMeta) {
-        modelWrap.appendChild(createElement('div', 'hero-model-hint', effectiveModelMeta.title || effectiveModelMeta.label));
-    }
-    content.appendChild(modelWrap);
+    content.appendChild(createElement(
+        'div',
+        'hero-subtitle',
+        '这里只管理机器人、提示词、记忆、发送策略、日志与备份。回复模型与认证方式统一在“模型”页维护。',
+    ));
 
     const details = createElement('div', 'hero-details');
-    details.appendChild(createHeroDetail('当前运行预设', runtimePreset?.name || '--'));
-    details.appendChild(createHeroDetail('当前保存预设', activePreset?.name || '--'));
-    details.appendChild(createHeroDetail('运行态审计', auditStatus));
-    details.appendChild(createHeroDetail('已配置预设', `${configuredPresets}/${page._presetDrafts.length}`));
-    details.appendChild(createHeroDetail('审计版本', String(page._configAudit?.version || '--')));
-    details.appendChild(createHeroDetail('最后加载', formatDateTime(page._configAudit?.loaded_at)));
-    details.appendChild(createHeroDetail('未知覆盖', typeof unknownCount === 'number' ? `${unknownCount} 项` : '--'));
-    details.appendChild(createHeroDetail('未消费配置', typeof dormantCount === 'number' ? `${dormantCount} 项` : '--'));
-    details.appendChild(createHeroDetail('LangSmith', page._config.agent?.langsmith_api_key_configured ? '已配置 Key' : '未配置 Key'));
+    details.appendChild(createHeroDetail('运行能力', connected ? '已连接 Python 服务' : '未连接 Python 服务'));
+    details.appendChild(createHeroDetail('配置审计', getAuditStatusLabel(page)));
+    details.appendChild(createHeroDetail('运行配置版本', runtimeVersion > 0 ? String(runtimeVersion) : '--'));
+    details.appendChild(createHeroDetail('最近审计时间', formatDateTime(page._configAudit?.loaded_at)));
     content.appendChild(details);
 
-    const actions = createElement('div', 'hero-actions');
-    const button = createElement('button', 'btn btn-secondary', '测试当前连接');
-    button.type = 'button';
-    button.disabled = !effectivePreset?.name;
-    button.addEventListener('click', () => void page._testPresetByName(effectivePreset?.name || ''));
-    actions.appendChild(button);
+    content.appendChild(createHeroAuditDisclosure([
+        { label: '审计版本', value: String(page._configAudit?.version || '--') },
+        { label: '最后加载', value: formatDateTime(page._configAudit?.loaded_at) },
+        { label: '未知覆盖', value: `${unknownCount} 项` },
+        { label: '未消费配置', value: `${dormantCount} 项` },
+        {
+            label: 'LangSmith',
+            value: page._config?.agent?.langsmith_api_key_configured ? '已配置 Key' : '未配置 Key',
+        },
+    ]));
 
-    const hintClassName = heroTestFeedback
-        ? `ping-result ${heroTestFeedback.state === 'success' ? 'success' : (heroTestFeedback.state === 'error' ? 'error' : 'pending')}`
-        : 'ping-result';
-    const hintText = heroTestFeedback?.message
-        || (effectivePreset?.name ? '可直接测试当前生效预设的连通性，不会启动机器人。' : '请先配置并激活一个预设。');
-    actions.appendChild(createElement('div', hintClassName, hintText));
-
+    content.appendChild(createElement('div', 'detail-help', summaryHint));
     card.appendChild(content);
-    card.appendChild(actions);
     container.appendChild(card);
 }

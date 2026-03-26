@@ -8,11 +8,13 @@ import {
     renderGrowthTasks,
     renderHealthMetrics,
     renderIdlePanel,
+    renderReadiness,
     renderRetrieval,
+    renderStabilitySummary,
     renderStartupState,
     syncStartupMeta,
 } from './renderers.js';
-import { refreshDashboardCost } from './data-loader.js';
+import { refreshDashboardCost, refreshDashboardStability } from './data-loader.js';
 
 function resolveDeps(deps = {}) {
     return {
@@ -23,10 +25,13 @@ function resolveDeps(deps = {}) {
         renderGrowthTasks: deps.renderGrowthTasks || renderGrowthTasks,
         renderHealthMetrics: deps.renderHealthMetrics || renderHealthMetrics,
         renderIdlePanel: deps.renderIdlePanel || renderIdlePanel,
+        renderReadiness: deps.renderReadiness || renderReadiness,
         renderRetrieval: deps.renderRetrieval || renderRetrieval,
+        renderStabilitySummary: deps.renderStabilitySummary || renderStabilitySummary,
         renderStartupState: deps.renderStartupState || renderStartupState,
         syncStartupMeta: deps.syncStartupMeta || syncStartupMeta,
         refreshDashboardCost: deps.refreshDashboardCost || refreshDashboardCost,
+        refreshDashboardStability: deps.refreshDashboardStability || refreshDashboardStability,
     };
 }
 
@@ -181,6 +186,7 @@ export function updateBotUI(page, deps = {}) {
     });
     helper.renderStartupState(page, status.startup);
     helper.syncStartupMeta(page, status.startup);
+    helper.renderReadiness(page, page.getState('readiness.report'));
     helper.renderDiagnostics(page, status.diagnostics);
 }
 
@@ -200,6 +206,7 @@ export function updateStats(page, stats, deps = {}) {
         system_metrics: stats.system_metrics || {},
         health_checks: stats.health_checks || {},
         merge_feedback: stats.merge_feedback || null,
+        pending_replies: stats.pending_replies || null,
         reply_quality: stats.reply_quality || null,
         retriever_stats: stats.retriever_stats || {},
         runtime_timings: stats.runtime_timings || {},
@@ -240,6 +247,7 @@ export function updateStats(page, stats, deps = {}) {
 
     helper.renderStartupState(page, nextStats.startup);
     helper.syncStartupMeta(page, nextStats.startup);
+    helper.renderReadiness(page, page.getState('readiness.report'));
     helper.renderDiagnostics(page, nextStats.diagnostics);
     helper.renderHealthMetrics(
         page,
@@ -254,7 +262,13 @@ export function updateStats(page, stats, deps = {}) {
         nextStats.runtime_timings,
         nextStats.export_rag
     );
+    helper.renderStabilitySummary(
+        page,
+        nextStats.pending_replies,
+        page._stability || {},
+    );
     void helper.refreshDashboardCost(page);
+    void helper.refreshDashboardStability(page);
 
     page._lastStats = nextStats;
 }

@@ -1,0 +1,55 @@
+.about-stage {
+    display: grid;
+    gap: 18px;
+}
+
+.about-hero {
+    border-color: rgba(22, 124, 102, 0.16);
+    background:
+        radial-gradient(circle at top right, rgba(62, 199, 166, 0.18), transparent 26%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(243, 247, 251, 0.96));
+}
+
+.about-hero-body {
+    display: grid;
+    grid-template-columns: minmax(0, 1.4fr) minmax(280px, 0.8fr);
+    gap: 18px;
+}
+
+.about-hero-logo-shell {
+    width: 72px;
+    height: 72px;
+    border-radius: 18px;
+    padding: 12px;
+    background: #fff;
+    border: 1px solid rgba(15, 23, 42, 0.06);
+    box-shadow: var(--shadow-sm);
+}
+
+.about-link-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 14px;
+}
+
+.about-link-card {
+    border: 1px solid var(--border-color);
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.98);
+    padding: 16px;
+    display: grid;
+    gap: 12px;
+    text-align: left;
+}
+
+.about-link-card-sponsor {
+    border-color: rgba(22, 124, 102, 0.18);
+    background: linear-gradient(180deg, rgba(232, 249, 245, 0.92), rgba(255, 255, 255, 0.98));
+}
+
+@media (max-width: 900px) {
+    .about-hero-body,
+    .about-link-grid {
+        grid-template-columns: 1fr;
+    }
+}

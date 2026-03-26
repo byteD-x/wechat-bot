@@ -2,10 +2,10 @@ import asyncio
 import hashlib
 import inspect
 import logging
-import os
 import random
 import time
-from typing import Any, Dict, List, Optional, Set, Tuple
+from types import SimpleNamespace
+from typing import Any, Dict, List, Optional, Set
 
 from .core.export_rag import ExportChatRAG
 from .core.memory import MemoryManager
@@ -28,6 +28,11 @@ from .core.config_service import get_config_service
 from .core.config_audit import diff_config_paths
 from .core.pricing_catalog import get_pricing_catalog
 from .core.reply_quality_tracker import get_reply_quality_tracker
+from .core.reply_policy import (
+    build_chat_id as build_reply_policy_chat_id,
+    evaluate_reply_policy,
+    normalize_reply_policy,
+)
 
 from .types import MessageEvent
 from .bot_event_flow import (
@@ -148,12 +153,24 @@ class WeChatBot:
             "successful": 0,
             "empty": 0,
             "failed": 0,
+            "pending_approval": 0,
             "delayed": 0,
             "retrieval_augmented": 0,
             "retrieval_hit_count": 0,
             "helpful_count": 0,
             "unhelpful_count": 0,
             "last_reply_at": None,
+        }
+        self.reply_policy_cfg: Dict[str, Any] = normalize_reply_policy()
+        self.pending_reply_stats: Dict[str, Any] = {
+            "total": 0,
+            "pending": 0,
+            "approved": 0,
+            "rejected": 0,
+            "expired": 0,
+            "failed": 0,
+            "latest_created_at": 0,
+            "by_status": {},
         }
 
     def _load_effective_config(self, *, force_reload: bool = False) -> Dict[str, Any]:
@@ -308,6 +325,7 @@ class WeChatBot:
             maybe_result = initialize_memory()
             if inspect.isawaitable(maybe_result):
                 await maybe_result
+        await self.refresh_pending_reply_stats(notify=False)
 
         self._ensure_vector_memory()
         
@@ -403,6 +421,7 @@ class WeChatBot:
         self.bot_cfg = self.config.get("bot", {})
         self.api_cfg = self.config.get("api", {})
         self.agent_cfg = self.config.get("agent", {})
+        self.reply_policy_cfg = normalize_reply_policy(self.bot_cfg.get("reply_policy"))
         
         level, log_file, max_bytes, backup_count, format_type = get_logging_settings(self.config)
         setup_logging(level, log_file, max_bytes, backup_count, format_type)
@@ -1572,6 +1591,23 @@ class WeChatBot:
             logging.warning("回复质量持久化失败(failed): %s", exc)
         self._notify_runtime_status_changed()
 
+    def _record_reply_pending_approval(self) -> None:
+        self.reply_quality_stats["attempted"] = max(
+            0,
+            int(self.reply_quality_stats.get("attempted", 0) or 0) - 1,
+        )
+        self.reply_quality_stats["pending_approval"] = int(
+            self.reply_quality_stats.get("pending_approval", 0) or 0
+        ) + 1
+        self._mark_reply_quality_dirty()
+
+    def _record_pending_reply_resolved(self) -> None:
+        self.reply_quality_stats["pending_approval"] = max(
+            0,
+            int(self.reply_quality_stats.get("pending_approval", 0) or 0) - 1,
+        )
+        self._mark_reply_quality_dirty()
+
     def _record_reply_success(self, response_metadata: Optional[Dict[str, Any]] = None) -> None:
         metadata = dict(response_metadata or {})
         retrieval = dict(metadata.get("retrieval") or {})
@@ -1626,6 +1662,7 @@ class WeChatBot:
         successful = int(self.reply_quality_stats.get("successful", 0) or 0)
         empty = int(self.reply_quality_stats.get("empty", 0) or 0)
         failed = int(self.reply_quality_stats.get("failed", 0) or 0)
+        pending_approval = int(self.reply_quality_stats.get("pending_approval", 0) or 0)
         delayed = int(self.reply_quality_stats.get("delayed", 0) or 0)
         retrieval_augmented = int(self.reply_quality_stats.get("retrieval_augmented", 0) or 0)
         retrieval_hit_count = int(self.reply_quality_stats.get("retrieval_hit_count", 0) or 0)
@@ -1654,6 +1691,7 @@ class WeChatBot:
             "successful": successful,
             "empty": empty,
             "failed": failed,
+            "pending_approval": pending_approval,
             "delayed": delayed,
             "retrieval_augmented": retrieval_augmented,
             "retrieval_hit_count": retrieval_hit_count,
@@ -1709,6 +1747,334 @@ class WeChatBot:
             return
         self.pending_tasks.add(task)
         self._notify_runtime_status_changed()
+
+    async def expire_stale_pending_replies(self, *, notify: bool = True) -> Dict[str, Any]:
+        if self.memory is None:
+            self.pending_reply_stats = dict(self.pending_reply_stats or {})
+            return dict(self.pending_reply_stats)
+
+        ttl_hours = as_int(self.reply_policy_cfg.get("pending_ttl_hours", 24), 24, min_value=1)
+        cutoff = int(time.time()) - int(ttl_hours * 3600)
+        expired = await self.memory.expire_pending_replies(created_before=cutoff)
+        previous_pending = int((self.pending_reply_stats or {}).get("pending", 0) or 0)
+        stats = await self.memory.get_pending_reply_stats()
+        self.pending_reply_stats = dict(stats or {})
+        if expired > 0:
+            resolved_delta = min(previous_pending, expired)
+            for _ in range(resolved_delta):
+                self._record_pending_reply_resolved()
+            if notify:
+                await self.bot_manager.broadcast_event(
+                    "pending_reply",
+                    {
+                        "action": "expired",
+                        "expired_count": expired,
+                        "pending_count": int(self.pending_reply_stats.get("pending", 0) or 0),
+                    },
+                )
+                self._notify_runtime_status_changed()
+        return dict(self.pending_reply_stats)
+
+    async def refresh_pending_reply_stats(self, *, notify: bool = True) -> Dict[str, Any]:
+        stats = await self.expire_stale_pending_replies(notify=False)
+        self.pending_reply_stats = dict(stats or {})
+        if notify:
+            self._notify_runtime_status_changed()
+        return dict(self.pending_reply_stats)
+
+    async def list_pending_replies(
+        self,
+        *,
+        chat_id: str = "",
+        limit: int = 50,
+        status: Optional[str] = "pending",
+    ) -> List[Dict[str, Any]]:
+        if self.memory is None:
+            return []
+        await self.expire_stale_pending_replies(notify=False)
+        return await self.memory.list_pending_replies(
+            chat_id=chat_id,
+            limit=limit,
+            status=status,
+        )
+
+    async def evaluate_outgoing_reply_policy(
+        self,
+        *,
+        event: MessageEvent,
+        user_text: str,
+        reply_text: str,
+    ) -> Dict[str, Any]:
+        chat_id = build_reply_policy_chat_id(event)
+        has_existing_history = False
+        if self.memory is not None:
+            has_existing_history = await self.memory.has_messages(chat_id)
+        return evaluate_reply_policy(
+            event,
+            bot_cfg=self.bot_cfg,
+            user_text=user_text,
+            draft_reply=reply_text,
+            has_existing_history=has_existing_history,
+        )
+
+    def _build_pending_reply_payload(
+        self,
+        *,
+        prepared: Any,
+        event: MessageEvent,
+        chat_id: str,
+        user_text: str,
+        reply_text: str,
+        trace_id: Optional[str],
+        policy_result: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        response_metadata = self._build_reply_metadata(
+            prepared=prepared,
+            event=event,
+            chat_id=chat_id,
+            user_text=user_text,
+            reply_text=reply_text,
+            streamed=False,
+        )
+        return {
+            "trace_id": str(trace_id or ""),
+            "chat_id": chat_id,
+            "chat_name": str(getattr(event, "chat_name", "") or ""),
+            "sender": str(getattr(event, "sender", "") or ""),
+            "is_group": bool(getattr(event, "is_group", False)),
+            "is_at_me": bool(getattr(event, "is_at_me", False)),
+            "msg_type": str(getattr(event, "msg_type", "") or ""),
+            "chat_type": str(getattr(event, "chat_type", "") or ""),
+            "timestamp": getattr(event, "timestamp", None),
+            "user_text": user_text,
+            "reply_text": reply_text,
+            "policy_result": dict(policy_result or {}),
+            "response_metadata": response_metadata,
+            "timings": dict(getattr(prepared, "timings", {}) or {}),
+            "trace": dict(getattr(prepared, "trace", {}) or {}),
+            "user_profile": (
+                prepared.user_profile.model_dump(mode="json")
+                if hasattr(getattr(prepared, "user_profile", None), "model_dump")
+                else dict(getattr(prepared, "user_profile", {}) or {})
+                if isinstance(getattr(prepared, "user_profile", None), dict)
+                else {}
+            ),
+            "memory_context": list(getattr(prepared, "memory_context", []) or []),
+            "system_prompt": str(getattr(prepared, "system_prompt", "") or ""),
+            "image_path": str(getattr(prepared, "image_path", "") or ""),
+        }
+
+    async def queue_pending_reply(
+        self,
+        *,
+        prepared: Any,
+        event: MessageEvent,
+        chat_id: str,
+        user_text: str,
+        reply_text: str,
+        trace_id: Optional[str],
+        policy_result: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        if self.memory is None:
+            raise RuntimeError("memory manager unavailable")
+
+        payload = self._build_pending_reply_payload(
+            prepared=prepared,
+            event=event,
+            chat_id=chat_id,
+            user_text=user_text,
+            reply_text=reply_text,
+            trace_id=trace_id,
+            policy_result=policy_result,
+        )
+        source_message_id = str(
+            getattr(event, "timestamp", None)
+            or trace_id
+            or int(time.time())
+        )
+        pending_reply = await self.memory.create_pending_reply(
+            chat_id=chat_id,
+            source_message_id=source_message_id,
+            trigger_reason=str(policy_result.get("trigger_reason") or "manual_review"),
+            draft_reply=reply_text,
+            metadata=payload,
+        )
+        self._record_reply_pending_approval()
+        await self.refresh_pending_reply_stats(notify=False)
+        await self.bot_manager.broadcast_event(
+            "pending_reply",
+            {
+                "action": "created",
+                "pending_reply": pending_reply,
+                "pending_count": int(self.pending_reply_stats.get("pending", 0) or 0),
+            },
+        )
+        self._notify_runtime_status_changed()
+        return pending_reply
+
+    def _rehydrate_pending_prepared_request(self, pending_reply: Dict[str, Any]) -> Any:
+        from .core.agent_runtime import AgentPreparedRequest
+
+        metadata = dict(pending_reply.get("metadata") or {})
+        user_profile = metadata.get("user_profile") or {}
+        profile_object: Any = user_profile
+        if isinstance(user_profile, dict) and user_profile:
+            profile_object = SimpleNamespace(**user_profile)
+
+        event = MessageEvent(
+            chat_name=str(metadata.get("chat_name") or ""),
+            sender=str(metadata.get("sender") or ""),
+            content=str(metadata.get("user_text") or ""),
+            is_group=bool(metadata.get("is_group", False)),
+            is_at_me=bool(metadata.get("is_at_me", False)),
+            msg_type=str(metadata.get("msg_type") or "text"),
+            is_self=False,
+            chat_type=str(metadata.get("chat_type") or "") or None,
+            timestamp=metadata.get("timestamp"),
+            raw_item=None,
+        )
+        return AgentPreparedRequest(
+            chat_id=str(metadata.get("chat_id") or pending_reply.get("chat_id") or ""),
+            user_text=str(metadata.get("user_text") or ""),
+            system_prompt=str(metadata.get("system_prompt") or ""),
+            prompt_messages=[],
+            event=event,
+            memory_context=list(metadata.get("memory_context") or []),
+            user_profile=profile_object,
+            timings=dict(metadata.get("timings") or {}),
+            trace=dict(metadata.get("trace") or {}),
+            response_metadata=dict(metadata.get("response_metadata") or {}),
+            image_path=str(metadata.get("image_path") or "") or None,
+        )
+
+    async def approve_pending_reply(
+        self,
+        pending_id: int,
+        *,
+        edited_reply: str = "",
+    ) -> Dict[str, Any]:
+        if self.memory is None:
+            return {"success": False, "message": "memory manager unavailable"}
+        if not self.wx or not self.ai_client:
+            return {"success": False, "message": "bot transport unavailable"}
+
+        await self.expire_stale_pending_replies(notify=False)
+        pending_reply = await self.memory.get_pending_reply(pending_id)
+        if pending_reply is None:
+            return {"success": False, "message": "pending reply not found"}
+        if str(pending_reply.get("status") or "") != "pending":
+            return {"success": False, "message": "pending reply already resolved"}
+
+        prepared = self._rehydrate_pending_prepared_request(pending_reply)
+        event = prepared.event
+        chat_id = str(pending_reply.get("chat_id") or "")
+        final_reply = str(edited_reply or pending_reply.get("draft_reply") or "").strip()
+        if not final_reply:
+            return {"success": False, "message": "reply text cannot be empty"}
+
+        try:
+            async with self._get_chat_lock(chat_id):
+                reply_text = await self._send_smart_reply(
+                    self.wx,
+                    event,
+                    final_reply,
+                    trace_id=str((pending_reply.get("metadata") or {}).get("trace_id") or ""),
+                )
+        except Exception as exc:
+            metadata = dict(pending_reply.get("metadata") or {})
+            metadata["approval_error"] = str(exc)
+            metadata["approval_failed_at"] = int(time.time())
+            await self.memory.update_pending_reply(
+                pending_id,
+                draft_reply=final_reply,
+                metadata=metadata,
+            )
+            await self.refresh_pending_reply_stats(notify=False)
+            await self.bot_manager.broadcast_event(
+                "pending_reply",
+                {
+                    "action": "failed",
+                    "pending_id": int(pending_id),
+                    "message": str(exc),
+                    "pending_count": int(self.pending_reply_stats.get("pending", 0) or 0),
+                },
+            )
+            self._notify_runtime_status_changed()
+            return {"success": False, "message": f"approve failed: {exc}"}
+
+        self._record_pending_reply_resolved()
+        self._record_reply_attempt()
+        finalize_error = ""
+        try:
+            await self._finalize_reply_delivery(
+                prepared=prepared,
+                event=event,
+                chat_id=chat_id,
+                user_text=str(prepared.user_text or ""),
+                reply_text=reply_text,
+                trace_id=str((pending_reply.get("metadata") or {}).get("trace_id") or ""),
+                streamed=False,
+            )
+        except Exception as exc:
+            finalize_error = str(exc)
+            logging.warning("Pending reply finalize failed after send: %s", exc)
+
+        resolution_metadata = {
+            "approved_at": int(time.time()),
+            "approved_reply": reply_text,
+            "approval_mode": "edited" if bool(str(edited_reply or "").strip()) else "original",
+        }
+        if finalize_error:
+            resolution_metadata["approval_finalize_error"] = finalize_error
+
+        resolved = await self.memory.resolve_pending_reply(
+            pending_id,
+            status="approved",
+            draft_reply=reply_text,
+            metadata=resolution_metadata,
+        )
+        await self.refresh_pending_reply_stats(notify=False)
+        await self.bot_manager.broadcast_event(
+            "pending_reply",
+            {
+                "action": "approved",
+                "pending_reply": resolved,
+                "pending_count": int(self.pending_reply_stats.get("pending", 0) or 0),
+            },
+        )
+        self._notify_runtime_status_changed()
+        response = {"success": True, "pending_reply": resolved, "reply_text": reply_text}
+        if finalize_error:
+            response["warning"] = f"reply sent but finalize failed: {finalize_error}"
+        return response
+
+    async def reject_pending_reply(self, pending_id: int) -> Dict[str, Any]:
+        if self.memory is None:
+            return {"success": False, "message": "memory manager unavailable"}
+        await self.expire_stale_pending_replies(notify=False)
+        pending_reply = await self.memory.get_pending_reply(pending_id)
+        if pending_reply is None:
+            return {"success": False, "message": "pending reply not found"}
+        if str(pending_reply.get("status") or "") != "pending":
+            return {"success": False, "message": "pending reply already resolved"}
+
+        self._record_pending_reply_resolved()
+        resolved = await self.memory.resolve_pending_reply(
+            pending_id,
+            status="rejected",
+            metadata={"rejected_at": int(time.time())},
+        )
+        await self.refresh_pending_reply_stats(notify=False)
+        await self.bot_manager.broadcast_event(
+            "pending_reply",
+            {
+                "action": "rejected",
+                "pending_reply": resolved,
+                "pending_count": int(self.pending_reply_stats.get("pending", 0) or 0),
+            },
+        )
+        self._notify_runtime_status_changed()
+        return {"success": True, "pending_reply": resolved}
 
     def _build_reply_metadata(
         self,
@@ -1814,6 +2180,19 @@ class WeChatBot:
             "pending_tasks": len(self.pending_tasks),
             "merge_pending_chats": pending_merge_chats,
             "merge_pending_messages": pending_merge_messages,
+            "pending_replies": {
+                "pending": int(self.pending_reply_stats.get("pending", 0) or 0),
+                "approved": int(self.pending_reply_stats.get("approved", 0) or 0),
+                "rejected": int(self.pending_reply_stats.get("rejected", 0) or 0),
+                "expired": int(self.pending_reply_stats.get("expired", 0) or 0),
+                "failed": int(self.pending_reply_stats.get("failed", 0) or 0),
+                "latest_created_at": self.pending_reply_stats.get("latest_created_at"),
+                "status_text": (
+                    f"待审批回复 {int(self.pending_reply_stats.get('pending', 0) or 0)} 条"
+                    if int(self.pending_reply_stats.get("pending", 0) or 0) > 0
+                    else "当前没有待审批回复"
+                ),
+            },
             "merge_feedback": {
                 "enabled": as_float(self.bot_cfg.get("merge_user_messages_sec", 0.0), 0.0) > 0,
                 "active": pending_merge_chats > 0,

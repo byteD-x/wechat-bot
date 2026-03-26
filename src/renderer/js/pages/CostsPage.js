@@ -3,6 +3,7 @@ import { refreshCosts, refreshPricingCatalog } from './costs/data-controller.js'
 import { syncCostFilters } from './costs/filter-sync.js';
 import { bindCostsPage } from './costs/page-shell.js';
 import { toggleCostSession } from './costs/session-controller.js';
+import { renderCostsPageShell } from '../app-shell/pages/index.js';
 
 export class CostsPage extends PageController {
     constructor() {
@@ -21,10 +22,15 @@ export class CostsPage extends PageController {
         this._sessions = [];
         this._details = new Map();
         this._loading = false;
+        this._lastLoadedAt = 0;
     }
 
     async onInit() {
         await super.onInit();
+        const container = this.container || (typeof document !== 'undefined' ? this.getContainer() : null);
+        if (container) {
+            container.innerHTML = renderCostsPageShell();
+        }
         bindCostsPage(this, {
             refreshCosts: (page) => refreshCosts(page, {
                 onToggleSession: (chatId, item) => toggleCostSession(page, chatId, item),
