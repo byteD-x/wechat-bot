@@ -14,7 +14,11 @@ from backend.config_schemas import BotConfig
 from backend.core.agent_runtime import AgentRuntime
 from backend.core.ai_client import AIClient
 from backend.core.memory import MemoryManager
-from backend.model_auth.services.migration import ensure_provider_auth_center_config, project_provider_auth_center
+from backend.model_auth.services.migration import (
+    ensure_provider_auth_center_config,
+    hydrate_runtime_settings,
+    project_provider_auth_center,
+)
 from backend.model_auth.storage.credential_store import CredentialStore
 from backend.transports import BaseTransport, WcferryTransport
 from backend.transports.wcferry_adapter import (
@@ -161,7 +165,7 @@ def _build_provider_auth_openai_api_cfg(tmp_path, *, selection_mode="auto", sele
     entry.setdefault("metadata", {})
     entry["metadata"]["selection_mode"] = selection_mode
     entry["selected_profile_id"] = oauth_profile["id"] if selected_method == "oauth" else api_profile["id"]
-    return project_provider_auth_center(config["api"]), api_profile["id"], oauth_profile["id"]
+    return project_provider_auth_center(config["api"]), api_profile["id"], oauth_profile["id"], store
 
 
 @pytest.mark.asyncio
@@ -575,7 +579,7 @@ async def test_select_ai_client_falls_back_to_other_presets(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_select_ai_client_falls_back_to_api_key_when_same_provider_oauth_resolution_fails(tmp_path, monkeypatch):
-    api_cfg, api_profile_id, oauth_profile_id = _build_provider_auth_openai_api_cfg(
+    api_cfg, api_profile_id, oauth_profile_id, store = _build_provider_auth_openai_api_cfg(
         tmp_path,
         selection_mode="auto",
         selected_method="api_key",
@@ -600,6 +604,11 @@ async def test_select_ai_client_falls_back_to_api_key_when_same_provider_oauth_r
 
     monkeypatch.setattr(factory_module, "build_agent_runtime", _build_fake_runtime)
     monkeypatch.setattr(factory_module, "resolve_oauth_settings", _resolve_fake_oauth)
+    monkeypatch.setattr(
+        factory_module,
+        "hydrate_runtime_settings",
+        lambda settings: hydrate_runtime_settings(settings, credential_store=store),
+    )
 
     client, preset_name = await factory_module.select_ai_client(
         api_cfg,
@@ -614,7 +623,7 @@ async def test_select_ai_client_falls_back_to_api_key_when_same_provider_oauth_r
 
 @pytest.mark.asyncio
 async def test_select_ai_client_honors_manual_profile_then_falls_back_to_other_auth(tmp_path, monkeypatch):
-    api_cfg, api_profile_id, oauth_profile_id = _build_provider_auth_openai_api_cfg(
+    api_cfg, api_profile_id, oauth_profile_id, store = _build_provider_auth_openai_api_cfg(
         tmp_path,
         selection_mode="manual",
         selected_method="api_key",
@@ -638,6 +647,11 @@ async def test_select_ai_client_honors_manual_profile_then_falls_back_to_other_a
         "resolve_oauth_settings",
         lambda settings: SimpleNamespace(settings=dict(settings)),
     )
+    monkeypatch.setattr(
+        factory_module,
+        "hydrate_runtime_settings",
+        lambda settings: hydrate_runtime_settings(settings, credential_store=store),
+    )
 
     client, preset_name = await factory_module.select_ai_client(
         api_cfg,
@@ -652,7 +666,7 @@ async def test_select_ai_client_honors_manual_profile_then_falls_back_to_other_a
 
 @pytest.mark.asyncio
 async def test_select_specific_ai_client_uses_same_provider_fallback_chain(tmp_path, monkeypatch):
-    api_cfg, api_profile_id, oauth_profile_id = _build_provider_auth_openai_api_cfg(
+    api_cfg, api_profile_id, oauth_profile_id, store = _build_provider_auth_openai_api_cfg(
         tmp_path,
         selection_mode="auto",
         selected_method="api_key",
@@ -677,6 +691,11 @@ async def test_select_specific_ai_client_uses_same_provider_fallback_chain(tmp_p
 
     monkeypatch.setattr(factory_module, "build_agent_runtime", _build_fake_runtime)
     monkeypatch.setattr(factory_module, "resolve_oauth_settings", _resolve_fake_oauth)
+    monkeypatch.setattr(
+        factory_module,
+        "hydrate_runtime_settings",
+        lambda settings: hydrate_runtime_settings(settings, credential_store=store),
+    )
 
     client, preset_name = await factory_module.select_specific_ai_client(
         api_cfg,
