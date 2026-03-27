@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+import backend.transports.wcferry_adapter as wcferry_adapter_module
 from backend.transports.wcferry_adapter import WcferryTransport
 
 
@@ -8,6 +9,18 @@ def _build_adapter():
     adapter._by_wxid = {}
     adapter._name_map = {}
     return adapter
+
+
+def test_powershell_decodes_gb18030_chinese_path(monkeypatch):
+    monkeypatch.setattr(
+        wcferry_adapter_module.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            stdout=r"E:\腾讯\WeChat.exe".encode("gb18030"),
+        ),
+    )
+
+    assert wcferry_adapter_module._powershell("Get-Process WeChat | Select-Object -First 1 -ExpandProperty Path") == r"E:\腾讯\WeChat.exe"
 
 
 def test_resolve_receiver_accepts_filehelper_display_name():

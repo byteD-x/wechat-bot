@@ -48,8 +48,50 @@ function mergeConfigWithLiveStatus(localConfigResult = {}, liveConfigResult = {}
             auth_mode: liveApi.auth_mode || nextApi.auth_mode,
             oauth_provider: liveApi.oauth_provider || nextApi.oauth_provider,
         },
+        local_auth_sync: liveConfigResult.local_auth_sync || localConfigResult.local_auth_sync || null,
         oauth: liveConfigResult.oauth || localConfigResult.oauth || null,
     };
+}
+
+function normalizeLocalAuthSyncState(result = {}) {
+    const payload = result?.local_auth_sync || {};
+    return {
+        refreshing: Boolean(payload?.refreshing),
+        refreshed_at: Number(payload?.refreshed_at || 0),
+        revision: Number(payload?.revision || 0),
+        changed_provider_ids: Array.isArray(payload?.changed_provider_ids) ? payload.changed_provider_ids : [],
+        message: String(payload?.message || '').trim(),
+    };
+}
+
+export function clearPendingLocalAuthSyncRefresh(page) {
+    if (page?._localAuthSyncRefreshTimer) {
+        clearTimeout(page._localAuthSyncRefreshTimer);
+        page._localAuthSyncRefreshTimer = null;
+    }
+    if (page) {
+        page._localAuthSyncRefreshAttempt = 0;
+    }
+}
+
+function scheduleLocalAuthSyncRefresh(page) {
+    const syncState = page?._localAuthSyncState || {};
+    if (!syncState.refreshing || !page?.isActive?.()) {
+        clearPendingLocalAuthSyncRefresh(page);
+        return;
+    }
+    if (page._localAuthSyncRefreshTimer) {
+        return;
+    }
+    const delayMs = Math.min(4000, 600 + (Number(page._localAuthSyncRefreshAttempt || 0) * 600));
+    page._localAuthSyncRefreshAttempt = Number(page._localAuthSyncRefreshAttempt || 0) + 1;
+    page._localAuthSyncRefreshTimer = setTimeout(() => {
+        page._localAuthSyncRefreshTimer = null;
+        if (!page.isActive() || page._isSaving) {
+            return;
+        }
+        void page.loadSettings({ silent: true, preserveFeedback: true });
+    }, delayMs);
 }
 
 export function buildModelSummaryView(modelAuthOverview = null, config = null) {
@@ -117,6 +159,10 @@ export function watchConfigChanges(page) {
     }
     page._removeConfigListener = window.electronAPI.onConfigChanged(() => {
         if (page._isSaving) {
+            return;
+        }
+        if (!page.isActive()) {
+            page._pendingConfigReload = true;
             return;
         }
         void page.loadSettings({ silent: true, preserveFeedback: true });
@@ -223,6 +269,17 @@ export async function loadSettings(page, options = {}, text = {}) {
                 agent: deepClone(mergedResult.agent || {}),
                 services: deepClone(mergedResult.services || {}),
             };
+            page._localAuthSyncState = normalizeLocalAuthSyncState(mergedResult);
+            const modelCatalog = deepClone(mergedResult.modelCatalog || page._modelCatalog || { providers: [] });
+            if (!Array.isArray(modelCatalog.providers)) {
+                modelCatalog.providers = [];
+            }
+            page._modelCatalog = modelCatalog;
+            page._providersById = new Map(
+                modelCatalog.providers
+                    .map((provider) => [String(provider?.id || '').trim(), provider])
+                    .filter(([providerId]) => providerId),
+            );
             const runtimeVersion = Number(page.getState('bot.status.config_snapshot.version') || 0);
             if (!page.getState('bot.connected')) {
                 page._configAudit = null;
@@ -242,11 +299,13 @@ export async function loadSettings(page, options = {}, text = {}) {
             if (!preserveFeedback) {
                 page._hideSaveFeedback();
             }
+            page._pendingConfigReload = false;
             page._loaded = true;
             page._resetDirtyState?.();
             if (page._shouldRefreshAudit() || !silent) {
                 void page._loadConfigAudit({ silent: true, force: !silent });
             }
+            scheduleLocalAuthSyncRefresh(page);
             if (!silent) {
                 toast.success('配置已刷新');
             }

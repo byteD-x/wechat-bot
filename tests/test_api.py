@@ -680,7 +680,7 @@ async def test_api_model_catalog(client):
     google = providers.get("google")
     assert google is not None
     assert google["base_url"] == "https://generativelanguage.googleapis.com/v1beta/openai"
-    assert "gemini-2.5-flash-lite" in google["models"]
+    assert "gemini-3.1-pro-preview" in google["models"]
 
     doubao = providers.get("doubao")
     assert doubao is not None
@@ -690,6 +690,7 @@ async def test_api_model_catalog(client):
     openai = providers.get("openai")
     assert openai is not None
     assert openai["default_model"] == "gpt-5.4-mini"
+    assert "gpt-5.4-pro" in openai["models"]
     assert "gpt-5.4" in openai["models"]
     assert "gpt-5.3-codex" in openai["models"]
     auth_methods = {item["id"]: item["type"] for item in openai.get("auth_methods", [])}
@@ -700,6 +701,7 @@ async def test_api_model_catalog(client):
     assert "glm-4.7" in providers["zhipu"]["models"]
     assert providers["openrouter"]["default_model"] == "openrouter/auto"
     assert "google/gemini-3.1-pro-preview" in providers["openrouter"]["models"]
+    assert providers["together"]["default_model"] == "moonshotai/Kimi-K2.5"
     assert providers["perplexity"]["models"] == ["sonar", "sonar-pro", "sonar-reasoning-pro", "sonar-deep-research"]
 
 
@@ -866,6 +868,93 @@ async def test_api_config_masks_langsmith_key(client):
     assert data["agent"]["langsmith_api_key_configured"] is True
     assert "langsmith_api_key" not in data["agent"]
     assert data["services"]["growth_tasks_enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_api_config_uses_cached_oauth_status_snapshot(client):
+    test_config = {
+        "api": {
+            "active_preset": "OpenAI",
+            "presets": [
+                {
+                    "name": "OpenAI",
+                    "provider_id": "openai",
+                    "base_url": "https://api.openai.com/v1",
+                    "api_key": "demo-openai-test-key",
+                    "auth_mode": "oauth",
+                    "oauth_provider": "openai_codex",
+                    "model": "gpt-5.4-mini",
+                }
+            ],
+        },
+        "bot": {},
+        "logging": {},
+        "agent": {},
+        "services": {},
+    }
+    oauth_payload = {
+        "success": True,
+        "providers": {
+            "openai_codex": {
+                "configured": True,
+                "detected": True,
+                "message": "cached local auth detected",
+            }
+        },
+        "supported_provider_ids": ["openai_codex"],
+        "refreshed_at": 1234567890,
+        "revision": 7,
+        "changed_provider_ids": ["openai_codex"],
+        "refreshing": True,
+        "message": "cached local auth detected",
+    }
+    captured = {}
+
+    def _fake_auth_summary(settings, *, provider_statuses=None):
+        captured["provider_statuses"] = provider_statuses
+        return {
+            "oauth_supported": True,
+            "oauth_ready": True,
+            "api_key_ready": True,
+            "auth_ready": True,
+            "oauth_status": {"configured": True},
+            "oauth_source": "openai_codex",
+            "oauth_bound": True,
+            "oauth_missing_fields": [],
+            "oauth_detected_local": True,
+            "oauth_experimental": False,
+            "oauth_requires_ack": False,
+            "oauth_experimental_ack": False,
+            "auth_status_summary": "ready",
+            "card_state": "active" if settings.get("_is_active") else "oauth_ready",
+            "card_rank": 0,
+            "card_group": "featured",
+        }
+
+    with (
+        patch.object(api_module.config_service, "get_snapshot", return_value=_build_snapshot(test_config)),
+        patch.object(api_module, "get_cached_oauth_provider_statuses", return_value=oauth_payload) as cached_mock,
+        patch.object(api_module, "get_preset_auth_summary", side_effect=_fake_auth_summary),
+        patch.object(
+            api_module,
+            "get_oauth_provider_statuses",
+            side_effect=AssertionError("live oauth scan should not run for /api/config"),
+        ),
+    ):
+        response = await client.get("/api/config")
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["oauth"] == oauth_payload
+    assert data["local_auth_sync"] == {
+        "refreshing": True,
+        "refreshed_at": 1234567890,
+        "revision": 7,
+        "changed_provider_ids": ["openai_codex"],
+        "message": "cached local auth detected",
+    }
+    assert captured["provider_statuses"] == oauth_payload["providers"]
+    cached_mock.assert_called_once_with()
 
 
 @pytest.mark.asyncio

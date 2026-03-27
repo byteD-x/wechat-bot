@@ -39,9 +39,13 @@ from tenacity import AsyncRetrying, stop_after_attempt, wait_exponential, retry_
 from .provider_compat import (
     build_anthropic_headers,
     build_anthropic_messages_payload,
+    build_anthropic_vertex_headers,
+    build_anthropic_vertex_messages_payload,
+    build_anthropic_vertex_request_url,
     infer_auth_transport,
     build_openai_chat_payload,
     build_openai_responses_payload,
+    normalize_anthropic_vertex_model,
     normalize_chat_result,
     normalize_provider_error,
 )
@@ -379,6 +383,13 @@ class AIClient:
         api_key = self._resolve_api_key()
         if self.auth_transport == "anthropic_native":
             return build_anthropic_headers(api_key=api_key, extra_headers=extra_headers)
+        if self.auth_transport == "anthropic_vertex":
+            return build_anthropic_vertex_headers(
+                api_key=api_key,
+                extra_headers=extra_headers,
+                project_id=str(self.transport_metadata.get("project_id") or "").strip(),
+                model=self.model,
+            )
         headers = {"Content-Type": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
@@ -390,6 +401,9 @@ class AIClient:
 
     def _is_google_code_assist_transport(self) -> bool:
         return self.auth_transport == "google_code_assist"
+
+    def _is_anthropic_vertex_transport(self) -> bool:
+        return self.auth_transport == "anthropic_vertex"
 
     def _serialize_messages_for_google(self, messages: Iterable[dict]) -> tuple[List[dict], str]:
         contents: List[dict] = []
@@ -626,6 +640,21 @@ class AIClient:
             stream=False,
         )
 
+    def _build_anthropic_vertex_payload(
+        self,
+        messages: Iterable[dict],
+        *,
+        max_completion_tokens: Optional[int] = None,
+    ) -> dict:
+        return build_anthropic_vertex_messages_payload(
+            model=self.model,
+            messages=messages,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+            max_completion_tokens=max_completion_tokens if max_completion_tokens is not None else self.max_completion_tokens,
+            stream=False,
+        )
+
     async def _request_anthropic_message(
         self,
         messages: Iterable[dict],
@@ -642,6 +671,29 @@ class AIClient:
             json=self._build_anthropic_payload(messages, max_completion_tokens=max_completion_tokens),
             timeout=timeout_sec or self.timeout_sec,
             refresh_reason="anthropic_message_401",
+        )
+        return response
+
+    async def _request_anthropic_vertex_message(
+        self,
+        messages: Iterable[dict],
+        *,
+        timeout_sec: Optional[float] = None,
+        max_completion_tokens: Optional[int] = None,
+    ):
+        payload = self._build_anthropic_vertex_payload(messages, max_completion_tokens=max_completion_tokens)
+        model_id = normalize_anthropic_vertex_model(self.model)
+        if not model_id:
+            raise RuntimeError("Claude Vertex transport could not resolve a usable model ID.")
+        url = build_anthropic_vertex_request_url(self.base_url, model_id)
+        client = self._get_http_client()
+        response = await self._request_with_auth_refresh(
+            client,
+            "post",
+            url,
+            json=payload,
+            timeout=timeout_sec or self.timeout_sec,
+            refresh_reason="anthropic_vertex_401",
         )
         return response
 
@@ -672,6 +724,26 @@ class AIClient:
                 return bool(normalized.text or normalized.reasoning or data.get("content"))
             except Exception as exc:
                 logging.warning("Anthropic probe failed: %s", exc)
+                return False
+        if self._is_anthropic_vertex_transport():
+            try:
+                resp = await self._request_anthropic_vertex_message(
+                    [{"role": "user", "content": "ping"}],
+                    timeout_sec=timeout_sec,
+                    max_completion_tokens=1,
+                )
+                if resp.status_code >= 400:
+                    logging.warning(
+                        "Claude Vertex probe failed (HTTP %s): %s",
+                        resp.status_code,
+                        resp.text[:200],
+                    )
+                    return False
+                data = resp.json()
+                normalized = normalize_chat_result(data)
+                return bool(normalized.text or normalized.reasoning or data.get("content"))
+            except Exception as exc:
+                logging.warning("Claude Vertex probe failed: %s", exc)
                 return False
         if self._is_openai_codex_responses_transport():
             try:
@@ -740,6 +812,9 @@ class AIClient:
         if self.auth_transport == "anthropic_native":
             ok = await self._probe_completion(timeout_sec=min(self.timeout_sec, FAST_PROBE_TIMEOUT_SEC))
             return ok, "messages"
+        if self._is_anthropic_vertex_transport():
+            ok = await self._probe_completion(timeout_sec=min(self.timeout_sec, FAST_PROBE_TIMEOUT_SEC))
+            return ok, "rawPredict"
         if self._is_openai_codex_responses_transport():
             ok = await self._probe_completion(timeout_sec=min(self.timeout_sec, FAST_PROBE_TIMEOUT_SEC))
             return ok, "responses"
@@ -825,6 +900,20 @@ class AIClient:
                                     data = await self._request_openai_codex_response(messages)
                                 elif self._is_google_code_assist_transport():
                                     data = await self._request_google_code_assist_response(messages)
+                                elif self._is_anthropic_vertex_transport():
+                                    resp = await self._request_anthropic_vertex_message(messages)
+                                    if resp.status_code >= 400:
+                                        normalized_error = normalize_provider_error(response=resp)
+                                        raise RuntimeError(normalized_error.message)
+                                    try:
+                                        data = resp.json()
+                                    except ValueError as exc:
+                                        normalized_error = normalize_provider_error(
+                                            exc=exc,
+                                            response=resp,
+                                            payload=resp.text[:200],
+                                        )
+                                        raise RuntimeError(normalized_error.message) from exc
                                 elif self.auth_transport == "anthropic_native":
                                     resp = await self._request_anthropic_message(messages)
                                     if resp.status_code >= 400:
@@ -932,7 +1021,7 @@ class AIClient:
         """获取文本 Embedding 向量"""
         # 请求去重
         # ... (可以使用类似 generate_reply 的去重逻辑，但 embedding 通常很快)
-        if self.auth_transport in {"anthropic_native", "openai_codex_responses", "google_code_assist"}:
+        if self.auth_transport in {"anthropic_native", "anthropic_vertex", "openai_codex_responses", "google_code_assist"}:
             logging.info("Embedding skipped: anthropic_native transport does not expose OpenAI-compatible embeddings.")
             return None
         if not self.embedding_model:

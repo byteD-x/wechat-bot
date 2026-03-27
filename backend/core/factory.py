@@ -415,9 +415,7 @@ async def select_ai_client(
 
     for candidate in candidates:
         preset_name = str(candidate.get("name") or "preset").strip() or "preset"
-        handled_variant = False
         for settings in _expand_provider_auth_runtime_variants(api_cfg, candidate):
-            handled_variant = True
             candidate_name = _describe_runtime_candidate(settings)
             try:
                 settings = _prepare_runtime_settings_candidate(settings, api_cfg, bot_cfg)
@@ -448,83 +446,6 @@ async def select_ai_client(
             logging.warning("\u9884\u8bbe %s \u4e0d\u53ef\u7528\uff0c\u5c1d\u8bd5\u4e0b\u4e00\u4e2a\u5019\u9009\u3002", candidate_name)
             if hasattr(client, "close"):
                 await client.close()
-        if handled_variant:
-            continue
-        settings = dict(settings)
-        auth_mode = str(settings.get("auth_mode") or "api_key").strip().lower() or "api_key"
-        api_key = settings.get("api_key")
-        if api_key is None:
-            api_key = ""
-        else:
-            api_key = str(api_key).strip()
-        settings = hydrate_runtime_settings(settings)
-        api_key = settings.get("api_key")
-        if api_key is None:
-            api_key = ""
-        else:
-            api_key = str(api_key).strip()
-        allow_empty_key = bool(settings.get("allow_empty_key", False))
-        base_url = str(settings.get("base_url") or "").strip()
-        model = str(settings.get("model") or "").strip()
-
-        if auth_mode != "oauth" and (not base_url or not model):
-            reason = f"预设 {name} 缺少 base_url 或 model"
-            _set_last_ai_client_error(reason)
-            logging.warning("跳过预设 %s：缺少 base_url 或 model", name)
-            continue
-        if auth_mode != "oauth" and is_placeholder_key(api_key) and not allow_empty_key:
-            reason = f"预设 {name} 的 api_key 未配置或为占位符"
-            _set_last_ai_client_error(reason)
-            logging.warning("跳过预设 %s：api_key 未配置或为占位符", name)
-            continue
-
-        settings = dict(settings)
-        settings["base_url"] = base_url
-        settings["model"] = model
-        settings["api_key"] = api_key
-        settings["embedding_model"] = _resolve_embedding_model(settings, api_cfg, bot_cfg)
-        # 传递 embedding_model
-        if "embedding_model" not in settings:
-            settings["embedding_model"] = str(api_cfg.get("embedding_model") or "")
-        try:
-            settings = resolve_oauth_settings(settings).settings
-        except OAuthSupportError as exc:
-            reason = f"预设 {name} OAuth 不可用：{exc}"
-            _set_last_ai_client_error(reason)
-            logging.warning("跳过预设 %s：OAuth 不可用：%s", name, exc)
-            continue
-
-        base_url = str(settings.get("base_url") or "").strip()
-        model = str(settings.get("model") or "").strip()
-        if not base_url or not model:
-            reason = f"预设 {name} 在认证解析后仍缺少 base_url 或 model"
-            _set_last_ai_client_error(reason)
-            logging.warning("跳过预设 %s：认证解析后仍缺少 base_url 或 model", name)
-            continue
-        settings["base_url"] = base_url
-        settings["model"] = model
-
-        candidate_issue = _validate_ollama_candidate(settings)
-        if candidate_issue:
-            _set_last_ai_client_error(candidate_issue)
-            logging.warning("跳过预设 %s：%s", name, candidate_issue)
-            continue
-
-        runtime_enabled = True if agent_cfg is None else bool(agent_cfg.get("enabled", True))
-        client = (
-            build_agent_runtime(settings, bot_cfg, agent_cfg)
-            if runtime_enabled
-            else build_ai_client(settings, bot_cfg)
-        )
-        logging.info("正在探测预设：%s", name)
-        if await client.probe():
-            _set_last_ai_client_error("")
-            logging.info("已选择预设：%s", name)
-            return client, name
-        _set_last_ai_client_error(f"预设 {name} 探测失败")
-        logging.warning("预设 %s 不可用，尝试下一个...", name)
-        if hasattr(client, "close"):
-            await client.close()
 
     if not get_last_ai_client_error():
         _set_last_ai_client_error("没有可用的预设，请检查 API 配置")
@@ -551,108 +472,8 @@ async def select_specific_ai_client(
     settings = next((p for p in presets if isinstance(p, dict) and p.get("name") == wanted), None)
     if isinstance(settings, dict):
         return await _select_specific_candidate_variants(api_cfg, bot_cfg, settings, wanted, agent_cfg)
-    if not isinstance(settings, dict):
-        _set_last_ai_client_error(f"指定预设不存在：{wanted}")
-        logging.error("指定预设不存在：%s", wanted)
-        return None, None
-
-    base_url = str(settings.get("base_url") or "").strip()
-    model = str(settings.get("model") or "").strip()
-    auth_mode = str(settings.get("auth_mode") or "api_key").strip().lower() or "api_key"
-    api_key = settings.get("api_key")
-    if api_key is None:
-        api_key = ""
-    else:
-        api_key = str(api_key).strip()
-    allow_empty_key = bool(settings.get("allow_empty_key", False))
-
-    if auth_mode != "oauth" and (not base_url or not model):
-        _set_last_ai_client_error(f"指定预设 {wanted} 缺少 base_url 或 model")
-        logging.error("指定预设 %s 缺少 base_url 或 model", wanted)
-        return None, None
-    if auth_mode != "oauth" and is_placeholder_key(api_key) and not allow_empty_key:
-        _set_last_ai_client_error(f"指定预设 {wanted} 的 api_key 未配置或为占位符")
-        logging.error("指定预设 %s 的 api_key 未配置或为占位符", wanted)
-        return None, None
-
-    settings = dict(settings)
-    settings["base_url"] = base_url
-    settings["model"] = model
-    settings["api_key"] = api_key
-    settings["embedding_model"] = _resolve_embedding_model(settings, api_cfg, bot_cfg)
-    if "embedding_model" not in settings:
-        settings["embedding_model"] = str(api_cfg.get("embedding_model") or "")
-    try:
-        settings = resolve_oauth_settings(settings).settings
-    except OAuthSupportError as exc:
-        _set_last_ai_client_error(f"指定预设 {wanted} OAuth 不可用：{exc}")
-        logging.error("指定预设 %s OAuth 不可用：%s", wanted, exc)
-        return None, None
-
-    for variant in _expand_provider_auth_runtime_variants(api_cfg, settings):
-        candidate_name = _describe_runtime_candidate(variant)
-        try:
-            variant = _prepare_runtime_settings_candidate(variant, api_cfg, bot_cfg)
-        except ValueError as exc:
-            _set_last_ai_client_error(str(exc))
-            logging.error("\u6307\u5b9a\u9884\u8bbe %s \u4e0d\u53ef\u7528\uff1a%s", candidate_name, exc)
-            continue
-        try:
-            client = _build_runtime_client_for_settings(variant, bot_cfg, agent_cfg)
-        except Exception as exc:
-            reason = f"\u6307\u5b9a\u9884\u8bbe {candidate_name} \u521d\u59cb\u5316\u5931\u8d25\uff1a{exc}"
-            _set_last_ai_client_error(reason)
-            logging.error("\u6307\u5b9a\u9884\u8bbe %s \u521d\u59cb\u5316\u5931\u8d25\uff1a%s", candidate_name, exc)
-            continue
-        logging.info("\u6b63\u5728\u4e25\u683c\u63a2\u6d4b\u6307\u5b9a\u9884\u8bbe\uff1a%s", candidate_name)
-        probe_ok = False
-        try:
-            probe_ok = bool(await client.probe())
-        except Exception as exc:
-            reason = f"\u6307\u5b9a\u9884\u8bbe {candidate_name} \u63a2\u6d4b\u5f02\u5e38\uff1a{exc}"
-            _set_last_ai_client_error(reason)
-            logging.error("\u6307\u5b9a\u9884\u8bbe %s \u63a2\u6d4b\u5f02\u5e38\uff1a%s", candidate_name, exc)
-        if probe_ok:
-            _set_last_ai_client_error("")
-            logging.info("\u5df2\u9009\u62e9\u6307\u5b9a\u9884\u8bbe\uff1a%s", candidate_name)
-            return client, wanted
-        _set_last_ai_client_error(f"\u6307\u5b9a\u9884\u8bbe {candidate_name} \u63a2\u6d4b\u5931\u8d25")
-        logging.error("\u6307\u5b9a\u9884\u8bbe\u4e0d\u53ef\u7528\uff1a%s", candidate_name)
-        if hasattr(client, "close"):
-            await client.close()
-    return None, None
-
-    base_url = str(settings.get("base_url") or "").strip()
-    model = str(settings.get("model") or "").strip()
-    if not base_url or not model:
-        _set_last_ai_client_error(f"指定预设 {wanted} 在认证解析后仍缺少 base_url 或 model")
-        logging.error("指定预设 %s 在认证解析后仍缺少 base_url 或 model", wanted)
-        return None, None
-    settings["base_url"] = base_url
-    settings["model"] = model
-
-    candidate_issue = _validate_ollama_candidate(settings)
-    if candidate_issue:
-        _set_last_ai_client_error(candidate_issue)
-        logging.error("指定预设 %s 不可用：%s", wanted, candidate_issue)
-        return None, None
-
-    runtime_enabled = True if agent_cfg is None else bool(agent_cfg.get("enabled", True))
-    client = (
-        build_agent_runtime(settings, bot_cfg, agent_cfg)
-        if runtime_enabled
-        else build_ai_client(settings, bot_cfg)
-    )
-    logging.info("正在严格探测指定预设：%s", wanted)
-    if await client.probe():
-        _set_last_ai_client_error("")
-        logging.info("已选择指定预设：%s", wanted)
-        return client, wanted
-
-    _set_last_ai_client_error(f"指定预设 {wanted} 探测失败")
-    logging.error("指定预设不可用：%s", wanted)
-    if hasattr(client, "close"):
-        await client.close()
+    _set_last_ai_client_error(f"指定预设不存在：{wanted}")
+    logging.error("指定预设不存在：%s", wanted)
     return None, None
 
 

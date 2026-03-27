@@ -290,6 +290,43 @@ async def test_ai_client_anthropic_probe_fast_uses_messages_mode(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_ai_client_anthropic_vertex_uses_raw_predict_and_bearer_headers(monkeypatch):
+    observed = []
+    payload = {
+        "type": "message",
+        "content": [{"type": "text", "text": "vertex ok"}],
+        "stop_reason": "end_turn",
+    }
+    client = AIClient(
+        base_url="https://global-aiplatform.googleapis.com/v1/projects/demo/locations/global/publishers/anthropic/models",
+        api_key="ya29.vertex-token",
+        auth_transport="anthropic_vertex",
+        transport_metadata={"project_id": "demo"},
+        model="claude-sonnet-4-0",
+        max_retries=0,
+    )
+
+    class _VertexHttpClient:
+        async def post(self, url, headers=None, json=None, timeout=None):
+            observed.append({"url": url, "headers": headers, "json": json, "timeout": timeout})
+            return _FakeResp(payload)
+
+    monkeypatch.setattr(client, "_get_http_client", lambda: _VertexHttpClient())
+
+    reply = await client.generate_reply("friend:alice", "hello vertex")
+    ok, mode = await client.probe_fast()
+
+    assert reply == "vertex ok"
+    assert ok is True
+    assert mode == "rawPredict"
+    assert observed[0]["url"].endswith("/claude-sonnet-4@20250514:rawPredict")
+    assert observed[0]["headers"]["Authorization"] == "Bearer ya29.vertex-token"
+    assert observed[0]["headers"]["X-Goog-User-Project"] == "demo"
+    assert observed[0]["json"]["anthropic_version"] == "vertex-2023-10-16"
+    assert "model" not in observed[0]["json"]
+
+
+@pytest.mark.asyncio
 async def test_ai_client_codex_oauth_generate_reply_uses_responses_transport(monkeypatch):
     observed = {}
     client = AIClient(

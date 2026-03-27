@@ -127,6 +127,8 @@
 - 每个 Provider 现在可以并存 `api_key / oauth / local_import / web_session` 多种认证方式，模型中心会统一管理自动优先级与手动指定规则：只配置 `API Key` 能完整运行，只配置 `OAuth / 本机同步` 也能完整运行，同时配置时默认优先 `OAuth / 本机同步`，当前认证不可用时自动回退到同一 Provider 下另一种可用认证。
 - 模型卡片不再静态硬编码，而是由增强后的 model catalog 驱动，并按 `当前激活 -> 认证可用 -> 检测到本机登录但未绑定 -> 未配置` 排序；卡片状态明确区分 `当前生效 / OAuth 可用 / API Key 可用 / 待授权 / 实验能力`。
 - `OpenAI / Codex / ChatGPT` 与 `Google / Gemini / Gemini CLI` 已补齐纯 OAuth / 本机同步直连对话链路，不再要求用户额外补一个 `API Key` 才能开始对话。
+- 这轮继续把 `Kimi / Kimi Code` 与 `GLM / 智谱` 从“预留扩展位”推进到可直接配置的 Coding Plan 路径：`Kimi` 新增独立 `Kimi Coding Plan API Key`，`GLM` 新增独立 `GLM Coding Plan API Key`，并保留原有通用 API Key。
+- 这轮又补了 `MiniMax Token Plan`：仍走现有 OpenAI-compatible 对话链路，但会把订阅型 Token Plan Key 与通用 API Key 分开建模，并兼容 `api.minimax.io / api.minimaxi.com` 两套地区入口。
 - 对支持本机授权复用的 Provider，项目不把本地认证源复制成长期真源，而是运行时按需读取本地标准授权位置或本地凭据缓存；因此本机认证变化后，项目内的实际认证也会跟着变化。
 - 模型中心新增后台本机认证同步器，已支持“路径级 watcher + polling fallback”，负责缓存最近一次本机授权快照、变更指纹和手动强刷结果。
 - 这轮继续补齐了 `Claude / Claude Code` 与 `Kimi / Kimi Code` 的真实本地发现器，以及 `Doubao / Yuanbao` 的浏览器 Cookie / Session 本地探测通路。
@@ -138,17 +140,29 @@
 - 未配置时右侧直接给三步向导：`选择模型 -> 选择认证方式 -> 设为回复模型`；已配置后自动切换到紧凑工作台，3 次点击内就能完成换模型或换认证。
 - 模型切换也改成了傻瓜式：在 `改模型` 弹窗里既能保存默认模型，也能一键 `保存并用于回复`；当前活跃 Provider 则直接显示 `切换当前模型`。
 - 认证配置不再把 API Key、OAuth、会话导入、本机同步全部平铺在页面里，而是统一收敛到工作流弹窗；首次触发时再按认证方式展示一次极简说明。
+- `Google / Gemini / Gemini CLI` 这条链路又往前推进了一步：模型中心工作流现在可以直接填写 `项目 ID`，而且当本机 `Gemini CLI` 已检测到 `project_id` 时，运行时会自动复用，不再要求用户去高级设置里手工补一遍。
+- 浏览器授权收口也补平了一个真实问题：对 `OpenAI / Codex / ChatGPT` 与 `Google / Gemini / Gemini CLI` 这类最终靠本机凭据落盘完成的路径，模型中心在“继续完成授权”时会直接走本机重扫，不再错误地把它们当成必须提交标准 callback 的 OAuth。
+- 同样的收口规则现在也覆盖 `Claude Code OAuth`：浏览器登录完成后不会再强行要求标准 callback，而是直接回到本机凭据探测与跟随链路。
 - 模型页主按钮、状态词和操作入口统一改成中文，重复说明和低频元信息折叠收纳，让非技术用户也能靠直觉完成配置。
 - 最新补丁又把一条易用性短板补齐了：工作台里已配置的 `API Key` 也能直接重设，`Doubao / Yuanbao` 这类 `web_session` 方法的 `去登录` 会直接打开网页登录页，而不是把用户带进错误弹窗。
 
 Provider 分层策略也更清晰：
 
-- 已接入核心能力：`OpenAI / Codex / ChatGPT`、`Google / Gemini / Gemini CLI`、`Qwen / DashScope / Qwen Code`、`Doubao / 火山方舟 / TRAE`、`Yuanbao / 元宝`
-- 扩展预留：`Claude / Claude Code`、`Kimi / Moonshot / Kimi Code`、`GLM / 智谱`、`MiniMax`、`DeepSeek`
+- 已接入核心能力：`OpenAI / Codex / ChatGPT`、`Google / Gemini / Gemini CLI`、`Qwen / DashScope / Qwen Code`、`Claude / Claude Code`、`Kimi / Moonshot / Kimi Code`、`GLM / 智谱`、`MiniMax`、`Doubao / 火山方舟 / TRAE`、`Yuanbao / 元宝`
+- 扩展预留：`DeepSeek`
 - `Qwen` 的 `DashScope API Key` 与 `Coding Plan API Key` 现在是同一 Provider 下的两条独立认证方法，卡片会分别展示推荐模型、入口和能力说明
+- `百炼 / DashScope / bailian` 这类外部配置或导入预设现在会统一规范成 `qwen`；`https://coding.dashscope.aliyuncs.com/v1` 上的 `MiniMax / GLM / Kimi` 模型不会再被模型名误判到其他 Provider
+- `Claude / Claude Code` 现在已经补齐独立 `Claude Code OAuth` 与 `Claude Code 本机登录` 两个入口，浏览器登录和本机凭据跟随不再混在一张方法卡里
+- `Kimi / Kimi Code` 现在已经补齐独立 `Kimi Coding Plan API Key`，并把 `kimi-for-coding` 作为 Coding 场景默认模型
+- `GLM / 智谱` 现在已经补齐独立 `GLM Coding Plan API Key`，并支持通过 `https://open.bigmodel.cn/api/coding/paas/v4` 自动识别 Coding Plan Provider
+- `MiniMax` 现在已经补齐独立 `Token Plan API Key`，并支持通过 `https://api.minimax.io/v1`、`https://api.minimaxi.com/v1` 以及 Anthropic-compatible 的 `/anthropic` 端点自动识别 Provider
 - `Doubao / Yuanbao` 的网页登录当前按 `web_session` 建模，不伪装成标准 OAuth
+- 模型中心工作流现在会在首次配置 `Qwen OAuth / 百炼 Coding Plan`、`Kimi Code`、`GLM Coding Plan`、`MiniMax Token Plan` 这类专用认证时，先显示并自动落到 method 级推荐的 `base_url / model`，把“认证方式”和“实际对话端点”收成同一条闭环
+- 遗留 preset 保存链路也开始复用同一份 method metadata：即使历史入口仍只区分 `api_key / oauth`，保存时也会补齐更接近真实运行时的 `base_url / model / oauth_provider`
 - `Claude / Claude Code` 现在会探测 `~/.claude.json` / `~/.claude/settings.json` / `~/.claude/.credentials.json` / `C:/ProgramData/ClaudeCode/managed-settings.json`，并在本地存在 `apiKeyHelper` 或 Claude API credential cache 时直接进入 `anthropic_native` 运行时；`Kimi / Kimi Code` 现在会探测 `~/.kimi/config.toml` / `~/.kimi/credentials/*.json`
 - `Claude / Claude Code` 进入 `anthropic_native` 运行时后，如果 helper 或本地 credential cache 已在后台轮换，首次 `401` 会先强制刷新一次本地认证并自动重试，降低短暂失配带来的失败率
+- `Claude / Claude Code` 这轮继续补齐了 `Claude Vertex AI 本机认证`：模型中心可直接复用 `gcloud` ADC / 服务账号，运行时走 Vertex AI 的 `rawPredict` 链路，而不是只停留在 auth method 占位
+- `Claude on Vertex AI` 会自动把常见的 Anthropic 风格模型 ID 映射成 Vertex API 模型 ID，并兼容用户把 base URL 配到 `/models` 根路径或具体模型 endpoint；`Bedrock` 仍保持未实现状态
 - `Doubao / Yuanbao` 现在会优先探测本机浏览器 Cookie 数据库、`IndexedDB / Local Storage`、桌面私有存储或显式导出 Session 文件，并通过 `web_session + follow mode` 接入统一状态机
 - 模型中心现在还会把 `system_keychain` 纳入补充发现信号，并把 `keychain_provider / keychain_targets` 一并带进 Provider 状态卡片
 - `Kimi / Kimi Code` 的本机认证已经开始进入真实运行时链路：优先跟随 `~/.kimi/config.toml` 的本地 provider 配置，必要时再回退到 `~/.kimi/credentials/*.json`，同时方法级默认 `base_url / model` 会跟着切到 Kimi Coding endpoint

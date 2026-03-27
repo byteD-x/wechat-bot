@@ -42,6 +42,7 @@
 ## Features
 
 - `Model Auth Center`: 独立模型与认证中心，统一管理 `api_key / oauth / local_import / web_session`。只配置 `API Key` 或只配置 `OAuth / 本机同步` 都可以直接对话并使用完整功能；同时配置时默认优先 `OAuth / 本机同步`，也支持手动切换，当前认证不可用时会自动回退到同一服务商下的另一种可用认证。
+- `Coding Plan Coverage`: 模型中心已补齐多条 Coding Plan 入口，当前可直接区分并配置 `Qwen / 百炼`、`Kimi Code`、`GLM Coding Plan`、`MiniMax Token Plan` 等订阅型 API Key，避免和同服务商的通用 API Key 混用。
 
 - `Multi-provider`: 支持 OpenAI、DeepSeek、Qwen、Doubao、Ollama、OpenRouter、Groq 等 OpenAI-compatible 接口。
 - `LangGraph Runtime`: 用 LangChain/LangGraph 编排对话快路径；同步链只保留短期上下文和轻量画像注入，RAG、情绪、事实等高级能力统一后移到后台成长流水线。
@@ -140,6 +141,15 @@ npm run dev
 补充说明：
 - 使用 `Ollama` 时可以不填写 `API Key`，聊天模型与 embedding 模型可以分别配置。
 - `OpenAI / Codex / ChatGPT` 与 `Google / Gemini / Gemini CLI` 已补齐纯 OAuth / 本机同步直连对话链路，不需要再额外补一个 `API Key` 才能开始对话。
+- `Kimi / Moonshot / Kimi Code` 现在会把 `Moonshot API Key` 与 `Kimi Coding Plan API Key` 分开展示，并默认推荐 `kimi-for-coding`。
+- `GLM / 智谱` 现在会把通用 `API Key` 与 `GLM Coding Plan API Key` 分开展示；当 `base_url` 指向 `https://open.bigmodel.cn/api/coding/paas/v4` 时会自动识别为智谱 Coding Plan。
+- `MiniMax` 现在会把通用 `API Key` 与 `Token Plan API Key` 分开展示；国际区与中国区入口都支持，`https://api.minimaxi.com/v1` 以及 Anthropic-compatible 的 `/anthropic` 端点都会自动识别为 MiniMax。
+- `百炼 / DashScope / bailian` 现在会统一归并到 `Qwen` Provider；即使在 `https://coding.dashscope.aliyuncs.com/v1` 上选择的是 `MiniMax / GLM / Kimi` 模型，仍会按百炼 Coding Plan 路径处理，不会被模型名误判到别的 Provider。
+- 模型中心在首次配置 `Qwen OAuth / 百炼 Coding Plan`、`Kimi Code`、`GLM Coding Plan`、`MiniMax Token Plan` 这类专用方法时，会先预览并自动落到该方法推荐的 `base_url / model`，避免把 OAuth 或 Coding Plan 认证误投到通用对话端点。
+- 遗留设置页里的 preset 序列化现在也会复用同一份 method metadata：旧配置即使仍按 `api_key / oauth` 保存，也会尽量写入对应 coding / OAuth runtime 的 `base_url / model / oauth_provider`，便于继续投影到真实对话链路。
+- `Google / Gemini / Gemini CLI` 现在会在模型中心工作流里直接收集 `项目 ID`；如果本机 `Gemini CLI` 已经检测到可复用的 `project_id`，运行时会自动复用，不需要再手动补填一次。
+- 对 `OpenAI / Codex / ChatGPT` 与 `Google / Gemini / Gemini CLI` 这类“浏览器打开后最终由本机凭据落盘完成”的方法，模型中心会在“继续完成授权”时优先走本机重扫，不会误要求用户补标准 OAuth callback。
+- `Claude / Claude Code` 现在也有显式 `Claude Code OAuth` 方法；它和本机跟随共享同一组本地凭据探测与本机重扫收口，但实际进入 Anthropic 对话运行时仍要求 `apiKeyHelper` 或可复用的本机 API 凭据缓存。
 - 向量记忆 / RAG 现在有独立总开关；首次开启时会提示本地存储、资源占用和潜在调用成本。
 - 如需给向量记忆单独指定 embedding，可在“设置”页填写单独模型，或在预设里填写默认 embedding 模型；`Ollama` 可使用如 `nomic-embed-text` 之类的本地 embedding 模型。
 - “系统提示”现在拆成“自定义系统提示词”与“固定注入块（只读）”；历史对话、用户画像、情绪/时间/风格等系统注入内容不会再暴露给设置页直接改写。
@@ -319,7 +329,9 @@ Windows 正式发布现在默认只生成两种产物：
 - 下载完成后可在应用内直接执行“立即安装并重启”；安装流程会使用最新 `setup.exe` 覆盖升级现有安装目录
 - `portable.exe` 仍保留手动更新模式，需前往 GitHub Releases 下载新版安装包
 - 正式 Release 通过 GitHub Actions 构建并上传，不再建议在本地直接上传大文件
-- 每次 Release 的更新说明会自动基于“上一个正式 tag 到当前 tag”的 commit 区间生成
+- 每次 Release 都必须提供 `docs/release_notes/<tag>.md`，并按 `Features / Improvements / Fixes / Performance / Breaking Changes` 的固定顺序编写；无内容分类直接省略
+- Release 正文只写本次已发布且对外可感知的变化，默认面向普通用户描述，不再使用 commit/PR 风格流水账
+- Release tag 必须使用 `vX.Y.Z`，`package.json` 版本号必须使用 `X.Y.Z`，且两者保持一致
 
 本地仅构建产物：
 
@@ -436,12 +448,19 @@ POST /api/growth/tasks/<task_type>/clear
   - `POST /api/model_auth/action`
   - 旧的 `/api/auth/providers/*` 只剩兼容壳层，不再由设置页、旧预设 modal 或模型页主流程直接调用；前端统一走模型中心接口
 - 当前 Provider 策略：
-  - 已接入核心能力：`OpenAI / Codex / ChatGPT`、`Google / Gemini / Gemini CLI`、`Qwen / DashScope / Qwen Code`、`Doubao / 火山方舟 / TRAE`、`Yuanbao / 元宝`
-  - 扩展预留：`Claude / Claude Code`、`Kimi / Moonshot / Kimi Code`、`GLM / 智谱`、`MiniMax`、`DeepSeek`
+  - 已接入核心能力：`OpenAI / Codex / ChatGPT`、`Google / Gemini / Gemini CLI`、`Qwen / DashScope / Qwen Code`、`Claude / Claude Code`、`Kimi / Moonshot / Kimi Code`、`GLM / 智谱`、`MiniMax`、`Doubao / 火山方舟 / TRAE`、`Yuanbao / 元宝`
+  - 扩展预留：`DeepSeek`
   - `Qwen` 现在会把 `DashScope API Key` 与 `Coding Plan API Key` 拆成两条独立认证方法，而不是继续共用一张泛化 API Key 表单
+  - `bailian / dashscope` 这类外部配置里的 Provider ID 现在会自动规范成 `qwen`，百炼 Coding Plan 上承载的 `MiniMax / GLM / Kimi` 模型也会继续落在同一条百炼配置链路
+  - `Claude / Claude Code` 现已补齐独立 `Claude Code OAuth` 与 `Claude Code 本机登录` 双入口，允许把浏览器登录和本机凭据跟随分开配置
+  - `Kimi / Kimi Code` 现已补齐独立 `Kimi Coding Plan API Key`，并把 `kimi-for-coding` 作为 Coding 场景默认模型
+  - `GLM / 智谱` 现已补齐独立 `GLM Coding Plan API Key`，并支持按 Coding Plan base URL 自动识别 Provider
+  - `MiniMax` 现已补齐独立 `Token Plan API Key`，并支持按地区识别 `api.minimax.io / api.minimaxi.com`
   - `Doubao / Yuanbao` 的网页登录当前按 `web_session` 建模，不伪装成标准 OAuth
 - `Claude / Claude Code` 当前已接入 `~/.claude.json` / `~/.claude/settings.json` / `~/.claude/.credentials.json` / `C:/ProgramData/ClaudeCode/managed-settings.json` 的本地发现；当本地存在 `apiKeyHelper` 或可复用的 Claude API 凭据缓存时，会直接走 `anthropic_native` 运行时链路。`Kimi / Kimi Code` 已接入 `~/.kimi/config.toml` / `~/.kimi/credentials/*.json` 的本地发现。
 - `Claude / Claude Code` 的 helper / 本地 credential cache 进入运行时后，如果首次调用命中 `401`，当前会先强制刷新一次本地认证再自动重试，减少本地凭据刚轮换时的瞬时失败。
+- `Claude / Claude Code` 现在新增 `Claude Vertex AI 本机认证`：会复用 `gcloud` 的 `application_default_credentials.json` 或 `GOOGLE_APPLICATION_CREDENTIALS`，运行时直接走 Vertex AI 的 `publishers/anthropic/models/{model}:rawPredict` 链路，不再只停留在文档占位。
+- 对 `Claude on Vertex AI`，项目会把 `claude-sonnet-4-0`、`claude-opus-4-1`、`claude-3-7-sonnet-latest` 这类 Anthropic 风格模型 ID 自动映射成 Vertex API 模型 ID；当前仍未实现 `Claude Bedrock` 的 SigV4 / Converse 运行时。
 - `Doubao / Yuanbao` 当前会优先尝试检测本机浏览器 Cookie 数据库、`IndexedDB / Local Storage`、桌面私有存储或显式导出 Session 文件，再提示用户绑定或导入。
 - 模型中心现在也会把 `system_keychain` 作为补充发现信号接入统一状态机；当前主要用于 Windows Credential Manager target 发现与跟随提示，不代表已经开放稳定运行时消费。
 - 对支持本机授权复用的 Provider，项目不会把本地认证源复制为长期真源；运行时会按需读取本地标准授权位置或本地凭据缓存，因此本机认证变化后，项目中的实际认证也会跟着变化。

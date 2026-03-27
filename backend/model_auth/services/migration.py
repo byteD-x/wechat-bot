@@ -4,21 +4,45 @@ import re
 import time
 from copy import deepcopy
 from typing import Any, Dict, Iterable, Optional
+from urllib.parse import urlsplit, urlunsplit
 
 from backend.model_catalog import infer_provider_id, merge_provider_defaults
+from backend.core.oauth_support import get_preset_auth_summary
 from backend.utils.config import is_placeholder_key
 
 from ..domain.enums import AuthMethodType, CredentialSource, SyncPolicy
 from ..providers.registry import (
+    get_method_required_fields,
     get_method_auth_provider_id,
     get_provider_definition,
     get_provider_method,
+    get_provider_required_fields,
     list_provider_definitions,
 )
 from ..storage.credential_store import CredentialStore, get_credential_store
 
 CENTER_VERSION = 1
 _PROFILE_SLUG_RE = re.compile(r"[^a-z0-9]+")
+_RUNTIME_ENDPOINT_SUFFIXES = (
+    "/chat/completions",
+    "/codex/responses",
+    "/responses",
+    "/messages",
+    "/embeddings",
+)
+_LEGACY_REQUIRED_FIELDS = (
+    "oauth_project_id",
+    "oauth_location",
+)
+_RUNTIME_REQUIRED_FIELD_LABELS = {
+    "oauth_project_id": "项目 ID",
+    "oauth_location": "地区",
+}
+_PROVIDER_ID_ALIASES = {
+    "bailian": "qwen",
+    "dashscope": "qwen",
+    "moonshot": "kimi",
+}
 
 
 def _slugify(value: Any, *, fallback: str) -> str:
@@ -27,11 +51,19 @@ def _slugify(value: Any, *, fallback: str) -> str:
     return lowered or fallback
 
 
+def _canonicalize_provider_id(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return ""
+    return _PROVIDER_ID_ALIASES.get(normalized, normalized)
+
+
 def _now() -> int:
     return int(time.time())
 
 
 def _default_provider_entry(provider_id: str) -> Dict[str, Any]:
+    provider_id = _canonicalize_provider_id(provider_id)
     definition = get_provider_definition(provider_id)
     label = definition.label if definition else provider_id
     return {
@@ -159,7 +191,7 @@ def _normalize_binding(binding: Dict[str, Any] | None) -> Dict[str, Any]:
 def _normalize_profile(profile: Dict[str, Any]) -> Dict[str, Any]:
     normalized = dict(profile or {})
     normalized["id"] = str(normalized.get("id") or "").strip()
-    normalized["provider_id"] = str(normalized.get("provider_id") or "").strip().lower()
+    normalized["provider_id"] = _canonicalize_provider_id(normalized.get("provider_id"))
     normalized["method_id"] = str(normalized.get("method_id") or "").strip().lower()
     method_type = str(normalized.get("method_type") or AuthMethodType.API_KEY.value).strip().lower()
     if method_type not in {item.value for item in AuthMethodType}:
@@ -176,31 +208,48 @@ def _normalize_profile(profile: Dict[str, Any]) -> Dict[str, Any]:
 def _provider_map(center_payload: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     raw = center_payload.get("providers")
     if isinstance(raw, dict):
-        items = raw.items()
+        items = list(raw.items())
     elif isinstance(raw, list):
-        items = ((item.get("provider_id"), item) for item in raw if isinstance(item, dict))
+        items = [(item.get("provider_id"), item) for item in raw if isinstance(item, dict)]
     else:
-        items = ()
+        items = []
+    normalized_items = []
+    for index, (provider_id, value) in enumerate(items):
+        original_key = str(
+            provider_id or (value.get("provider_id") if isinstance(value, dict) else "")
+        ).strip().lower()
+        normalized_items.append((index, original_key, _canonicalize_provider_id(original_key), value))
     providers: Dict[str, Dict[str, Any]] = {}
-    for provider_id, value in items:
-        key = str(provider_id or "").strip().lower()
+    for _, original_key, key, value in sorted(
+        normalized_items,
+        key=lambda item: (item[1] == item[2], item[0]),
+    ):
         if not key or not isinstance(value, dict):
             continue
-        entry = _default_provider_entry(key)
+        entry = deepcopy(providers.get(key) or _default_provider_entry(key))
         entry.update({k: deepcopy(v) for k, v in value.items() if k != "auth_profiles"})
         entry["provider_id"] = key
-        entry["auth_profiles"] = [
-            _normalize_profile(item)
-            for item in value.get("auth_profiles") or []
-            if isinstance(item, dict)
-        ]
+        merged_profiles = {
+            str(item.get("id") or "").strip(): dict(item)
+            for item in entry.get("auth_profiles") or []
+            if isinstance(item, dict) and str(item.get("id") or "").strip()
+        }
+        for item in value.get("auth_profiles") or []:
+            if not isinstance(item, dict):
+                continue
+            normalized_profile = _normalize_profile(item)
+            profile_id = str(normalized_profile.get("id") or "").strip()
+            if profile_id:
+                merged_profiles[profile_id] = normalized_profile
+        entry["auth_profiles"] = list(merged_profiles.values())
         entry["metadata"] = dict(entry.get("metadata") or {})
         entry["metadata"].setdefault("project_to_runtime", bool(entry["auth_profiles"]))
         entry["metadata"]["selection_mode"] = _normalize_selection_mode(entry["metadata"].get("selection_mode"))
         _reconcile_selected_profile(entry)
         providers[key] = entry
     for definition in list_provider_definitions():
-        providers.setdefault(definition.id, _default_provider_entry(definition.id))
+        canonical_id = _canonicalize_provider_id(definition.id)
+        providers.setdefault(canonical_id, _default_provider_entry(canonical_id))
     return providers
 
 
@@ -218,18 +267,115 @@ def _resolve_oauth_method_id(provider_id: str, oauth_provider: Any) -> str:
     return ""
 
 
+def _resolve_provider_id_from_auth_provider(auth_provider_id: Any) -> str:
+    wanted = str(auth_provider_id or "").strip()
+    if not wanted:
+        return ""
+    matched_provider_ids: set[str] = set()
+    for definition in list_provider_definitions():
+        for method in definition.auth_methods:
+            if get_method_auth_provider_id(method) == wanted:
+                matched_provider_ids.add(_canonicalize_provider_id(definition.id))
+                break
+    if len(matched_provider_ids) == 1:
+        return next(iter(matched_provider_ids))
+    return ""
+
+
+def _normalize_runtime_base_url(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        parsed = urlsplit(raw)
+    except Exception:
+        parsed = None
+    if parsed and parsed.scheme and parsed.netloc:
+        path = str(parsed.path or "").rstrip("/")
+        lowered_path = path.lower()
+        for suffix in _RUNTIME_ENDPOINT_SUFFIXES:
+            if lowered_path.endswith(suffix):
+                path = path[: -len(suffix)].rstrip("/")
+                break
+        normalized = urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
+        return normalized.rstrip("/")
+
+    normalized = raw.rstrip("/")
+    lowered = normalized.lower()
+    for suffix in _RUNTIME_ENDPOINT_SUFFIXES:
+        if lowered.endswith(suffix):
+            return normalized[: -len(suffix)].rstrip("/")
+    return normalized
+
+
+def _runtime_metadata_field_names(
+    provider_id: Any,
+    method: Any = None,
+) -> tuple[str, ...]:
+    names: list[str] = []
+    seen: set[str] = set()
+    for field_name in _LEGACY_REQUIRED_FIELDS:
+        if field_name not in seen:
+            seen.add(field_name)
+            names.append(field_name)
+    for field_name in get_provider_required_fields(_canonicalize_provider_id(provider_id)):
+        if field_name not in seen:
+            seen.add(field_name)
+            names.append(field_name)
+    for field_name in get_method_required_fields(method):
+        if field_name not in seen:
+            seen.add(field_name)
+            names.append(field_name)
+    return tuple(names)
+
+
+def _collect_runtime_metadata_values(
+    entry: Dict[str, Any],
+    *,
+    method: Any = None,
+    provider_id: Any = None,
+) -> Dict[str, Any]:
+    metadata = dict(entry.get("metadata") or {})
+    resolved_provider_id = _canonicalize_provider_id(
+        provider_id if provider_id is not None else entry.get("provider_id")
+    )
+    values: Dict[str, Any] = {}
+    for field_name in _runtime_metadata_field_names(resolved_provider_id, method):
+        if field_name in metadata:
+            values[field_name] = deepcopy(metadata.get(field_name))
+    return values
+
+
+def _format_required_field_labels(field_names: Iterable[str]) -> str:
+    labels: list[str] = []
+    for field_name in field_names:
+        normalized = str(field_name or "").strip()
+        if not normalized:
+            continue
+        labels.append(_RUNTIME_REQUIRED_FIELD_LABELS.get(normalized, normalized))
+    return "、".join(labels)
+
+
 def _resolve_api_key_method_id(provider_id: str, candidate: Dict[str, Any]) -> str:
+    provider_id = _canonicalize_provider_id(provider_id)
     definition = get_provider_definition(provider_id)
     if definition is None:
         return "api_key"
-    base_url = str(candidate.get("base_url") or "").strip().lower()
+    base_url = _normalize_runtime_base_url(candidate.get("base_url")).lower()
     raw_key = str(candidate.get("api_key") or "").strip().lower()
     for method in definition.auth_methods:
         if method.type is not AuthMethodType.API_KEY:
             continue
-        recommended_base_url = str(method.metadata.get("recommended_base_url") or "").strip().lower()
+        recommended_base_urls = [
+            str(method.metadata.get("recommended_base_url") or "").strip().lower(),
+            *[
+                str(item or "").strip().lower()
+                for item in (method.metadata.get("regional_base_urls") or [])
+                if str(item or "").strip()
+            ],
+        ]
         key_prefix_hint = str(method.metadata.get("key_prefix_hint") or "").strip().lower()
-        if recommended_base_url and base_url and base_url.startswith(recommended_base_url):
+        if base_url and any(prefix and base_url.startswith(prefix) for prefix in recommended_base_urls):
             return method.id
         if key_prefix_hint and raw_key.startswith(key_prefix_hint):
             return method.id
@@ -255,12 +401,12 @@ def _resolve_method_runtime_defaults(
     metadata = dict(profile_metadata or {})
     method_metadata = dict(getattr(method, "metadata", {}) or {})
     return {
-        "base_url": str(
+        "base_url": _normalize_runtime_base_url(
             metadata.get("base_url")
             or method_metadata.get("recommended_base_url")
             or entry.get("default_base_url")
             or ""
-        ).strip(),
+        ),
         "model": str(
             metadata.get("model")
             or method_metadata.get("recommended_model")
@@ -320,7 +466,9 @@ def _ingest_legacy_candidate(
     is_active: bool,
 ) -> None:
     normalized = merge_provider_defaults(dict(candidate or {}))
-    provider_id = str(
+    normalized["base_url"] = _normalize_runtime_base_url(normalized.get("base_url"))
+    auth_mode = str(normalized.get("auth_mode") or "").strip().lower()
+    provider_id = _canonicalize_provider_id(
         normalized.get("provider_id")
         or infer_provider_id(
             provider_id=normalized.get("provider_id"),
@@ -329,14 +477,21 @@ def _ingest_legacy_candidate(
             model=normalized.get("model"),
         )
         or ""
-    ).strip().lower()
+    )
+    if auth_mode == "oauth":
+        oauth_provider_owner = _resolve_provider_id_from_auth_provider(normalized.get("oauth_provider"))
+        if oauth_provider_owner:
+            provider_id = oauth_provider_owner
+            normalized["provider_id"] = oauth_provider_owner
     if not provider_id:
         return
     entry = providers.setdefault(provider_id, _default_provider_entry(provider_id))
     entry["legacy_preset_name"] = str(normalized.get("name") or entry.get("legacy_preset_name") or provider_id).strip()
     entry["alias"] = str(normalized.get("alias") or entry.get("alias") or "").strip()
     entry["default_model"] = str(normalized.get("model") or entry.get("default_model") or "").strip()
-    entry["default_base_url"] = str(normalized.get("base_url") or entry.get("default_base_url") or "").strip()
+    entry["default_base_url"] = _normalize_runtime_base_url(
+        normalized.get("base_url") or entry.get("default_base_url") or ""
+    )
     entry.setdefault("metadata", {})
     for field_name in (
         "timeout_sec",
@@ -376,12 +531,12 @@ def _ingest_legacy_candidate(
                 },
                 "metadata": {
                     **dict(entry["metadata"]),
-                    "base_url": str(
+                    "base_url": _normalize_runtime_base_url(
                         normalized.get("base_url")
                         or (method.metadata.get("recommended_base_url") if method else "")
                         or entry.get("default_base_url")
                         or ""
-                    ).strip(),
+                    ),
                     "model": str(
                         normalized.get("model")
                         or (method.metadata.get("recommended_model") if method else "")
@@ -435,7 +590,7 @@ def _select_runtime_profile(entry: Dict[str, Any]) -> tuple[Dict[str, Any], Dict
 
 
 def _iter_runtime_profiles(entry: Dict[str, Any]) -> Iterable[tuple[Dict[str, Any], Dict[str, Any]]]:
-    provider_id = str(entry.get("provider_id") or "").strip().lower()
+    provider_id = _canonicalize_provider_id(entry.get("provider_id"))
     profiles = [item for item in entry.get("auth_profiles") or [] if isinstance(item, dict)]
     selected_id = str(entry.get("selected_profile_id") or "").strip()
     selection_mode = _normalize_selection_mode((entry.get("metadata") or {}).get("selection_mode"))
@@ -452,8 +607,8 @@ def _iter_runtime_profiles(entry: Dict[str, Any]) -> Iterable[tuple[Dict[str, An
         method = get_provider_method(provider_id, profile.get("method_id"))
         if method is None or not method.runtime_supported:
             continue
-        profile_metadata = dict(profile.get("metadata") or {})
-        if profile_metadata.get("runtime_ready") is False:
+        runtime_ready, _ = _resolve_profile_runtime_readiness(entry, profile, method)
+        if not runtime_ready:
             continue
         yield profile, {
             "provider": get_provider_definition(provider_id),
@@ -466,7 +621,7 @@ def _build_runtime_preset(
     profile: Dict[str, Any],
     context: Dict[str, Any],
 ) -> Dict[str, Any]:
-    provider_id = str(entry.get("provider_id") or "").strip().lower()
+    provider_id = _canonicalize_provider_id(entry.get("provider_id"))
     method = context["method"]
     metadata = dict(entry.get("metadata") or {})
     binding = dict(profile.get("binding") or {})
@@ -482,9 +637,7 @@ def _build_runtime_preset(
         "oauth_provider": get_method_auth_provider_id(method),
         "oauth_source": str(binding.get("source") or method.id).strip(),
         "oauth_binding": binding,
-        "oauth_experimental_ack": bool(method.experimental),
-        "oauth_project_id": metadata.get("oauth_project_id"),
-        "oauth_location": metadata.get("oauth_location"),
+        "oauth_experimental_ack": True,
         "model": runtime_defaults["model"],
         "timeout_sec": metadata.get("timeout_sec", 10),
         "max_retries": metadata.get("max_retries", 2),
@@ -495,7 +648,37 @@ def _build_runtime_preset(
         "embedding_model": metadata.get("embedding_model"),
         "allow_empty_key": bool(metadata.get("allow_empty_key", False)),
         "provider_auth_profile_id": str(profile.get("id") or "").strip(),
+        **_collect_runtime_metadata_values(entry, method=method, provider_id=provider_id),
     }
+
+
+def _resolve_profile_runtime_readiness(
+    entry: Dict[str, Any],
+    profile: Dict[str, Any],
+    method,
+) -> tuple[bool, str]:
+    profile_metadata = dict(profile.get("metadata") or {})
+    if "runtime_ready" in profile_metadata:
+        ready = bool(profile_metadata.get("runtime_ready"))
+        reason = str(profile_metadata.get("runtime_unavailable_reason") or "").strip()
+        if ready:
+            return True, ""
+        return ready, reason
+    if method.type is AuthMethodType.API_KEY:
+        return True, ""
+    summary = get_preset_auth_summary(
+        _build_runtime_preset(entry, profile, {"method": method})
+    )
+    if bool(summary.get("oauth_ready")):
+        return True, ""
+    missing_fields = list(summary.get("oauth_missing_fields") or [])
+    if missing_fields:
+        labels = _format_required_field_labels(missing_fields)
+        return False, f"当前运行时还缺少必填字段：{labels}。请在模型中心补充后再用于对话。"
+    reason = str(summary.get("auth_status_summary") or "").strip()
+    if reason:
+        return False, reason
+    return False, "当前认证还未就绪，暂时不能直接用于对话。"
 
 
 def project_provider_auth_center(api_cfg: Dict[str, Any]) -> Dict[str, Any]:
@@ -507,7 +690,15 @@ def project_provider_auth_center(api_cfg: Dict[str, Any]) -> Dict[str, Any]:
     for preset in projected.get("presets") or []:
         if not isinstance(preset, dict):
             continue
-        provider_id = str(preset.get("provider_id") or "").strip().lower()
+        provider_id = infer_provider_id(
+            provider_id=preset.get("provider_id"),
+            preset_name=preset.get("name"),
+            base_url=preset.get("base_url"),
+            model=preset.get("model"),
+        )
+        provider_id = _canonicalize_provider_id(provider_id)
+        if provider_id not in managed and str(preset.get("auth_mode") or "").strip().lower() == "oauth":
+            provider_id = _resolve_provider_id_from_auth_provider(preset.get("oauth_provider")) or provider_id
         if provider_id and provider_id in managed:
             continue
         kept_presets.append(dict(preset))
@@ -581,6 +772,7 @@ def ensure_provider_auth_center_config(
             is_active=str(candidate.get("name") or "").strip() == active_preset,
         )
     preferred_active_provider_id = str(center.get("active_provider_id") or "").strip().lower()
+    preferred_active_provider_id = _canonicalize_provider_id(preferred_active_provider_id)
     if preferred_active_provider_id:
         preferred_entry = providers.get(preferred_active_provider_id) or {}
         preferred_profile, _ = _select_runtime_profile(preferred_entry)

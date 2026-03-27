@@ -33,6 +33,7 @@ from backend.core.cost_analytics import CostAnalyticsService
 from backend.core.oauth_support import (
     OAuthSupportError,
     cancel_auth_flow,
+    get_cached_oauth_provider_statuses,
     get_oauth_provider_statuses,
     get_preset_auth_summary,
     infer_oauth_provider_id,
@@ -143,7 +144,12 @@ backup_service = WorkspaceBackupService()
 model_auth_center_service = get_model_auth_center_service()
 
 
-def _mask_preset(preset: dict, *, is_active: bool = False) -> dict:
+def _mask_preset(
+    preset: dict,
+    *,
+    is_active: bool = False,
+    provider_statuses: dict | None = None,
+) -> dict:
     masked = merge_provider_defaults(preset)
     masked["provider_id"] = infer_provider_id(
         provider_id=masked.get("provider_id"),
@@ -171,7 +177,7 @@ def _mask_preset(preset: dict, *, is_active: bool = False) -> dict:
     masked["_is_active"] = bool(is_active)
     masked["auth_mode"] = str(masked.get("auth_mode") or "api_key").strip().lower() or "api_key"
     masked["oauth_provider"] = infer_oauth_provider_id(masked)
-    auth_summary = get_preset_auth_summary(masked)
+    auth_summary = get_preset_auth_summary(masked, provider_statuses=provider_statuses)
     masked.update(
         {
             "oauth_supported": bool(auth_summary.get("oauth_supported")),
@@ -198,6 +204,21 @@ def _mask_preset(preset: dict, *, is_active: bool = False) -> dict:
     return masked
 
 
+def _build_local_auth_sync_state(payload: dict | None) -> dict:
+    status = dict(payload or {})
+    return {
+        "refreshing": bool(status.get("refreshing")),
+        "refreshed_at": int(status.get("refreshed_at") or 0),
+        "revision": int(status.get("revision") or 0),
+        "changed_provider_ids": [
+            str(provider_id).strip()
+            for provider_id in (status.get("changed_provider_ids") or [])
+            if str(provider_id).strip()
+        ],
+        "message": str(status.get("message") or "").strip(),
+    }
+
+
 def _build_config_payload(snapshot=None) -> dict:
     active_snapshot = snapshot or config_service.get_snapshot()
     config_dict = active_snapshot.config
@@ -206,10 +227,18 @@ def _build_config_payload(snapshot=None) -> dict:
     bot_cfg = dict(config_dict.get("bot", {}))
     agent_cfg = dict(config_dict.get("agent", {}))
     active_preset = str(api_cfg.get("active_preset") or "").strip()
+    oauth_status = get_cached_oauth_provider_statuses()
+    provider_statuses = dict(oauth_status.get("providers") or {})
     presets = []
     for preset in api_cfg.get("presets", []):
         preset_name = str((preset or {}).get("name") or "").strip()
-        presets.append(_mask_preset(preset, is_active=(preset_name == active_preset)))
+        presets.append(
+            _mask_preset(
+                preset,
+                is_active=(preset_name == active_preset),
+                provider_statuses=provider_statuses,
+            )
+        )
 
     api_cfg_safe = api_cfg.copy()
     api_cfg_safe["presets"] = presets
@@ -229,7 +258,8 @@ def _build_config_payload(snapshot=None) -> dict:
         "logging": config_dict.get("logging", {}),
         "agent": agent_cfg,
         "services": config_dict.get("services", {}),
-        "oauth": get_oauth_provider_statuses(),
+        "local_auth_sync": _build_local_auth_sync_state(oauth_status),
+        "oauth": oauth_status,
     }
 
 

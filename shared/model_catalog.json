@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-03-26",
+  "updated_at": "2026-03-27",
   "providers": [
     {
       "id": "openai",
@@ -8,14 +8,32 @@
       "api_key_url": "https://platform.openai.com/api-keys",
       "aliases": ["openai", "gpt"],
       "default_model": "gpt-5.4-mini",
-      "models": ["gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.3-codex", "gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano", "gpt-4o", "gpt-4o-mini"]
+      "models": ["gpt-5.4-pro", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.3-codex", "gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano", "gpt-4o", "gpt-4o-mini"]
+    },
+    {
+      "id": "anthropic",
+      "label": "Anthropic / Claude",
+      "base_url": "https://api.anthropic.com/v1",
+      "api_key_url": "https://platform.claude.com/settings/keys",
+      "aliases": ["anthropic", "claude"],
+      "default_model": "claude-sonnet-4-0",
+      "models": ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5", "claude-sonnet-4-5", "claude-opus-4-5", "claude-sonnet-4-0", "claude-opus-4-1", "claude-opus-4-0", "claude-3-7-sonnet-latest", "claude-3-5-haiku-latest"]
+    },
+    {
+      "id": "google",
+      "label": "Google / Gemini",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "api_key_url": "https://aistudio.google.com/apikey",
+      "aliases": ["google", "gemini", "vertex"],
+      "default_model": "gemini-2.5-flash",
+      "models": ["gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-3.1-flash-lite-preview", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
     },
     {
       "id": "doubao",
-      "label": "Doubao (璞嗗寘)",
+      "label": "Doubao (豆包)",
       "base_url": "https://ark.cn-beijing.volces.com/api/v3",
       "api_key_url": "https://console.volcengine.com/ark",
-      "aliases": ["doubao", "璞嗗寘", "ark", "volc"],
+      "aliases": ["doubao", "豆包", "ark", "volc"],
       "default_model": "doubao-seed-1.8",
       "models": ["doubao-seed-1.8", "doubao-seed-2.0-pro", "doubao-seed-2.0-lite", "doubao-seed-2.0-mini", "doubao-seed-code"]
     },
@@ -30,30 +48,39 @@
     },
     {
       "id": "qwen",
-      "label": "Qwen (閫氫箟鍗冮棶)",
+      "label": "Qwen (通义千问)",
       "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
       "api_key_url": "https://dashscope.console.aliyun.com/apiKey",
-      "aliases": ["qwen", "閫氫箟", "鍗冮棶", "dashscope", "鐧剧偧"],
+      "aliases": ["qwen", "通义", "千问", "dashscope", "bailian", "百炼"],
       "default_model": "qwen3.5-plus",
       "models": ["qwen3.5-plus", "qwen3.5-flash", "qwen3-max-2026-01-23", "qwen-plus-latest", "qwen-turbo-latest", "qwen3-coder-next", "qwen3-coder-plus", "qwen3-coder-flash"]
     },
     {
       "id": "zhipu",
-      "label": "Zhipu (鏅鸿氨)",
+      "label": "Zhipu (智谱)",
       "base_url": "https://open.bigmodel.cn/api/paas/v4",
       "api_key_url": "https://open.bigmodel.cn/usercenter/apikeys",
-      "aliases": ["zhipu", "glm", "鏅鸿氨"],
+      "aliases": ["zhipu", "glm", "智谱"],
       "default_model": "glm-5",
       "models": ["glm-5", "glm-4.7", "glm-4.6", "glm-4.5-air"]
     },
     {
-      "id": "moonshot",
-      "label": "Moonshot (Kimi)",
+      "id": "kimi",
+      "label": "Kimi (Moonshot)",
       "base_url": "https://api.moonshot.cn/v1",
       "api_key_url": "https://platform.moonshot.cn/console/api-keys",
       "aliases": ["moonshot", "kimi"],
       "default_model": "kimi-k2-turbo-preview",
-      "models": ["kimi-k2-turbo-preview", "kimi-k2-0905-preview", "kimi-k2-thinking-turbo", "kimi-thinking-preview", "kimi-latest"]
+      "models": ["kimi-for-coding", "kimi-k2-turbo-preview", "kimi-k2-0905-preview", "kimi-k2-thinking-turbo", "kimi-thinking-preview", "kimi-latest"]
+    },
+    {
+      "id": "minimax",
+      "label": "MiniMax",
+      "base_url": "https://api.minimax.io/v1",
+      "api_key_url": "https://platform.minimax.io/",
+      "aliases": ["minimax", "minimaxi"],
+      "default_model": "MiniMax-M2.5",
+      "models": ["MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5", "MiniMax-M2.5-highspeed", "MiniMax-M2.1", "MiniMax-M2.1-highspeed", "MiniMax-M2", "MiniMax-Text-01"]
     },
     {
       "id": "groq",
@@ -62,16 +89,16 @@
       "api_key_url": "https://console.groq.com/keys",
       "aliases": ["groq"],
       "default_model": "moonshotai/kimi-k2-instruct-0905",
-      "models": ["moonshotai/kimi-k2-instruct-0905", "openai/gpt-oss-120b", "qwen/qwen3-32b", "llama-3.3-70b-versatile", "deepseek-r1-distill-llama-70b"]
+      "models": ["moonshotai/kimi-k2-instruct-0905", "openai/gpt-oss-120b", "openai/gpt-oss-20b", "meta-llama/llama-4-scout-17b-16e-instruct", "qwen/qwen3-32b", "llama-3.3-70b-versatile"]
     },
     {
       "id": "siliconflow",
       "label": "SiliconFlow",
       "base_url": "https://api.siliconflow.cn/v1",
       "api_key_url": "https://cloud.siliconflow.cn/account/ak",
-      "aliases": ["siliconflow", "silicon", "纭呭熀"],
+      "aliases": ["siliconflow", "silicon", "硅基"],
       "default_model": "deepseek-ai/DeepSeek-V3.2",
-      "models": ["deepseek-ai/DeepSeek-V3.2", "Qwen/Qwen3-Coder-480B-A35B-Instruct", "Qwen/Qwen3-Next-80B-A3B-Instruct", "zai-org/GLM-4.7", "MiniMaxAI/MiniMax-M2"]
+      "models": ["deepseek-ai/DeepSeek-V3.2", "deepseek-ai/DeepSeek-V3.1", "Qwen/Qwen3-Coder-480B-A35B-Instruct", "Qwen/Qwen3-Next-80B-A3B-Instruct", "zai-org/GLM-4.5", "openai/gpt-oss-120b"]
     },
     {
       "id": "mistral",
@@ -98,7 +125,7 @@
       "api_key_url": "https://openrouter.ai/keys",
       "aliases": ["openrouter"],
       "default_model": "openrouter/auto",
-      "models": ["openrouter/auto", "anthropic/claude-opus-4.6", "anthropic/claude-sonnet-4.6", "google/gemini-3.1-pro-preview", "openai/gpt-5.1", "deepseek/deepseek-v3.2", "minimax/minimax-m2.5"]
+      "models": ["openrouter/auto", "anthropic/claude-opus-4.6", "anthropic/claude-sonnet-4.6", "anthropic/claude-haiku-4.5", "google/gemini-3.1-pro-preview", "google/gemini-3.1-flash-lite-preview", "openai/gpt-5.4", "openai/gpt-5.4-pro", "deepseek/deepseek-v3.2", "minimax/minimax-m2.7"]
     },
     {
       "id": "together",
@@ -106,8 +133,8 @@
       "base_url": "https://api.together.xyz/v1",
       "api_key_url": "https://api.together.xyz/settings/api-keys",
       "aliases": ["together"],
-      "default_model": "moonshotai/Kimi-K2-Instruct-0905",
-      "models": ["moonshotai/Kimi-K2-Instruct-0905", "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8", "deepseek-ai/DeepSeek-V3.1", "openai/gpt-oss-120b", "meta-llama/Llama-3.3-70B-Instruct-Turbo"]
+      "default_model": "moonshotai/Kimi-K2.5",
+      "models": ["moonshotai/Kimi-K2.5", "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8", "deepseek-ai/DeepSeek-V3.1", "openai/gpt-oss-120b", "meta-llama/Llama-3.3-70B-Instruct-Turbo"]
     },
     {
       "id": "fireworks",

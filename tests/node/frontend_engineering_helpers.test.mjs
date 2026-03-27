@@ -44,6 +44,7 @@ import {
 import { App } from '../../src/renderer/js/app.module.js';
 import { stateManager } from '../../src/renderer/js/core/StateManager.js';
 import { apiService } from '../../src/renderer/js/services/ApiService.js';
+import { notificationService } from '../../src/renderer/js/services/NotificationService.js';
 import {
     renderPresetList,
     renderSaveFeedback,
@@ -57,6 +58,15 @@ function withDom(run) {
     const env = installDomStub();
     try {
         run(env);
+    } finally {
+        env.restore();
+    }
+}
+
+async function withDomAsync(run) {
+    const env = installDomStub();
+    try {
+        await run(env);
     } finally {
         env.restore();
     }
@@ -668,6 +678,131 @@ test('app readiness action restart_as_admin delegates to electron api', async ()
         }
     }
 });
+
+test('app init respects the page selected before startup finishes', async () => {
+    const originalApiInit = apiService.init;
+    const originalNotificationInit = notificationService.init;
+
+    try {
+        apiService.init = async () => {};
+        notificationService.init = () => {};
+        resetReadinessState();
+        stateManager.set('currentPage', 'models');
+
+        const pageStub = () => ({
+            async onInit() {},
+        });
+        const switchPageCalls = [];
+        const app = Object.create(App.prototype);
+        app.pages = {
+            dashboard: pageStub(),
+            costs: pageStub(),
+            messages: pageStub(),
+            models: pageStub(),
+            settings: pageStub(),
+            logs: pageStub(),
+            about: pageStub(),
+        };
+        app._runInitStep = async (_step, fn) => fn();
+        app._setupRuntimeIdleState = async () => {};
+        app._loadFirstRunState = async () => {};
+        app._setupVersion = async () => {};
+        app._setupUpdater = async () => {};
+        app._bindGlobalEvents = () => {};
+        app._bindKeyboardShortcuts = () => {};
+        app._setupCloseChoiceModal = () => {};
+        app._setupConfirmModal = () => {};
+        app._setupUpdateModal = () => {};
+        app._setupFirstRunGuide = () => {};
+        app._ensureLightweightBackend = async () => {};
+        app._checkBackendConnection = async () => {};
+        app._refreshStatus = async () => {};
+        app._switchPage = async (pageName, options = {}) => {
+            switchPageCalls.push({ pageName, options });
+        };
+        app._startStatusRefresh = () => {};
+
+        await App.prototype.init.call(app);
+
+        assert.deepEqual(switchPageCalls, [
+            {
+                pageName: 'models',
+                options: { source: 'init' },
+            },
+        ]);
+    } finally {
+        apiService.init = originalApiInit;
+        notificationService.init = originalNotificationInit;
+        resetReadinessState();
+    }
+});
+
+test('app switchPage ignores stale transitions that finish late', async () => withDomAsync(async ({ document, registerElement }) => {
+    document.querySelectorAll = (selector) => document.body.querySelectorAll(selector);
+    const navDashboard = document.createElement('button');
+    navDashboard.className = 'nav-item';
+    navDashboard.dataset.page = 'dashboard';
+    document.body.appendChild(navDashboard);
+
+    const navModels = document.createElement('button');
+    navModels.className = 'nav-item';
+    navModels.dataset.page = 'models';
+    document.body.appendChild(navModels);
+
+    const pageDashboard = registerElement('page-dashboard', document.createElement('section'));
+    pageDashboard.className = 'page';
+    document.body.appendChild(pageDashboard);
+
+    const pageModels = registerElement('page-models', document.createElement('section'));
+    pageModels.className = 'page';
+    document.body.appendChild(pageModels);
+
+    let resolveModelsBackend = null;
+    const transitions = [];
+    const app = Object.create(App.prototype);
+    app._pageSwitchSeq = 0;
+    app.currentPage = null;
+    app.pages = {
+        dashboard: {
+            isActive() {
+                return false;
+            },
+            async onEnter() {
+                transitions.push('dashboard:enter');
+            },
+        },
+        models: {
+            isActive() {
+                return false;
+            },
+            async onEnter() {
+                transitions.push('models:enter');
+            },
+            async onLeave() {
+                transitions.push('models:leave');
+            },
+        },
+    };
+    app._ensureBackendForPage = async (pageName) => {
+        if (pageName === 'models') {
+            await new Promise((resolve) => {
+                resolveModelsBackend = resolve;
+            });
+        }
+    };
+
+    const firstSwitch = App.prototype._switchPage.call(app, 'models', { source: 'nav' });
+    const secondSwitch = App.prototype._switchPage.call(app, 'dashboard', { source: 'nav' });
+    resolveModelsBackend?.();
+    await Promise.all([firstSwitch, secondSwitch]);
+
+    assert.deepEqual(transitions, ['models:leave', 'dashboard:enter']);
+    assert.equal(stateManager.get('currentPage'), 'dashboard');
+    assert.equal(navDashboard.classList.contains('active'), true);
+    assert.equal(navModels.classList.contains('active'), false);
+    assert.equal(pageDashboard.classList.contains('active'), true);
+    assert.equal(pageModels.classList.contains('active'), false);
+}));
 
 test('about page wires updater state and renders update panel on enter', async () => {
     const page = new AboutPage();

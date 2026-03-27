@@ -702,9 +702,11 @@ python -m py_compile backend\core\agent_runtime.py backend\bot.py backend\bot_ma
 
 Release Notes 规则：
 
-- 每次正式发版都会自动对比“上一个正式 tag 到当前 tag”的提交范围
-- 发布说明会自动包含 compare 区间、Compare 链接、按 Conventional Commits 分组的摘要，以及原始提交列表
-- 如果当前是首个正式版本，则会回退为“从仓库起点到当前 tag”的首版说明
+- 每次正式发版都必须提供 `docs/release_notes/<tag>.md`
+- 更新内容固定按 `Features`、`Improvements`、`Fixes`、`Performance`、`Breaking Changes` 的顺序分组；无内容分类直接省略
+- 更新内容只写本次已发布且对外可感知的变化，不写 commit、PR、重构过程和无外部影响的内部调整
+- 更新内容默认面向普通用户，优先写新增了什么、修改了什么、在哪种场景下生效，尽量使用非技术语言
+- Git tag 必须符合 `vX.Y.Z`，`package.json` 版本号必须符合 `X.Y.Z`，且两者一致
 
 ## 11. 成本管理
 
@@ -850,6 +852,8 @@ Release Notes 规则：
 - 如果本机已经存在可同步的标准授权源，项目会优先绑定并直接同步。
 - 如果本机没有授权，则需要先走一次浏览器 OAuth 登录。
 - 对已经打通运行时链路的 Provider，完成 OAuth 后就可以直接对话，不需要再额外补一个 `API Key`。
+- 对 `OpenAI / Codex / ChatGPT` 与 `Google / Gemini / Gemini CLI` 这类“浏览器打开后最终靠本机凭据落盘完成”的方法，点击“继续完成授权”时系统会优先走本机重扫，不会错误要求你再补一份标准 OAuth callback。
+- `Google / Gemini / Gemini CLI` 现在会在模型中心工作流里直接展示 `项目 ID` 输入项；如果本机 `Gemini CLI` 状态里已经带有 `project_id`，模型中心会自动复用这份值，不会强制你再手动填写一次。
 - 同一 Provider 同时存在 `API Key` 与 `OAuth / 本机同步` 时，默认优先 `OAuth / 本机同步`；如果当前认证短暂失效，系统会自动回退到另一种可用认证。
 - 对支持本机授权复用的 Provider，项目不会长期复制本地 Token；运行时会按需读取本地授权源，所以本机授权变化后，项目中的授权也会跟着变化。
 - 模型中心会维护一份后台本机认证快照；对已发现的本机认证文件会优先使用 watcher，失败时自动回退到 polling。手动点击“扫描本机认证”时，会强制刷新这份快照。
@@ -862,19 +866,27 @@ Release Notes 规则：
   - `OpenAI / Codex / ChatGPT`：`api_key + oauth + local_import`
   - `Google / Gemini / Gemini CLI`：`api_key + oauth + local_import`
   - `Qwen / DashScope / Qwen Code`：`api_key + oauth + local_import`
+  - `Claude / Claude Code`：`api_key + oauth + local_import`
+  - `Kimi / Moonshot / Kimi Code`：`api_key + oauth + local_import + coding_plan_api_key`
+  - `GLM / 智谱`：`api_key + coding_plan_api_key`
   - `Doubao / 火山方舟 / TRAE`：`api_key + web_session`
   - `Yuanbao / 元宝`：`web_session`
 - 同一 Provider 下同时存在多种认证方式时，界面会同时展示“当前认证”和其它可用备用认证；未手动指定时默认优先 OAuth / 本机同步。
 - 其中 `Qwen` 会把 `DashScope API Key` 与 `Coding Plan API Key` 作为两条独立认证方法展示，避免用户把订阅型 Coding Plan Key 和通用百炼 Key 混用。
+- `百炼 / DashScope / bailian` 现在都会统一归并到 `Qwen` Provider；当 `base_url` 为 `https://coding.dashscope.aliyuncs.com/v1` 时，即使模型名是 `MiniMax-M2.5`、`glm-5` 或 `kimi-k2.5`，系统也会继续按百炼 Coding Plan 处理。
+- `Kimi` 会把 `Moonshot API Key` 与 `Kimi Coding Plan API Key` 分开展示，Coding 场景默认推荐 `kimi-for-coding`。
+- `GLM / 智谱` 会把通用 `API Key` 与 `GLM Coding Plan API Key` 分开展示；当 `base_url` 为 `https://open.bigmodel.cn/api/coding/paas/v4` 时，系统会自动识别为智谱 Coding Plan。
+- `MiniMax` 会把通用 `API Key` 与 `Token Plan API Key` 分开展示；国际区和中国区入口都会识别，`https://api.minimaxi.com/v1` 以及 Anthropic-compatible 的 `/anthropic` 端点也会归类到 MiniMax。
+- 首次在模型中心配置 `Qwen OAuth / 百炼 Coding Plan`、`Kimi Code`、`GLM Coding Plan`、`MiniMax Token Plan` 这类专用方法时，工作流弹窗会直接预览将要使用的 `base_url / model`，并在首次保存时自动写入推荐端点，避免手工把 OAuth 或 Coding Plan 认证配到通用聊天入口。
+- 即使走旧的 preset 保存链路，系统现在也会复用同一份 method metadata 来补齐 `base_url / model / oauth_provider`，尽量把 `Kimi Code OAuth`、`GLM Coding Plan`、`Qwen / 百炼 Coding Plan` 这类配置写成可直接投影到真实对话 runtime 的状态。
 - 预留扩展位：
-  - `Claude / Claude Code`
-  - `Kimi / Moonshot / Kimi Code`
-  - `GLM / 智谱`
-  - `MiniMax`
   - `DeepSeek`
 - 注意：`Doubao / Yuanbao` 的网页登录当前按 `web_session` 建模，不伪装成标准 OAuth。
+- 注意：`Claude / Claude Code` 现在会把 `Claude API Key`、`Claude Code OAuth`、`Claude Code 本机登录` 分开展示；前两条浏览器登录路径共享同一组本机凭据来源，但 UI 会拆成显式 OAuth / 本机跟随两个入口。
 - 注意：`Claude / Claude Code` 现在已经支持真实的本机凭据发现；当本地存在 `apiKeyHelper` 或可复用的 Claude API credential cache 时，会直接进入 `anthropic_native` 运行时。若本地只有订阅型 Claude.ai OAuth 状态，当前仍保守停留在 follow-mode discovery/status。
 - 注意：`Claude / Claude Code` 若通过 `apiKeyHelper` 或本地 Claude API credential cache 进入运行时，首次请求遇到 `401` 时会自动触发一次本地认证刷新并重试一次。
+- 注意：`Claude / Claude Code` 现在新增 `Claude Vertex AI 本机认证`，会复用 `gcloud` ADC 或 `GOOGLE_APPLICATION_CREDENTIALS`，并把请求发到 Vertex AI 的 `publishers/anthropic/models/{model}:rawPredict`。
+- 注意：`Claude Vertex AI` 当前支持通过 `oauth_project_id / oauth_location` 指定项目和区域；如果模型里填写的是 `claude-sonnet-4-0`、`claude-opus-4-1`、`claude-3-7-sonnet-latest` 这类 Anthropic 风格 ID，系统会自动映射成 Vertex API 的模型 ID。
 - 注意：`Kimi / Kimi Code` 现在已经支持真实的本机凭据发现，并会优先跟随 `~/.kimi/config.toml` 中的本地 provider 配置；如果本地 provider 配置没有可用凭据，才会回退到 `~/.kimi/credentials/*.json`。
 - 注意：模型中心的后台同步器现在也会跟踪目录级浏览器存储目标与桌面私有存储路径，因此 `IndexedDB / Local Storage` 或本地客户端存储变化也会触发本机会话快照刷新。
 - 注意：系统钥匙串当前只进入“发现/状态/绑定元数据”链路，还没有接入真正的钥匙串事件监听与稳定运行时消费。

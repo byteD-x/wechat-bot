@@ -17,11 +17,15 @@ from ..utils.logging import build_stage_log_message
 from .provider_compat import (
     build_anthropic_headers,
     build_anthropic_messages_payload,
+    build_anthropic_vertex_headers,
+    build_anthropic_vertex_messages_payload,
+    build_anthropic_vertex_request_url,
     infer_auth_transport,
     build_openai_chat_payload,
     build_openai_responses_payload,
     extract_reasoning_text as compat_extract_reasoning_text,
     extract_visible_text as compat_extract_visible_text,
+    normalize_anthropic_vertex_model,
     normalize_chat_result,
     normalize_provider_error,
 )
@@ -71,7 +75,7 @@ class _AnthropicNativeChatModel:
         self._streaming = streaming
 
     async def ainvoke(self, messages, config=None):
-        return await self._runtime._invoke_anthropic_native_chat(messages, stream=self._streaming)
+        return await self._runtime._invoke_anthropic_chat(messages, stream=self._streaming)
 
     async def astream(self, messages, config=None):
         response = await self.ainvoke(messages, config=config)
@@ -375,7 +379,7 @@ class AgentRuntime:
         )
 
     def _build_chat_model(self, *, streaming: bool) -> Any:
-        if self.auth_transport == "anthropic_native":
+        if self.auth_transport in {"anthropic_native", "anthropic_vertex"}:
             return _AnthropicNativeChatModel(self, streaming=streaming)
         kwargs: Dict[str, Any] = {
             "model": self.model,
@@ -395,7 +399,7 @@ class AgentRuntime:
         return self._imports["ChatOpenAI"](**kwargs)
 
     def _build_embedding_client(self) -> Optional[Any]:
-        if self.auth_transport in {"anthropic_native", "openai_codex_responses", "google_code_assist"}:
+        if self.auth_transport in {"anthropic_native", "anthropic_vertex", "openai_codex_responses", "google_code_assist"}:
             return None
         if not self.embedding_model:
             return None
@@ -795,6 +799,13 @@ class AgentRuntime:
         api_key = self._resolve_runtime_api_key()
         if self.auth_transport == "anthropic_native":
             return build_anthropic_headers(api_key=api_key, extra_headers=extra_headers)
+        if self.auth_transport == "anthropic_vertex":
+            return build_anthropic_vertex_headers(
+                api_key=api_key,
+                extra_headers=extra_headers,
+                project_id=str(self.transport_metadata.get("project_id") or "").strip(),
+                model=self.model,
+            )
         headers = {"Content-Type": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
@@ -906,6 +917,31 @@ class AgentRuntime:
             max_completion_tokens=self.max_completion_tokens,
         )
 
+    def _build_anthropic_vertex_payload(
+        self,
+        messages: Iterable[Any],
+        *,
+        stream: bool,
+    ) -> Dict[str, Any]:
+        return build_anthropic_vertex_messages_payload(
+            model=self.model,
+            messages=self._serialize_prompt_messages_for_openai(messages),
+            stream=stream,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+            max_completion_tokens=self.max_completion_tokens,
+        )
+
+    async def _invoke_anthropic_chat(
+        self,
+        messages: Iterable[Any],
+        *,
+        stream: bool,
+    ) -> Any:
+        if self._is_anthropic_vertex_transport():
+            return await self._invoke_anthropic_vertex_chat(messages, stream=stream)
+        return await self._invoke_anthropic_native_chat(messages, stream=stream)
+
     async def _invoke_anthropic_native_chat(
         self,
         messages: Iterable[Any],
@@ -936,11 +972,47 @@ class AgentRuntime:
             )
             raise RuntimeError(normalized_error.message) from exc
 
+    async def _invoke_anthropic_vertex_chat(
+        self,
+        messages: Iterable[Any],
+        *,
+        stream: bool,
+    ) -> Any:
+        model_id = normalize_anthropic_vertex_model(self.model)
+        if not model_id:
+            raise RuntimeError("Claude Vertex transport could not resolve a usable model ID.")
+        url = build_anthropic_vertex_request_url(self.base_url, model_id)
+        payload = self._build_anthropic_vertex_payload(messages, stream=stream)
+        headers = self._build_openai_compatible_headers()
+        async with httpx.AsyncClient(timeout=self.effective_timeout_sec) as client:
+            response = await client.post(url, headers=headers, json=payload)
+            if response.status_code == 401 and self._force_refresh_auth(reason="anthropic_vertex_401"):
+                response = await client.post(
+                    url,
+                    headers=self._build_openai_compatible_headers(),
+                    json=self._build_anthropic_vertex_payload(messages, stream=stream),
+                )
+        if response.status_code >= 400:
+            normalized_error = normalize_provider_error(response=response)
+            raise RuntimeError(normalized_error.message)
+        try:
+            return response.json()
+        except ValueError as exc:
+            normalized_error = normalize_provider_error(
+                exc=exc,
+                response=response,
+                payload=response.text[:200],
+            )
+            raise RuntimeError(normalized_error.message) from exc
+
     def _is_openai_codex_responses_transport(self) -> bool:
         return self.auth_transport == "openai_codex_responses"
 
     def _is_google_code_assist_transport(self) -> bool:
         return self.auth_transport == "google_code_assist"
+
+    def _is_anthropic_vertex_transport(self) -> bool:
+        return self.auth_transport == "anthropic_vertex"
 
     def _serialize_prompt_messages_for_google(self, prompt_messages: Iterable[Any]) -> tuple[List[Dict[str, Any]], str]:
         contents: List[Dict[str, Any]] = []
@@ -1258,6 +1330,7 @@ class AgentRuntime:
     def _supports_chat_completions_fallback(self) -> bool:
         return self.auth_transport not in {
             "anthropic_native",
+            "anthropic_vertex",
             "openai_codex_responses",
             "google_code_assist",
         }

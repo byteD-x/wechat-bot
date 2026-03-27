@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import ModelsPage, { summarizeCards } from '../../src/renderer/js/pages/ModelsPage.js';
+import { apiService } from '../../src/renderer/js/services/ApiService.js';
+import { toast } from '../../src/renderer/js/services/NotificationService.js';
 
 test('models page falls back to another testable auth state when the selected one has no runtime profile', () => {
     const page = new ModelsPage();
@@ -77,4 +79,154 @@ test('models page localizes legacy english runtime health details', () => {
 
     assert.equal(page.getHealthDetail(card), '已检测到本机认证来源，但暂时还不能直接用于运行时请求。');
     assert.equal(page.getSyncDetail(card), '已检测到本机授权来源。');
+});
+
+test('models page keeps the user selected provider when a slow save resolves late', async () => {
+    const originalRunModelAuthAction = apiService.runModelAuthAction;
+    const originalToastSuccess = toast.success;
+    const originalToastError = toast.error;
+    let resolveAction = null;
+
+    apiService.runModelAuthAction = async () => (
+        new Promise((resolve) => {
+            resolveAction = resolve;
+        })
+    );
+    toast.success = () => {};
+    toast.error = () => {};
+
+    try {
+        const page = new ModelsPage();
+        page._isActive = true;
+        page.applyOverview({
+            active_provider_id: 'openai',
+            cards: [
+                { provider: { id: 'openai', label: 'OpenAI' } },
+                { provider: { id: 'google', label: 'Google' } },
+            ],
+        });
+        page._selectedProviderId = 'openai';
+        let renderCount = 0;
+        page.render = () => {
+            renderCount += 1;
+        };
+        page.renderFeedback = () => {};
+
+        const pending = page.runAction(
+            'update_provider_defaults',
+            { provider_id: 'openai' },
+            { preserveSelection: true, providerId: 'openai' },
+        );
+
+        page._selectedProviderId = 'google';
+        resolveAction?.({
+            message: 'saved',
+            overview: {
+                active_provider_id: 'openai',
+                cards: [
+                    { provider: { id: 'openai', label: 'OpenAI' } },
+                    { provider: { id: 'google', label: 'Google' } },
+                ],
+            },
+        });
+
+        await pending;
+
+        assert.equal(page._selectedProviderId, 'google');
+        assert.equal(renderCount, 1);
+    } finally {
+        apiService.runModelAuthAction = originalRunModelAuthAction;
+        toast.success = originalToastSuccess;
+        toast.error = originalToastError;
+    }
+});
+
+test('models page schedules a silent refresh while local auth sync is still running', async () => {
+    const originalGetModelAuthOverview = apiService.getModelAuthOverview;
+    const originalGetModelCatalog = apiService.getModelCatalog;
+    const originalSetTimeout = globalThis.setTimeout;
+    const originalClearTimeout = globalThis.clearTimeout;
+    const scheduled = [];
+    const cleared = [];
+
+    apiService.getModelAuthOverview = async () => ({
+        overview: {
+            active_provider_id: 'openai',
+            cards: [
+                { provider: { id: 'openai', label: 'OpenAI' } },
+            ],
+            local_auth_sync: {
+                refreshing: true,
+                refreshed_at: 0,
+                revision: 0,
+                changed_provider_ids: [],
+                message: '',
+            },
+        },
+    });
+    apiService.getModelCatalog = async () => ({
+        providers: [
+            { id: 'openai', label: 'OpenAI', models: ['gpt-5.4'] },
+        ],
+    });
+    globalThis.setTimeout = (fn, delay) => {
+        scheduled.push({ fn, delay });
+        return scheduled.length;
+    };
+    globalThis.clearTimeout = (handle) => {
+        cleared.push(handle);
+    };
+
+    try {
+        const page = new ModelsPage();
+        page._isActive = true;
+        page.render = () => {};
+        page._ensureProviderModels = async () => {};
+
+        await page.loadOverview({ preserveSelection: true });
+
+        assert.equal(scheduled.length, 1);
+        assert.equal(scheduled[0].delay, 600);
+        assert.equal(page._localAuthSyncRefreshAttempt, 1);
+
+        let refreshOptions = null;
+        page.loadOverview = async (options = {}) => {
+            refreshOptions = options;
+        };
+
+        scheduled[0].fn();
+        await Promise.resolve();
+
+        assert.deepEqual(refreshOptions, { preserveSelection: true });
+        assert.deepEqual(cleared, []);
+    } finally {
+        apiService.getModelAuthOverview = originalGetModelAuthOverview;
+        apiService.getModelCatalog = originalGetModelCatalog;
+        globalThis.setTimeout = originalSetTimeout;
+        globalThis.clearTimeout = originalClearTimeout;
+    }
+});
+
+test('models page clears pending silent refresh when leaving the page', async () => {
+    const originalClearTimeout = globalThis.clearTimeout;
+    const cleared = [];
+    globalThis.clearTimeout = (handle) => {
+        cleared.push(handle);
+    };
+
+    try {
+        const page = new ModelsPage();
+        page._isActive = true;
+        page._localAuthSyncRefreshTimer = 42;
+        page._localAuthSyncRefreshAttempt = 3;
+
+        await page.onLeave();
+
+        assert.deepEqual(cleared, [42]);
+        assert.equal(page._localAuthSyncRefreshTimer, null);
+        assert.equal(page._localAuthSyncRefreshAttempt, 0);
+        assert.equal(page.isActive(), false);
+    } finally {
+        globalThis.clearTimeout = originalClearTimeout;
+    }
 });

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 import httpx
+from backend.core.provider_compat import ANTHROPIC_VERTEX_1M_BETA_HEADER
 
 try:  # pragma: no cover - Python 3.11+
     import tomllib  # type: ignore[attr-defined]
@@ -97,6 +98,9 @@ KEYCHAIN_TARGET_PATTERN = re.compile(r"^\s*Target:\s*(.+?)\s*$", flags=re.IGNORE
 CLAUDE_API_KEY_HELPER_TTL_MS = 5 * 60 * 1000
 CLAUDE_DEFAULT_BASE_URL = "https://api.anthropic.com/v1"
 CLAUDE_DEFAULT_MODEL = "claude-sonnet-4-5"
+CLAUDE_VERTEX_DEFAULT_LOCATION = "global"
+CLAUDE_VERTEX_DEFAULT_MODEL = "claude-sonnet-4-6"
+GCLOUD_ACCESS_TOKEN_TTL_MS = 5 * 60 * 1000
 
 
 @dataclass(slots=True)
@@ -181,7 +185,7 @@ class BaseAuthProvider:
         completed = subprocess.run(
             args,
             capture_output=True,
-            text=True,
+            text=False,
             timeout=30,
             check=False,
         )
@@ -220,7 +224,7 @@ class _ClaudeApiKeyHelperRuntime:
             self._command,
             shell=True,
             capture_output=True,
-            text=True,
+            text=False,
             timeout=15,
             check=False,
         )
@@ -249,6 +253,61 @@ class _ClaudeApiKeyHelperRuntime:
             "Authorization": f"Bearer {auth_value}",
             "anthropic-version": "2023-06-01",
         }
+
+
+class _GCloudAccessTokenRuntime:
+    def __init__(self, command: str) -> None:
+        self._command = str(command or "").strip()
+        self._lock = threading.Lock()
+        self._cached_value = ""
+        self._cached_at = 0.0
+
+    @staticmethod
+    def _ttl_ms() -> int:
+        raw = normalize_text(os.environ.get("WECHAT_BOT_GCLOUD_ACCESS_TOKEN_TTL_MS"))
+        try:
+            ttl_ms = int(raw)
+        except (TypeError, ValueError):
+            ttl_ms = GCLOUD_ACCESS_TOKEN_TTL_MS
+        return max(0, ttl_ms)
+
+    def force_refresh(self) -> None:
+        with self._lock:
+            self._cached_value = ""
+            self._cached_at = 0.0
+
+    def _print_access_token(self) -> str:
+        commands = (
+            [self._command, "auth", "application-default", "print-access-token"],
+            [self._command, "auth", "print-access-token"],
+        )
+        last_error = ""
+        for args in commands:
+            completed = subprocess.run(
+                args,
+                capture_output=True,
+                text=False,
+                timeout=30,
+                check=False,
+            )
+            if completed.returncode == 0:
+                token = normalize_text(completed.stdout)
+                if token:
+                    return token
+                last_error = "gcloud did not return a usable access token."
+                continue
+            last_error = normalize_text(completed.stderr) or normalize_text(completed.stdout)
+        raise AuthSupportError(last_error or "Unable to obtain a Vertex AI access token from gcloud.")
+
+    def get_access_token(self) -> str:
+        with self._lock:
+            ttl_ms = self._ttl_ms()
+            now_ms = time.time() * 1000
+            if ttl_ms > 0 and self._cached_value and (now_ms - self._cached_at) < ttl_ms:
+                return self._cached_value
+            self._cached_value = self._print_access_token()
+            self._cached_at = now_ms
+            return self._cached_value
 
 
 def _safe_read_text(path: Path) -> str:
@@ -672,7 +731,7 @@ def _query_system_keychain_targets(
         completed = subprocess.run(
             ["cmdkey", "/list"],
             capture_output=True,
-            text=True,
+            text=False,
             timeout=10,
             check=False,
         )
@@ -686,7 +745,7 @@ def _query_system_keychain_targets(
             normalize_text(completed.stderr) or normalize_text(completed.stdout),
         )
         return {}
-    all_targets = _extract_keychain_targets(completed.stdout)
+    all_targets = _extract_keychain_targets(normalize_text(completed.stdout))
     if not all_targets:
         return {}
     normalized_hints = tuple(
@@ -1208,7 +1267,7 @@ class GoogleGeminiCliAuthProvider(BaseAuthProvider):
     label = "Google Gemini CLI"
     cli_name = "gemini"
     tier = "experimental"
-    requires_extra_fields = ()
+    requires_extra_fields = ("oauth_project_id",)
     local_source_label = "gemini_cli_oauth"
 
     def __init__(self) -> None:
@@ -2044,6 +2103,277 @@ class ClaudeCodeLocalAuthProvider(BaseAuthProvider):
         )
 
 
+class ClaudeVertexLocalAuthProvider(BaseAuthProvider):
+    id = "claude_vertex_local"
+    provider_id = "anthropic"
+    label = "Claude Vertex AI 本机认证"
+    auth_type = "local_import"
+    tier = "experimental"
+    runtime_supported = True
+    cli_name = "gcloud"
+    local_source_label = "claude_vertex_local"
+    requires_extra_fields = ("oauth_project_id", "oauth_location")
+
+    @staticmethod
+    def gcloud_config_dir() -> Path:
+        override = normalize_text(os.environ.get("CLOUDSDK_CONFIG"))
+        if override:
+            return Path(override).expanduser().resolve()
+        if os.name == "nt":
+            appdata = normalize_text(os.environ.get("APPDATA"))
+            if appdata:
+                return Path(appdata).expanduser().resolve() / "gcloud"
+            return Path.home() / "AppData" / "Roaming" / "gcloud"
+        return Path.home() / ".config" / "gcloud"
+
+    @classmethod
+    def application_default_credentials_path(cls) -> Path:
+        override = normalize_text(os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"))
+        if override:
+            return Path(override).expanduser().resolve()
+        return cls.gcloud_config_dir() / "application_default_credentials.json"
+
+    @classmethod
+    def config_default_path(cls) -> Path:
+        return cls.gcloud_config_dir() / "configurations" / "config_default"
+
+    @classmethod
+    def active_config_path(cls) -> Path:
+        return cls.gcloud_config_dir() / "active_config"
+
+    def _load_adc_payload(self) -> Dict[str, Any]:
+        return safe_read_json(self.application_default_credentials_path())
+
+    @staticmethod
+    def _normalize_gcloud_value(value: Any) -> str:
+        normalized = normalize_text(value)
+        if normalized.lower() in {"(unset)", "unset", "none"}:
+            return ""
+        return normalized
+
+    def _run_gcloud_value(self, *args: str) -> str:
+        command = shutil.which(self.cli_name)
+        if not command:
+            return ""
+        completed = subprocess.run(
+            [command, *args],
+            capture_output=True,
+            text=False,
+            timeout=20,
+            check=False,
+        )
+        if completed.returncode != 0:
+            return ""
+        for line in normalize_text(completed.stdout).splitlines():
+            candidate = self._normalize_gcloud_value(line)
+            if candidate:
+                return candidate
+        return ""
+
+    @staticmethod
+    def _resolve_location_from_environment() -> str:
+        return normalize_text(
+            os.environ.get("CLOUD_ML_REGION")
+            or os.environ.get("GOOGLE_CLOUD_LOCATION")
+            or os.environ.get("GOOGLE_CLOUD_REGION")
+        )
+
+    @staticmethod
+    def _resolve_project_id_from_environment() -> str:
+        return normalize_text(
+            os.environ.get("ANTHROPIC_VERTEX_PROJECT_ID")
+            or os.environ.get("GCLOUD_PROJECT")
+            or os.environ.get("GOOGLE_CLOUD_PROJECT")
+            or os.environ.get("GOOGLE_CLOUD_PROJECT_ID")
+        )
+
+    def _resolve_status_project_id(self, settings: Optional[Dict[str, Any]] = None) -> str:
+        payload = settings if isinstance(settings, dict) else {}
+        direct = normalize_text(payload.get("oauth_project_id"))
+        if direct:
+            return direct
+        env_project = self._resolve_project_id_from_environment()
+        if env_project:
+            return env_project
+        adc_payload = self._load_adc_payload()
+        for key in ("project_id", "quota_project_id"):
+            candidate = normalize_text(adc_payload.get(key))
+            if candidate:
+                return candidate
+        return self._run_gcloud_value("config", "get-value", "project", "--quiet")
+
+    def _resolve_status_location(self, settings: Optional[Dict[str, Any]] = None) -> str:
+        payload = settings if isinstance(settings, dict) else {}
+        return (
+            normalize_text(payload.get("oauth_location"))
+            or self._resolve_location_from_environment()
+            or CLAUDE_VERTEX_DEFAULT_LOCATION
+        )
+
+    @staticmethod
+    def _extract_adc_account_label(adc_payload: Dict[str, Any]) -> tuple[str, str]:
+        service_account_email = normalize_text(adc_payload.get("client_email"))
+        if service_account_email:
+            return service_account_email, service_account_email
+        quota_project = normalize_text(adc_payload.get("quota_project_id"))
+        if quota_project:
+            return f"GCloud ADC ({quota_project})", ""
+        return "", ""
+
+    @staticmethod
+    def _has_adc_credentials(adc_payload: Dict[str, Any]) -> bool:
+        return bool(
+            normalize_text(adc_payload.get("refresh_token"))
+            or normalize_text(adc_payload.get("client_email"))
+            or normalize_text(adc_payload.get("type"))
+        )
+
+    @staticmethod
+    def _build_vertex_base_url(project_id: str, location: str) -> str:
+        normalized_project = normalize_text(project_id)
+        normalized_location = normalize_text(location) or CLAUDE_VERTEX_DEFAULT_LOCATION
+        if not normalized_project:
+            raise AuthSupportError("Claude Vertex AI 运行时缺少可用的项目 ID。")
+        return (
+            f"https://{normalized_location}-aiplatform.googleapis.com/v1/projects/"
+            f"{normalized_project}/locations/{normalized_location}/publishers/anthropic/models"
+        )
+
+    @staticmethod
+    def _build_runtime_headers(project_id: str, model: str) -> Dict[str, str]:
+        headers: Dict[str, str] = {}
+        normalized_project = normalize_text(project_id)
+        if normalized_project:
+            headers["X-Goog-User-Project"] = normalized_project
+        if normalize_text(model).lower().endswith("[1m]"):
+            headers["anthropic-beta"] = ANTHROPIC_VERTEX_1M_BETA_HEADER
+        return headers
+
+    def status(self, settings: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        adc_path = self.application_default_credentials_path()
+        adc_payload = self._load_adc_payload()
+        cli_available = bool(shutil.which(self.cli_name))
+        configured = self._has_adc_credentials(adc_payload)
+        detected = bool(configured or adc_path.exists())
+        project_id = self._resolve_status_project_id(settings)
+        location = self._resolve_status_location(settings)
+        account_label, account_email = self._extract_adc_account_label(adc_payload)
+        if cli_available and not account_email:
+            account_email = self._run_gcloud_value("config", "get-value", "account", "--quiet")
+        if account_email and not account_label:
+            account_label = account_email
+        runtime_available = bool(configured and cli_available and project_id)
+        runtime_unavailable_reason = ""
+        if configured and not cli_available:
+            runtime_unavailable_reason = "已检测到 Google Cloud 凭据，但当前机器缺少 gcloud，无法直接用于 Vertex AI 对话。"
+        elif configured and not project_id:
+            runtime_unavailable_reason = "已检测到 Google Cloud 凭据，但还缺少可用的 Vertex 项目 ID。"
+        watch_paths = [
+            str(path)
+            for path in (
+                adc_path,
+                self.config_default_path(),
+                self.active_config_path(),
+            )
+            if path.exists()
+        ]
+        message = (
+            f"已检测到可同步的 Vertex AI 本机认证，可直接用于 Claude 对话。项目 {project_id or '未设置'}，区域 {location}。"
+            if runtime_available
+            else "还没有检测到可直接用于 Claude on Vertex AI 的本机 Google Cloud 凭据。"
+        )
+        return {
+            **self.capability(),
+            "cli_name": self.cli_name,
+            "cli_available": cli_available,
+            "auth_path": str(adc_path),
+            "config_path": str(self.config_default_path()),
+            "watch_paths": watch_paths,
+            "detected": detected,
+            "configured": configured,
+            "runtime_available": runtime_available,
+            "runtime_unavailable_reason": runtime_unavailable_reason,
+            "account_label": account_label or "Google Cloud ADC",
+            "account_email": account_email,
+            "project_id": project_id,
+            "location": location,
+            "message": message,
+        }
+
+    def start_browser_flow(self, settings: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        command = self._resolve_cli()
+        subprocess.Popen(
+            [command, "auth", "application-default", "login"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            creationflags=int(getattr(subprocess, "DETACHED_PROCESS", 0))
+            | int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)),
+            start_new_session=True,
+        )
+        return {
+            "success": True,
+            "completed": False,
+            "message": "已启动 gcloud 浏览器登录。请先完成 Google Cloud 授权，再回来刷新本机状态。",
+        }
+
+    def submit_callback(
+        self,
+        flow_state: Optional[Dict[str, Any]],
+        payload: Optional[Dict[str, Any]] = None,
+        settings: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        status = self.status(settings)
+        if status.get("configured") or status.get("detected"):
+            return {
+                "success": True,
+                "completed": True,
+                "message": "Claude Vertex AI 本机认证现在已经可用了。",
+            }
+        return {
+            "success": True,
+            "completed": False,
+            "message": "还没有检测到可用的 Vertex AI 本机认证。请先完成 gcloud 登录，再回来重试。",
+        }
+
+    def _resolve_project_id(self, settings: Dict[str, Any]) -> str:
+        project_id = self._resolve_status_project_id(settings)
+        if project_id:
+            return project_id
+        raise AuthSupportError(
+            "Claude Vertex AI 缺少项目 ID。请填写 oauth_project_id，或先配置 ANTHROPIC_VERTEX_PROJECT_ID / "
+            "GOOGLE_CLOUD_PROJECT / GCLOUD_PROJECT。"
+        )
+
+    def _resolve_location(self, settings: Dict[str, Any]) -> str:
+        return self._resolve_status_location(settings)
+
+    def resolve_runtime(self, settings: Dict[str, Any]) -> ProviderRuntimeContext:
+        command = self._resolve_cli()
+        project_id = self._resolve_project_id(settings)
+        location = self._resolve_location(settings)
+        runtime = _GCloudAccessTokenRuntime(command)
+        model = normalize_text(settings.get("model")) or CLAUDE_VERTEX_DEFAULT_MODEL
+        return ProviderRuntimeContext(
+            api_key=runtime.get_access_token,
+            base_url=self._build_vertex_base_url(project_id, location),
+            extra_headers=lambda: self._build_runtime_headers(project_id, model),
+            refresh_auth=runtime.force_refresh,
+            auth_transport="anthropic_vertex",
+            metadata={
+                "project_id": project_id,
+                "location": location,
+                "source_auth_path": str(self.application_default_credentials_path()),
+                "credential_strategy": "gcloud_application_default",
+                "model_hint": model,
+            },
+        )
+
+    def logout_source(self, settings: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        command = self._resolve_cli()
+        return self._run_cli_command([command, "auth", "application-default", "revoke", "--quiet"])
+
+
 class KimiCodeLocalAuthProvider(BaseAuthProvider):
     id = "kimi_code_local"
     provider_id = "kimi"
@@ -2100,11 +2430,15 @@ class KimiCodeLocalAuthProvider(BaseAuthProvider):
             name_hints=self.keychain_target_hints,
         )
         config_summary = _summarize_kimi_config(self.config_path())
+        runtime_config = _read_kimi_runtime_config(self.config_path())
+        config_api_key = normalize_text(runtime_config.get("api_key"))
+        config_api_key_available = bool(config_api_key and not _looks_like_placeholder_secret(config_api_key))
         credential_path, _, credential_metadata = self._load_best_credential()
         account_email = normalize_text(credential_metadata.get("account_email"))
         account_label = normalize_text(credential_metadata.get("account_label"))
         detected = bool(credential_path or self.config_path().exists() or keychain_status)
-        configured = bool(credential_path)
+        configured = bool(credential_path or config_api_key_available)
+        runtime_available = configured
         provider_names = normalize_text(config_summary.get("provider_names"))
         model_name = normalize_text(config_summary.get("model"))
         watch_paths = [str(self.config_path())]
@@ -2115,11 +2449,15 @@ class KimiCodeLocalAuthProvider(BaseAuthProvider):
             watch_paths.append(str(credential_path.resolve()))
         if keychain_status and not account_label:
             account_label = normalize_text(keychain_status.get("account_label")) or account_label
+        if config_api_key_available and not account_label:
+            account_label = "Kimi Code API Key"
         message = (
             "已检测到可同步的 Kimi Code 本机登录源。"
             if configured
             else "还没有检测到可同步的 Kimi Code 本机登录源。"
         )
+        if config_api_key_available:
+            message = f"{message} 宸插彂鐜?config.toml 涓殑 Kimi Code API Key锛屽彲鐩存帴鐢ㄤ簬瀵硅瘽銆?"
         if provider_names:
             message = f"{message} 当前配置的 Provider：{provider_names}。"
         if model_name:
@@ -2134,6 +2472,8 @@ class KimiCodeLocalAuthProvider(BaseAuthProvider):
             "config_path": str(self.config_path()),
             "detected": detected,
             "configured": configured,
+            "runtime_available": runtime_available,
+            "runtime_unavailable_reason": "",
             "account_label": account_email or account_label or "Kimi Code 本机登录",
             "account_email": account_email,
             "provider_names": provider_names,
@@ -2631,6 +2971,7 @@ def build_auth_provider_registry() -> Dict[str, BaseAuthProvider]:
         "google_gemini_cli": GoogleGeminiCliAuthProvider(),
         "qwen_oauth": QwenOAuthProvider(),
         "claude_code_local": ClaudeCodeLocalAuthProvider(),
+        "claude_vertex_local": ClaudeVertexLocalAuthProvider(),
         "kimi_code_local": KimiCodeLocalAuthProvider(),
         "doubao_session": DoubaoWebSessionProvider(),
         "tencent_yuanbao": TencentYuanbaoExperimentalAuthProvider(),

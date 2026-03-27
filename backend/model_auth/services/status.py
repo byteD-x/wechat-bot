@@ -9,11 +9,21 @@ from ..domain.models import (
     HealthCheckResult,
     ProviderOverviewCard,
 )
-from ..providers.registry import get_method_auth_provider_id, get_provider_definition
+from ..providers.registry import (
+    get_method_auth_provider_id,
+    get_provider_definition,
+    get_provider_required_fields,
+)
 from ..storage.credential_store import CredentialStore, get_credential_store
 from ..sync.discovery import extract_locator_path, get_legacy_status_map, get_method_local_status
 from ..sync.orchestrator import build_local_sync_state
-from .migration import _resolve_method_runtime_defaults, _select_runtime_profile, ensure_provider_auth_center_config
+from .migration import (
+    _collect_runtime_metadata_values,
+    _resolve_method_runtime_defaults,
+    _resolve_profile_runtime_readiness,
+    _select_runtime_profile,
+    ensure_provider_auth_center_config,
+)
 
 _CARD_RANK = {
     AuthStatus.CONNECTED: 1,
@@ -84,13 +94,16 @@ def _build_source_group(
     }
 
 
-def _resolve_runtime_readiness(method, profile: Dict[str, Any] | None, local_status: Dict[str, Any]) -> tuple[bool, str]:
+def _resolve_runtime_readiness(
+    entry: Dict[str, Any],
+    method,
+    profile: Dict[str, Any] | None,
+    local_status: Dict[str, Any],
+) -> tuple[bool, str]:
     if not bool(method.runtime_supported):
         return False, "这种认证方式暂不支持直接用于运行时调用。"
-    profile_metadata = dict((profile or {}).get("metadata") or {})
-    if "runtime_ready" in profile_metadata:
-        ready = bool(profile_metadata.get("runtime_ready"))
-        reason = str(profile_metadata.get("runtime_unavailable_reason") or "").strip()
+    if profile is not None:
+        ready, reason = _resolve_profile_runtime_readiness(entry, profile, method)
         if not ready and not reason:
             reason = "这组认证已经配置，但暂时还没有可用于运行时请求的凭据。"
         return ready, reason
@@ -576,9 +589,10 @@ def build_provider_overview_cards(
     config: Dict[str, Any],
     *,
     credential_store: CredentialStore | None = None,
+    assume_normalized: bool = False,
 ) -> List[ProviderOverviewCard]:
     store = credential_store or get_credential_store()
-    normalized = ensure_provider_auth_center_config(config, credential_store=store)
+    normalized = config if assume_normalized else ensure_provider_auth_center_config(config, credential_store=store)
     center = dict(((normalized.get("api") or {}).get("provider_auth_center") or {}))
     provider_entries = dict(center.get("providers") or {})
     active_provider_id = str(center.get("active_provider_id") or "").strip().lower()
@@ -613,7 +627,12 @@ def build_provider_overview_cards(
                         sync_state=sync_state,
                         profile_id=str(profile.get("id") or "").strip(),
                     )
-                    runtime_ready, runtime_unavailable_reason = _resolve_runtime_readiness(method, profile, local_status)
+                    runtime_ready, runtime_unavailable_reason = _resolve_runtime_readiness(
+                        entry,
+                        method,
+                        profile,
+                        local_status,
+                    )
                     runtime_defaults = _resolve_method_runtime_defaults(entry, method, profile_metadata)
                     if not binding.get("locator_path"):
                         binding["locator_path"] = extract_locator_path(local_status)
@@ -717,7 +736,12 @@ def build_provider_overview_cards(
                     local_status,
                     pending_flow=bool(pending_flows.get(method.id)),
                 )
-                runtime_ready, runtime_unavailable_reason = _resolve_runtime_readiness(method, None, local_status)
+                runtime_ready, runtime_unavailable_reason = _resolve_runtime_readiness(
+                    entry,
+                    method,
+                    None,
+                    local_status,
+                )
                 runtime_defaults = _resolve_method_runtime_defaults(entry, method)
                 action_items = _actions_for_state(
                     status,
@@ -843,6 +867,7 @@ def build_provider_overview_cards(
         runtime_unavailable_reason = ""
         if not can_set_active_provider and selected_profile and selected_method is not None:
             _, runtime_unavailable_reason = _resolve_runtime_readiness(
+                entry,
                 selected_method,
                 selected_profile,
                 get_method_local_status(selected_method, legacy_statuses),
@@ -884,8 +909,15 @@ def build_provider_overview_cards(
                     "default_model": str(entry.get("default_model") or "").strip(),
                     "default_base_url": str(entry.get("default_base_url") or "").strip(),
                     "alias": str(entry.get("alias") or "").strip(),
-                    "oauth_project_id": str((entry.get("metadata") or {}).get("oauth_project_id") or "").strip(),
-                    "oauth_location": str((entry.get("metadata") or {}).get("oauth_location") or "").strip(),
+                    **{
+                        field_name: str(value or "").strip()
+                        for field_name, value in _collect_runtime_metadata_values(entry, provider_id=provider_id).items()
+                    },
+                    **{
+                        field_name: ""
+                        for field_name in get_provider_required_fields(provider_id)
+                        if field_name not in _collect_runtime_metadata_values(entry, provider_id=provider_id)
+                    },
                     "provider_counts": provider_counts,
                     "provider_sync": provider_sync,
                     "provider_health": provider_health,

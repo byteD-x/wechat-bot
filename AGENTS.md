@@ -116,8 +116,13 @@
   - 错误处理与日志安全
   - 测试覆盖是否足够
 - 项目发版
- - 版本号需要符合 x.y.z 原则
- - 每次出新版需要有更新说明，只要具体的更新内容
+ - Git tag 必须符合 `vX.Y.Z`，`package.json` 中的版本号必须符合 `X.Y.Z`，两者必须一致
+ - 每次发版都必须提供 `docs/release_notes/<tag>.md`
+ - Release 正文只写本次已实际发布、且对用户/集成方/运维方/开发者有外部影响的变更
+ - Release 正文固定按 `Features`、`Improvements`、`Fixes`、`Performance`、`Breaking Changes` 的顺序分组；无内容的分类直接省略
+ - 每条更新只表达一件事，优先写“做了什么 + 对谁生效或在哪种场景下生效 + 带来的结果”
+ - 禁止直接照搬 commit message、PR 标题、任务标题；禁止出现 commit hash、`misc changes`、`bug fixes and improvements`、`bump version`、`若干优化`、`一些调整`
+ - 默认使用非技术语言；只有在会影响升级、集成或使用时，才写必要的技术性变化
 
 ## 9. 执行清单
 - 开始前：

@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional
 
 from .audio_transcription import transcribe_audio_file
 from .base import BaseTransport
+from ..utils.text_codec import decode_text_bytes
 from ..utils.runtime_artifacts import (
     WCFERRY_DIR,
     chdir_temporarily,
@@ -64,12 +65,10 @@ def _powershell(command: str) -> str:
             command,
         ],
         capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="ignore",
+        text=False,
         check=False,
     )
-    return (completed.stdout or "").strip()
+    return decode_text_bytes(completed.stdout).strip()
 
 
 def _is_windows_admin() -> bool:

@@ -1,5 +1,9 @@
 from backend.core.provider_compat import (
+    build_anthropic_vertex_request_url,
+    build_anthropic_vertex_messages_payload,
     build_openai_chat_payload,
+    infer_auth_transport,
+    normalize_anthropic_vertex_model,
     normalize_chat_result,
     normalize_provider_error,
 )
@@ -81,3 +85,36 @@ def test_normalize_provider_error_prefers_provider_payload():
     assert normalized.code == "too_many_requests"
     assert normalized.type == "limit"
     assert normalized.retryable is True
+
+
+def test_infer_auth_transport_detects_anthropic_compatible_paths():
+    assert infer_auth_transport("https://api.anthropic.com/v1") == "anthropic_native"
+    assert (
+        infer_auth_transport(
+            "https://global-aiplatform.googleapis.com/v1/projects/demo/locations/global/publishers/anthropic/models"
+        )
+        == "anthropic_vertex"
+    )
+    assert infer_auth_transport("https://api.minimax.io/anthropic") == "anthropic_native"
+    assert infer_auth_transport("https://api.minimaxi.com/anthropic/messages") == "anthropic_native"
+    assert infer_auth_transport("https://api.openai.com/v1") == "openai_compatible"
+
+
+def test_build_anthropic_vertex_payload_normalizes_legacy_model_ids():
+    payload = build_anthropic_vertex_messages_payload(
+        model="claude-sonnet-4-0",
+        messages=[{"role": "user", "content": "hello"}],
+        max_completion_tokens=32,
+    )
+
+    assert normalize_anthropic_vertex_model("claude-sonnet-4-0") == "claude-sonnet-4@20250514"
+    assert payload["anthropic_version"] == "vertex-2023-10-16"
+    assert payload["messages"][0]["content"][0]["text"] == "hello"
+    assert "model" not in payload
+    assert (
+        build_anthropic_vertex_request_url(
+            "https://global-aiplatform.googleapis.com/v1/projects/demo/locations/global/publishers/anthropic/models",
+            "claude-sonnet-4-0",
+        )
+        == "https://global-aiplatform.googleapis.com/v1/projects/demo/locations/global/publishers/anthropic/models/claude-sonnet-4@20250514:rawPredict"
+    )

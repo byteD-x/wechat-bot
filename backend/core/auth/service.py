@@ -51,6 +51,10 @@ def _infer_service_provider_id(payload: Dict[str, Any]) -> str:
     lower_name = normalize_text(payload.get("name")).lower()
     lower_base_url = normalize_text(payload.get("base_url")).lower()
     lower_model = normalize_text(payload.get("model")).lower()
+    if "aiplatform.googleapis.com" in lower_base_url and (
+        "/publishers/anthropic/" in lower_base_url or "claude" in lower_name or "claude" in lower_model
+    ):
+        return "anthropic"
     haystacks = [lower_name, lower_base_url, lower_model]
     for provider_id, aliases in _SERVICE_ALIASES.items():
         if any(alias in value for alias in aliases for value in haystacks if value):
@@ -63,6 +67,13 @@ def infer_auth_provider_id(settings: Optional[Dict[str, Any]]) -> str:
     explicit = normalize_text(payload.get("oauth_provider"))
     if explicit in _AUTH_PROVIDERS:
         return explicit
+    lower_name = normalize_text(payload.get("name")).lower()
+    lower_base_url = normalize_text(payload.get("base_url")).lower()
+    lower_model = normalize_text(payload.get("model")).lower()
+    if "aiplatform.googleapis.com" in lower_base_url and (
+        "/publishers/anthropic/" in lower_base_url or "claude" in lower_name or "claude" in lower_model
+    ):
+        return "claude_vertex_local"
     provider_id = _infer_service_provider_id(payload)
     return _DEFAULT_AUTH_PROVIDER_BY_SERVICE.get(provider_id, "")
 
@@ -206,25 +217,93 @@ def get_auth_provider_statuses() -> Dict[str, Any]:
     }
 
 
+def _strip_sync_metadata(status: Dict[str, Any] | None) -> Dict[str, Any]:
+    return {
+        key: value
+        for key, value in dict(status or {}).items()
+        if not str(key).startswith("_sync_")
+    }
+
+
+def get_cached_auth_provider_statuses(*, force_refresh: bool = False) -> Dict[str, Any]:
+    try:
+        from backend.model_auth.sync.orchestrator import get_local_auth_sync_orchestrator
+
+        orchestrator = get_local_auth_sync_orchestrator()
+        orchestrator.start()
+        snapshot = orchestrator.get_snapshot(
+            force_refresh=force_refresh,
+            reason="auth_status_snapshot",
+        )
+    except Exception:
+        return get_auth_provider_statuses()
+
+    providers = {
+        str(provider_id): _strip_sync_metadata(status)
+        for provider_id, status in dict(snapshot.get("providers") or {}).items()
+    }
+    return {
+        "success": bool(snapshot.get("success", True)),
+        "providers": providers,
+        "supported_provider_ids": get_supported_auth_provider_ids(),
+        "refreshed_at": int(snapshot.get("refreshed_at") or 0),
+        "revision": int(snapshot.get("revision") or 0),
+        "changed_provider_ids": [
+            str(provider_id).strip()
+            for provider_id in (snapshot.get("changed_provider_ids") or [])
+            if str(provider_id).strip()
+        ],
+        "refreshing": bool(snapshot.get("refreshing")),
+        "message": str(snapshot.get("message") or "").strip(),
+    }
+
+
 def _list_missing_required_fields(
     provider: Optional[BaseAuthProvider],
     settings: Dict[str, Any],
+    provider_status: Optional[Dict[str, Any]] = None,
 ) -> list[str]:
     if provider is None:
         return []
+    status_payload = dict(provider_status or {})
+
+    def _resolve_field_value(field_name: str) -> str:
+        direct = normalize_text(settings.get(field_name))
+        if direct:
+            return direct
+        status_direct = normalize_text(status_payload.get(field_name))
+        if status_direct:
+            return status_direct
+        fallback_keys = {
+            "oauth_project_id": ("project_id",),
+            "oauth_location": ("location", "region"),
+        }.get(field_name, ())
+        for fallback_key in fallback_keys:
+            fallback = normalize_text(status_payload.get(fallback_key))
+            if fallback:
+                return fallback
+        return ""
+
     missing: list[str] = []
     for field_name in provider.requires_extra_fields:
-        if not normalize_text(settings.get(field_name)):
+        if not _resolve_field_value(field_name):
             missing.append(field_name)
     return missing
 
 
-def get_preset_auth_summary(settings: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def get_preset_auth_summary(
+    settings: Optional[Dict[str, Any]],
+    *,
+    provider_statuses: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     payload = dict(settings or {})
     auth_mode = normalize_auth_mode(payload.get("auth_mode"))
     provider_id = infer_auth_provider_id(payload)
     provider = get_auth_provider(provider_id)
-    provider_status = provider.status(payload) if provider else None
+    if provider and isinstance(provider_statuses, dict):
+        provider_status = dict(provider_statuses.get(provider_id) or {})
+    else:
+        provider_status = provider.status(payload) if provider else None
     oauth_source = normalize_text(payload.get("oauth_source"))
     oauth_binding = payload.get("oauth_binding") if isinstance(payload.get("oauth_binding"), dict) else {}
     imported_runtime_snapshot = _load_runtime_snapshot(payload.get("credential_ref")) if _is_import_copy_binding(payload) else {}
@@ -234,7 +313,7 @@ def get_preset_auth_summary(settings: Optional[Dict[str, Any]]) -> Dict[str, Any
     api_key = normalize_text(payload.get("api_key"))
     api_key_configured = bool(api_key and not api_key.startswith("YOUR_"))
     api_key_ready = bool(allow_empty_key or api_key_configured)
-    oauth_missing_fields = _list_missing_required_fields(provider, payload)
+    oauth_missing_fields = _list_missing_required_fields(provider, payload, provider_status)
     oauth_detected_local = bool(provider_status and provider_status.get("detected"))
     oauth_ready = bool(
         imported_copy_ready

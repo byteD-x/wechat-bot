@@ -667,6 +667,12 @@ function getCurrentBaseUrl(card = {}, provider = {}) {
     return runtimeBaseUrl || String(card?.metadata?.default_base_url || provider?.default_base_url || '').trim();
 }
 
+function normalizeRuntimeBaseUrl(value) {
+    return String(value || '')
+        .trim()
+        .replace(/\/(chat\/completions|responses|messages)$/i, '');
+}
+
 function getCurrentProfileLabel(card = {}, state = {}, method = {}) {
     return String(card?.selected_label || state?.account_email || state?.account_label || method?.label || '').trim();
 }
@@ -881,6 +887,8 @@ export class ModelsPage extends PageController {
         this._searchQuery = '';
         this._listFilter = 'all';
         this._loadingPromise = null;
+        this._localAuthSyncRefreshTimer = null;
+        this._localAuthSyncRefreshAttempt = 0;
         this._activeWorkflow = null;
         this._onboardingSeen = loadOnboardingState();
         this._emailVisibilityMode = loadEmailVisibilityPreference();
@@ -927,6 +935,45 @@ export class ModelsPage extends PageController {
         await this.loadOverview({ preserveSelection: true });
     }
 
+    async onLeave() {
+        this._clearPendingOverviewRefresh();
+        await super.onLeave();
+    }
+
+    async onDestroy() {
+        this._clearPendingOverviewRefresh();
+        await super.onDestroy();
+    }
+
+    _clearPendingOverviewRefresh() {
+        if (this._localAuthSyncRefreshTimer) {
+            clearTimeout(this._localAuthSyncRefreshTimer);
+            this._localAuthSyncRefreshTimer = null;
+        }
+        this._localAuthSyncRefreshAttempt = 0;
+    }
+
+    _schedulePendingOverviewRefresh(overview = null) {
+        const syncState = overview?.local_auth_sync || {};
+        const isRefreshing = Boolean(syncState?.refreshing);
+        if (!isRefreshing || !this.isActive()) {
+            this._clearPendingOverviewRefresh();
+            return;
+        }
+        if (this._localAuthSyncRefreshTimer) {
+            return;
+        }
+        const delayMs = Math.min(4000, 600 + (this._localAuthSyncRefreshAttempt * 600));
+        this._localAuthSyncRefreshAttempt += 1;
+        this._localAuthSyncRefreshTimer = setTimeout(() => {
+            this._localAuthSyncRefreshTimer = null;
+            if (!this.isActive()) {
+                return;
+            }
+            void this.loadOverview({ preserveSelection: true });
+        }, delayMs);
+    }
+
     async loadOverview(options = {}) {
         if (this._loadingPromise) {
             return this._loadingPromise;
@@ -946,10 +993,17 @@ export class ModelsPage extends PageController {
                 if (catalogResult.status === 'fulfilled' && catalogResult.value?.providers) {
                     this.applyModelCatalog(catalogResult.value);
                 }
-                this.applyOverview(overviewResult.value?.overview || null, options);
+                const overview = overviewResult.value?.overview || null;
+                this.applyOverview(overview, options);
+                this._schedulePendingOverviewRefresh(overview);
                 await this._ensureProviderModels(this._selectedProviderId);
-                this.render();
+                if (this.isActive()) {
+                    this.render();
+                }
             } catch (error) {
+                if (!this.isActive()) {
+                    return;
+                }
                 console.error('[ModelsPage] load overview failed:', error);
                 toast.error(error?.message || '加载模型中心失败');
                 this.renderError(error?.message || '加载模型中心失败');
@@ -1740,7 +1794,11 @@ export class ModelsPage extends PageController {
     }
 
     renderWorkflowEntryButton(provider, method, state, action, options = {}) {
-        const uiAction = action?.id === 'start_browser_auth' ? 'workflow_start_browser' : 'open_workflow';
+        const requiresWorkflowForm = action?.id === 'start_browser_auth'
+            && this.getMethodRequiredFields(method).length > 0;
+        const uiAction = action?.id === 'start_browser_auth' && !requiresWorkflowForm
+            ? 'workflow_start_browser'
+            : 'open_workflow';
         const tone = options.primary ? 'btn-primary' : 'btn-secondary';
         const workflowKind = getActionWorkflowKind(action?.id, method);
         const label = action?.label || getLocalizedActionLabel(action?.id) || '查看';
@@ -2005,6 +2063,118 @@ export class ModelsPage extends PageController {
         });
     }
 
+    getMethodRequiredFields(method = {}) {
+        return Array.isArray(method?.requires_fields)
+            ? method.requires_fields.map((item) => String(item || '').trim()).filter(Boolean)
+            : [];
+    }
+
+    renderMethodRequiredFieldInputs(card = {}, method = {}) {
+        const fieldNames = this.getMethodRequiredFields(method);
+        if (!fieldNames.length) {
+            return '';
+        }
+        return fieldNames.map((fieldName) => {
+            const meta = EXTRA_FIELD_META[fieldName] || { label: fieldName, placeholder: '' };
+            return `
+                <label class="form-group full-width">
+                    <span class="form-label">${escapeHtml(meta.label)}</span>
+                    <input
+                        class="form-input"
+                        name="${escapeHtml(fieldName)}"
+                        type="text"
+                        value="${escapeHtml(card?.metadata?.[fieldName] || '')}"
+                        placeholder="${escapeHtml(meta.placeholder || '')}"
+                    >
+                </label>
+            `;
+        }).join('');
+    }
+
+    buildMethodSetupDefaultsPayload(providerId, provider = {}, card = {}, method = {}, formData = null) {
+        if (!providerId) {
+            return null;
+        }
+        const payload = { provider_id: providerId };
+        let hasChanges = false;
+        const fieldNames = this.getMethodRequiredFields(method);
+        fieldNames.forEach((fieldName) => {
+            const value = String(formData?.get?.(fieldName) || '').trim();
+            if (value) {
+                payload[fieldName] = value;
+                hasChanges = true;
+            }
+        });
+        if (!this.hasConfiguredProfile(card)) {
+            const recommendedModel = String(method?.metadata?.recommended_model || '').trim();
+            const recommendedBaseUrl = normalizeRuntimeBaseUrl(method?.metadata?.recommended_base_url);
+            const providerDefaultModel = String(provider?.default_model || '').trim();
+            const providerDefaultBaseUrl = normalizeRuntimeBaseUrl(provider?.default_base_url);
+            const currentDefaultModel = String(card?.metadata?.default_model || providerDefaultModel || '').trim();
+            const currentDefaultBaseUrl = normalizeRuntimeBaseUrl(card?.metadata?.default_base_url || providerDefaultBaseUrl || '');
+            if (recommendedModel && recommendedModel !== currentDefaultModel && (!currentDefaultModel || currentDefaultModel === providerDefaultModel)) {
+                payload.default_model = recommendedModel;
+                hasChanges = true;
+            }
+            if (
+                recommendedBaseUrl
+                && recommendedBaseUrl !== currentDefaultBaseUrl
+                && (!currentDefaultBaseUrl || currentDefaultBaseUrl === providerDefaultBaseUrl)
+            ) {
+                payload.default_base_url = recommendedBaseUrl;
+                hasChanges = true;
+            }
+        }
+        if (!hasChanges) {
+            return null;
+        }
+        return payload;
+    }
+
+    getMethodRuntimePreview(providerId, provider = {}, card = {}, method = {}) {
+        const currentModel = String(getCurrentModel(card, provider) || '').trim();
+        const currentBaseUrl = String(getCurrentBaseUrl(card, provider) || '').trim();
+        const payload = this.buildMethodSetupDefaultsPayload(providerId, provider, card, method, null) || {};
+        return {
+            model: String(payload.default_model || currentModel || '').trim(),
+            baseUrl: String(payload.default_base_url || currentBaseUrl || '').trim(),
+            modelLabel: payload.default_model ? '完成后默认模型' : '当前模型',
+            baseUrlLabel: payload.default_base_url ? '完成后默认端点' : '当前端点',
+        };
+    }
+
+    renderMethodRuntimePreview(providerId, provider = {}, card = {}, method = {}, variant = 'meta') {
+        const preview = this.getMethodRuntimePreview(providerId, provider, card, method);
+        const rows = [];
+        if (preview.model) {
+            rows.push({ label: preview.modelLabel, value: preview.model });
+        }
+        if (preview.baseUrl) {
+            rows.push({ label: preview.baseUrlLabel, value: preview.baseUrl });
+        }
+        if (!rows.length) {
+            return '';
+        }
+        if (variant === 'callout') {
+            return `
+                <div class="modal-callout">
+                    ${rows.map((item) => `<div>${escapeHtml(item.label)}：${escapeHtml(item.value)}</div>`).join('')}
+                </div>
+            `;
+        }
+        return rows
+            .map((item) => `<div class="model-center-workflow-meta">${escapeHtml(item.label)}：${escapeHtml(item.value)}</div>`)
+            .join('');
+    }
+
+    async persistMethodRequiredFields(providerId, provider, card, method, formData) {
+        const payload = this.buildMethodSetupDefaultsPayload(providerId, provider, card, method, formData);
+        if (!payload) {
+            return null;
+        }
+        return this.runAction('update_provider_defaults', payload, { preserveSelection: true, providerId });
+    }
+
     renderModelSelect(providerId, currentModel, options, isCustom) {
         const selectOptions = [
             ['', '选择模型'],
@@ -2124,7 +2294,7 @@ export class ModelsPage extends PageController {
                 body: `
                     <form id="${MODAL_FORM_ID}" data-model-auth-form="api_key" data-provider-id="${escapeHtml(context.provider?.id || '')}" data-method-id="${escapeHtml(context.method?.id || '')}">
                         <div class="model-center-workflow-stack">
-                            <div class="modal-callout">当前模型：${escapeHtml(getCurrentModel(context.card, context.provider) || '未选择')}</div>
+                            ${this.renderMethodRuntimePreview(context.provider?.id || '', context.provider, context.card, context.method, 'callout')}
                             <label class="form-group full-width">
                                 <span class="form-label">API Key</span>
                                 <input class="form-input" name="api_key" type="password" placeholder="粘贴 API Key">
@@ -2184,23 +2354,32 @@ export class ModelsPage extends PageController {
         }
         if (workflow.kind === 'local') {
             const hasImportCopy = normalizeStateActions(context.state).some((item) => item.id === 'import_local_auth_copy');
+            const shouldSetDefault = this.shouldSetDefaultByDefault(context.card);
             return {
                 kicker: '本机同步',
                 title: context.method?.label || '同步本机登录',
                 subtitle: '这台电脑登过就优先用这个。',
                 body: `
-                    <div class="model-center-workflow-stack">
+                    <form id="${MODAL_FORM_ID}" data-model-auth-form="local_auth" data-provider-id="${escapeHtml(context.provider?.id || '')}" data-method-id="${escapeHtml(context.method?.id || '')}">
+                        <div class="model-center-workflow-stack">
                         <div class="modal-callout">${escapeHtml(this.formatEmailVisibilityText(context.state?.account_label || context.state?.account_email || '已检测到本机可同步的登录状态。'))}</div>
+                        ${this.renderMethodRuntimePreview(context.provider?.id || '', context.provider, context.card, context.method)}
+                        ${this.renderMethodRequiredFieldInputs(context.card, context.method)}
                         <div class="model-center-tip-grid">
                             ${renderWorkflowCard({ title: '直接同步', text: '后面更省心。' })}
                             ${renderWorkflowCard({ title: '导入副本', text: '需要独立凭据时再用。' })}
                         </div>
+                        <label class="form-checkbox model-center-inline-checkbox">
+                            <input type="checkbox" name="set_default" ${shouldSetDefault ? 'checked' : ''}>
+                            <span class="form-checkbox-label">完成后直接使用</span>
+                        </label>
                     </div>
+                    </form>
                 `,
                 footer: `
                     <button type="button" class="btn btn-secondary btn-sm" data-model-auth-ui="workflow_close">取消</button>
-                    ${hasImportCopy ? `<button type="button" class="btn btn-secondary btn-sm" data-model-auth-action="import_local_auth_copy" data-provider-id="${escapeHtml(context.provider?.id || '')}" data-method-id="${escapeHtml(context.method?.id || '')}">导入认证副本</button>` : ''}
-                    <button type="button" class="btn btn-primary btn-sm" data-model-auth-action="bind_local_auth" data-provider-id="${escapeHtml(context.provider?.id || '')}" data-method-id="${escapeHtml(context.method?.id || '')}">立即同步</button>
+                    ${hasImportCopy ? `<button type="submit" class="btn btn-secondary btn-sm" form="${MODAL_FORM_ID}" data-model-auth-submit-action="import_local_auth_copy">导入认证副本</button>` : ''}
+                    <button type="submit" class="btn btn-primary btn-sm" form="${MODAL_FORM_ID}" data-model-auth-submit-action="bind_local_auth">立即同步</button>
                 `,
             };
         }
@@ -2217,12 +2396,12 @@ export class ModelsPage extends PageController {
             body: this.renderBrowserAuthForm(context.card, context.provider, context.method, context.state),
             footer: browserHasPending
                 ? `
-                    <button type="button" class="btn btn-secondary btn-sm" data-model-auth-ui="workflow_start_browser" data-provider-id="${escapeHtml(context.provider?.id || '')}" data-method-id="${escapeHtml(context.method?.id || '')}">重新打开登录页</button>
+                    <button type="submit" class="btn btn-secondary btn-sm" form="${MODAL_FORM_ID}" data-model-auth-submit-action="reopen_browser_auth">重新打开登录页</button>
                     <button type="submit" class="btn btn-primary btn-sm" form="${MODAL_FORM_ID}">我已登录，继续</button>
                 `
                 : `
                     <button type="button" class="btn btn-secondary btn-sm" data-model-auth-ui="workflow_close">取消</button>
-                    <button type="button" class="btn btn-primary btn-sm" data-model-auth-ui="workflow_start_browser" data-provider-id="${escapeHtml(context.provider?.id || '')}" data-method-id="${escapeHtml(context.method?.id || '')}">打开登录页</button>
+                    <button type="submit" class="btn btn-primary btn-sm" form="${MODAL_FORM_ID}" data-model-auth-submit-action="start_browser_auth">打开登录页</button>
                 `,
         };
     }
@@ -2279,8 +2458,9 @@ export class ModelsPage extends PageController {
                             : '先打开登录页，再回来'}
                     </div>
                     ${pending?.started_at ? `<div class="model-center-workflow-meta">最近打开：${escapeHtml(formatTimestamp(pending.started_at))}</div>` : ''}
-                    ${getCurrentModel(card, provider) ? `<div class="model-center-workflow-meta">当前模型：${escapeHtml(getCurrentModel(card, provider))}</div>` : ''}
+                    ${this.renderMethodRuntimePreview(provider?.id || '', provider, card, method)}
                     <input type="hidden" name="flow_id" value="${escapeHtml(flowId)}">
+                    ${this.renderMethodRequiredFieldInputs(card, method)}
                     <details class="model-center-mini-details">
                         <summary>可选项</summary>
                         <label class="form-group full-width">
@@ -2565,6 +2745,8 @@ export class ModelsPage extends PageController {
         const formData = new FormData(form);
         const submitAction = String(submitter?.dataset?.modelAuthSubmitAction || '').trim();
         const card = this.getCardByProviderId(providerId) || this.getSelectedCard() || {};
+        const provider = this.getProvider(providerId, card?.provider || {});
+        const method = this.getMethodMap(provider).get(methodId) || { id: methodId };
         const defaultSetDefault = this.shouldSetDefaultByDefault(card);
 
         if (formType === 'provider_model' || formType === 'workflow_model') {
@@ -2589,14 +2771,11 @@ export class ModelsPage extends PageController {
         }
 
         if (formType === 'advanced_settings') {
-            await this.runAction('update_provider_defaults', {
-                provider_id: providerId,
-                legacy_preset_name: formData.get('legacy_preset_name'),
-                alias: formData.get('alias'),
-                default_base_url: formData.get('default_base_url'),
-                oauth_project_id: formData.get('oauth_project_id'),
-                oauth_location: formData.get('oauth_location'),
-            }, { preserveSelection: true, providerId });
+            const advancedPayload = { provider_id: providerId };
+            for (const [key, value] of formData.entries()) {
+                advancedPayload[key] = typeof value === 'string' ? value.trim() : value;
+            }
+            await this.runAction('update_provider_defaults', advancedPayload, { preserveSelection: true, providerId });
             return;
         }
 
@@ -2606,6 +2785,7 @@ export class ModelsPage extends PageController {
                 toast.error('请输入 API Key');
                 return;
             }
+            await this.persistMethodRequiredFields(providerId, provider, card, method, formData);
             await this.runAction('save_api_key', {
                 provider_id: providerId,
                 method_id: methodId,
@@ -2634,12 +2814,45 @@ export class ModelsPage extends PageController {
             return;
         }
 
+        if (formType === 'local_auth') {
+            await this.persistMethodRequiredFields(providerId, provider, card, method, formData);
+            await this.runAction(
+                submitAction === 'import_local_auth_copy' ? 'import_local_auth_copy' : 'bind_local_auth',
+                {
+                    provider_id: providerId,
+                    method_id: methodId,
+                    set_default: getFormBooleanWithDefault(formData, 'set_default', defaultSetDefault),
+                },
+                { preserveSelection: true, providerId },
+            );
+            this.closeWorkflowModal();
+            return;
+        }
+
         if (formType === 'browser_callback') {
+            if (submitAction === 'start_browser_auth' || submitAction === 'reopen_browser_auth') {
+                await this.persistMethodRequiredFields(providerId, provider, card, method, formData);
+                await this.runAction('start_browser_auth', {
+                    provider_id: providerId,
+                    method_id: methodId,
+                }, {
+                    preserveSelection: true,
+                    providerId,
+                });
+                await this.openWorkflow({
+                    kind: 'browser',
+                    providerId,
+                    methodId,
+                    skipOnboarding: true,
+                });
+                return;
+            }
             const flowValue = String(formData.get('flow_id') || form?.dataset?.flowId || '').trim();
             if (!flowValue) {
                 toast.error('登录流程信息缺失，请重新打开登录页');
                 return;
             }
+            await this.persistMethodRequiredFields(providerId, provider, card, method, formData);
             const result = await this.runAction('complete_browser_auth', {
                 provider_id: providerId,
                 method_id: methodId,
@@ -2665,11 +2878,10 @@ export class ModelsPage extends PageController {
         try {
             const result = await apiService.runModelAuthAction(action, payload);
             this.applyOverview(result?.overview || null, { preserveSelection: options.preserveSelection !== false });
-            if (options.providerId) {
-                this._selectedProviderId = String(options.providerId);
+            if (this.isActive()) {
+                this.render();
+                this.renderFeedback(result?.message || '操作已完成');
             }
-            this.render();
-            this.renderFeedback(result?.message || '操作已完成');
             toast.success(result?.message || '操作已完成');
             return result;
         } catch (error) {

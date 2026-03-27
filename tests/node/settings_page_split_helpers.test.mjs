@@ -20,6 +20,7 @@ import {
     loadSettings,
     scheduleAutoSave,
     shouldRefreshAudit,
+    watchConfigChanges,
 } from '../../src/renderer/js/pages/settings/runtime-sync.js';
 import {
     EMAIL_VISIBILITY_STORAGE_KEY,
@@ -109,12 +110,30 @@ test('runtime-sync loadSettings refreshes page state and schedules audit when ne
             logging: {},
             agent: {},
             services: {},
+            modelCatalog: {
+                providers: [
+                    {
+                        id: 'openai',
+                        label: 'OpenAI',
+                        base_url: 'https://api.openai.com/v1',
+                        default_model: 'gpt-4.1',
+                    },
+                    {
+                        id: 'qwen',
+                        label: 'Qwen',
+                        base_url: 'https://coding.dashscope.aliyuncs.com/v1',
+                        default_model: 'qwen3-coder-next',
+                    },
+                ],
+            },
         });
 
         await withDom(async () => {
             const calls = [];
             const page = {
                 _config: null,
+                _modelCatalog: null,
+                _providersById: new Map(),
                 _configAudit: null,
                 _loaded: false,
                 _loadingPromise: null,
@@ -169,6 +188,8 @@ test('runtime-sync loadSettings refreshes page state and schedules audit when ne
 
             assert.equal(page._loaded, true);
             assert.equal(page._lastConfigVersion, 4);
+            assert.equal(page._modelCatalog.providers.length, 2);
+            assert.equal(page._providersById.get('qwen')?.default_model, 'qwen3-coder-next');
             assert.deepEqual(calls, [
                 'fill',
                 'hero',
@@ -179,6 +200,237 @@ test('runtime-sync loadSettings refreshes page state and schedules audit when ne
         });
     } finally {
         apiService.getConfig = originalGetConfig;
+    }
+});
+
+test('runtime-sync loadSettings schedules a silent refresh while local auth sync is still running', async () => {
+    const originalGetConfig = apiService.getConfig;
+    const originalSetTimeout = globalThis.setTimeout;
+    const originalClearTimeout = globalThis.clearTimeout;
+    const timers = [];
+    const cleared = [];
+
+    try {
+        apiService.getConfig = async () => ({
+            success: true,
+            api: {
+                active_preset: 'default',
+                presets: [{ name: 'default', provider_id: 'openai', model: 'gpt-4.1' }],
+            },
+            bot: {},
+            logging: {},
+            agent: {},
+            services: {},
+            local_auth_sync: {
+                refreshing: true,
+                refreshed_at: 0,
+                revision: 0,
+                changed_provider_ids: [],
+                message: '',
+            },
+            modelCatalog: { providers: [] },
+        });
+        globalThis.setTimeout = (callback, delay) => {
+            const token = { callback, delay };
+            timers.push(token);
+            return token;
+        };
+        globalThis.clearTimeout = (token) => {
+            cleared.push(token);
+        };
+
+        await withDom(async () => {
+            let reloadOptions = null;
+            const page = {
+                _config: null,
+                _modelCatalog: null,
+                _providersById: new Map(),
+                _configAudit: null,
+                _loaded: false,
+                _loadingPromise: null,
+                _auditPromise: null,
+                _auditStatus: 'idle',
+                _auditMessage: '',
+                _lastConfigVersion: 0,
+                _auditRequestId: 0,
+                _localAuthSyncState: null,
+                _localAuthSyncRefreshTimer: null,
+                _localAuthSyncRefreshAttempt: 0,
+                _isSaving: false,
+                isActive() {
+                    return true;
+                },
+                _shouldRefreshAudit() {
+                    return false;
+                },
+                getState() {
+                    return 0;
+                },
+                $(selector) {
+                    if (selector === '#current-config-hero') {
+                        return { innerHTML: '' };
+                    }
+                    return null;
+                },
+                _fillForm() {},
+                _renderHero() {},
+                _renderExportRagStatus() {},
+                _hideSaveFeedback() {},
+                _renderLoadError() {},
+                _loadConfigAudit() {},
+                _renderUpdatePanel() {},
+                _commitSettingsBaseline() {},
+                _resetDirtyState() {},
+                async loadSettings(options) {
+                    reloadOptions = options;
+                },
+            };
+
+            await loadSettings(page, { silent: true }, {
+                loading: 'loading',
+                loadFailed: 'load failed',
+                noAudit: 'no audit',
+            });
+
+            assert.equal(page._localAuthSyncState.refreshing, true);
+            assert.equal(page._localAuthSyncRefreshAttempt, 1);
+            assert.equal(timers.length, 1);
+            assert.equal(timers[0].delay, 600);
+
+            timers[0].callback();
+            await Promise.resolve();
+
+            assert.deepEqual(reloadOptions, { silent: true, preserveFeedback: true });
+            assert.deepEqual(cleared, []);
+        });
+    } finally {
+        apiService.getConfig = originalGetConfig;
+        globalThis.setTimeout = originalSetTimeout;
+        globalThis.clearTimeout = originalClearTimeout;
+    }
+});
+
+test('runtime-sync defers config reload while settings page is inactive', async () => {
+    const previousWindow = globalThis.window;
+    let changeHandler = null;
+
+    globalThis.window = {
+        electronAPI: {
+            configSubscribe() {
+                return Promise.resolve();
+            },
+            onConfigChanged(handler) {
+                changeHandler = handler;
+                return () => {};
+            },
+        },
+        open: () => {},
+        setTimeout: globalThis.setTimeout,
+        clearTimeout: globalThis.clearTimeout,
+    };
+
+    try {
+        let loadCalls = 0;
+        const page = {
+            _removeConfigListener: null,
+            _isSaving: false,
+            _pendingConfigReload: false,
+            isActive() {
+                return false;
+            },
+            async loadSettings() {
+                loadCalls += 1;
+            },
+        };
+
+        watchConfigChanges(page);
+        changeHandler?.();
+
+        assert.equal(page._pendingConfigReload, true);
+        assert.equal(loadCalls, 0);
+    } finally {
+        if (previousWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = previousWindow;
+        }
+    }
+});
+
+test('settings page onEnter reloads when a background config change is pending', async () => {
+    const page = new SettingsPage();
+    const calls = [];
+
+    page._loaded = true;
+    page._pendingConfigReload = true;
+    page._handleMainScroll = () => {};
+    page._loadWorkspaceBackups = async () => {
+        calls.push('backups');
+    };
+    page.loadSettings = async (options) => {
+        calls.push(options);
+        page._pendingConfigReload = false;
+    };
+    page._renderHero = () => {
+        calls.push('hero');
+    };
+    page.getState = () => 0;
+
+    await page.onEnter();
+
+    assert.deepEqual(calls, [
+        { preserveFeedback: true },
+        'backups',
+    ]);
+});
+
+test('settings page onEnter reloads when local auth sync is still refreshing', async () => {
+    const page = new SettingsPage();
+    const calls = [];
+
+    page._loaded = true;
+    page._localAuthSyncState = { refreshing: true };
+    page._handleMainScroll = () => {};
+    page._loadWorkspaceBackups = async () => {
+        calls.push('backups');
+    };
+    page.loadSettings = async (options) => {
+        calls.push(options);
+        page._localAuthSyncState = { refreshing: false };
+    };
+    page._renderHero = () => {
+        calls.push('hero');
+    };
+    page.getState = () => 0;
+
+    await page.onEnter();
+
+    assert.deepEqual(calls, [
+        { preserveFeedback: true },
+        'backups',
+    ]);
+});
+
+test('settings page clears pending local auth sync refresh when leaving', async () => {
+    const originalClearTimeout = globalThis.clearTimeout;
+    const cleared = [];
+    globalThis.clearTimeout = (handle) => {
+        cleared.push(handle);
+    };
+
+    try {
+        const page = new SettingsPage();
+        page._localAuthSyncRefreshTimer = 123;
+        page._localAuthSyncRefreshAttempt = 2;
+
+        await page.onLeave();
+
+        assert.deepEqual(cleared, [123]);
+        assert.equal(page._localAuthSyncRefreshTimer, null);
+        assert.equal(page._localAuthSyncRefreshAttempt, 0);
+        assert.equal(page.isActive(), false);
+    } finally {
+        globalThis.clearTimeout = originalClearTimeout;
     }
 });
 
@@ -387,6 +639,327 @@ test('preset-controller keeps modal flow and draft commit behavior stable', asyn
         'render-hero',
         'autosave:true',
     ]);
+}));
+
+test('preset-controller upgrades legacy Kimi OAuth presets to coding runtime defaults', async () => withDom(async ({ document, registerElement }) => {
+    const modal = document.createElement('div');
+    modal.classList.add('modal');
+    registerElement('preset-modal', modal);
+
+    const providerSelect = document.createElement('select');
+    const originalName = document.createElement('input');
+    const nameInput = document.createElement('input');
+    const aliasInput = document.createElement('input');
+    const embeddingInput = document.createElement('input');
+    const keyInput = document.createElement('input');
+    const modelSelect = document.createElement('select');
+    const modelCustom = document.createElement('input');
+    const help = document.createElement('div');
+    const helpLink = document.createElement('a');
+    const authModeApiKey = document.createElement('input');
+    const authModeOauth = document.createElement('input');
+    const oauthProjectId = document.createElement('input');
+    const oauthLocation = document.createElement('input');
+
+    authModeApiKey.type = 'radio';
+    authModeOauth.type = 'radio';
+
+    registerElement('edit-preset-provider', providerSelect);
+    registerElement('edit-preset-original-name', originalName);
+    registerElement('edit-preset-name', nameInput);
+    registerElement('edit-preset-alias', aliasInput);
+    registerElement('edit-preset-embedding-model', embeddingInput);
+    registerElement('edit-preset-key', keyInput);
+    registerElement('edit-preset-model-select', modelSelect);
+    registerElement('edit-preset-model-custom', modelCustom);
+    registerElement('api-key-help', help);
+    registerElement('api-key-help-link', helpLink);
+    registerElement('edit-preset-auth-mode-api-key', authModeApiKey);
+    registerElement('edit-preset-auth-mode-oauth', authModeOauth);
+    registerElement('edit-preset-oauth-project-id', oauthProjectId);
+    registerElement('edit-preset-oauth-location', oauthLocation);
+
+    const page = {
+        _selectedPresetIndex: -1,
+        _activePreset: '',
+        _presetDrafts: [],
+        _providersById: new Map([
+            ['kimi', {
+                id: 'kimi',
+                label: 'Kimi',
+                base_url: 'https://api.moonshot.cn/v1',
+                default_model: 'kimi-k2-turbo-preview',
+                api_key_url: 'https://platform.moonshot.cn/console/api-keys',
+                auth_methods: [
+                    {
+                        id: 'api_key',
+                        type: 'api_key',
+                        metadata: {
+                            recommended_base_url: 'https://api.moonshot.cn/v1',
+                            recommended_model: 'kimi-k2-turbo-preview',
+                        },
+                    },
+                    {
+                        id: 'kimi_code_oauth',
+                        type: 'oauth',
+                        provider_id: 'kimi_code_local',
+                        metadata: {
+                            recommended_base_url: 'https://api.kimi.com/coding/v1',
+                            recommended_model: 'kimi-for-coding',
+                        },
+                    },
+                ],
+            }],
+        ]),
+        _modelCatalog: {
+            providers: [{
+                id: 'kimi',
+                label: 'Kimi',
+                base_url: 'https://api.moonshot.cn/v1',
+                default_model: 'kimi-k2-turbo-preview',
+                auth_methods: [
+                    {
+                        id: 'api_key',
+                        type: 'api_key',
+                        metadata: {
+                            recommended_base_url: 'https://api.moonshot.cn/v1',
+                            recommended_model: 'kimi-k2-turbo-preview',
+                        },
+                    },
+                    {
+                        id: 'kimi_code_oauth',
+                        type: 'oauth',
+                        provider_id: 'kimi_code_local',
+                        metadata: {
+                            recommended_base_url: 'https://api.kimi.com/coding/v1',
+                            recommended_model: 'kimi-for-coding',
+                        },
+                    },
+                ],
+            }],
+        },
+        $(selector) {
+            return document.getElementById(selector.slice(1));
+        },
+        _renderPresetList() {},
+        _renderHero() {},
+        _scheduleAutoSave() {},
+    };
+
+    openPresetModal(page);
+    providerSelect.value = 'kimi';
+    authModeApiKey.checked = false;
+    authModeOauth.checked = true;
+    nameInput.value = 'kimi-oauth';
+    modelSelect.value = '__custom__';
+    modelCustom.value = 'kimi-k2-turbo-preview';
+
+    commitPresetModal(page, {
+        presetNameMissing: 'preset name missing',
+        presetModelMissing: 'preset model missing',
+        presetSaveSuccess: 'preset saved',
+    });
+    await Promise.resolve();
+
+    assert.equal(page._presetDrafts.length, 1);
+    assert.equal(page._presetDrafts[0].auth_mode, 'oauth');
+    assert.equal(page._presetDrafts[0].oauth_provider, 'kimi_code_local');
+    assert.equal(page._presetDrafts[0].base_url, 'https://api.kimi.com/coding/v1');
+    assert.equal(page._presetDrafts[0].model, 'kimi-for-coding');
+}));
+
+test('preset-controller infers qwen coding plan runtime from coder models in legacy api key presets', async () => withDom(async ({ document, registerElement }) => {
+    const modal = document.createElement('div');
+    modal.classList.add('modal');
+    registerElement('preset-modal', modal);
+
+    const providerSelect = document.createElement('select');
+    const originalName = document.createElement('input');
+    const nameInput = document.createElement('input');
+    const aliasInput = document.createElement('input');
+    const embeddingInput = document.createElement('input');
+    const keyInput = document.createElement('input');
+    const modelSelect = document.createElement('select');
+    const modelCustom = document.createElement('input');
+    const help = document.createElement('div');
+    const helpLink = document.createElement('a');
+    const authModeApiKey = document.createElement('input');
+    const authModeOauth = document.createElement('input');
+
+    authModeApiKey.type = 'radio';
+    authModeOauth.type = 'radio';
+
+    registerElement('edit-preset-provider', providerSelect);
+    registerElement('edit-preset-original-name', originalName);
+    registerElement('edit-preset-name', nameInput);
+    registerElement('edit-preset-alias', aliasInput);
+    registerElement('edit-preset-embedding-model', embeddingInput);
+    registerElement('edit-preset-key', keyInput);
+    registerElement('edit-preset-model-select', modelSelect);
+    registerElement('edit-preset-model-custom', modelCustom);
+    registerElement('api-key-help', help);
+    registerElement('api-key-help-link', helpLink);
+    registerElement('edit-preset-auth-mode-api-key', authModeApiKey);
+    registerElement('edit-preset-auth-mode-oauth', authModeOauth);
+
+    const qwenProvider = {
+        id: 'qwen',
+        label: 'Qwen',
+        base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        default_model: 'qwen3.5-plus',
+        api_key_url: 'https://dashscope.console.aliyun.com/apiKey',
+        auth_methods: [
+            {
+                id: 'api_key',
+                type: 'api_key',
+                metadata: {
+                    recommended_base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+                    recommended_model: 'qwen3.5-plus',
+                },
+            },
+            {
+                id: 'coding_plan_api_key',
+                type: 'api_key',
+                metadata: {
+                    recommended_base_url: 'https://coding.dashscope.aliyuncs.com/v1',
+                    recommended_model: 'qwen3-coder-next',
+                },
+            },
+        ],
+    };
+
+    const page = {
+        _selectedPresetIndex: -1,
+        _activePreset: '',
+        _presetDrafts: [],
+        _providersById: new Map([['qwen', qwenProvider]]),
+        _modelCatalog: {
+            providers: [qwenProvider],
+        },
+        $(selector) {
+            return document.getElementById(selector.slice(1));
+        },
+        _renderPresetList() {},
+        _renderHero() {},
+        _scheduleAutoSave() {},
+    };
+
+    openPresetModal(page);
+    providerSelect.value = 'qwen';
+    authModeApiKey.checked = true;
+    authModeOauth.checked = false;
+    nameInput.value = 'qwen-coder';
+    modelSelect.value = '__custom__';
+    modelCustom.value = 'qwen3-coder-next';
+
+    commitPresetModal(page, {
+        presetNameMissing: 'preset name missing',
+        presetModelMissing: 'preset model missing',
+        presetSaveSuccess: 'preset saved',
+    });
+    await Promise.resolve();
+
+    assert.equal(page._presetDrafts.length, 1);
+    assert.equal(page._presetDrafts[0].auth_mode, 'api_key');
+    assert.equal(page._presetDrafts[0].oauth_provider, '');
+    assert.equal(page._presetDrafts[0].base_url, 'https://coding.dashscope.aliyuncs.com/v1');
+    assert.equal(page._presetDrafts[0].model, 'qwen3-coder-next');
+}));
+
+test('preset-controller defaults legacy GLM api key presets to the coding plan endpoint', async () => withDom(async ({ document, registerElement }) => {
+    const modal = document.createElement('div');
+    modal.classList.add('modal');
+    registerElement('preset-modal', modal);
+
+    const providerSelect = document.createElement('select');
+    const originalName = document.createElement('input');
+    const nameInput = document.createElement('input');
+    const aliasInput = document.createElement('input');
+    const embeddingInput = document.createElement('input');
+    const keyInput = document.createElement('input');
+    const modelSelect = document.createElement('select');
+    const modelCustom = document.createElement('input');
+    const help = document.createElement('div');
+    const helpLink = document.createElement('a');
+    const authModeApiKey = document.createElement('input');
+    const authModeOauth = document.createElement('input');
+
+    authModeApiKey.type = 'radio';
+    authModeOauth.type = 'radio';
+
+    registerElement('edit-preset-provider', providerSelect);
+    registerElement('edit-preset-original-name', originalName);
+    registerElement('edit-preset-name', nameInput);
+    registerElement('edit-preset-alias', aliasInput);
+    registerElement('edit-preset-embedding-model', embeddingInput);
+    registerElement('edit-preset-key', keyInput);
+    registerElement('edit-preset-model-select', modelSelect);
+    registerElement('edit-preset-model-custom', modelCustom);
+    registerElement('api-key-help', help);
+    registerElement('api-key-help-link', helpLink);
+    registerElement('edit-preset-auth-mode-api-key', authModeApiKey);
+    registerElement('edit-preset-auth-mode-oauth', authModeOauth);
+
+    const zhipuProvider = {
+        id: 'zhipu',
+        label: 'GLM',
+        base_url: 'https://open.bigmodel.cn/api/paas/v4',
+        default_model: 'glm-5',
+        api_key_url: 'https://open.bigmodel.cn/usercenter/apikeys',
+        auth_methods: [
+            {
+                id: 'api_key',
+                type: 'api_key',
+                metadata: {
+                    recommended_base_url: 'https://open.bigmodel.cn/api/paas/v4',
+                    recommended_model: 'glm-5',
+                },
+            },
+            {
+                id: 'coding_plan_api_key',
+                type: 'api_key',
+                metadata: {
+                    recommended_base_url: 'https://open.bigmodel.cn/api/coding/paas/v4',
+                    recommended_model: 'glm-5',
+                },
+            },
+        ],
+    };
+
+    const page = {
+        _selectedPresetIndex: -1,
+        _activePreset: '',
+        _presetDrafts: [],
+        _providersById: new Map([['zhipu', zhipuProvider]]),
+        _modelCatalog: {
+            providers: [zhipuProvider],
+        },
+        $(selector) {
+            return document.getElementById(selector.slice(1));
+        },
+        _renderPresetList() {},
+        _renderHero() {},
+        _scheduleAutoSave() {},
+    };
+
+    openPresetModal(page);
+    providerSelect.value = 'zhipu';
+    authModeApiKey.checked = true;
+    authModeOauth.checked = false;
+    nameInput.value = 'glm-coding';
+    modelSelect.value = '__custom__';
+    modelCustom.value = 'glm-5';
+
+    commitPresetModal(page, {
+        presetNameMissing: 'preset name missing',
+        presetModelMissing: 'preset model missing',
+        presetSaveSuccess: 'preset saved',
+    });
+    await Promise.resolve();
+
+    assert.equal(page._presetDrafts.length, 1);
+    assert.equal(page._presetDrafts[0].base_url, 'https://open.bigmodel.cn/api/coding/paas/v4');
+    assert.equal(page._presetDrafts[0].model, 'glm-5');
 }));
 
 function createToastRecorder() {
@@ -1176,6 +1749,20 @@ test('models page preserves full auth methods from overview providers and routes
     assert.equal(browserButton.includes('data-model-auth-ui="workflow_start_browser"'), true);
     assert.equal(browserButton.includes('data-workflow-kind="session"'), false);
 
+    const googleBrowserButton = page.renderWorkbenchActionButton(
+        { id: 'google' },
+        {
+            id: 'google_oauth',
+            type: 'oauth',
+            label: 'Google OAuth',
+            requires_fields: ['oauth_project_id'],
+        },
+        { method_id: 'google_oauth' },
+        { id: 'start_browser_auth' },
+    );
+    assert.equal(googleBrowserButton.includes('data-model-auth-ui="open_workflow"'), true);
+    assert.equal(googleBrowserButton.includes('data-workflow-kind="browser"'), true);
+
     const wizardMarkup = page.renderWizardAuthCard(
         {},
         { id: 'doubao' },
@@ -1223,6 +1810,164 @@ test('models page advanced panel renders provider description, local paths and n
     assert.equal(markup.includes('补充说明'), true);
     assert.equal(markup.includes('~/.gemini/oauth_creds.json'), true);
     assert.equal(markup.includes('$GEMINI_CLI_HOME/.gemini/settings.json'), true);
+});
+
+test('models page browser auth form renders required provider fields inline', () => {
+    const page = new ModelsPage();
+    const markup = page.renderBrowserAuthForm(
+        { metadata: { oauth_project_id: 'demo-project' } },
+        { id: 'google' },
+        { id: 'google_oauth', label: 'Google OAuth', type: 'oauth', requires_fields: ['oauth_project_id'] },
+        { metadata: {} },
+    );
+
+    assert.equal(markup.includes('name="oauth_project_id"'), true);
+    assert.equal(markup.includes('value="demo-project"'), true);
+});
+
+test('models page api key workflow previews coding plan runtime before first save', () => {
+    const page = new ModelsPage();
+    page.getCardByProviderId = () => ({
+        provider: {
+            id: 'qwen',
+            default_model: 'qwen3.5-plus',
+            default_base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+            auth_methods: [
+                {
+                    id: 'coding_plan_api_key',
+                    type: 'api_key',
+                    label: 'Coding Plan API Key',
+                    metadata: {
+                        recommended_model: 'qwen3-coder-next',
+                        recommended_base_url: 'https://coding.dashscope.aliyuncs.com/v1',
+                    },
+                },
+            ],
+        },
+        auth_states: [],
+        metadata: {
+            default_model: 'qwen3.5-plus',
+            default_base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        },
+    });
+    page.getSelectedCard = () => ({});
+    page._activeWorkflow = {
+        kind: 'api_key',
+        providerId: 'qwen',
+        methodId: 'coding_plan_api_key',
+    };
+
+    const content = page.getWorkflowContent();
+
+    assert.equal(content.body.includes('qwen3-coder-next'), true);
+    assert.equal(content.body.includes('https://coding.dashscope.aliyuncs.com/v1'), true);
+    assert.equal(content.body.includes('qwen3.5-plus'), false);
+    assert.equal(content.body.includes('https://dashscope.aliyuncs.com/compatible-mode/v1'), false);
+});
+
+test('models page browser auth form previews Kimi coding runtime before first OAuth login', () => {
+    const page = new ModelsPage();
+    const markup = page.renderBrowserAuthForm(
+        {
+            auth_states: [],
+            metadata: {
+                default_model: 'kimi-k2-turbo-preview',
+                default_base_url: 'https://api.moonshot.cn/v1',
+            },
+        },
+        {
+            id: 'kimi',
+            default_model: 'kimi-k2-turbo-preview',
+            default_base_url: 'https://api.moonshot.cn/v1',
+        },
+        {
+            id: 'kimi_code_oauth',
+            label: 'Kimi Code OAuth',
+            type: 'oauth',
+            metadata: {
+                recommended_model: 'kimi-for-coding',
+                recommended_base_url: 'https://api.kimi.com/coding/v1',
+            },
+        },
+        { metadata: {} },
+    );
+
+    assert.equal(markup.includes('kimi-for-coding'), true);
+    assert.equal(markup.includes('https://api.kimi.com/coding/v1'), true);
+    assert.equal(markup.includes('kimi-k2-turbo-preview'), false);
+    assert.equal(markup.includes('https://api.moonshot.cn/v1'), false);
+});
+
+test('models page local auth workflow previews Kimi coding runtime before first local bind', () => {
+    const page = new ModelsPage();
+    page.getCardByProviderId = () => ({
+        provider: {
+            id: 'kimi',
+            default_model: 'kimi-k2-turbo-preview',
+            default_base_url: 'https://api.moonshot.cn/v1',
+            auth_methods: [
+                {
+                    id: 'kimi_code_local',
+                    type: 'local_import',
+                    label: 'Kimi Code Local',
+                    metadata: {
+                        recommended_model: 'kimi-for-coding',
+                        recommended_base_url: 'https://api.kimi.com/coding/v1',
+                    },
+                },
+            ],
+        },
+        auth_states: [],
+        metadata: {
+            default_model: 'kimi-k2-turbo-preview',
+            default_base_url: 'https://api.moonshot.cn/v1',
+        },
+    });
+    page.getSelectedCard = () => ({});
+    page._activeWorkflow = {
+        kind: 'local',
+        providerId: 'kimi',
+        methodId: 'kimi_code_local',
+    };
+
+    const content = page.getWorkflowContent();
+
+    assert.equal(content.body.includes('kimi-for-coding'), true);
+    assert.equal(content.body.includes('https://api.kimi.com/coding/v1'), true);
+    assert.equal(content.body.includes('kimi-k2-turbo-preview'), false);
+    assert.equal(content.body.includes('https://api.moonshot.cn/v1'), false);
+});
+
+test('models page browser auth form previews Qwen OAuth runtime before first login', () => {
+    const page = new ModelsPage();
+    const markup = page.renderBrowserAuthForm(
+        {
+            auth_states: [],
+            metadata: {
+                default_model: 'qwen3.5-plus',
+                default_base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+            },
+        },
+        {
+            id: 'qwen',
+            default_model: 'qwen3.5-plus',
+            default_base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        },
+        {
+            id: 'qwen_oauth',
+            label: 'Qwen OAuth',
+            type: 'oauth',
+            metadata: {
+                recommended_model: 'qwen3-coder-plus',
+                recommended_base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+            },
+        },
+        { metadata: {} },
+    );
+
+    assert.equal(markup.includes('qwen3-coder-plus'), true);
+    assert.equal(markup.includes('qwen3.5-plus'), false);
+    assert.equal(markup.includes('https://dashscope.aliyuncs.com/compatible-mode/v1'), true);
 });
 
 test('models page browser callback form submits structured payload to the model auth center', async () => {
@@ -1331,6 +2076,664 @@ test('models page renders and submits flowless browser auth continuation via loc
         callback_payload: {},
         set_default: true,
     });
+});
+
+test('models page browser workflow persists required fields before starting auth', async () => {
+    const originalFormData = globalThis.FormData;
+    const page = new ModelsPage();
+    const calls = [];
+    const workflowCalls = [];
+    globalThis.FormData = class {
+        constructor(form) {
+            this.map = form._data || {};
+        }
+
+        get(name) {
+            return this.map[name] ?? null;
+        }
+    };
+    page.getCardByProviderId = () => ({
+        provider: {
+            id: 'google',
+            auth_methods: [
+                { id: 'google_oauth', type: 'oauth', label: 'Google OAuth', requires_fields: ['oauth_project_id'] },
+            ],
+        },
+        auth_states: [],
+    });
+    page.getSelectedCard = () => ({});
+    page.runAction = async (action, payload, options) => {
+        calls.push({ action, payload, options });
+        return { success: true };
+    };
+    page.openWorkflow = async (payload) => {
+        workflowCalls.push(payload);
+    };
+
+    try {
+        await page.handleFormSubmit(
+            {
+                dataset: {
+                    modelAuthForm: 'browser_callback',
+                    providerId: 'google',
+                    methodId: 'google_oauth',
+                },
+                _data: {
+                    oauth_project_id: 'demo-google-project',
+                    callback_payload: '',
+                },
+            },
+            {
+                dataset: {
+                    modelAuthSubmitAction: 'start_browser_auth',
+                },
+            },
+        );
+    } finally {
+        globalThis.FormData = originalFormData;
+    }
+
+    assert.deepEqual(calls, [
+        {
+            action: 'update_provider_defaults',
+            payload: {
+                provider_id: 'google',
+                oauth_project_id: 'demo-google-project',
+            },
+            options: {
+                preserveSelection: true,
+                providerId: 'google',
+            },
+        },
+        {
+            action: 'start_browser_auth',
+            payload: {
+                provider_id: 'google',
+                method_id: 'google_oauth',
+            },
+            options: {
+                preserveSelection: true,
+                providerId: 'google',
+            },
+        },
+    ]);
+    assert.deepEqual(workflowCalls, [
+        {
+            kind: 'browser',
+            providerId: 'google',
+            methodId: 'google_oauth',
+            skipOnboarding: true,
+        },
+    ]);
+});
+
+test('models page local auth workflow persists required fields before binding', async () => {
+    const originalFormData = globalThis.FormData;
+    const page = new ModelsPage();
+    const calls = [];
+    let closeCalls = 0;
+    globalThis.FormData = class {
+        constructor(form) {
+            this.map = form._data || {};
+        }
+
+        get(name) {
+            return this.map[name] ?? null;
+        }
+    };
+    page.getCardByProviderId = () => ({
+        provider: {
+            id: 'google',
+            auth_methods: [
+                { id: 'gemini_cli_local', type: 'local_import', label: 'Gemini CLI 本机登录', requires_fields: ['oauth_project_id'] },
+            ],
+        },
+        auth_states: [],
+    });
+    page.getSelectedCard = () => ({});
+    page.runAction = async (action, payload, options) => {
+        calls.push({ action, payload, options });
+        return { success: true };
+    };
+    page.closeWorkflowModal = () => {
+        closeCalls += 1;
+    };
+
+    try {
+        await page.handleFormSubmit(
+            {
+                dataset: {
+                    modelAuthForm: 'local_auth',
+                    providerId: 'google',
+                    methodId: 'gemini_cli_local',
+                },
+                _data: {
+                    oauth_project_id: 'demo-google-project',
+                },
+            },
+            {
+                dataset: {
+                    modelAuthSubmitAction: 'bind_local_auth',
+                },
+            },
+        );
+    } finally {
+        globalThis.FormData = originalFormData;
+    }
+
+    assert.deepEqual(calls, [
+        {
+            action: 'update_provider_defaults',
+            payload: {
+                provider_id: 'google',
+                oauth_project_id: 'demo-google-project',
+            },
+            options: {
+                preserveSelection: true,
+                providerId: 'google',
+            },
+        },
+        {
+            action: 'bind_local_auth',
+            payload: {
+                provider_id: 'google',
+                method_id: 'gemini_cli_local',
+                set_default: true,
+            },
+            options: {
+                preserveSelection: true,
+                providerId: 'google',
+            },
+        },
+    ]);
+    assert.equal(closeCalls, 1);
+});
+
+test('models page api key workflow seeds coding plan defaults before saving the first specialized profile', async () => {
+    const originalFormData = globalThis.FormData;
+    const page = new ModelsPage();
+    const calls = [];
+    let closeCalls = 0;
+    globalThis.FormData = class {
+        constructor(form) {
+            this.map = form._data || {};
+        }
+
+        get(name) {
+            return this.map[name] ?? null;
+        }
+    };
+    page.getCardByProviderId = () => ({
+        provider: {
+            id: 'qwen',
+            default_model: 'qwen3.5-plus',
+            default_base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+            auth_methods: [
+                {
+                    id: 'coding_plan_api_key',
+                    type: 'api_key',
+                    label: 'Coding Plan API Key',
+                    metadata: {
+                        recommended_model: 'qwen3-coder-next',
+                        recommended_base_url: 'https://coding.dashscope.aliyuncs.com/v1',
+                    },
+                },
+            ],
+        },
+        auth_states: [],
+        metadata: {
+            default_model: 'qwen3.5-plus',
+            default_base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        },
+    });
+    page.getSelectedCard = () => ({});
+    page.runAction = async (action, payload, options) => {
+        calls.push({ action, payload, options });
+        return { success: true };
+    };
+    page.closeWorkflowModal = () => {
+        closeCalls += 1;
+    };
+
+    try {
+        await page.handleFormSubmit({
+            dataset: {
+                modelAuthForm: 'api_key',
+                providerId: 'qwen',
+                methodId: 'coding_plan_api_key',
+            },
+            _data: {
+                api_key: 'sk-demo-coding-plan',
+                label: 'Coding Plan',
+            },
+        });
+    } finally {
+        globalThis.FormData = originalFormData;
+    }
+
+    assert.deepEqual(calls, [
+        {
+            action: 'update_provider_defaults',
+            payload: {
+                provider_id: 'qwen',
+                default_model: 'qwen3-coder-next',
+                default_base_url: 'https://coding.dashscope.aliyuncs.com/v1',
+            },
+            options: {
+                preserveSelection: true,
+                providerId: 'qwen',
+            },
+        },
+        {
+            action: 'save_api_key',
+            payload: {
+                provider_id: 'qwen',
+                method_id: 'coding_plan_api_key',
+                label: 'Coding Plan',
+                api_key: 'sk-demo-coding-plan',
+                set_default: true,
+            },
+            options: {
+                preserveSelection: true,
+                providerId: 'qwen',
+            },
+        },
+    ]);
+    assert.equal(closeCalls, 1);
+});
+
+test('models page browser workflow seeds method-specific runtime defaults before starting first Kimi coding auth', async () => {
+    const originalFormData = globalThis.FormData;
+    const page = new ModelsPage();
+    const calls = [];
+    const workflowCalls = [];
+    globalThis.FormData = class {
+        constructor(form) {
+            this.map = form._data || {};
+        }
+
+        get(name) {
+            return this.map[name] ?? null;
+        }
+    };
+    page.getCardByProviderId = () => ({
+        provider: {
+            id: 'kimi',
+            default_model: 'kimi-k2-turbo-preview',
+            default_base_url: 'https://api.moonshot.cn/v1',
+            auth_methods: [
+                {
+                    id: 'kimi_code_oauth',
+                    type: 'oauth',
+                    label: 'Kimi Code OAuth',
+                    metadata: {
+                        recommended_model: 'kimi-for-coding',
+                        recommended_base_url: 'https://api.kimi.com/coding/v1',
+                    },
+                },
+            ],
+        },
+        auth_states: [],
+        metadata: {
+            default_model: 'kimi-k2-turbo-preview',
+            default_base_url: 'https://api.moonshot.cn/v1',
+        },
+    });
+    page.getSelectedCard = () => ({});
+    page.runAction = async (action, payload, options) => {
+        calls.push({ action, payload, options });
+        return { success: true };
+    };
+    page.openWorkflow = async (payload) => {
+        workflowCalls.push(payload);
+    };
+
+    try {
+        await page.handleFormSubmit(
+            {
+                dataset: {
+                    modelAuthForm: 'browser_callback',
+                    providerId: 'kimi',
+                    methodId: 'kimi_code_oauth',
+                },
+                _data: {
+                    callback_payload: '',
+                },
+            },
+            {
+                dataset: {
+                    modelAuthSubmitAction: 'start_browser_auth',
+                },
+            },
+        );
+    } finally {
+        globalThis.FormData = originalFormData;
+    }
+
+    assert.deepEqual(calls, [
+        {
+            action: 'update_provider_defaults',
+            payload: {
+                provider_id: 'kimi',
+                default_model: 'kimi-for-coding',
+                default_base_url: 'https://api.kimi.com/coding/v1',
+            },
+            options: {
+                preserveSelection: true,
+                providerId: 'kimi',
+            },
+        },
+        {
+            action: 'start_browser_auth',
+            payload: {
+                provider_id: 'kimi',
+                method_id: 'kimi_code_oauth',
+            },
+            options: {
+                preserveSelection: true,
+                providerId: 'kimi',
+            },
+        },
+    ]);
+    assert.deepEqual(workflowCalls, [
+        {
+            kind: 'browser',
+            providerId: 'kimi',
+            methodId: 'kimi_code_oauth',
+            skipOnboarding: true,
+        },
+    ]);
+});
+
+test('models page browser workflow seeds method-specific runtime defaults before starting first Qwen OAuth auth', async () => {
+    const originalFormData = globalThis.FormData;
+    const page = new ModelsPage();
+    const calls = [];
+    const workflowCalls = [];
+    globalThis.FormData = class {
+        constructor(form) {
+            this.map = form._data || {};
+        }
+
+        get(name) {
+            return this.map[name] ?? null;
+        }
+    };
+    page.getCardByProviderId = () => ({
+        provider: {
+            id: 'qwen',
+            default_model: 'qwen3.5-plus',
+            default_base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+            auth_methods: [
+                {
+                    id: 'qwen_oauth',
+                    type: 'oauth',
+                    label: 'Qwen OAuth',
+                    metadata: {
+                        recommended_model: 'qwen3-coder-plus',
+                        recommended_base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+                    },
+                },
+            ],
+        },
+        auth_states: [],
+        metadata: {
+            default_model: 'qwen3.5-plus',
+            default_base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        },
+    });
+    page.getSelectedCard = () => ({});
+    page.runAction = async (action, payload, options) => {
+        calls.push({ action, payload, options });
+        return { success: true };
+    };
+    page.openWorkflow = async (payload) => {
+        workflowCalls.push(payload);
+    };
+
+    try {
+        await page.handleFormSubmit(
+            {
+                dataset: {
+                    modelAuthForm: 'browser_callback',
+                    providerId: 'qwen',
+                    methodId: 'qwen_oauth',
+                },
+                _data: {
+                    callback_payload: '',
+                },
+            },
+            {
+                dataset: {
+                    modelAuthSubmitAction: 'start_browser_auth',
+                },
+            },
+        );
+    } finally {
+        globalThis.FormData = originalFormData;
+    }
+
+    assert.deepEqual(calls, [
+        {
+            action: 'update_provider_defaults',
+            payload: {
+                provider_id: 'qwen',
+                default_model: 'qwen3-coder-plus',
+            },
+            options: {
+                preserveSelection: true,
+                providerId: 'qwen',
+            },
+        },
+        {
+            action: 'start_browser_auth',
+            payload: {
+                provider_id: 'qwen',
+                method_id: 'qwen_oauth',
+            },
+            options: {
+                preserveSelection: true,
+                providerId: 'qwen',
+            },
+        },
+    ]);
+    assert.deepEqual(workflowCalls, [
+        {
+            kind: 'browser',
+            providerId: 'qwen',
+            methodId: 'qwen_oauth',
+            skipOnboarding: true,
+        },
+    ]);
+});
+
+test('models page local auth workflow seeds method-specific runtime defaults before binding first Qwen local profile', async () => {
+    const originalFormData = globalThis.FormData;
+    const page = new ModelsPage();
+    const calls = [];
+    let closeCalls = 0;
+    globalThis.FormData = class {
+        constructor(form) {
+            this.map = form._data || {};
+        }
+
+        get(name) {
+            return this.map[name] ?? null;
+        }
+    };
+    page.getCardByProviderId = () => ({
+        provider: {
+            id: 'qwen',
+            default_model: 'qwen3.5-plus',
+            default_base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+            auth_methods: [
+                {
+                    id: 'qwen_local',
+                    type: 'local_import',
+                    label: 'Qwen Local',
+                    metadata: {
+                        recommended_model: 'qwen3-coder-plus',
+                        recommended_base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+                    },
+                },
+            ],
+        },
+        auth_states: [],
+        metadata: {
+            default_model: 'qwen3.5-plus',
+            default_base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        },
+    });
+    page.getSelectedCard = () => ({});
+    page.runAction = async (action, payload, options) => {
+        calls.push({ action, payload, options });
+        return { success: true };
+    };
+    page.closeWorkflowModal = () => {
+        closeCalls += 1;
+    };
+
+    try {
+        await page.handleFormSubmit(
+            {
+                dataset: {
+                    modelAuthForm: 'local_auth',
+                    providerId: 'qwen',
+                    methodId: 'qwen_local',
+                },
+                _data: {},
+            },
+            {
+                dataset: {
+                    modelAuthSubmitAction: 'bind_local_auth',
+                },
+            },
+        );
+    } finally {
+        globalThis.FormData = originalFormData;
+    }
+
+    assert.deepEqual(calls, [
+        {
+            action: 'update_provider_defaults',
+            payload: {
+                provider_id: 'qwen',
+                default_model: 'qwen3-coder-plus',
+            },
+            options: {
+                preserveSelection: true,
+                providerId: 'qwen',
+            },
+        },
+        {
+            action: 'bind_local_auth',
+            payload: {
+                provider_id: 'qwen',
+                method_id: 'qwen_local',
+                set_default: true,
+            },
+            options: {
+                preserveSelection: true,
+                providerId: 'qwen',
+            },
+        },
+    ]);
+    assert.equal(closeCalls, 1);
+});
+
+test('models page local auth workflow seeds method-specific runtime defaults before binding first Kimi coding profile', async () => {
+    const originalFormData = globalThis.FormData;
+    const page = new ModelsPage();
+    const calls = [];
+    let closeCalls = 0;
+    globalThis.FormData = class {
+        constructor(form) {
+            this.map = form._data || {};
+        }
+
+        get(name) {
+            return this.map[name] ?? null;
+        }
+    };
+    page.getCardByProviderId = () => ({
+        provider: {
+            id: 'kimi',
+            default_model: 'kimi-k2-turbo-preview',
+            default_base_url: 'https://api.moonshot.cn/v1',
+            auth_methods: [
+                {
+                    id: 'kimi_code_local',
+                    type: 'local_import',
+                    label: 'Kimi Code Local',
+                    metadata: {
+                        recommended_model: 'kimi-for-coding',
+                        recommended_base_url: 'https://api.kimi.com/coding/v1',
+                    },
+                },
+            ],
+        },
+        auth_states: [],
+        metadata: {
+            default_model: 'kimi-k2-turbo-preview',
+            default_base_url: 'https://api.moonshot.cn/v1',
+        },
+    });
+    page.getSelectedCard = () => ({});
+    page.runAction = async (action, payload, options) => {
+        calls.push({ action, payload, options });
+        return { success: true };
+    };
+    page.closeWorkflowModal = () => {
+        closeCalls += 1;
+    };
+
+    try {
+        await page.handleFormSubmit(
+            {
+                dataset: {
+                    modelAuthForm: 'local_auth',
+                    providerId: 'kimi',
+                    methodId: 'kimi_code_local',
+                },
+                _data: {},
+            },
+            {
+                dataset: {
+                    modelAuthSubmitAction: 'bind_local_auth',
+                },
+            },
+        );
+    } finally {
+        globalThis.FormData = originalFormData;
+    }
+
+    assert.deepEqual(calls, [
+        {
+            action: 'update_provider_defaults',
+            payload: {
+                provider_id: 'kimi',
+                default_model: 'kimi-for-coding',
+                default_base_url: 'https://api.kimi.com/coding/v1',
+            },
+            options: {
+                preserveSelection: true,
+                providerId: 'kimi',
+            },
+        },
+        {
+            action: 'bind_local_auth',
+            payload: {
+                provider_id: 'kimi',
+                method_id: 'kimi_code_local',
+                set_default: true,
+            },
+            options: {
+                preserveSelection: true,
+                providerId: 'kimi',
+            },
+        },
+    ]);
+    assert.equal(closeCalls, 1);
 });
 
 test('models page keeps existing effective auth when deciding default selection', () => {

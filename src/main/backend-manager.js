@@ -1,7 +1,8 @@
+const { decodeBufferText } = require('./text-codec');
+
 function createBackendManager({
     http,
     spawn,
-    iconv,
     GLOBAL_STATE,
     getBackendCommand,
     getMainWindowVisible,
@@ -109,20 +110,7 @@ function createBackendManager({
             });
 
             const decodeSafe = (data) => {
-                try {
-                    const buffer = Buffer.isBuffer(data) ? data : Buffer.from(String(data));
-                    const utf8 = iconv.decode(buffer, 'utf-8');
-                    if (!utf8.includes('\ufffd')) {
-                        return utf8;
-                    }
-                    return iconv.decode(buffer, 'cp936');
-                } catch (_) {
-                    try {
-                        return Buffer.isBuffer(data) ? data.toString('utf8') : String(data);
-                    } catch (_) {
-                        return '';
-                    }
-                }
+                return decodeBufferText(data);
             };
 
             if (proc.stdout && typeof proc.stdout.on === 'function') {

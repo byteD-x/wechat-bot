@@ -1,6 +1,32 @@
 const fs = require('fs');
+const { decodeBufferText } = require('./text-codec');
+
+const PROVIDER_ID_ALIASES = {
+    claude: 'anthropic',
+    bailian: 'qwen',
+    dashscope: 'qwen',
+    moonshot: 'kimi',
+};
 
 const EXTRA_MODEL_PROVIDERS = [
+    {
+        id: 'qwen',
+        label: 'Qwen',
+        base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        api_key_url: 'https://dashscope.console.aliyun.com/apiKey',
+        aliases: ['qwen', 'dashscope', 'bailian'],
+        default_model: 'qwen3.5-plus',
+        models: ['qwen3.5-plus', 'qwen3.5-flash', 'qwen3-max-2026-01-23', 'qwen-plus-latest', 'qwen-turbo-latest', 'qwen3-coder-next', 'qwen3-coder-plus', 'qwen3-coder-flash', 'MiniMax-M2.5', 'glm-5', 'glm-4.7', 'kimi-k2.5'],
+    },
+    {
+        id: 'anthropic',
+        label: 'Anthropic / Claude',
+        base_url: 'https://api.anthropic.com/v1',
+        api_key_url: 'https://platform.claude.com/settings/keys',
+        aliases: ['anthropic', 'claude'],
+        default_model: 'claude-sonnet-4-0',
+        models: ['claude-sonnet-4-6', 'claude-opus-4-6', 'claude-haiku-4-5', 'claude-sonnet-4-5', 'claude-opus-4-5', 'claude-sonnet-4-0', 'claude-opus-4-1', 'claude-opus-4-0', 'claude-3-7-sonnet-latest', 'claude-3-5-haiku-latest'],
+    },
     {
         id: 'google',
         label: 'Google / Gemini CLI',
@@ -8,7 +34,7 @@ const EXTRA_MODEL_PROVIDERS = [
         api_key_url: 'https://aistudio.google.com/apikey',
         aliases: ['google', 'gemini', 'vertex'],
         default_model: 'gemini-2.5-flash',
-        models: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.5-flash-lite'],
+        models: ['gemini-3.1-pro-preview', 'gemini-3-flash-preview', 'gemini-3.1-flash-lite-preview', 'gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'],
     },
     {
         id: 'yuanbao',
@@ -19,31 +45,86 @@ const EXTRA_MODEL_PROVIDERS = [
         default_model: 'yuanbao-web',
         models: ['yuanbao-web'],
     },
+    {
+        id: 'kimi',
+        label: 'Kimi / Moonshot',
+        base_url: 'https://api.moonshot.cn/v1',
+        api_key_url: 'https://platform.moonshot.cn/console/api-keys',
+        aliases: ['moonshot', 'kimi'],
+        default_model: 'kimi-k2-turbo-preview',
+        models: ['kimi-for-coding', 'kimi-k2-turbo-preview', 'kimi-k2-0905-preview', 'kimi-k2-thinking-turbo', 'kimi-thinking-preview', 'kimi-latest'],
+    },
+    {
+        id: 'zhipu',
+        label: 'Zhipu',
+        base_url: 'https://open.bigmodel.cn/api/paas/v4',
+        api_key_url: 'https://open.bigmodel.cn/usercenter/apikeys',
+        aliases: ['zhipu', 'glm'],
+        default_model: 'glm-5',
+        models: ['glm-5', 'glm-4.7', 'glm-4.6', 'glm-4.5-air'],
+    },
+    {
+        id: 'minimax',
+        label: 'MiniMax',
+        base_url: 'https://api.minimax.io/v1',
+        api_key_url: 'https://platform.minimax.io/',
+        aliases: ['minimax', 'minimaxi'],
+        default_model: 'MiniMax-M2.5',
+        models: ['MiniMax-M2.7', 'MiniMax-M2.7-highspeed', 'MiniMax-M2.5', 'MiniMax-M2.5-highspeed', 'MiniMax-M2.1', 'MiniMax-M2.1-highspeed', 'MiniMax-M2', 'MiniMax-Text-01'],
+    },
 ];
 
 const AUTH_METHODS_BY_PROVIDER = {
     openai: [
-        { id: 'api_key', type: 'api_key', tier: 'stable', supports_local_reuse: false, requires_browser_flow: false, requires_fields: [], requires_extra_fields: [] },
-        { id: 'codex_local', type: 'local_import', provider_id: 'openai_codex', tier: 'stable', supports_local_reuse: true, requires_browser_flow: true, requires_fields: [], requires_extra_fields: [] },
+        { id: 'api_key', type: 'api_key', tier: 'stable', supports_local_reuse: false, requires_browser_flow: false, requires_fields: [], requires_extra_fields: [], metadata: { recommended_base_url: 'https://api.openai.com/v1', recommended_model: 'gpt-5.4-mini' } },
+        { id: 'codex_local', type: 'local_import', provider_id: 'openai_codex', tier: 'stable', supports_local_reuse: true, requires_browser_flow: true, requires_fields: [], requires_extra_fields: [], metadata: { recommended_base_url: 'https://api.openai.com/v1', recommended_model: 'gpt-5.4-mini' } },
     ],
     qwen: [
-        { id: 'api_key', type: 'api_key', tier: 'stable', supports_local_reuse: false, requires_browser_flow: false, requires_fields: [], requires_extra_fields: [] },
-        { id: 'qwen_oauth', type: 'oauth', provider_id: 'qwen_oauth', tier: 'stable', supports_local_reuse: true, requires_browser_flow: true, requires_fields: [], requires_extra_fields: [] },
-        { id: 'qwen_local', type: 'local_import', provider_id: 'qwen_oauth', tier: 'stable', supports_local_reuse: true, requires_browser_flow: true, requires_fields: [], requires_extra_fields: [] },
-        { id: 'coding_plan_api_key', type: 'api_key', tier: 'stable', supports_local_reuse: false, requires_browser_flow: false, requires_fields: [], requires_extra_fields: [] },
+        { id: 'api_key', type: 'api_key', tier: 'stable', supports_local_reuse: false, requires_browser_flow: false, requires_fields: [], requires_extra_fields: [], metadata: { recommended_base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', recommended_model: 'qwen3.5-plus', key_env_hint: 'DASHSCOPE_API_KEY' } },
+        { id: 'qwen_oauth', type: 'oauth', provider_id: 'qwen_oauth', tier: 'stable', supports_local_reuse: true, requires_browser_flow: true, requires_fields: [], requires_extra_fields: [], metadata: { recommended_base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', recommended_model: 'qwen3-coder-plus' } },
+        { id: 'qwen_local', type: 'local_import', provider_id: 'qwen_oauth', tier: 'stable', supports_local_reuse: true, requires_browser_flow: true, requires_fields: [], requires_extra_fields: [], metadata: { recommended_base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', recommended_model: 'qwen3-coder-plus' } },
+        { id: 'coding_plan_api_key', type: 'api_key', tier: 'stable', supports_local_reuse: false, requires_browser_flow: false, requires_fields: [], requires_extra_fields: [], metadata: { recommended_base_url: 'https://coding.dashscope.aliyuncs.com/v1', recommended_model: 'qwen3-coder-next', key_env_hint: 'BAILIAN_CODING_PLAN_API_KEY', key_prefix_hint: 'sk-sp-', subscription: true } },
     ],
     google: [
-        { id: 'api_key', type: 'api_key', tier: 'stable', supports_local_reuse: false, requires_browser_flow: false, requires_fields: [], requires_extra_fields: [] },
-        { id: 'google_oauth', type: 'oauth', provider_id: 'google_gemini_cli', tier: 'experimental', supports_local_reuse: true, requires_browser_flow: true, requires_fields: [], requires_extra_fields: [] },
-        { id: 'gemini_cli_local', type: 'local_import', provider_id: 'google_gemini_cli', tier: 'experimental', supports_local_reuse: true, requires_browser_flow: true, requires_fields: [], requires_extra_fields: [] },
+        { id: 'api_key', type: 'api_key', tier: 'stable', supports_local_reuse: false, requires_browser_flow: false, requires_fields: [], requires_extra_fields: [], metadata: { recommended_base_url: 'https://generativelanguage.googleapis.com/v1beta/openai', recommended_model: 'gemini-2.5-flash' } },
+        { id: 'google_oauth', type: 'oauth', provider_id: 'google_gemini_cli', tier: 'experimental', supports_local_reuse: true, requires_browser_flow: true, requires_fields: ['oauth_project_id'], requires_extra_fields: [], metadata: { recommended_base_url: 'https://generativelanguage.googleapis.com/v1beta/openai', recommended_model: 'gemini-2.5-flash' } },
+        { id: 'gemini_cli_local', type: 'local_import', provider_id: 'google_gemini_cli', tier: 'experimental', supports_local_reuse: true, requires_browser_flow: true, requires_fields: ['oauth_project_id'], requires_extra_fields: [], metadata: { recommended_base_url: 'https://generativelanguage.googleapis.com/v1beta/openai', recommended_model: 'gemini-2.5-flash' } },
+    ],
+    anthropic: [
+        { id: 'api_key', type: 'api_key', tier: 'stable', supports_local_reuse: false, requires_browser_flow: false, requires_fields: [], requires_extra_fields: [], metadata: { recommended_base_url: 'https://api.anthropic.com/v1', recommended_model: 'claude-sonnet-4-0' } },
+        { id: 'claude_code_local', type: 'local_import', provider_id: 'claude_code_local', tier: 'experimental', supports_local_reuse: true, requires_browser_flow: true, requires_fields: [], requires_extra_fields: [], metadata: { recommended_base_url: 'https://api.anthropic.com/v1', recommended_model: 'claude-sonnet-4-0' } },
+        { id: 'claude_code_oauth', type: 'oauth', provider_id: 'claude_code_local', tier: 'experimental', supports_local_reuse: true, requires_browser_flow: true, requires_fields: [], requires_extra_fields: [], metadata: { recommended_base_url: 'https://api.anthropic.com/v1', recommended_model: 'claude-sonnet-4-0' } },
+        { id: 'claude_vertex_local', type: 'local_import', provider_id: 'claude_vertex_local', tier: 'experimental', supports_local_reuse: true, requires_browser_flow: true, requires_fields: ['oauth_project_id', 'oauth_location'], requires_extra_fields: [], metadata: { recommended_base_url: 'https://global-aiplatform.googleapis.com/v1/projects/{project}/locations/global/publishers/anthropic/models', recommended_model: 'claude-sonnet-4-6' } },
+    ],
+    kimi: [
+        { id: 'api_key', type: 'api_key', tier: 'stable', supports_local_reuse: false, requires_browser_flow: false, requires_fields: [], requires_extra_fields: [], metadata: { recommended_base_url: 'https://api.moonshot.cn/v1', recommended_model: 'kimi-k2-turbo-preview' } },
+        { id: 'kimi_code_oauth', type: 'oauth', provider_id: 'kimi_code_local', tier: 'experimental', supports_local_reuse: true, requires_browser_flow: true, requires_fields: [], requires_extra_fields: [], metadata: { recommended_base_url: 'https://api.kimi.com/coding/v1', recommended_model: 'kimi-for-coding' } },
+        { id: 'kimi_code_local', type: 'local_import', provider_id: 'kimi_code_local', tier: 'experimental', supports_local_reuse: true, requires_browser_flow: true, requires_fields: [], requires_extra_fields: [], metadata: { recommended_base_url: 'https://api.kimi.com/coding/v1', recommended_model: 'kimi-for-coding' } },
+        { id: 'coding_plan_api_key', type: 'api_key', tier: 'stable', supports_local_reuse: false, requires_browser_flow: false, requires_fields: [], requires_extra_fields: [], metadata: { recommended_base_url: 'https://api.kimi.com/coding/v1', recommended_model: 'kimi-for-coding', key_env_hint: 'KIMI_API_KEY' } },
+    ],
+    zhipu: [
+        { id: 'api_key', type: 'api_key', tier: 'stable', supports_local_reuse: false, requires_browser_flow: false, requires_fields: [], requires_extra_fields: [], metadata: { recommended_base_url: 'https://open.bigmodel.cn/api/paas/v4', recommended_model: 'glm-5' } },
+        { id: 'coding_plan_api_key', type: 'api_key', tier: 'stable', supports_local_reuse: false, requires_browser_flow: false, requires_fields: [], requires_extra_fields: [], metadata: { recommended_base_url: 'https://open.bigmodel.cn/api/coding/paas/v4', recommended_model: 'glm-5', subscription: true } },
+    ],
+    minimax: [
+        { id: 'api_key', type: 'api_key', tier: 'stable', supports_local_reuse: false, requires_browser_flow: false, requires_fields: [], requires_extra_fields: [], metadata: { recommended_base_url: 'https://api.minimax.io/v1', recommended_model: 'MiniMax-M2.5' } },
+        { id: 'coding_plan_api_key', type: 'api_key', tier: 'stable', supports_local_reuse: false, requires_browser_flow: false, requires_fields: [], requires_extra_fields: [], metadata: { recommended_base_url: 'https://api.minimax.io/v1', recommended_model: 'MiniMax-M2.5', regional_base_urls: ['https://api.minimax.io/v1', 'https://api.minimaxi.com/v1', 'https://api.minimax.io/anthropic', 'https://api.minimaxi.com/anthropic'], key_env_hint: 'MINIMAX_API_KEY', subscription: true } },
     ],
     yuanbao: [
         { id: 'yuanbao_web_session', type: 'web_session', provider_id: 'tencent_yuanbao', tier: 'experimental', supports_local_reuse: false, requires_browser_flow: true, requires_fields: [], requires_extra_fields: [], runtime_supported: false },
     ],
 };
 
+function canonicalizeProviderId(providerId) {
+    const normalized = String(providerId || '').trim().toLowerCase();
+    if (!normalized) {
+        return '';
+    }
+    return PROVIDER_ID_ALIASES[normalized] || normalized;
+}
+
 function buildAuthMethods(provider = {}) {
-    const providerId = String(provider.id || '').trim().toLowerCase();
+    const providerId = canonicalizeProviderId(provider.id);
     if (AUTH_METHODS_BY_PROVIDER[providerId]) {
         return JSON.parse(JSON.stringify(AUTH_METHODS_BY_PROVIDER[providerId]));
     }
@@ -52,18 +133,124 @@ function buildAuthMethods(provider = {}) {
     ];
 }
 
-function enrichModelCatalog(payload = {}) {
-    const providers = Array.isArray(payload.providers) ? payload.providers.map((provider) => ({ ...provider })) : [];
-    const existingIds = new Set(providers.map((provider) => String(provider.id || '').trim().toLowerCase()));
-    EXTRA_MODEL_PROVIDERS.forEach((provider) => {
-        if (!existingIds.has(provider.id)) {
-            providers.push({ ...provider });
+function mergeTextList(...groups) {
+    const merged = [];
+    const seen = new Set();
+    groups.forEach((group) => {
+        (group || []).forEach((item) => {
+            const value = String(item || '').trim();
+            if (!value) {
+                return;
+            }
+            const lowered = value.toLowerCase();
+            if (seen.has(lowered)) {
+                return;
+            }
+            seen.add(lowered);
+            merged.push(value);
+        });
+    });
+    return merged;
+}
+
+function mergeAuthMethods(existingMethods = [], fallbackMethods = []) {
+    const merged = [];
+    const indexById = new Map();
+
+    (existingMethods || []).forEach((item) => {
+        if (!item || typeof item !== 'object') {
+            return;
+        }
+        const method = { ...item };
+        const methodId = String(method.id || '').trim();
+        if (!methodId || indexById.has(methodId)) {
+            return;
+        }
+        indexById.set(methodId, merged.length);
+        merged.push(method);
+    });
+
+    (fallbackMethods || []).forEach((item) => {
+        if (!item || typeof item !== 'object') {
+            return;
+        }
+        const method = { ...item };
+        const methodId = String(method.id || '').trim();
+        if (!methodId) {
+            return;
+        }
+        if (!indexById.has(methodId)) {
+            indexById.set(methodId, merged.length);
+            merged.push(method);
+            return;
+        }
+        const current = merged[indexById.get(methodId)];
+        Object.entries(method).forEach(([key, value]) => {
+            const currentValue = current[key];
+            if (currentValue === undefined || currentValue === null || currentValue === '') {
+                current[key] = Array.isArray(value) ? [...value] : value;
+                return;
+            }
+            if (Array.isArray(currentValue) && !currentValue.length) {
+                current[key] = Array.isArray(value) ? [...value] : value;
+            }
+        });
+    });
+
+    return merged;
+}
+
+function mergeProviderDetails(provider = {}, fallback = {}) {
+    const nextProvider = { ...provider };
+    const fallbackProvider = { ...fallback };
+    const canonicalId = canonicalizeProviderId(nextProvider.id || fallbackProvider.id);
+    const rawId = String(nextProvider.id || fallbackProvider.id || '').trim().toLowerCase();
+    ['label', 'base_url', 'api_key_url', 'default_model'].forEach((fieldName) => {
+        if (!String(nextProvider[fieldName] || '').trim() && String(fallbackProvider[fieldName] || '').trim()) {
+            nextProvider[fieldName] = fallbackProvider[fieldName];
         }
     });
-    providers.forEach((provider) => {
-        if (!Array.isArray(provider.auth_methods) || !provider.auth_methods.length) {
-            provider.auth_methods = buildAuthMethods(provider);
+    if (nextProvider.allow_empty_key === undefined && fallbackProvider.allow_empty_key !== undefined) {
+        nextProvider.allow_empty_key = !!fallbackProvider.allow_empty_key;
+    }
+    nextProvider.id = canonicalId || rawId;
+    const aliases = mergeTextList(nextProvider.aliases, fallbackProvider.aliases);
+    if (aliases.length) {
+        nextProvider.aliases = aliases;
+    }
+    const models = mergeTextList(nextProvider.models, fallbackProvider.models);
+    if (models.length) {
+        nextProvider.models = models;
+    }
+    const fallbackAuthMethods = Array.isArray(fallbackProvider.auth_methods) && fallbackProvider.auth_methods.length
+        ? fallbackProvider.auth_methods
+        : buildAuthMethods({ id: nextProvider.id });
+    nextProvider.auth_methods = mergeAuthMethods(nextProvider.auth_methods, fallbackAuthMethods);
+    return nextProvider;
+}
+
+function enrichModelCatalog(payload = {}) {
+    const providers = Array.isArray(payload.providers)
+        ? payload.providers.map((provider) => mergeProviderDetails(provider))
+        : [];
+    const providerIndexById = new Map(
+        providers
+            .map((provider, index) => [canonicalizeProviderId(provider.id), index])
+            .filter(([providerId]) => providerId),
+    );
+    EXTRA_MODEL_PROVIDERS.forEach((provider) => {
+        const providerId = canonicalizeProviderId(provider.id);
+        const nextProvider = mergeProviderDetails(provider);
+        if (providerIndexById.has(providerId)) {
+            const currentIndex = providerIndexById.get(providerId);
+            providers[currentIndex] = mergeProviderDetails(providers[currentIndex], nextProvider);
+            return;
         }
+        providerIndexById.set(providerId, providers.length);
+        providers.push(nextProvider);
+    });
+    providers.forEach((provider, index) => {
+        providers[index] = mergeProviderDetails(provider);
     });
     return {
         ...payload,
@@ -102,19 +289,27 @@ function diffConfigPaths(before = {}, after = {}) {
 }
 
 function inferProviderId(preset = {}) {
-    const existing = String(preset.provider_id || '').trim().toLowerCase();
+    const existing = canonicalizeProviderId(preset.provider_id);
     if (existing) {
         return existing;
     }
     const name = String(preset.name || '').trim().toLowerCase();
     const baseUrl = String(preset.base_url || '').trim().toLowerCase();
     const model = String(preset.model || '').trim().toLowerCase();
+    const isMiniMax = name.includes('minimax')
+        || model.includes('minimax')
+        || baseUrl.includes('minimax.io')
+        || baseUrl.includes('minimaxi.com');
     if (name.includes('ollama') || baseUrl.includes('11434')) return 'ollama';
     if (name.includes('openai') || baseUrl.includes('openai.com')) return 'openai';
     if (name.includes('deepseek') || baseUrl.includes('deepseek.com')) return 'deepseek';
     if (name.includes('qwen') || model.includes('qwen') || baseUrl.includes('dashscope')) return 'qwen';
+    if (name.includes('zhipu') || model.includes('glm') || baseUrl.includes('open.bigmodel.cn')) return 'zhipu';
+    if (isMiniMax) return 'minimax';
+    if (baseUrl.includes('aiplatform.googleapis.com') && (baseUrl.includes('/publishers/anthropic/') || name.includes('claude') || model.includes('claude'))) return 'anthropic';
     if (name.includes('claude') || model.includes('claude') || baseUrl.includes('anthropic')) return 'anthropic';
     if (name.includes('gemini') || model.includes('gemini') || baseUrl.includes('generativelanguage') || baseUrl.includes('aiplatform.googleapis.com')) return 'google';
+    if (name.includes('kimi') || name.includes('moonshot') || model.includes('kimi') || baseUrl.includes('moonshot.cn') || baseUrl.includes('api.kimi.com')) return 'kimi';
     if (name.includes('yuanbao') || model.includes('yuanbao') || baseUrl.includes('yuanbao.tencent.com')) return 'yuanbao';
     return '';
 }
@@ -184,6 +379,7 @@ function createConfigCli({
     getSharedConfigPath,
     readJsonFileImpl = readJsonFile,
     fsModule = fs,
+    decodeBufferImpl = decodeBufferText,
 }) {
     return {
         async run(commandArgs, options = {}) {
@@ -228,8 +424,8 @@ function createConfigCli({
                 child.stderr.on('data', (chunk) => stderrChunks.push(Buffer.from(chunk)));
                 child.on('error', (error) => finish(error));
                 child.on('exit', (code) => {
-                    const stdout = Buffer.concat(stdoutChunks).toString('utf8').trim();
-                    const stderr = Buffer.concat(stderrChunks).toString('utf8').trim();
+                    const stdout = decodeBufferImpl(Buffer.concat(stdoutChunks)).trim();
+                    const stderr = decodeBufferImpl(Buffer.concat(stderrChunks)).trim();
                     if (code !== 0) {
                         finish(new Error(stderr || stdout || `配置命令退出失败 (${code})`));
                         return;
@@ -457,6 +653,7 @@ module.exports = {
     createConfigCli,
     createSharedConfigService,
     diffConfigPaths,
+    enrichModelCatalog,
     inferProviderId,
     maskPreset,
     readJsonFile,

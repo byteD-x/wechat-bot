@@ -3,6 +3,7 @@ const {
     buildSnapshotFilename,
 } = require('./diagnostics-snapshot');
 const { launchElevatedApp } = require('./elevated-relaunch');
+const { decodeBufferText } = require('./text-codec');
 
 function registerIpcHandlers({
     ipcMain,
@@ -75,9 +76,9 @@ function registerIpcHandlers({
     ipcMain.handle('open-wechat', async () => {
         try {
             const isWechatRunning = () => new Promise((resolve) => {
-                exec('tasklist /FI "IMAGENAME eq WeChat.exe" /FO CSV /NH', { windowsHide: true }, (err, stdout) => {
+                exec('tasklist /FI "IMAGENAME eq WeChat.exe" /FO CSV /NH', { windowsHide: true, encoding: 'buffer' }, (err, stdout) => {
                     if (err) return resolve(false);
-                    const rows = String(stdout || '')
+                    const rows = decodeBufferText(stdout)
                         .split(/\r?\n/)
                         .map(item => item.trim())
                         .filter(Boolean);
@@ -90,9 +91,10 @@ function registerIpcHandlers({
                 return { success: true, message: 'WeChat is already running' };
             }
             const getInstallPath = () => new Promise((resolve) => {
-                exec('reg query "HKEY_CURRENT_USER\\Software\\Tencent\\WeChat" /v InstallPath', (err, stdout) => {
+                exec('reg query "HKEY_CURRENT_USER\\Software\\Tencent\\WeChat" /v InstallPath', { windowsHide: true, encoding: 'buffer' }, (err, stdout) => {
                     if (err || !stdout) return resolve(null);
-                    const match = stdout.match(/InstallPath\s+REG_SZ\s+(.+)/);
+                    const decoded = decodeBufferText(stdout);
+                    const match = decoded.match(/InstallPath\s+REG_SZ\s+(.+)/);
                     if (match && match[1]) {
                         resolve(path.join(match[1].trim(), 'WeChat.exe'));
                     } else {

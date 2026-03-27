@@ -53,6 +53,7 @@ class App {
         };
 
         this.currentPage = null;
+        this._pageSwitchSeq = 0;
         this._statusTimer = null;
         this._statusRefreshing = false;
         this._statusFailureCount = 0;
@@ -98,7 +99,8 @@ class App {
         await this._runInitStep('_ensureLightweightBackend', () => this._ensureLightweightBackend());
         await this._runInitStep('_checkBackendConnection', () => this._checkBackendConnection());
         await this._runInitStep('_refreshStatus', () => this._refreshStatus());
-        await this._runInitStep('_switchPage', () => this._switchPage('dashboard', { source: 'init' }));
+        const initialPage = stateManager.get('currentPage') || 'dashboard';
+        await this._runInitStep('_switchPage', () => this._switchPage(initialPage, { source: 'init' }));
         this._startStatusRefresh();
         console.log('[App] 初始化完成');
 
@@ -1140,28 +1142,56 @@ class App {
     }
 
     async _switchPage(pageName, options = {}) {
-        if (this.currentPage) {
-            await this.currentPage.onLeave();
+        const nextPageName = this.pages[pageName] ? pageName : 'dashboard';
+        const nextPage = this.pages[nextPageName];
+        if (!nextPage) {
+            return;
+        }
+
+        if (
+            this.currentPage === nextPage
+            && stateManager.get('currentPage') === nextPageName
+            && typeof nextPage.isActive === 'function'
+            && nextPage.isActive()
+        ) {
+            return;
+        }
+
+        const switchToken = (this._pageSwitchSeq || 0) + 1;
+        this._pageSwitchSeq = switchToken;
+        const previousPage = this.currentPage;
+
+        if (previousPage && previousPage !== nextPage) {
+            await previousPage.onLeave();
+            if (switchToken !== this._pageSwitchSeq) {
+                return;
+            }
         }
 
         document.querySelectorAll('.nav-item').forEach(item => {
-            item.classList.toggle('active', item.dataset.page === pageName);
+            item.classList.toggle('active', item.dataset.page === nextPageName);
         });
 
         document.querySelectorAll('.page').forEach(page => {
-            page.classList.toggle('active', page.id === `page-${pageName}`);
+            page.classList.toggle('active', page.id === `page-${nextPageName}`);
         });
 
-        stateManager.set('currentPage', pageName);
-        this.currentPage = this.pages[pageName];
+        stateManager.set('currentPage', nextPageName);
+        this.currentPage = nextPage;
 
-        await this._ensureBackendForPage(pageName, options);
-
-        if (this.currentPage) {
-            await this.currentPage.onEnter();
+        await this._ensureBackendForPage(nextPageName, options);
+        if (switchToken !== this._pageSwitchSeq) {
+            return;
         }
 
-        console.log(`[App] 切换到页面: ${pageName}`);
+        if (this.currentPage === nextPage) {
+            await nextPage.onEnter();
+            if (switchToken !== this._pageSwitchSeq) {
+                return;
+            }
+        }
+
+        console.log(`[App] 切换到页面: ${nextPageName}`);
     }
 
     async _refreshStatus(options = {}) {

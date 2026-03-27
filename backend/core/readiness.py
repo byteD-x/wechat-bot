@@ -17,6 +17,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
 
 from backend.shared_config import get_app_config_path
 from backend.core.oauth_support import get_preset_auth_summary
+from backend.utils.text_codec import decode_text_bytes
 from backend.transports.wcferry_adapter import (
     _is_windows_admin,
     detect_wcferry_supported_versions,
@@ -117,12 +118,10 @@ def _count_wechat_processes() -> Optional[int]:
             "((Get-Process WeChat,Weixin -ErrorAction SilentlyContinue) | Measure-Object).Count",
         ],
         capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="ignore",
+        text=False,
         check=False,
     )
-    raw = (completed.stdout or "").strip()
+    raw = decode_text_bytes(completed.stdout).strip()
     if not raw:
         return 0
     try:

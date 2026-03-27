@@ -10,7 +10,11 @@ from ..domain.enums import AuthMethodType
 from ..domain.models import HealthCheckResult
 from ..providers.registry import get_method_auth_provider_id, get_provider_method
 from ..storage.credential_store import CredentialStore, get_credential_store
-from .migration import _resolve_method_runtime_defaults, hydrate_runtime_settings
+from .migration import (
+    _collect_runtime_metadata_values,
+    _resolve_method_runtime_defaults,
+    hydrate_runtime_settings,
+)
 
 
 def _now() -> int:
@@ -42,7 +46,7 @@ def _build_base_settings(entry: Dict[str, Any], profile: Dict[str, Any], method)
     metadata = dict(entry.get("metadata") or {})
     profile_meta = dict(profile.get("metadata") or {})
     runtime_defaults = _resolve_method_runtime_defaults(entry, method, profile_meta)
-    return {
+    settings = {
         "provider_id": str(entry.get("provider_id") or "").strip().lower(),
         "base_url": runtime_defaults["base_url"],
         "model": runtime_defaults["model"],
@@ -54,11 +58,11 @@ def _build_base_settings(entry: Dict[str, Any], profile: Dict[str, Any], method)
         "max_completion_tokens": metadata.get("max_completion_tokens"),
         "reasoning_effort": metadata.get("reasoning_effort"),
         "embedding_model": metadata.get("embedding_model"),
-        "oauth_project_id": metadata.get("oauth_project_id"),
-        "oauth_location": metadata.get("oauth_location"),
         "auth_mode": "api_key",
         "credential_ref": str(profile.get("credential_ref") or "").strip(),
     }
+    settings.update(_collect_runtime_metadata_values(entry, method=method))
+    return settings
 
 
 def _build_profile_secret_issue(

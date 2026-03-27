@@ -95,13 +95,13 @@ backend/model_auth/
 | --- | --- | --- | --- |
 | OpenAI / Codex / ChatGPT | API Key；Codex/ChatGPT 浏览器登录；本地 Codex 凭据缓存 | `api_key + local_import` | 当前优先复用本地 `Codex / ChatGPT` 登录；浏览器登录入口按 `local_import` 的浏览器流程建模，不伪装成通用第三方 OAuth |
 | Google / Gemini / Gemini CLI | Google 登录；Gemini API Key；Vertex/Google Cloud 路径；本地 Gemini CLI 凭据缓存 | `api_key + oauth + local_import` | `google_oauth` 与 `gemini_cli_local` 同时建模；运行时继续复用本地 CLI 授权源 |
-| Qwen / 通义千问 / 百炼 / Qwen Code | DashScope API Key；Coding Plan API Key；Qwen OAuth；本地 Qwen Code / OAuth 缓存 | `api_key + oauth + local_import` | `qwen_oauth` 与 `qwen_local` 并存；通用 DashScope API Key 与 Coding Plan API Key 作为两条独立方法建模，避免被压成一条泛化 Key 配置 |
+| Qwen / 通义千问 / 百炼 / Qwen Code | DashScope API Key；Coding Plan API Key；Qwen OAuth；本地 Qwen Code / OAuth 缓存 | `api_key + oauth + local_import` | `qwen_oauth` 与 `qwen_local` 并存；通用 DashScope API Key 与 Coding Plan API Key 作为两条独立方法建模，避免被压成一条泛化 Key 配置；`bailian / dashscope` 会统一归并到 `qwen` |
 | Doubao / 火山方舟 / TRAE | 火山方舟 API Key；消费级网页登录；可能存在 IDE / 会话态 | `api_key + web_session` | 当前只把 Ark API Key 作为正式运行时路径；Doubao/Trae 登录按 `web_session` 保守建模，不伪装成标准 OAuth |
 | Yuanbao / 元宝 | 消费级网页登录 / 扫码登录 | `web_session` | 当前按 `web_session` 建模并保留扩展位；未把元宝消费端错误标记成公开标准 OAuth |
-| Claude / Claude Code | Claude.ai 凭据；Anthropic API Key；Bedrock Auth；Vertex Auth | `api_key + local_import` | 当前已接入 `~/.claude.json`、`~/.claude/settings.json`、`~/.claude/.credentials.json` 与 `C:/ProgramData/ClaudeCode/managed-settings.json` 的本地发现；当本地存在 `apiKeyHelper` 或可复用 Claude API 凭据缓存时，会进入 `anthropic_native` 运行时链路 |
-| Kimi / Moonshot / Kimi Code | Moonshot API Key；Kimi Code 浏览器 OAuth；本地 Kimi Code 配置缓存 | `api_key + oauth + local_import` | 当前已接入 `~/.kimi/config.toml`、`~/.kimi/credentials/*.json` 与 system keychain 提示信号的本地发现；运行时优先跟随 `config.toml` 中的本地 provider 配置，不再误建模为 `web_session` |
-| GLM / 智谱 | API Key | `api_key` | 当前为 API Key 路径，保留后续本地登录扩展位 |
-| MiniMax | API Key | `api_key` | 当前为 API Key 路径，保留后续 IDE/本地认证扩展位 |
+| Claude / Claude Code | Claude.ai 凭据；Anthropic API Key；Bedrock Auth；Vertex Auth | `api_key + oauth + local_import` | 当前已接入 `Claude Code OAuth`、`Claude Code 本机登录` 与 `Claude Vertex AI 本机认证` 三条路径，并复用 `~/.claude.json`、`~/.claude/settings.json`、`~/.claude/.credentials.json`、`C:/ProgramData/ClaudeCode/managed-settings.json`、`application_default_credentials.json` 与 `GOOGLE_APPLICATION_CREDENTIALS` 的本地发现；当本地存在 `apiKeyHelper` 或可复用 Claude API 凭据缓存时，会进入 `anthropic_native`；当检测到可用 `gcloud` ADC / 服务账号时，会进入 `anthropic_vertex` 运行时链路 |
+| Kimi / Moonshot / Kimi Code | Moonshot API Key；Kimi Code 浏览器 OAuth；Kimi Coding Plan API Key；本地 Kimi Code 配置缓存 | `api_key + oauth + local_import + coding_plan_api_key` | 当前已接入 `~/.kimi/config.toml`、`~/.kimi/credentials/*.json` 与 system keychain 提示信号的本地发现；运行时优先跟随 `config.toml` 中的本地 provider 配置，并将 Coding Plan API Key 作为独立方法建模，默认推荐 `kimi-for-coding` |
+| GLM / 智谱 | API Key；GLM Coding Plan API Key | `api_key + coding_plan_api_key` | 当前已补齐通用 API Key 与 Coding Plan API Key 两条路径；当 base URL 指向 `https://open.bigmodel.cn/api/coding/paas/v4` 时会按智谱 Coding Plan 路径归类 |
+| MiniMax | API Key；Token Plan / Coding Plan API Key | `api_key + coding_plan_api_key` | 当前已补齐通用 API Key 与 Token Plan / Coding Plan API Key 两条路径；会按地区识别 `api.minimax.io` 与 `api.minimaxi.com`，同时兼容 Anthropic-compatible 的 `/anthropic` 端点 |
 | DeepSeek | API Key | `api_key` | 当前为 API Key 路径 |
 
 补充说明：
@@ -109,8 +109,16 @@ backend/model_auth/
 - OpenAI / Codex / ChatGPT：当前最稳定的工程路径是“复用本地 Codex / ChatGPT 登录并持续跟随”，因此项目把它建模为 `local_import` + 浏览器登录入口，而不是通用第三方 OAuth。
 - Google / Gemini：Google 登录本身是 OAuth，但项目同时区分了“显式 OAuth profile”和“直接跟随本地 Gemini CLI 凭据”两种方法。
 - Qwen：DashScope 通用 API Key 与 Coding Plan API Key 会在同一 Provider 卡片下拆成两张独立表单，分别保留推荐 `base_url / model / key prefix` 元数据。
+- Qwen：当 `base_url` 指向 `https://coding.dashscope.aliyuncs.com/v1` 时，会优先按百炼 Coding Plan 归类；即使模型名来自 `MiniMax / GLM / Kimi`，也不会跳到这些模型原厂 Provider。
+- Claude / Claude Code：Claude Code OAuth 与 Claude 本机登录共享同一组本机凭据来源，但模型中心会把“执行浏览器登录”和“直接跟随本机已登录账号”拆成两个入口。
+- Claude / Claude Code：截至 2026-03-27，Google Vertex AI 路径已补成真实运行时，模型中心会把 `oauth_project_id / oauth_location` 与本机 `gcloud` 凭据一起组装成 `publishers/anthropic/models/{model}:rawPredict` 请求；`Bedrock` 当前仍只保留扩展位，没有误标成可直接对话。
 - Doubao / Yuanbao：当前缺少稳定、可公开依赖的标准 OAuth 说明，因此仅按 `web_session` 保守建模；本轮补充了基于浏览器 Cookie 数据库、`IndexedDB / Local Storage`、桌面私有存储或显式导出 Session 文件的本地探测。
-- Kimi：官方 Kimi Code CLI 已提供浏览器 OAuth 登录与 API Key 两条路径，因此这里按 `oauth + local_import + api_key` 预留，而不是 `web_session`。
+- Kimi：官方 Kimi Code CLI 已提供浏览器 OAuth 登录、通用 API Key 与 Coding Plan API Key 多条路径，因此这里按 `oauth + local_import + api_key + coding_plan_api_key` 建模，而不是 `web_session`。
+- MiniMax：官方 AI Coding Tools 文档已明确给出独立的 Token Plan 接入方式；本项目沿用统一的 `coding_plan_api_key` 方法位承载这类订阅型 Key，并支持国际区 / 中国区双入口，以及 Anthropic-compatible 的 `/anthropic` 端点。
+- GLM / 智谱：除了通用 API Key，当前也补齐了 `GLM Coding Plan API Key`，并把 Coding Plan base URL 作为 provider 识别信号之一。
+- 模型中心前端会把 method metadata 中的 `recommended_base_url / recommended_model` 直接投影到首次配置工作流：用户在保存 `coding_plan_api_key`、`Kimi Code OAuth`、`Kimi Code 本机登录` 等方法前，就能看到并自动落到真实对话端点，而不是继续停留在 provider 的通用默认值。
+- `Qwen OAuth / Qwen 本机登录` 现在也会复用同一套 method metadata，首次配置时会默认把模型切到 `qwen3-coder-plus`，与 Qwen Code 当前内置默认模型保持一致。
+- 对仍然依赖 legacy preset 序列化的路径，也会复用这份 method metadata：即便历史配置对象只有 `auth_mode=api_key|oauth`，保存时也会尽量回填正确的 `base_url / model / oauth_provider`，让后续 runtime projection 更稳定。
 
 ## 5. 本地认证优先与跟随
 
@@ -196,6 +204,7 @@ backend/model_auth/
 - 方法级表单：每个 `api_key` 或 `web_session` method 都拥有自己的独立表单，不再把同一 Provider 下的多条 API Key 路径压成一张通用表单。
 - 浏览器授权收口：当后端返回待完成的 `flow_id` 时，模型页会在对应 method 下显示“继续完成授权”表单，允许直接轮询本机授权状态，或补充 callback payload 后继续完成授权。
 - 通用继续授权：对于不暴露标准 `flow_id` 的网页登录 / session 型 provider，模型页会退化为 `__local_rescan__` 本机重扫路径，而不是强行要求 legacy OAuth flow。
+- 本机重扫优先：对 `OpenAI / Codex / ChatGPT`、`Google / Gemini / Gemini CLI` 这类实际通过本机凭据落盘完成的浏览器授权方法，即使前端还带着旧 `flow_id`，后端也会优先走本机重扫收口，不会错误提交到标准 OAuth callback。
 - 设置页迁移收口：设置页顶部的“模型与认证”卡片现在直接读取 `/api/model_auth/overview` 的活动 Provider 摘要，不再自己从旧 `api.presets` 投影状态。
 - 旧设置页收口：历史预设 modal 不再承载 `/api/auth/providers/*` OAuth 流程；如果用户仍打开旧 modal，会被明确引导到独立“模型”页处理浏览器授权、本机认证跟随与导入副本。
 
@@ -203,6 +212,8 @@ backend/model_auth/
 
 - `DashScope API Key`
 - `Coding Plan API Key`
+- `Kimi Coding Plan API Key`
+- `GLM Coding Plan API Key`
 - `Qwen OAuth`
 - `Qwen Local Auth`
 

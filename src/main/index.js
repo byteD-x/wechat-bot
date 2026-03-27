@@ -15,7 +15,6 @@ const { spawn, exec, execFile } = require('child_process');
 const http = require('http');
 const crypto = require('crypto');
 const Store = require('electron-store');
-const iconv = require('iconv-lite');
 const { UpdateManager } = require('./update-manager');
 const { BackendIdleController, DEFAULT_IDLE_SHUTDOWN_MS } = require('./backend-idle-controller');
 const { createBackendManager } = require('./backend-manager');
@@ -272,7 +271,6 @@ const RUNTIME_IDLE_CONTROLLER = new BackendIdleController({
 const BackendManager = createBackendManager({
     http,
     spawn,
-    iconv,
     GLOBAL_STATE,
     getBackendCommand,
     getMainWindowVisible,

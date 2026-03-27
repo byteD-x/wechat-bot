@@ -8,17 +8,48 @@ from types import SimpleNamespace
 
 from backend.core.auth.providers import (
     ClaudeCodeLocalAuthProvider,
+    ClaudeVertexLocalAuthProvider,
     DoubaoWebSessionProvider,
     GoogleGeminiCliAuthProvider,
     KimiCodeLocalAuthProvider,
     OpenAICodexAuthProvider,
     TencentYuanbaoExperimentalAuthProvider,
 )
+from backend.core.auth.common import normalize_text, safe_read_json
 
 
 def _encode_jwt_payload(payload: dict) -> str:
     encoded = base64.urlsafe_b64encode(json.dumps(payload).encode("utf-8")).decode("ascii").rstrip("=")
     return f"header.{encoded}.signature"
+
+
+def test_normalize_text_decodes_gb18030_chinese_bytes():
+    assert normalize_text("配置失败".encode("gb18030")) == "配置失败"
+
+
+def test_safe_read_json_supports_utf16_chinese_payload(tmp_path):
+    payload_path = tmp_path / "utf16-auth.json"
+    payload_path.write_bytes(json.dumps({"name": "中文用户"}, ensure_ascii=False).encode("utf-16"))
+
+    loaded = safe_read_json(payload_path)
+
+    assert loaded["name"] == "中文用户"
+
+
+def test_openai_codex_cli_command_decodes_chinese_stdout(monkeypatch):
+    monkeypatch.setattr(
+        "backend.core.auth.providers.subprocess.run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0,
+            stdout="已退出登录\n".encode("gb18030"),
+            stderr=b"",
+        ),
+    )
+
+    provider = OpenAICodexAuthProvider()
+    result = provider._run_cli_command(["codex", "logout"])
+
+    assert result["message"] == "已退出登录"
 
 
 def test_claude_code_local_provider_reads_local_session(monkeypatch, tmp_path):
@@ -160,6 +191,60 @@ def test_claude_code_local_provider_detects_system_keychain_targets(monkeypatch,
     assert status["keychain_provider"] == "windows_credential_manager"
     assert status["keychain_targets"] == ["LegacyGeneric:target=ClaudeCode/oauth"]
     assert status["keychain_locator"].startswith("keychain://windows_credential_manager/anthropic/")
+
+
+def test_claude_vertex_local_provider_resolves_runtime_from_gcloud_adc(monkeypatch, tmp_path):
+    gcloud_dir = tmp_path / "gcloud"
+    adc_path = gcloud_dir / "application_default_credentials.json"
+    config_path = gcloud_dir / "configurations" / "config_default"
+    active_config_path = gcloud_dir / "active_config"
+    config_path.parent.mkdir(parents=True)
+    adc_path.write_text(
+        json.dumps(
+            {
+                "type": "authorized_user",
+                "client_id": "demo-client",
+                "client_secret": "demo-secret",
+                "refresh_token": "demo-refresh-token",
+                "quota_project_id": "vertex-project-001",
+            }
+        ),
+        encoding="utf-8",
+    )
+    config_path.write_text("[core]\nproject = vertex-project-001\naccount = dev@example.com\n", encoding="utf-8")
+    active_config_path.write_text("default", encoding="utf-8")
+    monkeypatch.setenv("CLOUDSDK_CONFIG", str(gcloud_dir))
+    monkeypatch.setattr("backend.core.auth.providers.shutil.which", lambda _name: "C:/sdk/gcloud.cmd")
+
+    def _fake_run(args, **kwargs):
+        joined = " ".join(args)
+        if "config get-value project" in joined:
+            return SimpleNamespace(returncode=0, stdout=b"vertex-project-001\n", stderr=b"")
+        if "config get-value account" in joined:
+            return SimpleNamespace(returncode=0, stdout=b"dev@example.com\n", stderr=b"")
+        if "application-default print-access-token" in joined:
+            return SimpleNamespace(returncode=0, stdout=b"vertex-access-token-123\n", stderr=b"")
+        raise AssertionError(f"unexpected gcloud command: {joined}")
+
+    monkeypatch.setattr("backend.core.auth.providers.subprocess.run", _fake_run)
+
+    provider = ClaudeVertexLocalAuthProvider()
+    status = provider.status()
+    runtime = provider.resolve_runtime({})
+
+    assert status["configured"] is True
+    assert status["runtime_available"] is True
+    assert status["project_id"] == "vertex-project-001"
+    assert status["location"] == "global"
+    assert status["account_email"] == "dev@example.com"
+    assert runtime.auth_transport == "anthropic_vertex"
+    assert runtime.base_url.endswith("/projects/vertex-project-001/locations/global/publishers/anthropic/models")
+    assert callable(runtime.api_key)
+    assert runtime.api_key() == "vertex-access-token-123"
+    headers = runtime.extra_headers()
+    assert headers["X-Goog-User-Project"] == "vertex-project-001"
+    assert runtime.metadata["project_id"] == "vertex-project-001"
+    assert runtime.metadata["location"] == "global"
 
 
 def test_openai_codex_provider_reports_runtime_ready_with_oauth_tokens(monkeypatch, tmp_path):
@@ -365,6 +450,41 @@ def test_kimi_code_local_provider_resolves_runtime_from_config_api_key(monkeypat
     )
     assert runtime.base_url == "https://api.kimi.com/coding/v1"
     assert runtime.metadata["provider_name"] == "kimi-for-coding"
+    assert runtime.metadata["credential_strategy"] == "config_api_key"
+    assert callable(runtime.api_key)
+    assert runtime.api_key() == "ms-local-kimi-key-1234567890"
+
+
+def test_kimi_code_local_provider_marks_config_api_key_as_runtime_ready(monkeypatch, tmp_path):
+    share_dir = tmp_path / ".kimi"
+    share_dir.mkdir(parents=True)
+    config_path = share_dir / "config.toml"
+    config_path.write_text(
+        '\n'.join(
+            [
+                '[providers.kimi-for-coding]',
+                'type = "kimi"',
+                'base_url = "https://api.kimi.com/coding/v1"',
+                'model = "kimi-for-coding"',
+                'api_key = "ms-local-kimi-key-1234567890"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KIMI_SHARE_DIR", str(share_dir))
+
+    provider = KimiCodeLocalAuthProvider()
+    status = provider.status()
+    runtime = provider.resolve_runtime({})
+
+    assert status["detected"] is True
+    assert status["configured"] is True
+    assert status["runtime_available"] is True
+    assert status["runtime_unavailable_reason"] == ""
+    assert status["auth_path"] == ""
+    assert status["config_path"] == str(config_path.resolve())
+    assert status["watch_paths"] == [str(config_path.resolve())]
+    assert "kimi-for-coding" in status["provider_names"]
     assert runtime.metadata["credential_strategy"] == "config_api_key"
     assert callable(runtime.api_key)
     assert runtime.api_key() == "ms-local-kimi-key-1234567890"

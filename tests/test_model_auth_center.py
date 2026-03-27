@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 from copy import deepcopy
+from types import SimpleNamespace
 
 import pytest
 
@@ -68,6 +71,25 @@ def _broken_credential_entry(provider_id: str, method_type: str, *, payload: str
         "format": "dpapi",
         "payload": payload,
     }
+
+
+def _write_google_gemini_auth_files(tmp_path, *, project_id: str | None) -> tuple[str, str]:
+    creds = {
+        "access_token": "google-access-token-123",
+        "refresh_token": "google-refresh-token-456",
+        "expiry_date": 4102444800000,
+    }
+    accounts = {
+        "active": "gemini@example.com",
+    }
+    if project_id:
+        creds["project_id"] = project_id
+        accounts["project_id"] = project_id
+    creds_path = tmp_path / "google-oauth.json"
+    accounts_path = tmp_path / "google-accounts.json"
+    creds_path.write_text(json.dumps(creds), encoding="utf-8")
+    accounts_path.write_text(json.dumps(accounts), encoding="utf-8")
+    return str(creds_path), str(accounts_path)
 
 
 def test_migrate_legacy_api_key_into_provider_auth_center(tmp_path):
@@ -285,7 +307,7 @@ def test_project_provider_auth_center_uses_method_runtime_defaults_for_kimi_loca
                     "sync_policy": "follow",
                     "follow_local_auth": True,
                 },
-                "metadata": {},
+                "metadata": {"runtime_ready": True},
             }
         ],
         "metadata": {"project_to_runtime": True},
@@ -297,8 +319,69 @@ def test_project_provider_auth_center_uses_method_runtime_defaults_for_kimi_loca
     assert kimi_preset["auth_mode"] == "oauth"
     assert kimi_preset["oauth_provider"] == "kimi_code_local"
     assert kimi_preset["base_url"] == "https://api.kimi.com/coding/v1"
-    assert kimi_preset["model"] == "kimi-k2-turbo-preview"
+    assert kimi_preset["model"] == "kimi-for-coding"
     assert kimi_preset["provider_auth_profile_id"] == "kimi:kimi_code_local:work"
+
+
+def test_migrate_moonshot_oauth_profile_into_kimi_provider(tmp_path):
+    store = CredentialStore(str(tmp_path / "creds.json"))
+    config = _base_config()
+    config["api"]["active_preset"] = "Kimi OAuth"
+    config["api"]["presets"] = [
+        {
+            "name": "Kimi OAuth",
+            "provider_id": "moonshot",
+            "alias": "Kimi",
+            "base_url": "https://api.moonshot.cn/v1",
+            "api_key": "YOUR_API_KEY",
+            "auth_mode": "oauth",
+            "oauth_provider": "kimi_code_local",
+            "oauth_source": "kimi_code_credentials",
+            "model": "kimi-k2-turbo-preview",
+        }
+    ]
+
+    normalized = ensure_provider_auth_center_config(config, credential_store=store)
+    kimi_entry = normalized["api"]["provider_auth_center"]["providers"]["kimi"]
+    profile = next(item for item in kimi_entry["auth_profiles"] if item["method_id"] == "kimi_code_local")
+    profile.setdefault("metadata", {})["runtime_ready"] = True
+    projected = project_provider_auth_center(normalized["api"])
+    kimi_preset = next(item for item in projected["presets"] if item["provider_id"] == "kimi")
+
+    assert kimi_entry["selected_profile_id"] == profile["id"]
+    assert profile["provider_id"] == "kimi"
+    assert kimi_preset["provider_id"] == "kimi"
+    assert kimi_preset["oauth_provider"] == "kimi_code_local"
+    assert all(item["provider_id"] != "moonshot" for item in projected["presets"])
+
+
+def test_migrate_moonshot_api_key_profile_into_kimi_provider(tmp_path):
+    store = CredentialStore(str(tmp_path / "creds.json"))
+    config = _base_config()
+    config["api"]["active_preset"] = "Moonshot"
+    config["api"]["presets"] = [
+        {
+            "name": "Moonshot",
+            "provider_id": "moonshot",
+            "alias": "Kimi",
+            "base_url": "https://api.moonshot.cn/v1",
+            "api_key": "ms-test-key-1234567890",
+            "auth_mode": "api_key",
+            "model": "kimi-k2-turbo-preview",
+        }
+    ]
+
+    normalized = ensure_provider_auth_center_config(config, credential_store=store)
+    kimi_entry = normalized["api"]["provider_auth_center"]["providers"]["kimi"]
+    profile = next(item for item in kimi_entry["auth_profiles"] if item["method_id"] == "api_key")
+    projected = project_provider_auth_center(normalized["api"])
+    kimi_preset = next(item for item in projected["presets"] if item["provider_id"] == "kimi")
+
+    assert profile["provider_id"] == "kimi"
+    assert kimi_entry["selected_profile_id"] == profile["id"]
+    assert kimi_preset["provider_id"] == "kimi"
+    assert kimi_preset["auth_mode"] == "api_key"
+    assert all(item["provider_id"] != "moonshot" for item in projected["presets"])
 
 
 def test_migrate_qwen_coding_plan_api_key_into_dedicated_method(tmp_path):
@@ -323,9 +406,90 @@ def test_migrate_qwen_coding_plan_api_key_into_dedicated_method(tmp_path):
     profile = next(item for item in entry["auth_profiles"] if item["method_id"] == "coding_plan_api_key")
 
     assert entry["selected_profile_id"] == profile["id"]
-    assert profile["metadata"]["base_url"] == "https://coding.dashscope.aliyuncs.com/v1/chat/completions"
+    assert profile["metadata"]["base_url"] == "https://coding.dashscope.aliyuncs.com/v1"
     assert profile["metadata"]["model"] == "qwen3-coder-plus"
     assert store.get(profile["credential_ref"]).payload["api_key"] == "demo-coding-plan-key"
+
+
+def test_migrate_zhipu_coding_plan_api_key_into_dedicated_method(tmp_path):
+    store = CredentialStore(str(tmp_path / "creds.json"))
+    config = _base_config()
+    config["api"]["active_preset"] = "GLM Coding Plan"
+    config["api"]["presets"] = [
+        {
+            "name": "GLM Coding Plan",
+            "provider_id": "zhipu",
+            "alias": "代码助手",
+            "base_url": "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions",
+            "api_key": "demo-glm-coding-plan-key",
+            "auth_mode": "api_key",
+            "model": "glm-5",
+            "allow_empty_key": False,
+        }
+    ]
+
+    normalized = ensure_provider_auth_center_config(config, credential_store=store)
+    entry = normalized["api"]["provider_auth_center"]["providers"]["zhipu"]
+    profile = next(item for item in entry["auth_profiles"] if item["method_id"] == "coding_plan_api_key")
+
+    assert entry["selected_profile_id"] == profile["id"]
+    assert profile["metadata"]["base_url"] == "https://open.bigmodel.cn/api/coding/paas/v4"
+    assert profile["metadata"]["model"] == "glm-5"
+    assert store.get(profile["credential_ref"]).payload["api_key"] == "demo-glm-coding-plan-key"
+
+
+def test_migrate_kimi_coding_plan_api_key_into_dedicated_method(tmp_path):
+    store = CredentialStore(str(tmp_path / "creds.json"))
+    config = _base_config()
+    config["api"]["active_preset"] = "Kimi Coding Plan"
+    config["api"]["presets"] = [
+        {
+            "name": "Kimi Coding Plan",
+            "provider_id": "kimi",
+            "alias": "代码助手",
+            "base_url": "https://api.kimi.com/coding/v1/chat/completions",
+            "api_key": "demo-kimi-coding-plan-key",
+            "auth_mode": "api_key",
+            "model": "kimi-for-coding",
+            "allow_empty_key": False,
+        }
+    ]
+
+    normalized = ensure_provider_auth_center_config(config, credential_store=store)
+    entry = normalized["api"]["provider_auth_center"]["providers"]["kimi"]
+    profile = next(item for item in entry["auth_profiles"] if item["method_id"] == "coding_plan_api_key")
+
+    assert entry["selected_profile_id"] == profile["id"]
+    assert profile["metadata"]["base_url"] == "https://api.kimi.com/coding/v1"
+    assert profile["metadata"]["model"] == "kimi-for-coding"
+    assert store.get(profile["credential_ref"]).payload["api_key"] == "demo-kimi-coding-plan-key"
+
+
+def test_migrate_minimax_coding_plan_api_key_into_dedicated_method(tmp_path):
+    store = CredentialStore(str(tmp_path / "creds.json"))
+    config = _base_config()
+    config["api"]["active_preset"] = "MiniMax Coding Plan"
+    config["api"]["presets"] = [
+        {
+            "name": "MiniMax Coding Plan",
+            "provider_id": "minimax",
+            "alias": "代码助手",
+            "base_url": "https://api.minimaxi.com/anthropic/messages",
+            "api_key": "demo-minimax-coding-plan-key",
+            "auth_mode": "api_key",
+            "model": "MiniMax-M2.5",
+            "allow_empty_key": False,
+        }
+    ]
+
+    normalized = ensure_provider_auth_center_config(config, credential_store=store)
+    entry = normalized["api"]["provider_auth_center"]["providers"]["minimax"]
+    profile = next(item for item in entry["auth_profiles"] if item["method_id"] == "coding_plan_api_key")
+
+    assert entry["selected_profile_id"] == profile["id"]
+    assert profile["metadata"]["base_url"] == "https://api.minimaxi.com/anthropic"
+    assert profile["metadata"]["model"] == "MiniMax-M2.5"
+    assert store.get(profile["credential_ref"]).payload["api_key"] == "demo-minimax-coding-plan-key"
 
 
 def test_provider_overview_marks_local_auth_as_available_and_following(tmp_path, monkeypatch):
@@ -684,14 +848,34 @@ def test_registry_exposes_google_oauth_and_local_import_methods():
     methods = {method.id: method for method in provider.auth_methods}
     assert method_types["google_oauth"] == "oauth"
     assert method_types["gemini_cli_local"] == "local_import"
-    assert methods["google_oauth"].requires_fields == ()
-    assert methods["gemini_cli_local"].requires_fields == ()
+    assert methods["google_oauth"].requires_fields == ("oauth_project_id",)
+    assert methods["gemini_cli_local"].requires_fields == ("oauth_project_id",)
+
+
+def test_registry_exposes_claude_oauth_and_local_import_methods():
+    provider = get_provider_definition("anthropic")
+    assert provider is not None
+    method_types = {method.id: method.type.value for method in provider.auth_methods}
+    methods = {method.id: method for method in provider.auth_methods}
+
+    assert method_types["claude_code_oauth"] == "oauth"
+    assert method_types["claude_code_local"] == "local_import"
+    assert method_types["claude_vertex_local"] == "local_import"
+    assert methods["claude_code_oauth"].metadata["browser_flow_completion"] == "local_rescan"
+    assert methods["claude_code_local"].metadata["browser_flow_completion"] == "local_rescan"
+    assert methods["claude_vertex_local"].requires_fields == ("oauth_project_id", "oauth_location")
 
 
 def test_registry_models_kimi_as_oauth_and_local_import_instead_of_web_session():
     provider = get_provider_definition("kimi")
+    legacy_alias = get_provider_definition("moonshot")
+    bailian_alias = get_provider_definition("bailian")
     assert provider is not None
+    assert legacy_alias is not None
+    assert bailian_alias is not None
     method_ids = {method.id for method in provider.auth_methods}
+    assert legacy_alias.id == "kimi"
+    assert bailian_alias.id == "qwen"
     assert "kimi_code_oauth" in method_ids
     assert "kimi_code_local" in method_ids
     assert "kimi_web_session" not in method_ids
@@ -1138,7 +1322,7 @@ async def test_kimi_local_health_check_uses_local_follow_runtime_defaults(tmp_pa
 
     assert result.ok
     assert captured["base_url"] == "https://api.kimi.com/coding/v1"
-    assert captured["model"] == "kimi-k2-turbo-preview"
+    assert captured["model"] == "kimi-for-coding"
     assert callable(captured["api_key"])
     assert captured["api_key"]() == "ms-local-kimi-key-1234567890"
 
@@ -1298,6 +1482,53 @@ def test_local_auth_sync_orchestrator_updates_watch_paths_from_local_sources(mon
     assert "C:/Users/demo/AppData/Local/ByteDance/Doubao/User Data" in captured["paths"]
 
 
+def test_local_auth_sync_orchestrator_start_schedules_initial_refresh_without_blocking(monkeypatch):
+    started = threading.Event()
+    release = threading.Event()
+
+    def _slow_refresh():
+        started.set()
+        assert release.wait(timeout=5.0)
+        return {
+            "success": True,
+            "providers": {
+                "openai_codex": {
+                    "detected": True,
+                    "configured": True,
+                    "account_label": "Work A",
+                }
+            },
+        }
+
+    monkeypatch.setattr("backend.model_auth.sync.orchestrator.get_auth_provider_statuses", _slow_refresh)
+    orchestrator = LocalAuthSyncOrchestrator(poll_interval_sec=60, stale_after_sec=600)
+
+    try:
+        started_at = time.perf_counter()
+        orchestrator.start()
+        elapsed = time.perf_counter() - started_at
+
+        assert elapsed < 0.1
+        assert started.wait(timeout=0.5) is True
+
+        snapshot = orchestrator.get_snapshot(reason="startup_probe")
+        assert snapshot["refreshing"] is True
+        assert snapshot["refreshed_at"] == 0
+        assert snapshot["revision"] == 0
+
+        release.set()
+        assert orchestrator._refresh_thread is not None
+        orchestrator._refresh_thread.join(timeout=1.0)
+
+        refreshed = orchestrator.get_snapshot(reason="startup_complete")
+        assert refreshed["refreshing"] is False
+        assert refreshed["revision"] == 1
+        assert refreshed["providers"]["openai_codex"]["account_label"] == "Work A"
+    finally:
+        release.set()
+        orchestrator.stop()
+
+
 def test_scan_forces_local_auth_snapshot_refresh(monkeypatch, tmp_path):
     store = CredentialStore(str(tmp_path / "creds.json"))
     normalized = ensure_provider_auth_center_config(_base_config(), credential_store=store)
@@ -1324,6 +1555,46 @@ def test_scan_forces_local_auth_snapshot_refresh(monkeypatch, tmp_path):
     assert calls["start"] == 1
     assert calls["refresh"] == 1
     assert calls["reason"] == "manual_scan"
+
+
+def test_model_auth_center_get_overview_exposes_local_auth_sync_progress(monkeypatch, tmp_path):
+    store = CredentialStore(str(tmp_path / "creds.json"))
+    normalized = ensure_provider_auth_center_config(_base_config(), credential_store=store)
+    service = ModelAuthCenterService()
+    service._credential_store = store
+    calls = {"start": 0}
+
+    class _DummySync:
+        def start(self):
+            calls["start"] += 1
+
+        def get_snapshot(self, *, force_refresh: bool = False, reason: str = ""):
+            return {
+                "success": True,
+                "providers": {},
+                "refreshed_at": 0,
+                "revision": 7,
+                "changed_provider_ids": ["openai_codex"],
+                "message": "",
+                "refreshing": True,
+                "pending_reason": "startup",
+            }
+
+    service._sync_orchestrator = _DummySync()
+    monkeypatch.setattr(service, "_load_config", lambda: deepcopy(normalized))
+    monkeypatch.setattr("backend.model_auth.services.status.get_legacy_status_map", lambda: {})
+
+    result = service.get_overview()
+
+    assert calls["start"] == 1
+    assert result["success"] is True
+    assert result["overview"]["local_auth_sync"] == {
+        "refreshing": True,
+        "refreshed_at": 0,
+        "revision": 7,
+        "changed_provider_ids": ["openai_codex"],
+        "message": "",
+    }
 
 
 def test_update_provider_defaults_keeps_unconfigured_provider_out_of_runtime_projection(monkeypatch, tmp_path):
@@ -1400,6 +1671,122 @@ def test_update_provider_defaults_keeps_specialized_profile_runtime_model(monkey
 
     assert entry["default_model"] == "qwen-max-latest"
     assert selected["metadata"]["model"] == "qwen3-coder-plus"
+
+
+def test_update_provider_defaults_persists_dynamic_runtime_fields(monkeypatch, tmp_path):
+    store = CredentialStore(str(tmp_path / "creds.json"))
+    normalized = ensure_provider_auth_center_config(_base_config(), credential_store=store)
+    service = ModelAuthCenterService()
+    monkeypatch.setattr(
+        "backend.model_auth.services.center._runtime_metadata_field_names",
+        lambda provider_id, method=None: ("oauth_project_id", "oauth_location", "workspace_id", "region"),
+    )
+    monkeypatch.setattr(
+        "backend.model_auth.services.migration._runtime_metadata_field_names",
+        lambda provider_id, method=None: ("oauth_project_id", "oauth_location", "workspace_id", "region"),
+    )
+    monkeypatch.setattr(service, "_load_config", lambda: deepcopy(normalized))
+    monkeypatch.setattr(service, "_save_and_render", lambda cfg, **kwargs: deepcopy(cfg))
+
+    saved_config = service.update_provider_defaults(
+        {
+            "provider_id": "openai",
+            "workspace_id": "proj-123",
+            "region": "cn-hangzhou",
+        }
+    )
+    entry = saved_config["api"]["provider_auth_center"]["providers"]["openai"]
+    projected = project_provider_auth_center(saved_config["api"])
+    openai_preset = next(item for item in projected["presets"] if item["provider_id"] == "openai")
+
+    assert entry["metadata"]["workspace_id"] == "proj-123"
+    assert entry["metadata"]["region"] == "cn-hangzhou"
+    assert openai_preset["workspace_id"] == "proj-123"
+    assert openai_preset["region"] == "cn-hangzhou"
+
+
+def test_start_browser_auth_passes_dynamic_runtime_fields_to_oauth_launcher(monkeypatch, tmp_path):
+    store = CredentialStore(str(tmp_path / "creds.json"))
+    normalized = ensure_provider_auth_center_config(_base_config(), credential_store=store)
+    normalized["api"]["provider_auth_center"]["providers"]["openai"].setdefault("metadata", {}).update(
+        {
+            "workspace_id": "proj-123",
+            "region": "cn-hangzhou",
+        }
+    )
+    service = ModelAuthCenterService()
+    captured = {}
+
+    monkeypatch.setattr(
+        "backend.model_auth.services.migration._runtime_metadata_field_names",
+        lambda provider_id, method=None: ("oauth_project_id", "oauth_location", "workspace_id", "region"),
+    )
+    monkeypatch.setattr(service, "_load_config", lambda: deepcopy(normalized))
+    monkeypatch.setattr(
+        "backend.model_auth.services.center.launch_oauth_login",
+        lambda provider_key, settings=None: captured.update(
+            {
+                "provider_key": provider_key,
+                "settings": dict(settings or {}),
+            }
+        ) or {
+            "success": True,
+            "flow_id": "flow-123",
+            "created_at": 1,
+            "message": "ok",
+        },
+    )
+    monkeypatch.setattr(
+        service,
+        "_save_and_render",
+        lambda cfg, **kwargs: {"success": True, "overview": {"cards": []}, "message": kwargs.get("message", "")},
+    )
+
+    result = service.start_browser_auth({"provider_id": "openai", "method_id": "codex_local"})
+
+    assert result["success"] is True
+    assert captured["provider_key"] == "openai_codex"
+    assert captured["settings"]["workspace_id"] == "proj-123"
+    assert captured["settings"]["region"] == "cn-hangzhou"
+
+
+def test_start_browser_auth_passes_google_project_id_to_oauth_launcher(monkeypatch, tmp_path):
+    store = CredentialStore(str(tmp_path / "creds.json"))
+    normalized = ensure_provider_auth_center_config(_base_config(), credential_store=store)
+    normalized["api"]["provider_auth_center"]["providers"]["google"].setdefault("metadata", {}).update(
+        {
+            "oauth_project_id": "demo-google-project",
+        }
+    )
+    service = ModelAuthCenterService()
+    captured = {}
+
+    monkeypatch.setattr(service, "_load_config", lambda: deepcopy(normalized))
+    monkeypatch.setattr(
+        "backend.model_auth.services.center.launch_oauth_login",
+        lambda provider_key, settings=None: captured.update(
+            {
+                "provider_key": provider_key,
+                "settings": dict(settings or {}),
+            }
+        ) or {
+            "success": True,
+            "flow_id": "flow-456",
+            "created_at": 1,
+            "message": "ok",
+        },
+    )
+    monkeypatch.setattr(
+        service,
+        "_save_and_render",
+        lambda cfg, **kwargs: {"success": True, "overview": {"cards": []}, "message": kwargs.get("message", "")},
+    )
+
+    result = service.start_browser_auth({"provider_id": "google", "method_id": "google_oauth"})
+
+    assert result["success"] is True
+    assert captured["provider_key"] == "google_gemini_cli"
+    assert captured["settings"]["oauth_project_id"] == "demo-google-project"
 
 
 def test_complete_browser_auth_creates_oauth_profile_before_local_source_is_detected(monkeypatch, tmp_path):
@@ -1483,6 +1870,41 @@ def test_save_api_key_supports_provider_specific_method_id(monkeypatch, tmp_path
     assert profile["metadata"]["base_url"] == "https://coding.dashscope.aliyuncs.com/v1"
     assert profile["metadata"]["model"] == "qwen3-coder-next"
     assert store.get(profile["credential_ref"]).payload["api_key"] == "demo-provider-secure-value"
+
+
+def test_save_api_key_normalizes_runtime_endpoint_base_url(monkeypatch, tmp_path):
+    store = CredentialStore(str(tmp_path / "creds.json"))
+    normalized = ensure_provider_auth_center_config(_base_config(), credential_store=store)
+    service = ModelAuthCenterService()
+    service._credential_store = store
+    monkeypatch.setattr(service, "_load_config", lambda: deepcopy(normalized))
+    saved = {}
+
+    def _capture(cfg, **kwargs):
+        snapshot = deepcopy(cfg)
+        saved["config"] = snapshot
+        return {"success": True, "overview": {"cards": []}, "message": kwargs.get("message", "")}
+
+    monkeypatch.setattr(service, "_save_and_render", _capture)
+
+    service.save_api_key(
+        {
+            "provider_id": "qwen",
+            "method_id": "coding_plan_api_key",
+            "label": "Coding Plan Endpoint",
+            "api_key": "demo-provider-secure-value",
+            "default_base_url": "https://coding.dashscope.aliyuncs.com/v1/chat/completions",
+            "default_model": "qwen3-coder-plus",
+            "set_default": True,
+        }
+    )
+
+    entry = saved["config"]["api"]["provider_auth_center"]["providers"]["qwen"]
+    profile = next(item for item in entry["auth_profiles"] if item["id"] == entry["selected_profile_id"])
+
+    assert entry["default_base_url"] == "https://coding.dashscope.aliyuncs.com/v1"
+    assert profile["metadata"]["base_url"] == "https://coding.dashscope.aliyuncs.com/v1"
+    assert profile["metadata"]["model"] == "qwen3-coder-plus"
 
 
 def test_save_api_key_prefers_provider_default_model_over_method_recommendation(monkeypatch, tmp_path):
@@ -1902,6 +2324,162 @@ def test_complete_browser_auth_supports_flowless_local_rescan(monkeypatch, tmp_p
     assert profile["metadata"]["runtime_ready"] is True
 
 
+def test_complete_browser_auth_ignores_flow_id_for_openai_local_rescan(monkeypatch, tmp_path):
+    store = CredentialStore(str(tmp_path / "creds.json"))
+    normalized = ensure_provider_auth_center_config(_base_config(), credential_store=store)
+    service = ModelAuthCenterService()
+    service._credential_store = store
+
+    class _DummySync:
+        def start(self):
+            return None
+
+    service._sync_orchestrator = _DummySync()
+    monkeypatch.setattr(service, "_load_config", lambda: deepcopy(normalized))
+    monkeypatch.setattr(
+        "backend.model_auth.services.center.submit_auth_callback",
+        lambda provider_key, flow_id, payload=None: (_ for _ in ()).throw(
+            AssertionError("submit_auth_callback should not be used for local_rescan providers")
+        ),
+    )
+    monkeypatch.setattr(
+        "backend.model_auth.services.center.get_legacy_status_map",
+        lambda force_refresh=False: {
+            "openai_codex": {
+                "detected": True,
+                "configured": True,
+                "runtime_available": True,
+                "account_label": "ChatGPT Browser",
+                "auth_path": str(tmp_path / "codex-auth.json"),
+                "local_source_label": "codex_auth_json",
+            }
+        },
+    )
+    saved = {}
+
+    def _capture(cfg, **kwargs):
+        saved["config"] = deepcopy(cfg)
+        return {"success": True, "overview": {"cards": []}, "message": kwargs.get("message", "")}
+
+    monkeypatch.setattr(service, "_save_and_render", _capture)
+
+    result = service.complete_browser_auth(
+        {"provider_id": "openai", "method_id": "codex_local", "flow_id": "flow-openai-1"}
+    )
+
+    entry = saved["config"]["api"]["provider_auth_center"]["providers"]["openai"]
+    profile = next(item for item in entry["auth_profiles"] if item["method_id"] == "codex_local")
+
+    assert result["success"] is True
+    assert profile["credential_source"] == "local_config_file"
+    assert profile["binding"]["source_type"] == "openai_codex"
+    assert profile["metadata"]["runtime_ready"] is True
+
+
+def test_complete_browser_auth_ignores_flow_id_for_google_local_rescan(monkeypatch, tmp_path):
+    store = CredentialStore(str(tmp_path / "creds.json"))
+    normalized = ensure_provider_auth_center_config(_base_config(), credential_store=store)
+    service = ModelAuthCenterService()
+    service._credential_store = store
+
+    class _DummySync:
+        def start(self):
+            return None
+
+    service._sync_orchestrator = _DummySync()
+    monkeypatch.setattr(service, "_load_config", lambda: deepcopy(normalized))
+    monkeypatch.setattr(
+        "backend.model_auth.services.center.submit_auth_callback",
+        lambda provider_key, flow_id, payload=None: (_ for _ in ()).throw(
+            AssertionError("submit_auth_callback should not be used for local_rescan providers")
+        ),
+    )
+    monkeypatch.setattr(
+        "backend.model_auth.services.center.get_legacy_status_map",
+        lambda force_refresh=False: {
+            "google_gemini_cli": {
+                "detected": True,
+                "configured": True,
+                "runtime_available": True,
+                "account_label": "Gemini CLI Browser",
+                "local_source_label": "gemini_cli_oauth",
+            }
+        },
+    )
+    saved = {}
+
+    def _capture(cfg, **kwargs):
+        saved["config"] = deepcopy(cfg)
+        return {"success": True, "overview": {"cards": []}, "message": kwargs.get("message", "")}
+
+    monkeypatch.setattr(service, "_save_and_render", _capture)
+
+    result = service.complete_browser_auth(
+        {"provider_id": "google", "method_id": "google_oauth", "flow_id": "flow-google-1"}
+    )
+
+    entry = saved["config"]["api"]["provider_auth_center"]["providers"]["google"]
+    profile = next(item for item in entry["auth_profiles"] if item["method_id"] == "google_oauth")
+
+    assert result["success"] is True
+    assert profile["credential_source"] == "local_config_file"
+    assert profile["binding"]["source_type"] == "google_gemini_cli"
+    assert profile["binding"]["follow_local_auth"] is True
+    assert profile["metadata"]["runtime_ready"] is True
+
+
+def test_complete_browser_auth_ignores_flow_id_for_claude_local_rescan(monkeypatch, tmp_path):
+    store = CredentialStore(str(tmp_path / "creds.json"))
+    normalized = ensure_provider_auth_center_config(_base_config(), credential_store=store)
+    service = ModelAuthCenterService()
+    service._credential_store = store
+
+    class _DummySync:
+        def start(self):
+            return None
+
+    service._sync_orchestrator = _DummySync()
+    monkeypatch.setattr(service, "_load_config", lambda: deepcopy(normalized))
+    monkeypatch.setattr(
+        "backend.model_auth.services.center.submit_auth_callback",
+        lambda provider_key, flow_id, payload=None: (_ for _ in ()).throw(
+            AssertionError("submit_auth_callback should not be used for local_rescan providers")
+        ),
+    )
+    monkeypatch.setattr(
+        "backend.model_auth.services.center.get_legacy_status_map",
+        lambda force_refresh=False: {
+            "claude_code_local": {
+                "detected": True,
+                "configured": True,
+                "runtime_available": True,
+                "account_label": "Claude Code Browser",
+                "local_source_label": "claude_code_local",
+            }
+        },
+    )
+    saved = {}
+
+    def _capture(cfg, **kwargs):
+        saved["config"] = deepcopy(cfg)
+        return {"success": True, "overview": {"cards": []}, "message": kwargs.get("message", "")}
+
+    monkeypatch.setattr(service, "_save_and_render", _capture)
+
+    result = service.complete_browser_auth(
+        {"provider_id": "anthropic", "method_id": "claude_code_oauth", "flow_id": "flow-claude-1"}
+    )
+
+    entry = saved["config"]["api"]["provider_auth_center"]["providers"]["anthropic"]
+    profile = next(item for item in entry["auth_profiles"] if item["method_id"] == "claude_code_oauth")
+
+    assert result["success"] is True
+    assert profile["credential_source"] == "local_config_file"
+    assert profile["binding"]["source_type"] == "claude_code_local"
+    assert profile["binding"]["follow_local_auth"] is True
+    assert profile["metadata"]["runtime_ready"] is True
+
+
 def test_bind_local_auth_prefers_system_keychain_credential_source(monkeypatch, tmp_path):
     store = CredentialStore(str(tmp_path / "creds.json"))
     normalized = ensure_provider_auth_center_config(_base_config(), credential_store=store)
@@ -1977,6 +2555,107 @@ def test_provider_health_summary_uses_checked_result(monkeypatch, tmp_path):
     assert openai_card.metadata["provider_health"]["code"] == "warning"
     assert openai_card.metadata["provider_health"]["error_code"] == "api_key_invalid"
     assert openai_card.metadata["provider_health"]["checked_at"] == 123456
+
+
+def test_google_runtime_profile_reuses_detected_project_id_without_manual_metadata(monkeypatch, tmp_path):
+    creds_path, accounts_path = _write_google_gemini_auth_files(tmp_path, project_id="gemini-project-001")
+    monkeypatch.setenv("WECHAT_BOT_GEMINI_OAUTH_PATH", creds_path)
+    monkeypatch.setenv("WECHAT_BOT_GEMINI_ACCOUNTS_PATH", accounts_path)
+    store = CredentialStore(str(tmp_path / "creds.json"))
+    normalized = ensure_provider_auth_center_config(_base_config(), credential_store=store)
+    google_entry = normalized["api"]["provider_auth_center"]["providers"]["google"]
+    google_entry["selected_profile_id"] = "google:google_oauth:work"
+    google_entry["auth_profiles"] = [
+        {
+            "id": "google:google_oauth:work",
+            "provider_id": "google",
+            "method_id": "google_oauth",
+            "method_type": "oauth",
+            "label": "Gemini OAuth",
+            "credential_ref": "",
+            "credential_source": "oauth_callback",
+            "binding": {
+                "source": "google_gemini_cli",
+                "source_type": "google_gemini_cli",
+                "credential_source": "oauth_callback",
+                "sync_policy": "follow",
+                "follow_local_auth": True,
+            },
+            "metadata": {},
+        }
+    ]
+    monkeypatch.setattr("backend.model_auth.services.status.get_legacy_status_map", lambda: {})
+
+    cards = build_provider_overview_cards(normalized, credential_store=store)
+    google_card = next(card for card in cards if card.provider.id == "google")
+    google_state = next(
+        state for state in google_card.auth_states if state.metadata.get("profile_id") == "google:google_oauth:work"
+    )
+    action_ids = {item["id"] for item in google_state.actions}
+
+    assert google_state.metadata["runtime_ready"] is True
+    assert google_card.metadata["provider_health"]["code"] == "not_checked"
+    assert "test_profile" in action_ids
+
+    service = ModelAuthCenterService()
+    monkeypatch.setattr(service, "_load_config", lambda: deepcopy(normalized))
+    monkeypatch.setattr(
+        service,
+        "_save_and_render",
+        lambda cfg, **kwargs: {"success": True, "overview": {"cards": []}, "message": kwargs.get("message", "")},
+    )
+
+    result = service.set_active_provider({"provider_id": "google"})
+
+    assert result["success"] is True
+
+
+def test_google_runtime_profile_blocks_without_project_id_and_hides_test_action(monkeypatch, tmp_path):
+    creds_path, accounts_path = _write_google_gemini_auth_files(tmp_path, project_id=None)
+    monkeypatch.setenv("WECHAT_BOT_GEMINI_OAUTH_PATH", creds_path)
+    monkeypatch.setenv("WECHAT_BOT_GEMINI_ACCOUNTS_PATH", accounts_path)
+    store = CredentialStore(str(tmp_path / "creds.json"))
+    normalized = ensure_provider_auth_center_config(_base_config(), credential_store=store)
+    google_entry = normalized["api"]["provider_auth_center"]["providers"]["google"]
+    google_entry["selected_profile_id"] = "google:google_oauth:work"
+    google_entry["auth_profiles"] = [
+        {
+            "id": "google:google_oauth:work",
+            "provider_id": "google",
+            "method_id": "google_oauth",
+            "method_type": "oauth",
+            "label": "Gemini OAuth",
+            "credential_ref": "",
+            "credential_source": "oauth_callback",
+            "binding": {
+                "source": "google_gemini_cli",
+                "source_type": "google_gemini_cli",
+                "credential_source": "oauth_callback",
+                "sync_policy": "follow",
+                "follow_local_auth": True,
+            },
+            "metadata": {},
+        }
+    ]
+    monkeypatch.setattr("backend.model_auth.services.status.get_legacy_status_map", lambda: {})
+
+    cards = build_provider_overview_cards(normalized, credential_store=store)
+    google_card = next(card for card in cards if card.provider.id == "google")
+    google_state = next(
+        state for state in google_card.auth_states if state.metadata.get("profile_id") == "google:google_oauth:work"
+    )
+    action_ids = {item["id"] for item in google_state.actions}
+
+    assert google_state.metadata["runtime_ready"] is False
+    assert "项目 ID" in google_state.metadata["runtime_unavailable_reason"]
+    assert "test_profile" not in action_ids
+    assert google_card.metadata["provider_health"]["code"] == "blocked"
+
+    service = ModelAuthCenterService()
+    monkeypatch.setattr(service, "_load_config", lambda: deepcopy(normalized))
+
+    with pytest.raises(ValueError, match="支持运行时调用的认证"):
+        service.set_active_provider({"provider_id": "google"})
 
 
 def test_provider_health_summary_marks_runtime_blocked_and_hides_test_action(monkeypatch, tmp_path):
@@ -2177,3 +2856,46 @@ def test_logout_source_forces_local_auth_snapshot_refresh(monkeypatch, tmp_path)
     assert calls["start"] == 1
     assert calls["refresh"] == 1
     assert calls["reason"] == "source_logout"
+
+
+def test_build_provider_overview_cards_can_skip_redundant_normalization(monkeypatch, tmp_path):
+    store = CredentialStore(str(tmp_path / "credentials.sqlite3"))
+    normalized = ensure_provider_auth_center_config(_base_config(), credential_store=store)
+
+    def _unexpected_normalize(*args, **kwargs):
+        raise AssertionError("should not renormalize an already-normalized config")
+
+    monkeypatch.setattr("backend.model_auth.services.status.ensure_provider_auth_center_config", _unexpected_normalize)
+    monkeypatch.setattr("backend.model_auth.services.status.get_legacy_status_map", lambda: {})
+
+    cards = build_provider_overview_cards(
+        normalized,
+        credential_store=store,
+        assume_normalized=True,
+    )
+
+    assert cards
+    assert any(card.provider.id == "openai" for card in cards)
+
+
+def test_model_auth_center_load_config_skips_redundant_normalization(monkeypatch, tmp_path):
+    store = CredentialStore(str(tmp_path / "credentials.sqlite3"))
+    normalized = ensure_provider_auth_center_config(_base_config(), credential_store=store)
+    snapshot = SimpleNamespace(to_dict=lambda: deepcopy(normalized))
+    service = ModelAuthCenterService()
+    service._credential_store = store
+    service._config_service = SimpleNamespace(
+        get_snapshot=lambda: snapshot,
+        save_effective_config=lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("should not persist when config is already current")
+        ),
+    )
+
+    def _unexpected_normalize(*args, **kwargs):
+        raise AssertionError("should not renormalize an already-current config")
+
+    monkeypatch.setattr("backend.model_auth.services.center.ensure_provider_auth_center_config", _unexpected_normalize)
+
+    loaded = service._load_config()
+
+    assert loaded["api"]["provider_auth_center"]["providers"]["openai"]["provider_id"] == "openai"

@@ -1,13 +1,18 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { EventEmitter } = require('events');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const iconv = require('iconv-lite');
 
 const {
     buildRendererConfigPayload,
+    createConfigCli,
     createSharedConfigService,
+    enrichModelCatalog,
 } = require('../src/main/shared-config');
+const { decodeBufferText } = require('../src/main/text-codec');
 const {
     buildDiagnosticsSnapshot,
 } = require('../src/main/diagnostics-snapshot');
@@ -52,6 +57,182 @@ test('buildRendererConfigPayload masks secrets and drops runtime-only fields', (
     assert.equal(payload.agent.langsmith_api_key_configured, true);
     assert.equal('langsmith_api_key' in payload.agent, false);
     assert.equal('streaming_enabled' in payload.agent, false);
+});
+
+test('buildRendererConfigPayload canonicalizes provider ids for claude, kimi, and zhipu presets', () => {
+    const payload = buildRendererConfigPayload({
+        api: {
+            presets: [
+                {
+                    name: 'Claude Code',
+                    base_url: 'https://api.anthropic.com/v1',
+                    model: 'claude-sonnet-4-0',
+                    api_key: 'claude-demo-key-123456',
+                },
+                {
+                    name: 'Moonshot',
+                    provider_id: 'moonshot',
+                    base_url: 'https://api.moonshot.cn/v1',
+                    model: 'kimi-k2-turbo-preview',
+                    api_key: 'kimi-demo-key-123456',
+                },
+                {
+                    name: 'GLM Coding Plan',
+                    base_url: 'https://open.bigmodel.cn/api/coding/paas/v4',
+                    model: 'glm-5',
+                    api_key: 'glm-demo-key-123456',
+                },
+                {
+                    name: 'Bailian Coding Plan',
+                    provider_id: 'bailian',
+                    base_url: 'https://coding.dashscope.aliyuncs.com/v1',
+                    model: 'MiniMax-M2.5',
+                    api_key: 'bailian-demo-key-123456',
+                },
+                {
+                    name: 'Claude Vertex',
+                    base_url: 'https://global-aiplatform.googleapis.com/v1/projects/demo/locations/global/publishers/anthropic/models',
+                    model: 'claude-sonnet-4-6',
+                    api_key: 'vertex-demo-key-123456',
+                },
+            ],
+        },
+    });
+
+    assert.equal(payload.api.presets[0].provider_id, 'anthropic');
+    assert.equal(payload.api.presets[1].provider_id, 'kimi');
+    assert.equal(payload.api.presets[2].provider_id, 'zhipu');
+    assert.equal(payload.api.presets[3].provider_id, 'qwen');
+    assert.equal(payload.api.presets[4].provider_id, 'anthropic');
+    assert.equal(payload.api.presets[0].api_key, undefined);
+    assert.equal(payload.api.presets[1].api_key, undefined);
+    assert.equal(payload.api.presets[2].api_key, undefined);
+    assert.equal(payload.api.presets[3].api_key, undefined);
+    assert.equal(payload.api.presets[4].api_key, undefined);
+});
+
+test('buildRendererConfigPayload canonicalizes minimax direct and anthropic-compatible endpoint presets', () => {
+    const payload = buildRendererConfigPayload({
+        api: {
+            presets: [
+                {
+                    name: 'MiniMax China',
+                    base_url: 'https://api.minimaxi.com/v1',
+                    model: 'MiniMax-M2.5',
+                    api_key: 'minimax-demo-key-123456',
+                },
+                {
+                    name: 'MiniMax Coding Anthropic',
+                    base_url: 'https://api.minimax.io/anthropic/v1',
+                    model: 'MiniMax-M2.5',
+                    api_key: 'minimax-anthropic-demo-key-123456',
+                },
+                {
+                    name: 'MiniMax CN Messages',
+                    base_url: 'https://api.minimaxi.com/anthropic/messages',
+                    model: 'MiniMax-M2.5',
+                    api_key: 'minimax-cn-anthropic-demo-key-123456',
+                },
+            ],
+        },
+    });
+
+    assert.equal(payload.api.presets[0].provider_id, 'minimax');
+    assert.equal(payload.api.presets[0].api_key, undefined);
+    assert.equal(payload.api.presets[1].provider_id, 'minimax');
+    assert.equal(payload.api.presets[1].api_key, undefined);
+    assert.equal(payload.api.presets[2].provider_id, 'minimax');
+    assert.equal(payload.api.presets[2].api_key, undefined);
+});
+
+test('enrichModelCatalog merges existing qwen provider with latest coding plan models and auth methods', () => {
+    const result = enrichModelCatalog({
+        providers: [
+            {
+                id: 'bailian',
+                label: 'Bailian Coding Plan',
+                base_url: 'https://coding.dashscope.aliyuncs.com/v1',
+                models: ['qwen3-coder-next'],
+            },
+        ],
+    });
+
+    const qwen = result.providers.find((provider) => provider.id === 'qwen');
+    assert.ok(qwen);
+    assert.equal(qwen.base_url, 'https://coding.dashscope.aliyuncs.com/v1');
+    assert.equal(qwen.label, 'Bailian Coding Plan');
+    assert.equal(qwen.models.includes('qwen3-coder-next'), true);
+    assert.equal(qwen.models.includes('MiniMax-M2.5'), true);
+    assert.equal(qwen.models.includes('glm-5'), true);
+    assert.equal(qwen.models.includes('kimi-k2.5'), true);
+    assert.equal(qwen.auth_methods.some((method) => method.id === 'qwen_oauth'), true);
+    assert.equal(qwen.auth_methods.some((method) => method.id === 'coding_plan_api_key'), true);
+});
+
+test('enrichModelCatalog exposes runtime metadata for coding plan and oauth auth methods', () => {
+    const result = enrichModelCatalog({
+        providers: [
+            { id: 'qwen' },
+            { id: 'kimi' },
+            { id: 'zhipu' },
+            { id: 'minimax' },
+        ],
+    });
+
+    const providers = Object.fromEntries(result.providers.map((provider) => [provider.id, provider]));
+    const qwenMethods = Object.fromEntries((providers.qwen.auth_methods || []).map((method) => [method.id, method]));
+    const kimiMethods = Object.fromEntries((providers.kimi.auth_methods || []).map((method) => [method.id, method]));
+    const zhipuMethods = Object.fromEntries((providers.zhipu.auth_methods || []).map((method) => [method.id, method]));
+    const minimaxMethods = Object.fromEntries((providers.minimax.auth_methods || []).map((method) => [method.id, method]));
+
+    assert.equal(qwenMethods.qwen_oauth.metadata.recommended_base_url, 'https://dashscope.aliyuncs.com/compatible-mode/v1');
+    assert.equal(qwenMethods.qwen_oauth.metadata.recommended_model, 'qwen3-coder-plus');
+    assert.equal(qwenMethods.coding_plan_api_key.metadata.recommended_base_url, 'https://coding.dashscope.aliyuncs.com/v1');
+    assert.equal(qwenMethods.coding_plan_api_key.metadata.recommended_model, 'qwen3-coder-next');
+    assert.equal(kimiMethods.kimi_code_oauth.metadata.recommended_base_url, 'https://api.kimi.com/coding/v1');
+    assert.equal(kimiMethods.kimi_code_oauth.metadata.recommended_model, 'kimi-for-coding');
+    assert.equal(zhipuMethods.coding_plan_api_key.metadata.recommended_base_url, 'https://open.bigmodel.cn/api/coding/paas/v4');
+    assert.equal(minimaxMethods.coding_plan_api_key.metadata.regional_base_urls.includes('https://api.minimax.io/anthropic'), true);
+});
+
+test('decodeBufferText decodes Chinese text from gb18030 bytes', () => {
+    const encoded = iconv.encode('配置命令失败', 'gb18030');
+
+    assert.equal(decodeBufferText(encoded), '配置命令失败');
+});
+
+test('createConfigCli.run surfaces Chinese stderr from Windows buffers', async () => {
+    const cli = createConfigCli({
+        spawn() {
+            const child = new EventEmitter();
+            child.stdout = new EventEmitter();
+            child.stderr = new EventEmitter();
+            child.stdin = {
+                write() {},
+                end() {},
+            };
+            process.nextTick(() => {
+                child.stderr.emit('data', iconv.encode('配置命令退出失败', 'gb18030'));
+                child.emit('exit', 1);
+            });
+            return child;
+        },
+        getBackendCommand() {
+            return {
+                cmd: 'python',
+                args: ['run.py', 'config', 'probe'],
+                options: {},
+            };
+        },
+        getSharedConfigPath() {
+            return 'E:\\fake\\app_config.json';
+        },
+    });
+
+    await assert.rejects(
+        () => cli.run(['config', 'probe']),
+        /配置命令退出失败/,
+    );
 });
 
 test('createSharedConfigService.patch persists config and broadcasts changes', async () => {

@@ -1054,6 +1054,70 @@ async def test_agent_runtime_anthropic_native_refreshes_auth_on_401(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_agent_runtime_anthropic_vertex_invokes_raw_predict(monkeypatch):
+    monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
+
+    runtime = AgentRuntime(
+        settings={
+            "base_url": "https://global-aiplatform.googleapis.com/v1/projects/demo/locations/global/publishers/anthropic/models",
+            "api_key": "ya29.vertex-token",
+            "model": "claude-sonnet-4-0",
+            "provider_id": "anthropic",
+            "auth_transport": "anthropic_vertex",
+            "resolved_auth_metadata": {"project_id": "demo", "location": "global"},
+        },
+        bot_cfg={},
+        agent_cfg={"enabled": True},
+    )
+    prepared = SimpleNamespace(
+        prompt_messages=[_FakeMessage("hello vertex")],
+        chat_id="friend:alice",
+        response_metadata={},
+        timings={},
+    )
+    observed = {}
+
+    class _FakeResponse:
+        status_code = 200
+        text = '{"type":"message"}'
+
+        def json(self):
+            return {
+                "type": "message",
+                "content": [{"type": "text", "text": "vertex reply"}],
+                "stop_reason": "end_turn",
+            }
+
+    class _FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            observed["timeout"] = kwargs.get("timeout")
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            observed["url"] = url
+            observed["headers"] = headers
+            observed["json"] = json
+            return _FakeResponse()
+
+    monkeypatch.setattr("backend.core.agent_runtime.httpx.AsyncClient", _FakeAsyncClient)
+
+    reply = await runtime.invoke(prepared)
+
+    assert reply == "vertex reply"
+    assert observed["url"].endswith("/claude-sonnet-4@20250514:rawPredict")
+    assert observed["headers"]["Authorization"] == "Bearer ya29.vertex-token"
+    assert observed["headers"]["X-Goog-User-Project"] == "demo"
+    assert observed["json"]["anthropic_version"] == "vertex-2023-10-16"
+    assert "model" not in observed["json"]
+    assert prepared.response_metadata["finish_reason"] == "end_turn"
+
+
+@pytest.mark.asyncio
 async def test_agent_runtime_stream_prefers_visible_answer_over_reasoning_for_user_reply(monkeypatch):
     monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
 

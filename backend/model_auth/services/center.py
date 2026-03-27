@@ -14,16 +14,25 @@ from backend.core.oauth_support import (
 from backend.core.config_service import get_config_service
 
 from ..domain.enums import AuthMethodType, CredentialSource, SyncPolicy
-from ..providers.registry import get_method_auth_provider_id, get_provider_definition, get_provider_method
+from ..providers.registry import (
+    get_method_auth_provider_id,
+    get_provider_definition,
+    get_provider_method,
+    list_provider_definitions,
+)
 from ..storage.credential_store import get_credential_store
 from ..sync.discovery import extract_locator_path, get_legacy_status_map, get_method_local_status
 from ..sync.orchestrator import get_local_auth_sync_orchestrator
 from .health import run_profile_health_check
 from .migration import (
+    _canonicalize_provider_id,
+    _collect_runtime_metadata_values,
     _default_provider_entry,
+    _normalize_runtime_base_url,
     _provider_map,
     _reconcile_selected_profile,
     _resolve_method_runtime_defaults,
+    _runtime_metadata_field_names,
     _select_runtime_profile,
     _slugify,
     _store_api_key_secret,
@@ -87,9 +96,62 @@ class ModelAuthCenterService:
     def _ensure_sync_started(self) -> None:
         self._sync_orchestrator.start()
 
+    def _build_local_auth_sync_state(self) -> Dict[str, Any]:
+        snapshot = self._sync_orchestrator.get_snapshot(reason="overview_state")
+        return {
+            "refreshing": bool(snapshot.get("refreshing")),
+            "refreshed_at": int(snapshot.get("refreshed_at") or 0),
+            "revision": int(snapshot.get("revision") or 0),
+            "changed_provider_ids": [
+                str(item).strip()
+                for item in (snapshot.get("changed_provider_ids") or [])
+                if str(item).strip()
+            ],
+            "message": str(snapshot.get("message") or "").strip(),
+        }
+
+    def _build_overview_response(self, config: Dict[str, Any], cards: list[Dict[str, Any]], *, message: str = "") -> Dict[str, Any]:
+        center = dict(((config.get("api") or {}).get("provider_auth_center") or {}))
+        return {
+            "success": True,
+            "message": message,
+            "overview": {
+                "updated_at": int(center.get("updated_at") or _now()),
+                "active_provider_id": str(center.get("active_provider_id") or "").strip(),
+                "cards": cards,
+                "local_auth_sync": self._build_local_auth_sync_state(),
+            },
+        }
+
+    def _needs_config_normalization(self, config: Dict[str, Any]) -> bool:
+        api_cfg = dict(config.get("api") or {})
+        center = api_cfg.get("provider_auth_center")
+        if not isinstance(center, dict):
+            return True
+        if int(center.get("version") or 0) < 1:
+            return True
+
+        providers = center.get("providers")
+        if not isinstance(providers, dict):
+            return True
+
+        current_provider_ids = {
+            _canonicalize_provider_id(provider_id)
+            for provider_id, payload in providers.items()
+            if isinstance(payload, dict) and _canonicalize_provider_id(provider_id)
+        }
+        expected_provider_ids = {
+            _canonicalize_provider_id(definition.id)
+            for definition in list_provider_definitions()
+            if _canonicalize_provider_id(definition.id)
+        }
+        return current_provider_ids != expected_provider_ids
+
     def _load_config(self) -> Dict[str, Any]:
         snapshot = self._config_service.get_snapshot()
         current = snapshot.to_dict()
+        if not self._needs_config_normalization(current):
+            return current
         normalized = ensure_provider_auth_center_config(current, credential_store=self._credential_store)
         if normalized != current:
             saved = self._config_service.save_effective_config(
@@ -113,7 +175,7 @@ class ModelAuthCenterService:
         api_cfg = dict(config.get("api") or {})
         center = dict(api_cfg.get("provider_auth_center") or {})
         providers = _provider_map(center)
-        key = str(provider_id or "").strip().lower()
+        key = _canonicalize_provider_id(provider_id)
         entry = providers.setdefault(key, _default_provider_entry(key))
         center["providers"] = providers
         api_cfg["provider_auth_center"] = center
@@ -262,7 +324,7 @@ class ModelAuthCenterService:
     ) -> Dict[str, Any]:
         metadata = dict(entry.get("metadata") or {})
         runtime_defaults = _resolve_method_runtime_defaults(entry, method, profile_metadata)
-        return {
+        settings = {
             "provider_id": str(entry.get("provider_id") or "").strip().lower(),
             "base_url": runtime_defaults["base_url"],
             "model": runtime_defaults["model"],
@@ -274,8 +336,6 @@ class ModelAuthCenterService:
             "max_completion_tokens": metadata.get("max_completion_tokens"),
             "reasoning_effort": metadata.get("reasoning_effort"),
             "embedding_model": metadata.get("embedding_model"),
-            "oauth_project_id": metadata.get("oauth_project_id"),
-            "oauth_location": metadata.get("oauth_location"),
             "auth_mode": "oauth",
             "credential_ref": credential_ref,
             "oauth_provider": get_method_auth_provider_id(method),
@@ -283,6 +343,8 @@ class ModelAuthCenterService:
             "oauth_binding": dict(binding or {}),
             "oauth_experimental_ack": True,
         }
+        settings.update(_collect_runtime_metadata_values(entry, method=method))
+        return settings
 
     def _capture_import_copy_ref(
         self,
@@ -316,31 +378,28 @@ class ModelAuthCenterService:
 
     def _save_and_render(self, config: Dict[str, Any], *, source: str, message: str = "") -> Dict[str, Any]:
         saved = self._save_config(config, source=source)
-        center = dict(((saved.get("api") or {}).get("provider_auth_center") or {}))
-        cards = [card.to_dict() for card in build_provider_overview_cards(saved, credential_store=self._credential_store)]
-        return {
-            "success": True,
-            "message": message,
-            "overview": {
-                "updated_at": int(center.get("updated_at") or _now()),
-                "active_provider_id": str(center.get("active_provider_id") or "").strip(),
-                "cards": cards,
-            },
-        }
+        cards = [
+            card.to_dict()
+            for card in build_provider_overview_cards(
+                saved,
+                credential_store=self._credential_store,
+                assume_normalized=True,
+            )
+        ]
+        return self._build_overview_response(saved, cards, message=message)
 
     def get_overview(self) -> Dict[str, Any]:
         self._ensure_sync_started()
         config = self._load_config()
-        center = dict((((config.get("api") or {}).get("provider_auth_center")) or {}))
-        cards = [card.to_dict() for card in build_provider_overview_cards(config, credential_store=self._credential_store)]
-        return {
-            "success": True,
-            "overview": {
-                "updated_at": int(center.get("updated_at") or _now()),
-                "active_provider_id": str(center.get("active_provider_id") or "").strip(),
-                "cards": cards,
-            },
-        }
+        cards = [
+            card.to_dict()
+            for card in build_provider_overview_cards(
+                config,
+                credential_store=self._credential_store,
+                assume_normalized=True,
+            )
+        ]
+        return self._build_overview_response(config, cards)
 
     def scan(self) -> Dict[str, Any]:
         self._ensure_sync_started()
@@ -350,7 +409,7 @@ class ModelAuthCenterService:
 
     def update_provider_defaults(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         config = self._load_config()
-        provider_id = str(payload.get("provider_id") or "").strip().lower()
+        provider_id = _canonicalize_provider_id(payload.get("provider_id"))
         entry = self._get_provider_entry(config, provider_id)
         previous_default_model = str(entry.get("default_model") or "").strip()
         previous_default_base_url = str(entry.get("default_base_url") or "").strip()
@@ -359,13 +418,16 @@ class ModelAuthCenterService:
         for field_name in ("legacy_preset_name", "alias", "default_model", "default_base_url"):
             value = payload.get(field_name)
             if value is not None:
-                entry[field_name] = str(value or "").strip()
+                normalized_value = str(value or "").strip()
+                if field_name == "default_base_url":
+                    normalized_value = _normalize_runtime_base_url(normalized_value)
+                entry[field_name] = normalized_value
                 if field_name == "default_model":
                     sync_model = True
                 elif field_name == "default_base_url":
                     sync_base_url = True
         entry.setdefault("metadata", {})
-        for field_name in ("oauth_project_id", "oauth_location"):
+        for field_name in _runtime_metadata_field_names(provider_id):
             if field_name in payload:
                 entry["metadata"][field_name] = str(payload.get(field_name) or "").strip()
         if sync_model or sync_base_url:
@@ -381,7 +443,7 @@ class ModelAuthCenterService:
         return self._save_and_render(config, source="model_auth_center_defaults", message="服务方默认设置已更新。")
 
     def save_api_key(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        provider_id = str(payload.get("provider_id") or "").strip().lower()
+        provider_id = _canonicalize_provider_id(payload.get("provider_id"))
         method_id = str(payload.get("method_id") or "api_key").strip().lower() or "api_key"
         api_key = str(payload.get("api_key") or "").strip()
         if not provider_id or not api_key:
@@ -397,11 +459,11 @@ class ModelAuthCenterService:
         entry = self._get_provider_entry(config, provider_id)
         label = str(payload.get("label") or method.label or entry.get("legacy_preset_name") or provider_id).strip()
         requested_model = str(payload.get("default_model") or "").strip()
-        requested_base_url = str(payload.get("default_base_url") or "").strip()
+        requested_base_url = _normalize_runtime_base_url(payload.get("default_base_url"))
         recommended_model = str(method.metadata.get("recommended_model") or "").strip()
-        recommended_base_url = str(method.metadata.get("recommended_base_url") or "").strip()
+        recommended_base_url = _normalize_runtime_base_url(method.metadata.get("recommended_base_url"))
         provider_default_model = str(entry.get("default_model") or "").strip()
-        provider_default_base_url = str(entry.get("default_base_url") or "").strip()
+        provider_default_base_url = _normalize_runtime_base_url(entry.get("default_base_url"))
         if method.id == "api_key":
             profile_model = requested_model or provider_default_model or recommended_model
             profile_base_url = requested_base_url or provider_default_base_url or recommended_base_url
@@ -448,7 +510,7 @@ class ModelAuthCenterService:
 
     def _bind_local_auth_profile(self, payload: Dict[str, Any], *, follow_local_auth: bool) -> Dict[str, Any]:
         self._ensure_sync_started()
-        provider_id = str(payload.get("provider_id") or "").strip().lower()
+        provider_id = _canonicalize_provider_id(payload.get("provider_id"))
         method_id = str(payload.get("method_id") or "").strip().lower()
         method = self._resolve_action_method(
             provider_id,
@@ -533,7 +595,7 @@ class ModelAuthCenterService:
         return self._save_and_render(config, source=action_source, message=action_message)
 
     def bind_local_auth(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        provider_id = str(payload.get("provider_id") or "").strip().lower()
+        provider_id = _canonicalize_provider_id(payload.get("provider_id"))
         method_id = str(payload.get("method_id") or "").strip().lower()
         method = self._resolve_action_method(
             provider_id,
@@ -551,7 +613,7 @@ class ModelAuthCenterService:
         return self._bind_local_auth_profile(payload, follow_local_auth=False)
 
     def import_session(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        provider_id = str(payload.get("provider_id") or "").strip().lower()
+        provider_id = _canonicalize_provider_id(payload.get("provider_id"))
         method_id = str(payload.get("method_id") or "").strip().lower()
         session_payload = payload.get("session_payload")
         if not provider_id or not method_id or session_payload in (None, "", {}):
@@ -607,7 +669,7 @@ class ModelAuthCenterService:
         return self._save_and_render(config, source="model_auth_center_session_import", message="登录会话已安全导入。")
 
     def start_browser_auth(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        provider_id = str(payload.get("provider_id") or "").strip().lower()
+        provider_id = _canonicalize_provider_id(payload.get("provider_id"))
         method_id = str(payload.get("method_id") or "").strip().lower()
         method = self._resolve_action_method(
             provider_id,
@@ -623,10 +685,7 @@ class ModelAuthCenterService:
         entry.setdefault("metadata", {})
         pending = dict(entry["metadata"].get("pending_flows") or {})
         if adapter_id:
-            settings = {
-                "oauth_project_id": (entry.get("metadata") or {}).get("oauth_project_id"),
-                "oauth_location": (entry.get("metadata") or {}).get("oauth_location"),
-            }
+            settings = _collect_runtime_metadata_values(entry, method=method, provider_id=provider_id)
             result = launch_oauth_login(adapter_id, settings=settings)
             pending[method_id] = {
                 "flow_id": str(result.get("flow_id") or "").strip(),
@@ -649,7 +708,7 @@ class ModelAuthCenterService:
         return self._save_and_render(config, source="model_auth_center_browser_hint", message="登录页已打开。登录后回来继续。")
 
     def complete_browser_auth(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        provider_id = str(payload.get("provider_id") or "").strip().lower()
+        provider_id = _canonicalize_provider_id(payload.get("provider_id"))
         method_id = str(payload.get("method_id") or "").strip().lower()
         flow_id = str(payload.get("flow_id") or "").strip()
         if flow_id == "__local_rescan__":
@@ -663,7 +722,8 @@ class ModelAuthCenterService:
             raise ValueError("provider_id 和 method_id 必须指向支持网页登录的认证方式。")
         method_id = method.id
         adapter_id = get_method_auth_provider_id(method)
-        if adapter_id and flow_id:
+        browser_flow_completion = str(method.metadata.get("browser_flow_completion") or "").strip().lower()
+        if adapter_id and flow_id and browser_flow_completion != "local_rescan":
             result = submit_auth_callback(adapter_id, flow_id, payload=payload.get("callback_payload"))
         else:
             statuses = get_legacy_status_map(force_refresh=True)
@@ -767,7 +827,7 @@ class ModelAuthCenterService:
 
     def set_default_profile(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         config = self._load_config()
-        provider_id = str(payload.get("provider_id") or "").strip().lower()
+        provider_id = _canonicalize_provider_id(payload.get("provider_id"))
         profile_id = str(payload.get("profile_id") or "").strip()
         entry = self._get_provider_entry(config, provider_id)
         if not self._get_profile(entry, profile_id):
@@ -779,7 +839,7 @@ class ModelAuthCenterService:
 
     def set_active_provider(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         config = self._load_config()
-        provider_id = str(payload.get("provider_id") or "").strip().lower()
+        provider_id = _canonicalize_provider_id(payload.get("provider_id"))
         entry = self._get_provider_entry(config, provider_id)
         profile, _ = _select_runtime_profile(entry)
         if profile is None:
@@ -794,7 +854,7 @@ class ModelAuthCenterService:
 
     async def test_profile(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         config = self._load_config()
-        provider_id = str(payload.get("provider_id") or "").strip().lower()
+        provider_id = _canonicalize_provider_id(payload.get("provider_id"))
         profile_id = str(payload.get("profile_id") or "").strip()
         entry = self._get_provider_entry(config, provider_id)
         profile = self._get_profile(entry, profile_id)
@@ -818,7 +878,7 @@ class ModelAuthCenterService:
 
     def disconnect_profile(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         config = self._load_config()
-        provider_id = str(payload.get("provider_id") or "").strip().lower()
+        provider_id = _canonicalize_provider_id(payload.get("provider_id"))
         profile_id = str(payload.get("profile_id") or "").strip()
         entry = self._get_provider_entry(config, provider_id)
         profile = self._get_profile(entry, profile_id)
@@ -836,7 +896,7 @@ class ModelAuthCenterService:
 
     def logout_source(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         config = self._load_config()
-        provider_id = str(payload.get("provider_id") or "").strip().lower()
+        provider_id = _canonicalize_provider_id(payload.get("provider_id"))
         profile_id = str(payload.get("profile_id") or "").strip()
         entry = self._get_provider_entry(config, provider_id)
         profile = self._get_profile(entry, profile_id)

@@ -48,6 +48,10 @@ jobs:
         with:
           python-version: "3.10"
 
+      - name: Validate release metadata
+        shell: pwsh
+        run: python scripts/validate_release_metadata.py --tag "$env:RELEASE_TAG"
+
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:

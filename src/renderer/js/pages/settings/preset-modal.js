@@ -58,6 +58,126 @@ function getSelectedAuthMode() {
     return 'api_key';
 }
 
+function normalizeRuntimeBaseUrl(value) {
+    return String(value || '').trim().replace(/\/+$/, '');
+}
+
+function getProviderAuthMethods(provider = {}) {
+    return Array.isArray(provider?.auth_methods)
+        ? provider.auth_methods.filter((item) => item && typeof item === 'object')
+        : [];
+}
+
+function resolveMethodRecommendedBaseUrl(method = {}, preset = {}) {
+    let value = normalizeRuntimeBaseUrl(method?.metadata?.recommended_base_url);
+    if (!value) {
+        return '';
+    }
+    const projectId = String(preset.oauth_project_id || '').trim();
+    const location = String(preset.oauth_location || '').trim();
+    if (projectId) {
+        value = value.replaceAll('{project}', projectId);
+    }
+    if (location) {
+        value = value.replaceAll('{location}', location);
+    }
+    return normalizeRuntimeBaseUrl(value);
+}
+
+function collectMethodBaseUrlHints(method = {}, preset = {}) {
+    const hints = [
+        resolveMethodRecommendedBaseUrl(method, preset),
+        ...((method?.metadata?.regional_base_urls || []).map((item) => normalizeRuntimeBaseUrl(item))),
+    ].filter(Boolean);
+    return Array.from(new Set(hints));
+}
+
+function matchesMethodBaseUrl(method = {}, baseUrl = '', preset = {}) {
+    const wanted = normalizeRuntimeBaseUrl(baseUrl).toLowerCase();
+    if (!wanted) {
+        return false;
+    }
+    return collectMethodBaseUrlHints(method, preset).some((candidate) => wanted.startsWith(candidate.toLowerCase()));
+}
+
+function shouldUseQwenCodingPlanModel(model = '') {
+    const normalized = String(model || '').trim().toLowerCase();
+    return normalized.includes('coder')
+        || ['minimax-m2.5', 'glm-5', 'glm-4.7', 'kimi-k2.5'].includes(normalized);
+}
+
+function resolvePresetAuthMethod(provider = {}, preset = {}) {
+    const providerId = String(provider?.id || preset.provider_id || '').trim().toLowerCase();
+    const authMode = String(preset.auth_mode || 'api_key').trim().toLowerCase() || 'api_key';
+    const model = String(preset.model || '').trim().toLowerCase();
+    const oauthProvider = String(preset.oauth_provider || '').trim();
+    const methods = getProviderAuthMethods(provider);
+    if (authMode === 'oauth') {
+        if (oauthProvider) {
+            const matched = methods.find((method) => {
+                const methodId = String(method?.id || '').trim();
+                const methodProviderId = String(method?.provider_id || '').trim();
+                return oauthProvider === methodId || oauthProvider === methodProviderId;
+            });
+            if (matched) {
+                return matched;
+            }
+        }
+        return methods.find((method) => String(method?.type || '').trim() === 'oauth')
+            || methods.find((method) => String(method?.type || '').trim() === 'local_import')
+            || null;
+    }
+
+    const codingPlanMethod = methods.find((method) => String(method?.id || '').trim() === 'coding_plan_api_key');
+    const genericApiKeyMethod = methods.find((method) => {
+        const methodType = String(method?.type || '').trim();
+        const methodId = String(method?.id || '').trim();
+        return methodType === 'api_key' && methodId !== 'coding_plan_api_key';
+    }) || methods.find((method) => String(method?.type || '').trim() === 'api_key') || null;
+    const currentBaseUrl = normalizeRuntimeBaseUrl(preset.base_url);
+    const providerDefaultBaseUrl = normalizeRuntimeBaseUrl(provider?.base_url);
+
+    if (providerId === 'qwen' && shouldUseQwenCodingPlanModel(model)) {
+        return codingPlanMethod || genericApiKeyMethod;
+    }
+    if (providerId === 'kimi' && (model === 'kimi-for-coding' || normalizeRuntimeBaseUrl(preset.base_url).toLowerCase().includes('/coding/'))) {
+        return codingPlanMethod || genericApiKeyMethod;
+    }
+    if (providerId === 'zhipu' || providerId === 'minimax') {
+        return codingPlanMethod || genericApiKeyMethod;
+    }
+    const matchedByBaseUrl = methods.find((method) => matchesMethodBaseUrl(method, currentBaseUrl, preset));
+    if (matchedByBaseUrl && currentBaseUrl && currentBaseUrl !== providerDefaultBaseUrl) {
+        return matchedByBaseUrl;
+    }
+    return genericApiKeyMethod || codingPlanMethod || null;
+}
+
+function resolvePresetRuntimeSelection(provider = {}, preset = {}) {
+    const method = resolvePresetAuthMethod(provider, preset);
+    const authMode = String(preset.auth_mode || 'api_key').trim().toLowerCase() || 'api_key';
+    const providerDefaultModel = String(provider?.default_model || '').trim();
+    const providerDefaultBaseUrl = normalizeRuntimeBaseUrl(provider?.base_url);
+    const currentModel = String(preset.model || '').trim();
+    const currentBaseUrl = normalizeRuntimeBaseUrl(preset.base_url || providerDefaultBaseUrl || '');
+    const recommendedModel = String(method?.metadata?.recommended_model || '').trim();
+    const recommendedBaseUrl = resolveMethodRecommendedBaseUrl(method, preset);
+    const nextModel = recommendedModel && (!currentModel || currentModel === providerDefaultModel)
+        ? recommendedModel
+        : currentModel;
+    const nextBaseUrl = recommendedBaseUrl && (!currentBaseUrl || currentBaseUrl === providerDefaultBaseUrl)
+        ? recommendedBaseUrl
+        : currentBaseUrl;
+    return {
+        method,
+        model: nextModel || currentModel || providerDefaultModel || '',
+        base_url: nextBaseUrl || currentBaseUrl || providerDefaultBaseUrl || '',
+        oauth_provider: authMode === 'oauth'
+            ? String(method?.provider_id || preset.oauth_provider || '').trim()
+            : String(preset.oauth_provider || '').trim(),
+    };
+}
+
 export function createDefaultPreset(page) {
     const firstProvider = page?._modelCatalog?.providers?.[0] || { id: '', default_model: '' };
     return {
@@ -167,6 +287,10 @@ export function updatePresetHelpLink(page, providerId) {
 export function fillPresetModal(page, preset) {
     const provider = getProvider(page, preset.provider_id) || {};
     setModalState(page, preset);
+    const runtime = resolvePresetRuntimeSelection(provider, preset);
+    if (page._modalPresetState && !page._modalPresetState.oauth_provider && runtime.oauth_provider) {
+        page._modalPresetState.oauth_provider = runtime.oauth_provider;
+    }
     if (getField('edit-preset-original-name')) {
         getField('edit-preset-original-name').value = page._selectedPresetIndex >= 0 ? String(preset.name || '') : '';
     }
@@ -200,7 +324,7 @@ export function fillPresetModal(page, preset) {
         getField('edit-preset-auth-mode-oauth').checked = (preset.auth_mode || 'api_key') === 'oauth';
     }
     updatePresetHelpLink(page, preset.provider_id);
-    void populateModelOptions(page, preset.provider_id || provider.id || '', preset.model || provider.default_model || '');
+    void populateModelOptions(page, preset.provider_id || provider.id || '', runtime.model || preset.model || provider.default_model || '');
 }
 
 export function openPresetModal(page, index = -1) {
@@ -225,8 +349,20 @@ export function closePresetModal(page) {
 export async function handlePresetProviderChange(page) {
     const providerId = getField('edit-preset-provider')?.value || '';
     const provider = getProvider(page, providerId) || {};
+    const runtime = resolvePresetRuntimeSelection(provider, {
+        provider_id: providerId,
+        auth_mode: getSelectedAuthMode(),
+        model: getSelectedModelValue() || provider.default_model || '',
+        base_url: provider.base_url || '',
+        oauth_provider: page._modalPresetState?.oauth_provider || '',
+        oauth_project_id: String(getField('edit-preset-oauth-project-id')?.value || '').trim(),
+        oauth_location: String(getField('edit-preset-oauth-location')?.value || '').trim(),
+    });
+    if (page._modalPresetState && !page._modalPresetState.oauth_provider && runtime.oauth_provider) {
+        page._modalPresetState.oauth_provider = runtime.oauth_provider;
+    }
     updatePresetHelpLink(page, providerId);
-    await populateModelOptions(page, providerId, provider.default_model || '');
+    await populateModelOptions(page, providerId, runtime.model || provider.default_model || '');
 }
 
 export function togglePresetKeyVisibility() {
@@ -262,6 +398,7 @@ export function commitPresetModal(page, text) {
     const existing = page._selectedPresetIndex >= 0
         ? deepClone(drafts[page._selectedPresetIndex])
         : createDefaultPreset(page);
+    const authMode = getSelectedAuthMode();
 
     if (!name) {
         toast.error(text.presetNameMissing);
@@ -281,7 +418,7 @@ export function commitPresetModal(page, text) {
         model,
         embedding_model: embeddingModel,
         api_key: key || existing.api_key || '',
-        auth_mode: getSelectedAuthMode(),
+        auth_mode: authMode,
         oauth_provider: page._modalPresetState?.oauth_provider || existing.oauth_provider || '',
         oauth_source: page._modalPresetState?.oauth_source || existing.oauth_source || '',
         oauth_binding: page._modalPresetState?.oauth_binding ? deepClone(page._modalPresetState.oauth_binding) : (existing.oauth_binding || null),
@@ -290,6 +427,10 @@ export function commitPresetModal(page, text) {
         oauth_location: String(getField('edit-preset-oauth-location')?.value || '').trim(),
         allow_empty_key: !!provider.allow_empty_key,
     };
+    const runtime = resolvePresetRuntimeSelection(provider, nextPreset);
+    nextPreset.base_url = runtime.base_url || nextPreset.base_url || '';
+    nextPreset.model = runtime.model || nextPreset.model || '';
+    nextPreset.oauth_provider = runtime.oauth_provider || nextPreset.oauth_provider || '';
 
     if (page._selectedPresetIndex >= 0) {
         drafts[page._selectedPresetIndex] = nextPreset;

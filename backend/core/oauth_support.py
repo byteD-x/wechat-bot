@@ -4,6 +4,7 @@ from .auth import (
     AuthSupportError as OAuthSupportError,
     ResolvedAuthSettings as ResolvedOAuthSettings,
     cancel_auth_flow,
+    get_cached_auth_provider_statuses as get_cached_oauth_provider_statuses,
     get_auth_provider as get_oauth_provider,
     get_auth_provider_statuses as get_oauth_provider_statuses,
     get_preset_auth_summary,

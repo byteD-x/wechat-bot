@@ -96,8 +96,10 @@ class LocalAuthSyncOrchestrator:
         self._poll_interval_sec = max(2.0, float(poll_interval_sec or _DEFAULT_POLL_INTERVAL_SEC))
         self._stale_after_sec = max(self._poll_interval_sec, float(stale_after_sec or _DEFAULT_STALE_AFTER_SEC))
         self._lock = threading.RLock()
+        self._refresh_run_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
+        self._refresh_thread: threading.Thread | None = None
         self._watcher = ConfigReloadWatcher(
             [],
             debounce_ms=_DEFAULT_WATCH_DEBOUNCE_MS,
@@ -110,30 +112,36 @@ class LocalAuthSyncOrchestrator:
             "revision": 0,
             "changed_provider_ids": [],
             "message": "",
+            "refreshing": False,
+            "pending_reason": "",
             "watcher": self._watcher.get_status(),
         }
 
     def start(self) -> None:
         with self._lock:
-            if self._thread and self._thread.is_alive():
-                return
             self._stop_event.clear()
+            if not (self._thread and self._thread.is_alive()):
+                self._thread = threading.Thread(
+                    target=self._run_loop,
+                    name="model-auth-local-sync",
+                    daemon=True,
+                )
+                self._thread.start()
             if not int(self._snapshot.get("refreshed_at") or 0):
-                self._refresh_locked(reason="startup")
-            self._thread = threading.Thread(
-                target=self._run_loop,
-                name="model-auth-local-sync",
-                daemon=True,
-            )
-            self._thread.start()
+                self._schedule_refresh_locked(reason="startup")
 
     def stop(self) -> None:
         thread = None
+        refresh_thread = None
         with self._lock:
             thread = self._thread
             self._thread = None
+            refresh_thread = self._refresh_thread
+            self._refresh_thread = None
             self._stop_event.set()
             self._watcher.stop()
+        if refresh_thread and refresh_thread.is_alive():
+            refresh_thread.join(timeout=1.0)
         if thread and thread.is_alive():
             thread.join(timeout=1.0)
 
@@ -142,14 +150,58 @@ class LocalAuthSyncOrchestrator:
             return self.force_refresh(reason=reason)
         with self._lock:
             snapshot = deepcopy(self._snapshot)
-        refreshed_at = int(snapshot.get("refreshed_at") or 0)
-        if not refreshed_at or (_now() - refreshed_at) >= int(self._stale_after_sec):
-            return self.force_refresh(reason=f"stale_{reason}")
-        return snapshot
+            refreshed_at = int(snapshot.get("refreshed_at") or 0)
+            refreshing = bool(snapshot.get("refreshing"))
+            if not refreshed_at:
+                if not refreshing:
+                    self._schedule_refresh_locked(reason=f"lazy_{reason}")
+                    snapshot = deepcopy(self._snapshot)
+                return snapshot
+            if (_now() - refreshed_at) >= int(self._stale_after_sec):
+                if not refreshing:
+                    self._schedule_refresh_locked(reason=f"stale_{reason}")
+                    snapshot = deepcopy(self._snapshot)
+                return snapshot
+            return snapshot
 
     def force_refresh(self, *, reason: str = "manual") -> Dict[str, Any]:
-        with self._lock:
-            return self._refresh_locked(reason=reason)
+        with self._refresh_run_lock:
+            with self._lock:
+                previous_snapshot = deepcopy(self._snapshot)
+            return self._refresh_locked(previous_snapshot=previous_snapshot, reason=reason)
+
+    def _schedule_refresh_locked(self, *, reason: str) -> None:
+        if self._refresh_thread and self._refresh_thread.is_alive():
+            return
+        self._snapshot = {
+            **self._snapshot,
+            "refreshing": True,
+            "pending_reason": str(reason or "").strip(),
+        }
+        self._refresh_thread = threading.Thread(
+            target=self._run_refresh_once,
+            args=(str(reason or "").strip() or "background",),
+            name="model-auth-local-sync-refresh",
+            daemon=True,
+        )
+        self._refresh_thread.start()
+
+    def _run_refresh_once(self, reason: str) -> None:
+        try:
+            self.force_refresh(reason=reason)
+        except Exception as exc:  # pragma: no cover - background worker should not break callers
+            logger.warning("Local auth background refresh failed: %s", exc)
+            with self._lock:
+                self._snapshot = {
+                    **self._snapshot,
+                    "success": False,
+                    "message": str(exc),
+                    "refreshing": False,
+                    "pending_reason": "",
+                }
+        finally:
+            with self._lock:
+                self._refresh_thread = None
 
     def _run_loop(self) -> None:
         next_poll_at = time.monotonic() + self._poll_interval_sec
@@ -163,27 +215,30 @@ class LocalAuthSyncOrchestrator:
                     reason = "poll"
                 if not reason:
                     continue
-                self.force_refresh(reason=reason)
+                with self._lock:
+                    self._schedule_refresh_locked(reason=reason)
                 next_poll_at = time.monotonic() + self._poll_interval_sec
             except Exception as exc:  # pragma: no cover - 守护线程异常仅记录日志
                 logger.warning("Local auth sync poll failed: %s", exc)
 
-    def _refresh_locked(self, *, reason: str) -> Dict[str, Any]:
-        previous_snapshot = deepcopy(self._snapshot)
+    def _refresh_locked(self, *, previous_snapshot: Dict[str, Any], reason: str) -> Dict[str, Any]:
         previous_providers = dict(previous_snapshot.get("providers") or {})
         refreshed_at = _now()
         try:
             payload = get_auth_provider_statuses()
         except Exception as exc:
             logger.warning("Failed to refresh local auth snapshot: %s", exc)
-            self._snapshot = {
-                **previous_snapshot,
-                "success": False,
-                "message": str(exc),
-                "refreshed_at": refreshed_at,
-                "changed_provider_ids": [],
-            }
-            return deepcopy(self._snapshot)
+            with self._lock:
+                self._snapshot = {
+                    **self._snapshot,
+                    "success": False,
+                    "message": str(exc),
+                    "refreshed_at": refreshed_at,
+                    "changed_provider_ids": [],
+                    "refreshing": False,
+                    "pending_reason": "",
+                }
+                return deepcopy(self._snapshot)
 
         raw_providers = payload.get("providers") if isinstance(payload, dict) else {}
         next_providers: Dict[str, Dict[str, Any]] = {}
@@ -220,19 +275,22 @@ class LocalAuthSyncOrchestrator:
         for status in next_providers.values():
             status["_sync_watch_mode"] = watch_mode
 
-        self._snapshot = {
-            "success": bool(payload.get("success", True)) if isinstance(payload, dict) else True,
-            "providers": next_providers,
-            "refreshed_at": refreshed_at,
-            "revision": next_revision,
-            "changed_provider_ids": changed_provider_ids,
-            "message": str(payload.get("message") or "").strip() if isinstance(payload, dict) else "",
-            "watcher": {
-                **watcher_status,
-                "watch_path_count": len(watch_paths),
-            },
-        }
-        return deepcopy(self._snapshot)
+        with self._lock:
+            self._snapshot = {
+                "success": bool(payload.get("success", True)) if isinstance(payload, dict) else True,
+                "providers": next_providers,
+                "refreshed_at": refreshed_at,
+                "revision": next_revision,
+                "changed_provider_ids": changed_provider_ids,
+                "message": str(payload.get("message") or "").strip() if isinstance(payload, dict) else "",
+                "refreshing": False,
+                "pending_reason": "",
+                "watcher": {
+                    **watcher_status,
+                    "watch_path_count": len(watch_paths),
+                },
+            }
+            return deepcopy(self._snapshot)
 
     @staticmethod
     def _collect_watch_paths(provider_statuses: Iterable[Dict[str, Any]]) -> list[str]:

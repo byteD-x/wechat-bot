@@ -5,6 +5,31 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional
 
 ANTHROPIC_VERSION = "2023-06-01"
+ANTHROPIC_VERTEX_VERSION = "vertex-2023-10-16"
+ANTHROPIC_VERTEX_1M_BETA_HEADER = "context-1m-2025-08-07"
+
+_ANTHROPIC_VERTEX_MODEL_ALIASES = {
+    "claude-opus-4-6": "claude-opus-4-6",
+    "claude-sonnet-4-6": "claude-sonnet-4-6",
+    "claude-sonnet-4-5": "claude-sonnet-4-5@20250929",
+    "claude-sonnet-4-5@20250929": "claude-sonnet-4-5@20250929",
+    "claude-sonnet-4-0": "claude-sonnet-4@20250514",
+    "claude-sonnet-4": "claude-sonnet-4@20250514",
+    "claude-3-7-sonnet-latest": "claude-3-7-sonnet@20250219",
+    "claude-3-7-sonnet@20250219": "claude-3-7-sonnet@20250219",
+    "claude-opus-4-5": "claude-opus-4-5@20251101",
+    "claude-opus-4-5@20251101": "claude-opus-4-5@20251101",
+    "claude-opus-4-1": "claude-opus-4-1@20250805",
+    "claude-opus-4-1@20250805": "claude-opus-4-1@20250805",
+    "claude-opus-4-0": "claude-opus-4@20250514",
+    "claude-opus-4": "claude-opus-4@20250514",
+    "claude-haiku-4-5": "claude-haiku-4-5@20251001",
+    "claude-haiku-4-5@20251001": "claude-haiku-4-5@20251001",
+    "claude-3-5-haiku-latest": "claude-3-5-haiku@20241022",
+    "claude-3-5-haiku@20241022": "claude-3-5-haiku@20241022",
+    "claude-3-haiku": "claude-3-haiku@20240307",
+    "claude-3-haiku@20240307": "claude-3-haiku@20240307",
+}
 
 
 @dataclass(slots=True)
@@ -426,7 +451,9 @@ def infer_auth_transport(base_url: str, explicit: Optional[str] = None) -> str:
     if normalized:
         return normalized
     base = str(base_url or "").strip().lower()
-    if "api.anthropic.com" in base:
+    if "aiplatform.googleapis.com" in base and "/publishers/anthropic/models" in base:
+        return "anthropic_vertex"
+    if "api.anthropic.com" in base or base.endswith("/anthropic") or "/anthropic/" in base:
         return "anthropic_native"
     return "openai_compatible"
 
@@ -444,6 +471,57 @@ def build_anthropic_headers(
     headers.update(provided)
     if api_key and "x-api-key" not in lowered and "authorization" not in lowered:
         headers["x-api-key"] = api_key
+    return headers
+
+
+def anthropic_vertex_uses_1m_variant(model: str) -> bool:
+    return str(model or "").strip().lower().endswith("[1m]")
+
+
+def normalize_anthropic_vertex_model(model: str) -> str:
+    raw = str(model or "").strip()
+    if not raw:
+        return ""
+    cleaned = raw[:-4].strip() if anthropic_vertex_uses_1m_variant(raw) else raw
+    return _ANTHROPIC_VERTEX_MODEL_ALIASES.get(cleaned.lower(), cleaned)
+
+
+def build_anthropic_vertex_request_url(base_url: str, model: str) -> str:
+    normalized_base = str(base_url or "").strip().rstrip("/")
+    if not normalized_base:
+        return ""
+    if normalized_base.endswith(":rawPredict"):
+        return normalized_base
+    if normalized_base.endswith(":streamRawPredict"):
+        return f"{normalized_base.rsplit(':', 1)[0]}:rawPredict"
+    if "/publishers/anthropic/models/" in normalized_base:
+        suffix = normalized_base.split("/publishers/anthropic/models/", 1)[1]
+        if suffix and "/" not in suffix and ":" not in suffix:
+            return f"{normalized_base}:rawPredict"
+    model_id = normalize_anthropic_vertex_model(model)
+    if not model_id:
+        return normalized_base
+    return f"{normalized_base}/{model_id}:rawPredict"
+
+
+def build_anthropic_vertex_headers(
+    *,
+    api_key: str,
+    extra_headers: Optional[Dict[str, str]] = None,
+    project_id: str = "",
+    model: str = "",
+) -> Dict[str, str]:
+    headers: Dict[str, str] = {"Content-Type": "application/json"}
+    provided = dict(extra_headers or {})
+    lowered = {str(key or "").strip().lower(): str(key or "").strip() for key in provided}
+    normalized_project_id = str(project_id or "").strip()
+    if normalized_project_id and "x-goog-user-project" not in lowered:
+        headers["X-Goog-User-Project"] = normalized_project_id
+    if anthropic_vertex_uses_1m_variant(model) and "anthropic-beta" not in lowered:
+        headers["anthropic-beta"] = ANTHROPIC_VERTEX_1M_BETA_HEADER
+    if api_key and "authorization" not in lowered:
+        headers["Authorization"] = f"Bearer {api_key}"
+    headers.update(provided)
     return headers
 
 
@@ -515,6 +593,28 @@ def build_anthropic_messages_payload(
         payload["temperature"] = temperature
     if system_parts:
         payload["system"] = "\n\n".join(part for part in system_parts if part).strip()
+    return payload
+
+
+def build_anthropic_vertex_messages_payload(
+    *,
+    model: str,
+    messages: Iterable[Dict[str, Any]],
+    temperature: Optional[float] = None,
+    max_tokens: Optional[int] = None,
+    max_completion_tokens: Optional[int] = None,
+    stream: bool = False,
+) -> Dict[str, Any]:
+    payload = build_anthropic_messages_payload(
+        model=normalize_anthropic_vertex_model(model),
+        messages=messages,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        max_completion_tokens=max_completion_tokens,
+        stream=stream,
+    )
+    payload.pop("model", None)
+    payload["anthropic_version"] = ANTHROPIC_VERTEX_VERSION
     return payload
 
 

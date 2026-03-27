@@ -33,6 +33,7 @@ import { FIELD_META_BY_ID } from './settings/schema.js';
 import { apiService } from '../services/ApiService.js';
 import { toast } from '../services/NotificationService.js';
 import {
+    clearPendingLocalAuthSyncRefresh,
     loadConfigAudit,
     loadSettings,
     maybeRefreshForRuntimeConfigChange,
@@ -124,6 +125,10 @@ export class SettingsPage extends PageController {
         this._auditStatus = 'idle';
         this._auditMessage = '';
         this._lastConfigVersion = 0;
+        this._localAuthSyncState = null;
+        this._localAuthSyncRefreshTimer = null;
+        this._localAuthSyncRefreshAttempt = 0;
+        this._pendingConfigReload = false;
         this._isSaving = false;
         this._queuedAutoSave = false;
         this._autoSaveTimer = null;
@@ -164,12 +169,27 @@ export class SettingsPage extends PageController {
         await super.onEnter();
         this._handleMainScroll();
         const runtimeVersion = Number(this.getState('bot.status.config_snapshot.version') || 0);
-        if (!this._loaded || (runtimeVersion && runtimeVersion > this._lastConfigVersion)) {
+        if (
+            this._pendingConfigReload
+            || !this._loaded
+            || (runtimeVersion && runtimeVersion > this._lastConfigVersion)
+            || this._localAuthSyncState?.refreshing
+        ) {
             await this.loadSettings({ preserveFeedback: true });
         } else {
             this._renderHero();
         }
         await this._loadWorkspaceBackups({ silent: true });
+    }
+
+    async onLeave() {
+        clearPendingLocalAuthSyncRefresh(this);
+        await super.onLeave();
+    }
+
+    async onDestroy() {
+        clearPendingLocalAuthSyncRefresh(this);
+        await super.onDestroy();
     }
 
     _watchConfigChanges() {

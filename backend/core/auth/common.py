@@ -12,17 +12,23 @@ import webbrowser
 from pathlib import Path
 from typing import Any, Dict
 
+from backend.utils.text_codec import coerce_text, decode_text_bytes, looks_like_utf16_text
+
 logger = logging.getLogger(__name__)
 _MAX_TEXT_CANDIDATE_BYTES = 1024 * 1024
 _BINARY_DETECTION_SAMPLE_BYTES = 65536
 
 
 def normalize_text(value: Any) -> str:
-    return str(value or "").strip()
+    return coerce_text(value).strip()
 
 
 def _looks_like_binary_bytes(raw: bytes) -> bool:
     if not raw:
+        return False
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff", b"\xff\xfe\x00\x00", b"\x00\x00\xfe\xff")):
+        return False
+    if looks_like_utf16_text(raw):
         return False
     sample = raw[:_BINARY_DETECTION_SAMPLE_BYTES]
     if b"\x00" in sample:
@@ -50,14 +56,13 @@ def safe_read_text_candidate(path: Path, *, log_label: str = "auth state text fi
         return ""
     if not raw or len(raw) > _MAX_TEXT_CANDIDATE_BYTES or _looks_like_binary_bytes(raw):
         return ""
-    try:
-        return raw.decode("utf-8")
-    except UnicodeDecodeError:
-        text = raw.decode("utf-8", errors="replace")
-        replacement_ratio = text.count("\ufffd") / max(len(text), 1)
-        if replacement_ratio > 0.02:
-            return ""
-        return text
+    text = decode_text_bytes(raw)
+    if not text:
+        return ""
+    replacement_ratio = text.count("\ufffd") / max(len(text), 1)
+    if replacement_ratio > 0.02:
+        return ""
+    return text
 
 
 def safe_read_json(path: Path) -> Dict[str, Any]:
