@@ -54,7 +54,7 @@ def validate_release_notes(project_root: Path, tag: str) -> None:
     if not notes_path.is_file():
         fail(f"Missing release notes file: {notes_path}")
 
-    text = notes_path.read_text(encoding="utf-8").strip()
+    text = notes_path.read_text(encoding="utf-8-sig").strip()
     expected_title = f"# {tag} 更新内容"
     first_line = next((line.strip() for line in text.splitlines() if line.strip()), "")
     if first_line != expected_title:
