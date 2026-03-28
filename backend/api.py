@@ -1877,7 +1877,7 @@ async def restore_backup():
                 }
                 await asyncio.to_thread(backup_service.save_restore_result, payload)
                 return jsonify(payload)
-            except Exception as restore_error:
+            except Exception:
                 rollback_result = None
                 rollback_id = str((pre_restore_backup or {}).get("id") or "").strip()
                 should_attempt_rollback = bool(
