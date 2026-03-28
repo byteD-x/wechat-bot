@@ -1,7 +1,5 @@
-/**
- * 通知服务
- *
- * 提供 Toast 通知能力。
+﻿/**
+ * Notification service for toast feedback.
  */
 
 import { eventBus, Events } from '../core/EventBus.js';
@@ -16,7 +14,10 @@ class NotificationService {
     init() {
         this.container = document.getElementById('toast-container');
         if (!this.container) {
-            console.warn('[NotificationService] Toast 容器未找到');
+            this.container = this._createFallbackContainer();
+        }
+        if (!this.container) {
+            console.warn('[NotificationService] Toast container is missing');
         }
     }
 
@@ -53,18 +54,32 @@ class NotificationService {
 
         eventBus.emit(Events.TOAST_SHOW, { message, type });
 
+        const setTimer = typeof globalThis.setTimeout === 'function'
+            ? globalThis.setTimeout.bind(globalThis)
+            : (typeof globalThis.window?.setTimeout === 'function'
+                ? globalThis.window.setTimeout.bind(globalThis.window)
+                : (callback) => {
+                    callback();
+                    return 0;
+                });
+        const clearTimer = typeof globalThis.clearTimeout === 'function'
+            ? globalThis.clearTimeout.bind(globalThis)
+            : (typeof globalThis.window?.clearTimeout === 'function'
+                ? globalThis.window.clearTimeout.bind(globalThis.window)
+                : () => {});
+
         let timeoutId = null;
         const dismiss = () => {
             if (!toast.isConnected || toast.classList.contains('is-leaving')) {
                 return;
             }
             if (timeoutId) {
-                clearTimeout(timeoutId);
+                clearTimer(timeoutId);
                 timeoutId = null;
             }
             toast.classList.add('is-leaving');
             toast.classList.remove('is-visible');
-            window.setTimeout(() => {
+            setTimer(() => {
                 if (toast.isConnected) {
                     toast.remove();
                 }
@@ -73,15 +88,15 @@ class NotificationService {
 
         const scheduleDismiss = (delay) => {
             if (timeoutId) {
-                clearTimeout(timeoutId);
+                clearTimer(timeoutId);
             }
-            timeoutId = window.setTimeout(dismiss, delay);
+            timeoutId = setTimer(dismiss, delay);
         };
 
         closeButton.addEventListener('click', dismiss);
         toast.addEventListener('mouseenter', () => {
             if (timeoutId) {
-                clearTimeout(timeoutId);
+                clearTimer(timeoutId);
                 timeoutId = null;
             }
         });
@@ -89,7 +104,10 @@ class NotificationService {
             scheduleDismiss(this.hoverResumeDuration);
         });
 
-        requestAnimationFrame(() => {
+        const runOnNextFrame = typeof globalThis.requestAnimationFrame === 'function'
+            ? globalThis.requestAnimationFrame.bind(globalThis)
+            : (callback) => setTimer(callback, 0);
+        runOnNextFrame(() => {
             toast.classList.add('is-visible');
         });
         scheduleDismiss(Math.max(1200, Number(duration) || this.defaultDuration));
@@ -144,6 +162,19 @@ class NotificationService {
         svg.appendChild(use);
 
         return svg;
+    }
+
+    _createFallbackContainer() {
+        if (!globalThis.document?.body || typeof document.createElement !== 'function') {
+            return null;
+        }
+        const container = document.createElement('div');
+        container.setAttribute('id', 'toast-container');
+        container.setAttribute('aria-live', 'polite');
+        container.setAttribute('aria-atomic', 'false');
+        container.setAttribute('role', 'status');
+        document.body.appendChild(container);
+        return container;
     }
 }
 

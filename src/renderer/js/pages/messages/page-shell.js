@@ -82,15 +82,20 @@ export function bindMessagesPage(page, deps = {}) {
     });
 
     const documentObj = getDocument(deps);
-    documentObj.getElementById('btn-close-message-detail')?.addEventListener('click', () => {
-        runCloseDetailModal(page, deps);
-    });
-
-    documentObj.getElementById('message-detail-modal')?.addEventListener('click', (event) => {
-        if (event.target?.id === 'message-detail-modal') {
+    const closeButton = documentObj.getElementById('btn-close-message-detail');
+    const detailModal = documentObj.getElementById('message-detail-modal');
+    if (closeButton) {
+        page.bindEvent(closeButton, 'click', () => {
             runCloseDetailModal(page, deps);
-        }
-    });
+        });
+    }
+    if (detailModal) {
+        page.bindEvent(detailModal, 'click', (event) => {
+            if (event.target?.id === 'message-detail-modal') {
+                runCloseDetailModal(page, deps);
+            }
+        });
+    }
 
     page.bindEvent(getWindow(deps), 'keydown', (event) => {
         if (event.key === 'Escape' && documentObj.getElementById('message-detail-modal')?.classList.contains('active')) {

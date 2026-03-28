@@ -1,5 +1,8 @@
 import argparse
 import json
+import os
+import sys
+import types
 
 import run
 
@@ -13,13 +16,14 @@ def test_build_parser_supports_check_json_and_backup_restore():
     assert check_args.cached is True
 
     backup_args = parser.parse_args(
-        ["backup", "restore", "--backup-id", "backup-1", "--apply", "--json"]
+        ["backup", "restore", "--backup-id", "backup-1", "--apply", "--json", "--allow-running-service"]
     )
     assert backup_args.command == "backup"
     assert backup_args.backup_command == "restore"
     assert backup_args.backup_id == "backup-1"
     assert backup_args.apply is True
     assert backup_args.json is True
+    assert backup_args.allow_running_service is True
 
     verify_args = parser.parse_args(["backup", "verify", "--backup-id", "backup-1", "--json"])
     assert verify_args.command == "backup"
@@ -159,6 +163,7 @@ def test_cmd_backup_restore_apply_creates_pre_restore_snapshot(monkeypatch):
             saved_payloads.append(payload)
 
     monkeypatch.setattr(run, "_build_backup_service", lambda: FakeBackupService())
+    monkeypatch.setattr(run, "_is_local_runtime_service_running", lambda **_: False)
 
     result = run.cmd_backup_restore(
         argparse.Namespace(backup_id="backup-2", apply=True, json=False)
@@ -172,6 +177,75 @@ def test_cmd_backup_restore_apply_creates_pre_restore_snapshot(monkeypatch):
     ]
     assert saved_payloads and saved_payloads[0]["success"] is True
     assert saved_payloads[0]["pre_restore_backup"]["id"] == "pre-restore-cli"
+
+
+def test_cmd_backup_restore_apply_rolls_back_when_restore_fails(monkeypatch):
+    events = []
+    saved_payloads = []
+
+    class FakeBackupService:
+        def build_restore_plan(self, backup_ref: str) -> dict:
+            return {
+                "backup": {"id": backup_ref},
+                "included_files": ["app_config.json"],
+                "missing_files": [],
+                "invalid_files": [],
+                "valid": True,
+            }
+
+        def create_backup(self, mode: str, *, label: str = "") -> dict:
+            return {"id": "pre-restore-cli", "mode": mode}
+
+        def apply_restore(self, backup_ref: str) -> dict:
+            events.append(("apply_restore", backup_ref))
+            if backup_ref == "backup-2":
+                raise RuntimeError("restore boom")
+            return {"success": True, "restored_count": 1}
+
+        def save_restore_result(self, payload: dict) -> None:
+            saved_payloads.append(payload)
+
+    monkeypatch.setattr(run, "_build_backup_service", lambda: FakeBackupService())
+    monkeypatch.setattr(run, "_is_local_runtime_service_running", lambda **_: False)
+
+    result = run.cmd_backup_restore(
+        argparse.Namespace(backup_id="backup-2", apply=True, json=False)
+    )
+
+    assert result == 1
+    assert events == [
+        ("apply_restore", "backup-2"),
+        ("apply_restore", "pre-restore-cli"),
+    ]
+    assert saved_payloads and saved_payloads[0]["success"] is False
+    assert saved_payloads[0]["rollback"]["success"] is True
+
+
+def test_cmd_backup_restore_apply_blocks_when_runtime_service_running(monkeypatch, capsys):
+    called = {"plan_called": False}
+
+    class FakeBackupService:
+        def build_restore_plan(self, backup_ref: str) -> dict:
+            called["plan_called"] = True
+            return {"backup": {"id": backup_ref}, "included_files": [], "valid": True}
+
+    monkeypatch.setattr(run, "_build_backup_service", lambda: FakeBackupService())
+    monkeypatch.setattr(run, "_is_local_runtime_service_running", lambda **_: True)
+
+    result = run.cmd_backup_restore(
+        argparse.Namespace(
+            backup_id="backup-2",
+            apply=True,
+            json=True,
+            allow_running_service=False,
+        )
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert result == 1
+    assert payload["success"] is False
+    assert "--apply is blocked" in payload["message"]
+    assert called["plan_called"] is False
 
 
 def test_cmd_backup_cleanup_dry_run_json(monkeypatch, capsys):
@@ -237,3 +311,41 @@ def test_cmd_backup_cleanup_apply_json(monkeypatch, capsys):
     assert payload["dry_run"] is False
     assert payload["deleted_count"] == 1
     assert payload["deleted_backups"][0]["id"] == "quick-2"
+
+
+def test_cmd_web_rejects_non_loopback_without_explicit_token(monkeypatch):
+    monkeypatch.delenv("WECHAT_BOT_API_TOKEN", raising=False)
+
+    called = {"run_server": False}
+
+    def _fake_run_server(**kwargs):
+        called["run_server"] = True
+
+    fake_backend_api = types.ModuleType("backend.api")
+    fake_backend_api.run_server = _fake_run_server
+    monkeypatch.setitem(sys.modules, "backend.api", fake_backend_api)
+
+    result = run.cmd_web(argparse.Namespace(host="0.0.0.0", port=5000, debug=False))
+
+    assert result == 1
+    assert called["run_server"] is False
+
+
+def test_cmd_web_initializes_sse_ticket_when_missing(monkeypatch):
+    monkeypatch.setenv("WECHAT_BOT_API_TOKEN", "explicit-token")
+    monkeypatch.delenv("WECHAT_BOT_SSE_TICKET", raising=False)
+
+    called = {"run_server": False}
+
+    def _fake_run_server(**kwargs):
+        called["run_server"] = True
+
+    fake_backend_api = types.ModuleType("backend.api")
+    fake_backend_api.run_server = _fake_run_server
+    monkeypatch.setitem(sys.modules, "backend.api", fake_backend_api)
+
+    result = run.cmd_web(argparse.Namespace(host="127.0.0.1", port=5000, debug=False))
+
+    assert result == 0
+    assert called["run_server"] is True
+    assert os.environ.get("WECHAT_BOT_SSE_TICKET")

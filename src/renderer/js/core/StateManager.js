@@ -49,7 +49,12 @@ class StateManager {
                 downloadProgress: 0,
                 readyToInstall: false,
                 downloadedVersion: '',
-                downloadedInstallerPath: ''
+                downloadedInstallerPath: '',
+                downloadedInstallerSha256: '',
+                checksumAssetUrl: '',
+                checksumExpected: '',
+                checksumActual: '',
+                checksumVerified: false,
             },
             currentPage: 'dashboard',
             logs: {
@@ -68,7 +73,10 @@ class StateManager {
     }
 
     getState() {
-        return { ...this._state };
+        if (typeof structuredClone === 'function') {
+            return structuredClone(this._state);
+        }
+        return JSON.parse(JSON.stringify(this._state));
     }
 
     get(path) {

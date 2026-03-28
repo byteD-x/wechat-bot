@@ -382,3 +382,77 @@ async def test_bot_manager_start_returns_before_growth_manager_finishes(monkeypa
         manager.start_time = original_start_time
         manager.stop_event = original_stop_event
         manager._growth_start_task = original_growth_task
+
+
+@pytest.mark.asyncio
+async def test_bot_manager_stop_cancels_pending_growth_start_task(monkeypatch):
+    manager = BotManager.get_instance()
+    original_bot = manager.bot
+    original_task = manager.task
+    original_running = manager.is_running
+    original_paused = manager.is_paused
+    original_start_time = manager.start_time
+    original_stop_event = manager.stop_event
+    original_growth_task = getattr(manager, "_growth_start_task", None)
+
+    async def _noop_async(*_args, **_kwargs):
+        return None
+
+    started = asyncio.Event()
+
+    async def _slow_growth_start():
+        started.set()
+        await asyncio.sleep(60)
+        return {"success": True}
+
+    try:
+        manager.bot = None
+        manager.task = None
+        manager.is_running = True
+        manager.is_paused = False
+        manager.start_time = time.time()
+        manager.stop_event = asyncio.Event()
+        manager._growth_start_task = asyncio.create_task(_slow_growth_start())
+        await asyncio.wait_for(started.wait(), timeout=0.2)
+
+        monkeypatch.setattr(manager, "notify_status_change", _noop_async)
+        monkeypatch.setattr(manager, "_invalidate_status_cache", lambda: None)
+
+        result = await manager.stop()
+
+        assert result["success"] is True
+        assert manager._growth_start_task is None
+    finally:
+        pending_growth = getattr(manager, "_growth_start_task", None)
+        if pending_growth is not None:
+            pending_growth.cancel()
+            await asyncio.gather(pending_growth, return_exceptions=True)
+        manager.bot = original_bot
+        manager.task = original_task
+        manager.is_running = original_running
+        manager.is_paused = original_paused
+        manager.start_time = original_start_time
+        manager.stop_event = original_stop_event
+        manager._growth_start_task = original_growth_task
+
+
+@pytest.mark.asyncio
+async def test_bot_manager_restart_aborts_when_stop_fails(monkeypatch):
+    manager = BotManager.get_instance()
+    start_calls = {"count": 0}
+
+    async def _stop_failed():
+        return {"success": False, "message": "stop failed"}
+
+    async def _start_should_not_run():
+        start_calls["count"] += 1
+        return {"success": True}
+
+    monkeypatch.setattr(manager, "stop", _stop_failed)
+    monkeypatch.setattr(manager, "start", _start_should_not_run)
+
+    result = await manager.restart()
+
+    assert result["success"] is False
+    assert result["code"] == "restart_stop_failed"
+    assert start_calls["count"] == 0

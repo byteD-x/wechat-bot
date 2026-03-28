@@ -24,6 +24,34 @@
     transform: translateY(-1px);
 }
 
+.has-button-feedback {
+    transition:
+        filter var(--transition-fast),
+        box-shadow var(--transition-fast);
+}
+
+.has-button-feedback.is-feedback-pressed {
+    filter: brightness(0.94);
+}
+
+.has-button-feedback.is-feedback-clicked {
+    animation: button-feedback-flash 220ms ease-out;
+}
+
+@keyframes button-feedback-flash {
+    0% {
+        filter: brightness(0.94);
+    }
+
+    60% {
+        filter: brightness(1.04);
+    }
+
+    100% {
+        filter: brightness(1);
+    }
+}
+
 .btn:disabled {
     opacity: 0.6;
     cursor: not-allowed;
@@ -237,4 +265,10 @@ textarea:focus,
 
 .modal-choice-remember {
     margin-top: 8px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .has-button-feedback.is-feedback-clicked {
+        animation: none;
+    }
 }

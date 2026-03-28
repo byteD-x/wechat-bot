@@ -1,10 +1,19 @@
 /**
- * API 服务
+ * API 鏈嶅姟
  *
- * 封装渲染进程与后端 API 的通信。
- */
+ * 灏佽娓叉煋杩涚▼涓庡悗绔?API 鐨勯€氫俊銆? */
 
 import { debugLog } from '../core/Debug.js';
+
+const NODE_NETWORK_ERROR_CODES = new Set([
+    'ECONNREFUSED',
+    'ECONNRESET',
+    'EHOSTUNREACH',
+    'ENETUNREACH',
+    'ENOTFOUND',
+    'EAI_AGAIN',
+    'ETIMEDOUT',
+]);
 
 class ApiService {
     constructor() {
@@ -12,6 +21,18 @@ class ApiService {
         this.initialized = false;
         this.defaultTimeoutMs = 8000;
         this.apiToken = '';
+        this.sseTicket = '';
+        this.backendRequest = null;
+        this.endpointTimeoutMs = Object.freeze({
+            '/api/test_connection': 12000,
+        });
+        this.idempotentPostEndpoints = new Set([
+            '/api/send',
+            '/api/backups',
+            '/api/backups/restore',
+            '/api/data_controls/clear',
+        ]);
+        this.idempotencyNonce = 0;
     }
 
     async init() {
@@ -19,18 +40,21 @@ class ApiService {
             if (window.electronAPI?.getFlaskUrl) {
                 this.baseUrl = await window.electronAPI.getFlaskUrl();
             }
-            if (window.electronAPI?.getApiToken) {
-                this.apiToken = await window.electronAPI.getApiToken();
+            if (window.electronAPI?.getSseTicket) {
+                this.sseTicket = String(await window.electronAPI.getSseTicket() || '').trim();
+            }
+            if (typeof window.electronAPI?.backendRequest === 'function') {
+                this.backendRequest = window.electronAPI.backendRequest;
             }
         } catch (error) {
-            console.error('[ApiService] 初始化失败，回退到默认地址', error);
+            console.error('[ApiService] 鍒濆鍖栧け璐ワ紝鍥為€€鍒伴粯璁ゅ湴鍧€', error);
         }
 
         this.initialized = true;
-        debugLog('[ApiService] 初始化完成，baseUrl:', this.baseUrl);
+        debugLog('[ApiService] 鍒濆鍖栧畬鎴愶紝baseUrl:', this.baseUrl);
     }
 
-    async request(endpoint, options = {}, retries = 1) {
+    async request(endpoint, options = {}, retries = undefined) {
         if (!this.initialized) {
             await this.init();
         }
@@ -44,22 +68,51 @@ class ApiService {
             },
             ...fetchOptions,
         };
-
-        if (this.apiToken) {
-            config.headers['X-Api-Token'] = this.apiToken;
-        }
+        const method = String(config.method || 'GET').trim().toUpperCase();
+        this._attachIdempotencyKeyIfNeeded(endpoint, method, config);
 
         if (config.body && typeof config.body === 'object') {
             config.body = JSON.stringify(config.body);
         }
 
+        const retryBudget = Number.isInteger(retries)
+            ? Math.max(0, retries)
+            : (method === 'GET' || method === 'HEAD' ? 1 : 0);
+
         let lastError = null;
-        for (let attempt = 0; attempt <= retries; attempt += 1) {
-            const controller = new AbortController();
-            const timeout = timeoutMs ?? this.defaultTimeoutMs;
-            const timer = setTimeout(() => controller.abort(), timeout);
+        for (let attempt = 0; attempt <= retryBudget; attempt += 1) {
+            const timeout = timeoutMs ?? this.endpointTimeoutMs[endpoint] ?? this.defaultTimeoutMs;
+            let timer = null;
 
             try {
+                if (typeof this.backendRequest === 'function') {
+                    let requestPayload = null;
+                    if (config.body != null) {
+                        if (typeof config.body === 'string') {
+                            try {
+                                requestPayload = JSON.parse(config.body);
+                            } catch (_) {
+                                requestPayload = config.body;
+                            }
+                        } else {
+                            requestPayload = config.body;
+                        }
+                    }
+
+                    const ipcResponse = await this.backendRequest({
+                        method,
+                        endpoint,
+                        payload: requestPayload,
+                        timeoutMs: timeout,
+                    });
+                    if (ipcResponse?.ok) {
+                        return ipcResponse.data ?? {};
+                    }
+                    throw this._createIpcError(ipcResponse?.error, endpoint);
+                }
+
+                const controller = new AbortController();
+                timer = setTimeout(() => controller.abort(), timeout);
                 const response = await fetch(url, {
                     ...config,
                     signal: controller.signal,
@@ -75,7 +128,7 @@ class ApiService {
                 clearTimeout(timer);
                 const normalized = this._normalizeError(error, endpoint);
                 console.error(
-                    `[ApiService] 请求失败 (${attempt + 1}/${retries + 1}): ${endpoint}`,
+                    `[ApiService] 璇锋眰澶辫触 (${attempt + 1}/${retryBudget + 1}): ${endpoint}`,
                     normalized
                 );
                 lastError = normalized;
@@ -84,7 +137,7 @@ class ApiService {
                     throw normalized;
                 }
 
-                if (attempt < retries) {
+                if (attempt < retryBudget) {
                     await new Promise((resolve) => setTimeout(resolve, 1000));
                 }
             }
@@ -93,10 +146,72 @@ class ApiService {
         throw lastError;
     }
 
+    _requiresIdempotencyKey(endpoint, method) {
+        return String(method || '').toUpperCase() === 'POST' && this.idempotentPostEndpoints.has(String(endpoint || ''));
+    }
+
+    _generateIdempotencyKey(endpoint) {
+        const prefix = String(endpoint || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase().slice(0, 24) || 'api';
+        if (globalThis.crypto?.randomUUID) {
+            return `${prefix}-${globalThis.crypto.randomUUID()}`;
+        }
+        this.idempotencyNonce = (Number(this.idempotencyNonce || 0) + 1) % 1_000_000;
+        return `${prefix}-${Date.now().toString(36)}-${this.idempotencyNonce.toString(36)}`;
+    }
+
+    _attachIdempotencyKeyIfNeeded(endpoint, method, config) {
+        if (!this._requiresIdempotencyKey(endpoint, method)) {
+            return;
+        }
+        if (!config || typeof config !== 'object') {
+            return;
+        }
+        if (!config.headers || typeof config.headers !== 'object') {
+            config.headers = {};
+        }
+
+        const existingHeader = config.headers['Idempotency-Key'] || config.headers['idempotency-key'];
+        const idempotencyKey = String(existingHeader || this._generateIdempotencyKey(endpoint)).trim();
+        config.headers['Idempotency-Key'] = idempotencyKey;
+
+        if (config.body == null) {
+            config.body = { _idempotency_key: idempotencyKey };
+            return;
+        }
+        if (typeof config.body === 'object') {
+            config.body = {
+                ...config.body,
+                _idempotency_key: String(config.body?._idempotency_key || idempotencyKey),
+            };
+            return;
+        }
+        if (typeof config.body === 'string') {
+            try {
+                const parsed = JSON.parse(config.body);
+                if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                    config.body = {
+                        ...parsed,
+                        _idempotency_key: String(parsed._idempotency_key || idempotencyKey),
+                    };
+                }
+            } catch (_) {
+                // Keep original string body and rely on Idempotency-Key header for fetch path.
+            }
+        }
+    }
+
     async _parseResponseData(response) {
         const contentType = response.headers.get('content-type') || '';
         if (contentType.includes('application/json')) {
-            return response.json();
+            try {
+                return await response.json();
+            } catch (_) {
+                const parseError = new Error('鏈嶅姟绔繑鍥炰簡鏃犳晥 JSON');
+                parseError.code = 'invalid_json';
+                parseError.status = Number(response.status || 500);
+                parseError.data = { contentType };
+                throw parseError;
+            }
         }
 
         const text = await response.text();
@@ -112,36 +227,74 @@ class ApiService {
         return error;
     }
 
+    _createIpcError(payload, endpoint) {
+        const status = Number(payload?.status || 0);
+        const message = String(payload?.message || 'backend request failed');
+        const data = payload?.data && typeof payload.data === 'object' ? payload.data : {};
+        const rawCode = String(payload?.code || (status >= 400 ? 'http_error' : 'backend_error'));
+        const upperCode = rawCode.toUpperCase();
+        const isNodeNetworkCode = NODE_NETWORK_ERROR_CODES.has(upperCode);
+        const passthroughCodes = new Set(['timeout', 'network', 'network_error', 'invalid_json']);
+        const error = new Error(message);
+        error.status = isNodeNetworkCode ? 0 : status;
+        error.data = data;
+        error.endpoint = endpoint;
+        error.transportCode = rawCode;
+        if (passthroughCodes.has(rawCode)) {
+            error.code = rawCode;
+        } else if (isNodeNetworkCode) {
+            error.code = 'network_error';
+        } else {
+            error.code = status >= 400 ? 'http_error' : rawCode;
+        }
+        return error;
+    }
+
     _formatHttpErrorMessage(status, data) {
-        const detail = data?.message ? `：${data.message}` : '';
+        const detail = data?.message ? `锛?{data.message}` : '';
         if (status === 401 || status === 403) {
-            return `权限验证失败${detail}`;
+            return `鏉冮檺楠岃瘉澶辫触${detail}`;
         }
         if (status === 404) {
-            return `接口不存在${detail}`;
+            return `鎺ュ彛涓嶅瓨鍦?{detail}`;
         }
         if (status === 429) {
-            return `请求过于频繁${detail}`;
+            return `璇锋眰杩囦簬棰戠箒${detail}`;
         }
         if (status >= 500) {
-            return `服务端异常${detail}`;
+            return `鏈嶅姟绔紓甯?{detail}`;
         }
-        return `请求失败 (${status})${detail}`;
+        return `璇锋眰澶辫触 (${status})${detail}`;
     }
 
     _normalizeError(error, endpoint) {
         if (error?.name === 'AbortError') {
-            const timeoutError = new Error('请求超时，请稍后重试');
+            const timeoutError = new Error('璇锋眰瓒呮椂锛岃绋嶅悗閲嶈瘯');
             timeoutError.code = 'timeout';
             timeoutError.endpoint = endpoint;
             return timeoutError;
         }
 
-        if (error?.code === 'http_error') {
+        const upperCode = String(error?.code || '').toUpperCase();
+        if (NODE_NETWORK_ERROR_CODES.has(upperCode)) {
+            const networkError = error instanceof Error ? error : new Error('缃戠粶寮傚父鎴栨湇鍔′笉鍙敤');
+            networkError.code = 'network_error';
+            networkError.endpoint = endpoint;
+            networkError.status = 0;
+            return networkError;
+        }
+
+        if (
+            error?.code === 'http_error'
+            || error?.code === 'invalid_json'
+            || error?.code === 'timeout'
+            || error?.code === 'network'
+            || error?.code === 'network_error'
+        ) {
             return error;
         }
 
-        const networkError = new Error('网络异常或服务不可用');
+        const networkError = new Error('缃戠粶寮傚父鎴栨湇鍔′笉鍙敤');
         networkError.code = 'network';
         networkError.endpoint = endpoint;
         return networkError;
@@ -173,7 +326,7 @@ class ApiService {
         return this.request('/api/recover', { method: 'POST' });
     }
 
-    async pauseBot(reason = '用户暂停') {
+    async pauseBot(reason = '鐢ㄦ埛鏆傚仠') {
         return this.request('/api/pause', {
             method: 'POST',
             body: { reason }
@@ -224,16 +377,14 @@ class ApiService {
     }
 
     connectSSE(onMessage, onError, onOpen) {
-        const tokenParam = this.apiToken
-            ? `?token=${encodeURIComponent(this.apiToken)}`
-            : '';
-        const url = `${this.baseUrl}/api/events${tokenParam}`;
+        const query = this.sseTicket ? `?ticket=${encodeURIComponent(this.sseTicket)}` : '';
+        const url = `${this.baseUrl}/api/events${query}`;
 
-        debugLog('[ApiService] 连接 SSE:', `${this.baseUrl}/api/events`);
+        debugLog('[ApiService] Connecting SSE:', url);
 
         const eventSource = new EventSource(url);
         eventSource.onopen = () => {
-            debugLog('[ApiService] SSE 已连接');
+            debugLog('[ApiService] SSE connected');
             if (onOpen) {
                 onOpen();
             }
@@ -246,12 +397,12 @@ class ApiService {
                     onMessage(data);
                 }
             } catch (error) {
-                console.error('[ApiService] SSE 消息解析失败:', error);
+                console.error('[ApiService] SSE message parse failed:', error);
             }
         };
 
         eventSource.onerror = (error) => {
-            console.error('[ApiService] SSE 连接异常:', error);
+            console.error('[ApiService] SSE error:', error);
             if (onError) {
                 onError(error);
             }
@@ -419,7 +570,7 @@ class ApiService {
         return this.request('/api/backups', {
             method: 'POST',
             body: { mode, label },
-            timeoutMs: 20000,
+            timeoutMs: 300000,
         });
     }
 
@@ -427,7 +578,7 @@ class ApiService {
         return this.request('/api/backups/cleanup', {
             method: 'POST',
             body: payload,
-            timeoutMs: 20000,
+            timeoutMs: 300000,
         });
     }
 
@@ -435,7 +586,19 @@ class ApiService {
         return this.request('/api/backups/restore', {
             method: 'POST',
             body: payload,
-            timeoutMs: 30000,
+            timeoutMs: 300000,
+        });
+    }
+
+    async getDataControls() {
+        return this.request('/api/data_controls');
+    }
+
+    async clearDataControls(payload = {}) {
+        return this.request('/api/data_controls/clear', {
+            method: 'POST',
+            body: payload,
+            timeoutMs: 300000,
         });
     }
 
@@ -488,3 +651,4 @@ class ApiService {
 
 export const apiService = new ApiService();
 export default apiService;
+

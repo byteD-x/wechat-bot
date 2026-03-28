@@ -253,9 +253,14 @@ This phase turns the project from a demo-style assistant into a safer personal p
   - The dashboard and message detail panel now expose pending approvals, and each contact can override reply mode directly from the existing message detail entry.
 - `Workspace Backup + Restore`
   - New backup APIs support `quick` and `full` snapshots, write `backup_manifest.json`, and keep restore flows conservative.
-  - Restore now follows `dry-run -> checksum verification -> pre-restore quick backup -> stop runtime -> apply restore -> restart -> write result summary`.
-  - `run.py backup list/create/verify/restore` now exposes the same backup surface for headless maintenance and scripted drills.
-  - Settings now include a dedicated "数据与恢复" card with recent backups, restore feedback, and latest offline eval summary.
+  - Destructive maintenance APIs now run under a shared maintenance lock to prevent concurrent restore/cleanup/data-clear races.
+  - Restore now follows `dry-run -> checksum verification -> pre-restore quick backup -> stop runtime -> apply restore -> restart -> write result summary`, and returns post-restore auth warnings.
+  - `quick` backup now includes `data/provider_credentials.json` to preserve provider-auth bindings across rollback.
+  - `quick` backup also captures SQLite sidecar files (`chat_memory.db-wal` / `chat_memory.db-shm`) when present.
+  - `full` backup includes both `data/chat_exports/` and `data/vector_db/` to keep retrieval memory consistent after restore.
+  - Legacy backups without `checksum_summary` are treated as unverified and require explicit `allow_legacy_unverified=true` opt-in before restore apply.
+  - `POST /api/backups` now requires bot/growth runtime to be stopped before creating snapshots; `POST /api/backups/restore` defaults to `dry_run=true` unless explicitly set to `false`.
+  - Settings now include a dedicated "数据与恢复" card with recent backups, restore feedback, latest offline eval summary, and data-control cleanup (dry-run/apply with explicit scope and stopped runtime).
 - `Offline Eval + CI Gates`
   - `python run.py eval --dataset <path> --preset <name> --report <path>` generates a deterministic JSON report with `summary`, `cases`, `regressions`, `generated_at`, `preset`, and `app_version`.
   - The smoke dataset lives at `tests/fixtures/evals/smoke_cases.json`.
@@ -271,6 +276,8 @@ Key APIs introduced in this phase:
 - `POST /api/backups`
 - `POST /api/backups/cleanup`
 - `POST /api/backups/restore`
+- `GET /api/data_controls`
+- `POST /api/data_controls/clear`
 - `GET /api/evals/latest`
 
 ## Development
@@ -301,6 +308,7 @@ python run.py backup cleanup --keep-quick 5 --keep-full 3
 python run.py backup cleanup --keep-quick 5 --keep-full 3 --apply
 python run.py backup restore --backup-id <backup-id>
 python run.py backup restore --backup-id <backup-id> --apply
+python run.py backup restore --backup-id <backup-id> --apply --allow-running-service
 
 # 语法检查
 python -m py_compile backend\\core\\agent_runtime.py backend\\bot.py backend\\bot_manager.py backend\\api.py
@@ -388,7 +396,12 @@ npm run build:release
 以下内容默认视为敏感数据：
 
 - `API Key`
-- `WECHAT_BOT_API_TOKEN`（如需手动调试 Web API，请自行设置并妥善保管；不要写入日志、不要截图外泄）
+- `WECHAT_BOT_API_TOKEN`（如需手动调试 Web API，请自行设置并妥善保管；`/api/*` 请求可使用 `X-Api-Token` 或 `Authorization: Bearer <token>`；不要写入日志、不要截图外泄）
+- `WECHAT_BOT_SSE_TICKET`（SSE 专用票据；`/api/events` 需携带 `?ticket=<ticket>`，可通过 `/api/events_ticket` 获取）
+- `python run.py backup restore --apply` 默认会在检测到本地运行服务仍在运行时硬阻断；仅在明确知晓风险时使用 `--allow-running-service`
+- `/api/model_auth/*` 与 `/api/auth/providers*` 返回中的本地路径字段会自动脱敏（仅保留文件名，且不返回 `watch_paths`）
+- `/api/ollama/models` 仅允许本地回环地址（`localhost/127.0.0.1/::1`）作为 `base_url`，避免被误用为外部探测入口
+- `/api/logs` 与 `/api/logs/clear` 会校验日志路径必须位于 `data` 目录，且日志读取有最大行数上限
 - `data/` 下的密钥与覆盖配置
 - `data/chat_exports/`
 - `data/logs/`

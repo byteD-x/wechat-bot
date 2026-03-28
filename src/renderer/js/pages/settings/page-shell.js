@@ -1,3 +1,4 @@
+import { Events } from '../../core/EventBus.js';
 import { FIELD_META_BY_ID } from './schema.js';
 
 function getDocument(deps = {}) {
@@ -40,6 +41,10 @@ export function bindSettingsEvents(page, deps = {}) {
     bindOptional('#btn-restore-backup-apply', 'click', () => void page._restoreWorkspaceBackup(false));
     bindOptional('#btn-cleanup-backup-dry-run', 'click', () => void page._cleanupWorkspaceBackups(true));
     bindOptional('#btn-cleanup-backup-apply', 'click', () => void page._cleanupWorkspaceBackups(false));
+    bindOptional('#btn-data-control-dry-run', 'click', () => void page._runDataControls(true));
+    bindOptional('#btn-data-control-apply', 'click', () => void page._runDataControls(false));
+    bindOptional('#btn-open-models', 'click', () => page.emit(Events.PAGE_CHANGE, 'models'));
+    bindOptional('#settings-data-control-scope', 'change', () => page._renderBackupPanel?.());
     bindOptional('#settings-section-nav', 'click', (event) => {
         const button = event?.target?.closest?.('[data-settings-section]');
         if (!button) {

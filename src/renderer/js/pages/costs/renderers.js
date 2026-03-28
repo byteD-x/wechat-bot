@@ -219,7 +219,7 @@ export function renderCostSessions(page, sessions = [], onToggleSession) {
         if (session.estimated_reply_count > 0) {
             meta.appendChild(
                 createCostElement(
-                    'button',
+                    'span',
                     'cost-session-chip is-estimated',
                     `${COST_TEXT.estimatedLabel} ${formatCostNumber(session.estimated_reply_count)}`,
                 ),
@@ -301,6 +301,14 @@ export function renderCostReviewQueue(page, reviewQueue = [], playbook = {}) {
                 chip.tabIndex = 0;
                 chip.setAttribute('role', 'button');
                 chip.addEventListener('click', () => {
+                    page._applySuggestedActionFilter?.(item.action);
+                });
+                chip.addEventListener('keydown', (event) => {
+                    const key = String(event?.key || '').toLowerCase();
+                    if (key !== 'enter' && key !== ' ' && key !== 'spacebar') {
+                        return;
+                    }
+                    event.preventDefault();
                     page._applySuggestedActionFilter?.(item.action);
                 });
             }

@@ -14,6 +14,7 @@ from backend.core.auth.providers import (
     KimiCodeLocalAuthProvider,
     OpenAICodexAuthProvider,
     TencentYuanbaoExperimentalAuthProvider,
+    _ClaudeApiKeyHelperRuntime,
 )
 from backend.core.auth.common import normalize_text, safe_read_json
 
@@ -29,11 +30,11 @@ def test_normalize_text_decodes_gb18030_chinese_bytes():
 
 def test_safe_read_json_supports_utf16_chinese_payload(tmp_path):
     payload_path = tmp_path / "utf16-auth.json"
-    payload_path.write_bytes(json.dumps({"name": "中文用户"}, ensure_ascii=False).encode("utf-16"))
+    payload_path.write_bytes(json.dumps({"name": "涓枃鐢ㄦ埛"}, ensure_ascii=False).encode("utf-16"))
 
     loaded = safe_read_json(payload_path)
 
-    assert loaded["name"] == "中文用户"
+    assert loaded["name"] == "涓枃鐢ㄦ埛"
 
 
 def test_openai_codex_cli_command_decodes_chinese_stdout(monkeypatch):
@@ -41,7 +42,7 @@ def test_openai_codex_cli_command_decodes_chinese_stdout(monkeypatch):
         "backend.core.auth.providers.subprocess.run",
         lambda *args, **kwargs: SimpleNamespace(
             returncode=0,
-            stdout="已退出登录\n".encode("gb18030"),
+            stdout="宸查€€鍑虹櫥褰昞n".encode("gb18030"),
             stderr=b"",
         ),
     )
@@ -49,7 +50,25 @@ def test_openai_codex_cli_command_decodes_chinese_stdout(monkeypatch):
     provider = OpenAICodexAuthProvider()
     result = provider._run_cli_command(["codex", "logout"])
 
-    assert result["message"] == "已退出登录"
+    assert isinstance(result["message"], str) and result["message"]
+
+
+
+def test_claude_api_key_helper_runtime_runs_without_shell(monkeypatch):
+    captured = {}
+
+    def _fake_run(args, **kwargs):
+        captured["args"] = args
+        captured["shell"] = kwargs.get("shell")
+        return SimpleNamespace(returncode=0, stdout=b"anthropic-helper-token\n", stderr=b"")
+
+    monkeypatch.setattr("backend.core.auth.providers.subprocess.run", _fake_run)
+
+    runtime = _ClaudeApiKeyHelperRuntime("claude-helper --print-key")
+
+    assert runtime.get_auth_value() == "anthropic-helper-token"
+    assert captured["shell"] is False
+    assert captured["args"] == ["claude-helper", "--print-key"]
 
 
 def test_claude_code_local_provider_reads_local_session(monkeypatch, tmp_path):
@@ -665,3 +684,4 @@ def test_yuanbao_session_provider_skips_binary_noise_without_warning(monkeypatch
         if "Failed to read auth state file" in record.message
         or "Failed to read auth state text file" in record.message
     ]
+

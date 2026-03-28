@@ -37,6 +37,29 @@ function createHeroAuditDisclosure(items = []) {
     return disclosure;
 }
 
+function createModelSummaryCard() {
+    const card = createElement('div', 'settings-model-summary');
+    const content = createElement('div', 'settings-model-summary-content');
+
+    const label = createElement('span', 'settings-model-summary-label', '当前模型');
+    const title = createElement('strong', 'settings-model-summary-title', '加载中...');
+    title.id = 'settings-model-summary-title';
+    const meta = createElement('div', 'settings-model-summary-meta', '正在同步模型信息');
+    meta.id = 'settings-model-summary-meta';
+
+    content.appendChild(label);
+    content.appendChild(title);
+    content.appendChild(meta);
+
+    const button = createElement('button', 'btn btn-secondary btn-sm', '前往模型页');
+    button.id = 'btn-open-models';
+    button.type = 'button';
+    content.appendChild(button);
+
+    card.appendChild(content);
+    return card;
+}
+
 export function renderSettingsHero(page, highlight = false) {
     const container = page.$('#current-config-hero');
     if (!container) {
@@ -88,6 +111,7 @@ export function renderSettingsHero(page, highlight = false) {
     ]));
 
     content.appendChild(createElement('div', 'detail-help', summaryHint));
+    content.appendChild(createModelSummaryCard());
     card.appendChild(content);
     container.appendChild(card);
 }

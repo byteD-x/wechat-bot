@@ -1,0 +1,13 @@
+{
+  "repo": "wechat-chat",
+  "file_count": 2096,
+  "has_readme": true,
+  "has_docs": true,
+  "has_tests": true,
+  "has_ci": true,
+  "has_observability": true,
+  "has_analytics": true,
+  "has_security": true,
+  "has_lockfile": true,
+  "has_build_manifest": true
+}

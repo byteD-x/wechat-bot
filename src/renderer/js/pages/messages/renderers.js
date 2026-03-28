@@ -153,8 +153,12 @@ export function renderMessageLoadMore(page, hasMore) {
     if (!button) {
         return;
     }
+    if (!button.dataset.defaultLabel) {
+        button.dataset.defaultLabel = String(button.textContent || '').trim() || '加载更多';
+    }
     button.hidden = !hasMore;
-    button.disabled = !hasMore;
+    button.disabled = !hasMore || !!page._loadingMore;
+    button.textContent = page._loadingMore ? '加载中...' : button.dataset.defaultLabel;
 }
 
 export function buildMessageDetail(message, handlers = {}) {
@@ -228,15 +232,24 @@ export function buildMessageDetail(message, handlers = {}) {
 
         const actions = documentObj.createElement('div');
         actions.className = 'detail-actions';
+        const feedbackButtons = [];
+        let feedbackBusy = false;
 
         const buildFeedbackButton = (label, value) => {
             const button = documentObj.createElement('button');
             button.type = 'button';
             button.className = `btn ${currentFeedback === value ? 'btn-primary' : 'btn-secondary'} btn-sm`;
             button.textContent = label;
+            feedbackButtons.push(button);
             button.addEventListener('click', async () => {
+                if (feedbackBusy) {
+                    return;
+                }
                 const nextFeedback = currentFeedback === value ? '' : value;
-                button.disabled = true;
+                feedbackBusy = true;
+                feedbackButtons.forEach((item) => {
+                    item.disabled = true;
+                });
                 try {
                     const nextMessage = await handlers.onFeedback?.(message, nextFeedback, currentFeedback);
                     if (nextMessage) {
@@ -244,7 +257,10 @@ export function buildMessageDetail(message, handlers = {}) {
                         root.replaceWith(nextSection);
                     }
                 } finally {
-                    button.disabled = false;
+                    feedbackBusy = false;
+                    feedbackButtons.forEach((item) => {
+                        item.disabled = false;
+                    });
                 }
             });
             return button;

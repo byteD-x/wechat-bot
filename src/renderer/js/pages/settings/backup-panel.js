@@ -115,6 +115,15 @@ export function renderBackupPanel(page) {
     const evalElem = page.$('#settings-eval-summary');
     const selectElem = page.$('#settings-backup-select');
     const feedbackElem = page.$('#settings-backup-restore-feedback');
+    const dataControlElem = page.$('#settings-data-control-feedback');
+    const createQuickBtn = page.$('#btn-create-quick-backup');
+    const createFullBtn = page.$('#btn-create-full-backup');
+    const restoreDryRunBtn = page.$('#btn-restore-backup-dry-run');
+    const restoreApplyBtn = page.$('#btn-restore-backup-apply');
+    const cleanupDryRunBtn = page.$('#btn-cleanup-backup-dry-run');
+    const cleanupApplyBtn = page.$('#btn-cleanup-backup-apply');
+    const dataControlDryRunBtn = page.$('#btn-data-control-dry-run');
+    const dataControlApplyBtn = page.$('#btn-data-control-apply');
     const listElem = page.$('#settings-backup-list');
     if (!summaryElem || !evalElem || !selectElem || !feedbackElem || !listElem) {
         return;
@@ -133,14 +142,52 @@ export function renderBackupPanel(page) {
 
     evalElem.textContent = formatEvalSummary(latestEval);
 
-    if (lastRestore) {
+    if (state.restoreFeedback) {
+        feedbackElem.textContent = state.restoreFeedback;
+    } else if (lastRestore) {
         feedbackElem.textContent = lastRestore.success
             ? `最近一次恢复已完成，恢复前自动保留的保险备份：${lastRestore.pre_restore_backup?.id || '--'}`
             : `最近一次恢复未完成：${lastRestore.message || '--'}`;
-    } else if (!state.restoreFeedback) {
-        feedbackElem.textContent = '恢复前会自动留一份保险备份，避免恢复后找不回当前状态。';
     } else {
-        feedbackElem.textContent = state.restoreFeedback;
+        feedbackElem.textContent = '恢复前会自动留一份保险备份，避免恢复后找不回当前状态。';
+    }
+    if (dataControlElem) {
+        dataControlElem.textContent = state.dataControlFeedback || '尚未执行数据清理';
+    }
+
+    const backupBusy = !!state.backupBusy;
+    if (createQuickBtn) {
+        createQuickBtn.disabled = backupBusy;
+    }
+    if (createFullBtn) {
+        createFullBtn.disabled = backupBusy;
+    }
+    if (restoreDryRunBtn) {
+        restoreDryRunBtn.disabled = backupBusy || backups.length <= 0;
+    }
+    if (restoreApplyBtn) {
+        restoreApplyBtn.disabled = backupBusy || backups.length <= 0;
+    }
+    if (cleanupDryRunBtn) {
+        cleanupDryRunBtn.disabled = backupBusy;
+    }
+    if (cleanupApplyBtn) {
+        cleanupApplyBtn.disabled = backupBusy;
+    }
+    selectElem.disabled = backupBusy || backups.length <= 0;
+
+    const dataControlScope = String(page.$('#settings-data-control-scope')?.value || '').trim();
+    if (dataControlDryRunBtn) {
+        dataControlDryRunBtn.disabled = backupBusy || !!state.dataControlBusy;
+    }
+    if (dataControlApplyBtn) {
+        const canApply = (
+            !backupBusy
+            && !state.dataControlBusy
+            && !!dataControlScope
+            && String(state.dataControlDryRunScope || '').trim() === dataControlScope
+        );
+        dataControlApplyBtn.disabled = !canApply;
     }
 
     populateBackupSelect(selectElem, backups);

@@ -187,6 +187,43 @@
     padding: 2px 0 2px 8px;
 }
 
+.settings-model-summary {
+    padding: 12px 14px;
+    border-radius: 14px;
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    background: rgba(255, 255, 255, 0.78);
+}
+
+.settings-model-summary-content {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.settings-model-summary-label {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.settings-model-summary-title {
+    font-size: 13px;
+    color: var(--text-primary);
+}
+
+.settings-model-summary-meta {
+    font-size: 12px;
+    color: var(--text-secondary);
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.settings-model-summary-content .btn {
+    margin-left: auto;
+}
+
 .model-summary-card {
     background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.94));
 }
@@ -263,5 +300,18 @@
     .settings-workbench-summary,
     .backup-action-grid {
         grid-template-columns: 1fr;
+    }
+
+    .settings-model-summary-content {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .settings-model-summary-meta {
+        white-space: normal;
+    }
+
+    .settings-model-summary-content .btn {
+        margin-left: 0;
     }
 }

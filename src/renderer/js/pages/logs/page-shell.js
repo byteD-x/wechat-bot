@@ -50,6 +50,46 @@ export function bindLogsEvents(page, deps = {}) {
         void (deps.refreshLogs || refreshLogs)(page, {}, deps);
     });
 
+    page.bindEvent('#btn-restore-log-default-view', 'click', () => {
+        page._keyword = '';
+        page._level = '';
+        page._lineCount = 500;
+
+        page.setState('logs.autoScroll', true);
+        page.setState('logs.autoRefresh', true);
+        page.setState('logs.wrap', true);
+
+        const searchInput = page.$('#log-search');
+        if (searchInput) {
+            searchInput.value = '';
+        }
+        const levelSelect = page.$('#log-level');
+        if (levelSelect) {
+            levelSelect.value = '';
+        }
+        const lineSelect = page.$('#log-lines');
+        if (lineSelect) {
+            lineSelect.value = '500';
+        }
+        const autoScroll = page.$('#setting-auto-scroll');
+        if (autoScroll) {
+            autoScroll.checked = true;
+        }
+        const autoRefresh = page.$('#setting-auto-refresh');
+        if (autoRefresh) {
+            autoRefresh.checked = true;
+        }
+        const wrap = page.$('#setting-wrap');
+        if (wrap) {
+            wrap.checked = true;
+        }
+
+        (deps.syncOptionState || syncOptionState)(page);
+        (deps.updateWrapState || updateWrapState)(page, true);
+        (deps.setupAutoRefresh || setupAutoRefresh)(page, deps);
+        void (deps.refreshLogs || refreshLogs)(page, {}, deps);
+    });
+
     const searchInput = page.$('#log-search');
     searchInput?.addEventListener('input', () => {
         page._keyword = String(searchInput.value || '').trim().toLowerCase();

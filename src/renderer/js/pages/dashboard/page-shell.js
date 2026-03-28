@@ -172,7 +172,11 @@ export async function openWeChatClient(deps = {}) {
     const windowApi = getWindowApi(deps);
     try {
         if (windowApi?.openWeChat) {
-            await windowApi.openWeChat();
+            const result = await windowApi.openWeChat();
+            if (result?.success === false) {
+                currentToast.error(result?.error || result?.message || '打开微信客户端失败');
+                return;
+            }
             currentToast.success('正在打开微信客户端...');
         } else {
             currentToast.info('请手动打开微信客户端');

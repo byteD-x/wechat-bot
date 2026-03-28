@@ -35,6 +35,32 @@ function emitStatusRefresh(page, options = {}) {
     });
 }
 
+function getDashboardActionLocks(page) {
+    if (!page || typeof page !== 'object') {
+        return new Set();
+    }
+    if (!(page._dashboardActionLocks instanceof Set)) {
+        page._dashboardActionLocks = new Set();
+    }
+    return page._dashboardActionLocks;
+}
+
+async function runDashboardActionWithLock(page, lockKey, deps = {}, handler) {
+    const locks = getDashboardActionLocks(page);
+    const currentToast = getToast(deps);
+    if (locks.has(lockKey)) {
+        currentToast.info('操作执行中，请稍候...');
+        return false;
+    }
+    locks.add(lockKey);
+    try {
+        await handler();
+        return true;
+    } finally {
+        locks.delete(lockKey);
+    }
+}
+
 export async function runReadinessAction(page, action, deps = {}) {
     const currentToast = getToast(deps);
     const windowApi = getWindowApi(deps);
@@ -52,7 +78,11 @@ export async function runReadinessAction(page, action, deps = {}) {
     if (normalizedAction === 'open_wechat') {
         try {
             if (windowApi?.openWeChat) {
-                await windowApi.openWeChat();
+                const result = await windowApi.openWeChat();
+                if (result?.success === false) {
+                    currentToast.error(result?.error || result?.message || '打开微信客户端失败');
+                    return;
+                }
                 currentToast.success('正在打开微信客户端...');
             } else {
                 currentToast.info('请手动打开并登录微信客户端。');
@@ -335,36 +365,40 @@ export async function confirmAction(options, deps = {}) {
 export async function togglePause(page, deps = {}) {
     const currentApiService = getApiService(deps);
     const currentToast = getToast(deps);
-    try {
-        const isPaused = !!page.getState('bot.paused');
-        const result = isPaused
-            ? await currentApiService.resumeBot()
-            : await currentApiService.pauseBot();
+    await runDashboardActionWithLock(page, 'toggle-pause', deps, async () => {
+        try {
+            const isPaused = !!page.getState('bot.paused');
+            const result = isPaused
+                ? await currentApiService.resumeBot()
+                : await currentApiService.pauseBot();
 
-        currentToast.show(
-            result?.message || (result?.success ? '操作成功' : '操作失败'),
-            result?.success ? 'success' : 'error'
-        );
-        page.emit(Events.BOT_STATUS_CHANGE, {});
-    } catch (error) {
-        currentToast.error(currentToast.getErrorMessage(error, '暂停/恢复失败'));
-    }
+            currentToast.show(
+                result?.message || (result?.success ? '操作成功' : '操作失败'),
+                result?.success ? 'success' : 'error'
+            );
+            page.emit(Events.BOT_STATUS_CHANGE, {});
+        } catch (error) {
+            currentToast.error(currentToast.getErrorMessage(error, '暂停/恢复失败'));
+        }
+    });
 }
 
 export async function restartBot(page, deps = {}) {
     const currentApiService = getApiService(deps);
     const currentToast = getToast(deps);
-    try {
-        currentToast.info('正在重启机器人...');
-        const result = await currentApiService.restartBot();
-        currentToast.show(
-            result?.message || (result?.success ? '机器人正在重启' : '重启机器人失败'),
-            result?.success ? 'success' : 'error'
-        );
-        emitStatusRefresh(page, { followups: [2000] });
-    } catch (error) {
-        currentToast.error(currentToast.getErrorMessage(error, '重启机器人失败'));
-    }
+    await runDashboardActionWithLock(page, 'restart-bot', deps, async () => {
+        try {
+            currentToast.info('正在重启机器人...');
+            const result = await currentApiService.restartBot();
+            currentToast.show(
+                result?.message || (result?.success ? '机器人正在重启' : '重启机器人失败'),
+                result?.success ? 'success' : 'error'
+            );
+            emitStatusRefresh(page, { followups: [2000] });
+        } catch (error) {
+            currentToast.error(currentToast.getErrorMessage(error, '重启机器人失败'));
+        }
+    });
 }
 
 export async function recoverBot(page, deps = {}) {
@@ -376,15 +410,17 @@ export async function recoverBot(page, deps = {}) {
         await runReadinessAction(page, readinessAction.action, deps);
         return;
     }
-    try {
-        currentToast.info('正在尝试恢复机器人...');
-        const result = await currentApiService.recoverBot();
-        currentToast.show(
-            result?.message || (result?.success ? '机器人恢复中' : '恢复机器人失败'),
-            result?.success ? 'success' : 'error'
-        );
-        emitStatusRefresh(page, { followups: [1500] });
-    } catch (error) {
-        currentToast.error(currentToast.getErrorMessage(error, '恢复机器人失败'));
-    }
+    await runDashboardActionWithLock(page, 'recover-bot', deps, async () => {
+        try {
+            currentToast.info('正在尝试恢复机器人...');
+            const result = await currentApiService.recoverBot();
+            currentToast.show(
+                result?.message || (result?.success ? '机器人恢复中' : '恢复机器人失败'),
+                result?.success ? 'success' : 'error'
+            );
+            emitStatusRefresh(page, { followups: [1500] });
+        } catch (error) {
+            currentToast.error(currentToast.getErrorMessage(error, '恢复机器人失败'));
+        }
+    });
 }

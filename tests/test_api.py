@@ -1,4 +1,5 @@
 import pytest
+import os
 from datetime import datetime
 from unittest.mock import MagicMock, AsyncMock, patch
 
@@ -170,6 +171,25 @@ def mock_manager():
     # Restore
     api_module.manager = original_manager
 
+
+@pytest.fixture(autouse=True)
+def reset_api_runtime_state():
+    api_module._IDEMPOTENCY_CACHE.clear()
+    api_module._IDEMPOTENCY_INFLIGHT.clear()
+    api_module._API_METRICS_COUNTERS.clear()
+    api_module._API_METRICS_DURATION_SUM_MS.clear()
+    api_module._API_METRICS_DURATION_COUNT.clear()
+    api_module._API_AUTH_FAILURE_COUNTERS.clear()
+    api_module._API_METRIC_TRACKED_PATHS.clear()
+    yield
+    api_module._IDEMPOTENCY_CACHE.clear()
+    api_module._IDEMPOTENCY_INFLIGHT.clear()
+    api_module._API_METRICS_COUNTERS.clear()
+    api_module._API_METRICS_DURATION_SUM_MS.clear()
+    api_module._API_METRICS_DURATION_COUNT.clear()
+    api_module._API_AUTH_FAILURE_COUNTERS.clear()
+    api_module._API_METRIC_TRACKED_PATHS.clear()
+
 @pytest.mark.asyncio
 async def test_api_status(client, mock_manager):
     response = await client.get('/api/status')
@@ -186,6 +206,280 @@ async def test_api_ping(client, mock_manager):
     data = await response.get_json()
     assert data == {"success": True, "service_running": True}
     mock_manager.get_status.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_api_rejects_cross_site_origin(client, mock_manager):
+    response = await client.get('/api/status', headers={"Origin": "https://evil.example"})
+    assert response.status_code == 403
+    data = await response.get_json()
+    assert data["success"] is False
+    assert data["message"] == "forbidden_origin"
+
+
+@pytest.mark.asyncio
+async def test_api_rejects_cross_site_without_origin_for_browser(client, mock_manager):
+    response = await client.get(
+        '/api/status',
+        headers={"Sec-Fetch-Site": "cross-site"},
+    )
+    assert response.status_code == 403
+    data = await response.get_json()
+    assert data["success"] is False
+    assert data["message"] == "forbidden_origin"
+
+
+@pytest.mark.asyncio
+async def test_api_allows_electron_cross_site_with_file_origin(client, mock_manager):
+    response = await client.get(
+        '/api/status',
+        headers={
+            "Origin": "null",
+            "Sec-Fetch-Site": "cross-site",
+            "User-Agent": "Mozilla/5.0 AppleWebKit/537.36 Electron/31.0.0",
+        },
+    )
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["running"] is True
+    mock_manager.get_status.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_api_rejects_cross_site_with_file_triple_slash_origin_without_electron_ua(client, mock_manager):
+    response = await client.get(
+        '/api/status',
+        headers={
+            "Origin": "file:///E:/Project/wechat-chat/src/renderer/index.html",
+            "Sec-Fetch-Site": "cross-site",
+            "User-Agent": "Mozilla/5.0 AppleWebKit/537.36",
+        },
+    )
+    assert response.status_code == 403
+    data = await response.get_json()
+    assert data["success"] is False
+    assert data["message"] == "forbidden_origin"
+
+
+@pytest.mark.asyncio
+async def test_api_allows_cross_site_with_trusted_local_origin_even_without_electron_ua(client, mock_manager):
+    response = await client.get(
+        '/api/status',
+        headers={
+            "Origin": "http://127.0.0.1:3000",
+            "Sec-Fetch-Site": "cross-site",
+            "User-Agent": "Mozilla/5.0 AppleWebKit/537.36",
+        },
+    )
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["running"] is True
+    mock_manager.get_status.assert_called_once()
+    assert response.headers.get("Access-Control-Allow-Origin") == "http://127.0.0.1:3000"
+
+
+@pytest.mark.asyncio
+async def test_api_allows_ipv6_loopback_host_and_origin(client, mock_manager):
+    response = await client.get(
+        '/api/status',
+        headers={
+            "Host": "[::1]:5000",
+            "Origin": "http://[::1]:5173",
+            "Sec-Fetch-Site": "cross-site",
+        },
+    )
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["running"] is True
+    mock_manager.get_status.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_api_accepts_authorization_bearer_token(client, mock_manager):
+    with patch.dict(os.environ, {"WECHAT_BOT_API_TOKEN": "unit-test-token"}, clear=False):
+        response = await client.get(
+            '/api/status',
+            headers={"Authorization": "Bearer unit-test-token"},
+        )
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["running"] is True
+    mock_manager.get_status.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_api_rejects_invalid_authorization_bearer_token(client, mock_manager):
+    with patch.dict(os.environ, {"WECHAT_BOT_API_TOKEN": "unit-test-token"}, clear=False):
+        response = await client.get(
+            '/api/status',
+            headers={"Authorization": "Bearer invalid-token"},
+        )
+
+    assert response.status_code == 401
+    data = await response.get_json()
+    assert data["success"] is False
+    assert data["message"] == "unauthorized"
+
+
+@pytest.mark.asyncio
+async def test_api_rejects_query_token_for_non_event_endpoints(client, mock_manager):
+    with patch.dict(os.environ, {"WECHAT_BOT_API_TOKEN": "unit-test-token"}, clear=False):
+        response = await client.get("/api/status?token=unit-test-token")
+
+    assert response.status_code == 401
+    data = await response.get_json()
+    assert data["success"] is False
+    assert data["message"] == "unauthorized"
+
+
+@pytest.mark.asyncio
+async def test_api_events_ticket_requires_api_token(client, mock_manager):
+    with patch.dict(
+        os.environ,
+        {
+            "WECHAT_BOT_API_TOKEN": "unit-test-token",
+            "WECHAT_BOT_SSE_TICKET": "sse-ticket-abc",
+        },
+        clear=False,
+    ):
+        response = await client.get("/api/events_ticket")
+    assert response.status_code == 401
+    data = await response.get_json()
+    assert data["success"] is False
+    assert data["message"] == "unauthorized"
+
+
+@pytest.mark.asyncio
+async def test_api_events_ticket_returns_ticket_when_authorized(client, mock_manager):
+    with patch.dict(
+        os.environ,
+        {
+            "WECHAT_BOT_API_TOKEN": "unit-test-token",
+            "WECHAT_BOT_SSE_TICKET": "sse-ticket-abc",
+        },
+        clear=False,
+    ):
+        response = await client.get(
+            "/api/events_ticket",
+            headers={"X-Api-Token": "unit-test-token"},
+        )
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["success"] is True
+    assert data["ticket"] == "sse-ticket-abc"
+
+
+@pytest.mark.asyncio
+async def test_api_events_stream_rejects_missing_ticket_when_api_token_enabled(client, mock_manager):
+    with patch.dict(
+        os.environ,
+        {
+            "WECHAT_BOT_API_TOKEN": "unit-test-token",
+            "WECHAT_BOT_SSE_TICKET": "sse-ticket-abc",
+        },
+        clear=False,
+    ):
+        response = await client.get("/api/events")
+    assert response.status_code == 401
+    data = await response.get_json()
+    assert data["success"] is False
+    assert data["message"] == "unauthorized"
+
+
+@pytest.mark.asyncio
+async def test_api_model_auth_overview_redacts_local_path_details(client, mock_manager):
+    overview_payload = {
+        "success": True,
+        "overview": {
+            "cards": [
+                {
+                    "provider": {"id": "demo"},
+                    "auth_states": [
+                        {
+                            "binding": {
+                                "locator_path": "C:/Users/demo/AppData/Local/demo/cookie.db",
+                                "metadata": {
+                                    "watch_paths": [
+                                        "C:/Users/demo/AppData/Local/demo/cookie.db",
+                                        "C:/Users/demo/AppData/Local/demo/storage.json",
+                                    ],
+                                    "cookie_path": "C:/Users/demo/AppData/Local/demo/cookie.db",
+                                    "api_key_helper": "python helper.py --token super-secret",
+                                },
+                                "access_token": "abc123",
+                            },
+                        }
+                    ],
+                }
+            ]
+        },
+    }
+
+    with patch.object(api_module.model_auth_center_service, "get_overview", return_value=overview_payload):
+        response = await client.get("/api/model_auth/overview")
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    binding = data["overview"]["cards"][0]["auth_states"][0]["binding"]
+    assert binding["locator_path"] == ".../cookie.db"
+    assert binding["metadata"]["watch_paths"] == []
+    assert binding["metadata"]["cookie_path"] == ".../cookie.db"
+    assert binding["metadata"]["api_key_helper"] == "[REDACTED]"
+    assert binding["access_token"] == "[REDACTED]"
+
+
+@pytest.mark.asyncio
+async def test_api_404_under_api_prefix_returns_json_error(client, mock_manager):
+    response = await client.get("/api/__missing_route__")
+
+    assert response.status_code == 404
+    assert "application/json" in (response.content_type or "")
+    data = await response.get_json()
+    assert data["success"] is False
+    assert isinstance(data.get("message"), str)
+    assert data["message"]
+
+
+@pytest.mark.asyncio
+async def test_api_405_under_api_prefix_returns_json_error(client, mock_manager):
+    response = await client.get("/api/start")
+
+    assert response.status_code == 405
+    assert "application/json" in (response.content_type or "")
+    data = await response.get_json()
+    assert data["success"] is False
+    assert isinstance(data.get("message"), str)
+    assert data["message"]
+
+
+@pytest.mark.asyncio
+async def test_api_metrics_exports_request_and_auth_failure_counters(client, mock_manager):
+    mock_manager.export_metrics.return_value = ""
+
+    with patch.dict(os.environ, {"WECHAT_BOT_API_TOKEN": "metrics-token"}, clear=False):
+        ok_response = await client.get("/api/status", headers={"X-Api-Token": "metrics-token"})
+        unauthorized_response = await client.get("/api/status")
+        metrics_response = await client.get("/api/metrics", headers={"X-Api-Token": "metrics-token"})
+
+    assert ok_response.status_code == 200
+    assert unauthorized_response.status_code == 401
+    assert metrics_response.status_code == 200
+    body = (await metrics_response.get_data()).decode("utf-8")
+    assert 'wechat_api_requests_total{method="GET",path="/api/status",status="200"} 1' in body
+    assert 'wechat_api_requests_total{method="GET",path="/api/status",status="401"} 1' in body
+    assert 'wechat_api_auth_failures_total{reason="unauthorized",path="/api/status"} 1' in body
+
+
+def test_api_metric_path_cardinality_is_bounded():
+    api_module._API_METRIC_TRACKED_PATHS.clear()
+    for index in range(400):
+        normalized = api_module._bound_metric_path(f"/api/random/{index}")
+        if index < api_module._API_METRIC_MAX_PATH_CARDINALITY:
+            assert normalized == f"/api/random/{index}"
+        else:
+            assert normalized == "/api/_other"
+    assert len(api_module._API_METRIC_TRACKED_PATHS) == api_module._API_METRIC_MAX_PATH_CARDINALITY
 
 
 @pytest.mark.asyncio
@@ -273,6 +567,24 @@ async def test_api_stop(client, mock_manager):
     response = await client.post('/api/stop')
     assert response.status_code == 200
     mock_manager.stop.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_api_start_returns_409_when_manager_reports_failure(client, mock_manager):
+    mock_manager.start = AsyncMock(return_value={"success": False, "message": "already_running"})
+    response = await client.post('/api/start')
+    assert response.status_code == 409
+    data = await response.get_json()
+    assert data["success"] is False
+
+
+@pytest.mark.asyncio
+async def test_api_stop_returns_409_when_manager_reports_failure(client, mock_manager):
+    mock_manager.stop = AsyncMock(return_value={"success": False, "message": "not_running"})
+    response = await client.post('/api/stop')
+    assert response.status_code == 409
+    data = await response.get_json()
+    assert data["success"] is False
 
 
 @pytest.mark.asyncio
@@ -404,6 +716,114 @@ async def test_api_send(client, mock_manager):
     data = await response.get_json()
     assert data["success"] is True
     mock_manager.send_message.assert_called_with("User", "Hello")
+
+
+@pytest.mark.asyncio
+async def test_api_send_rejects_overlong_target(client, mock_manager):
+    response = await client.post('/api/send', json={"target": "U" * 257, "content": "Hello"})
+    assert response.status_code == 400
+    data = await response.get_json()
+    assert data["success"] is False
+    assert data["message"] == "target is too long"
+
+
+@pytest.mark.asyncio
+async def test_api_send_rejects_overlong_content(client, mock_manager):
+    response = await client.post('/api/send', json={"target": "User", "content": "x" * 8001})
+    assert response.status_code == 400
+    data = await response.get_json()
+    assert data["success"] is False
+    assert data["message"] == "content is too long"
+
+
+@pytest.mark.asyncio
+async def test_api_send_requires_idempotency_key_when_not_testing(client, mock_manager):
+    previous_testing = bool(api_module.app.config.get("TESTING"))
+    api_module.app.config["TESTING"] = False
+    try:
+        with (
+            patch("backend.api._is_local_request", return_value=True),
+            patch.dict(os.environ, {"WECHAT_BOT_API_TOKEN": "unit-test-token"}, clear=False),
+        ):
+            response = await client.post(
+                '/api/send',
+                json={"target": "User", "content": "Hello"},
+                headers={"X-Api-Token": "unit-test-token"},
+            )
+    finally:
+        api_module.app.config["TESTING"] = previous_testing
+
+    assert response.status_code == 400
+    data = await response.get_json()
+    assert data["success"] is False
+    assert data["message"] == "idempotency_key_required"
+    mock_manager.send_message.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_api_rejects_all_api_requests_when_token_is_missing_in_non_testing_mode(client, mock_manager):
+    previous_testing = bool(api_module.app.config.get("TESTING"))
+    api_module.app.config["TESTING"] = False
+    try:
+        with (
+            patch("backend.api._is_local_request", return_value=True),
+            patch.dict(os.environ, {"WECHAT_BOT_API_TOKEN": "", "WECHAT_BOT_SSE_TICKET": ""}, clear=False),
+        ):
+            response = await client.get('/api/status')
+    finally:
+        api_module.app.config["TESTING"] = previous_testing
+
+    assert response.status_code == 503
+    data = await response.get_json()
+    assert data["success"] is False
+    assert data["message"] == "api_token_not_configured"
+    mock_manager.get_status.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_api_send_replays_idempotent_response(client, mock_manager):
+    mock_manager.send_message = AsyncMock(return_value={"success": True, "message_id": "msg-1"})
+    headers = {"Idempotency-Key": "send-idem-1"}
+
+    first = await client.post('/api/send', json={"target": "User", "content": "Hello"}, headers=headers)
+    second = await client.post('/api/send', json={"target": "User", "content": "Hello"}, headers=headers)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    second_data = await second.get_json()
+    assert second_data["success"] is True
+    assert second.headers.get("X-Idempotency-Replayed") == "1"
+    mock_manager.send_message.assert_awaited_once_with("User", "Hello")
+
+
+@pytest.mark.asyncio
+async def test_api_send_rejects_idempotency_key_reuse_with_different_payload(client, mock_manager):
+    mock_manager.send_message = AsyncMock(return_value={"success": True, "message_id": "msg-1"})
+    headers = {"Idempotency-Key": "send-idem-conflict"}
+
+    first = await client.post('/api/send', json={"target": "User", "content": "Hello"}, headers=headers)
+    second = await client.post('/api/send', json={"target": "User", "content": "Changed"}, headers=headers)
+
+    assert first.status_code == 200
+    assert second.status_code == 400
+    data = await second.get_json()
+    assert data["success"] is False
+    assert "idempotency key was reused" in data["message"]
+    mock_manager.send_message.assert_awaited_once_with("User", "Hello")
+
+
+@pytest.mark.asyncio
+async def test_api_send_rejects_when_same_idempotency_key_request_is_stuck_inflight(client, mock_manager):
+    mock_manager.send_message = AsyncMock(return_value={"success": True, "message_id": "msg-1"})
+    headers = {"Idempotency-Key": "send-idem-stuck"}
+    with patch("backend.api._apply_idempotency_guard", AsyncMock(side_effect=RuntimeError("idempotency request is still in progress"))):
+        response = await client.post('/api/send', json={"target": "User", "content": "Hello"}, headers=headers)
+
+    assert response.status_code == 409
+    data = await response.get_json()
+    assert data["success"] is False
+    assert data["message"] == "idempotency request is still in progress"
+    mock_manager.send_message.assert_not_awaited()
 
 @pytest.mark.asyncio
 async def test_api_usage(client, mock_manager):
@@ -636,11 +1056,34 @@ async def test_api_costs_review_queue_export(client, mock_manager):
     assert export_mock.await_args.kwargs["review_reason"] == "retrieval_weak"
     assert export_mock.await_args.kwargs["suggested_action"] == "tune_retrieval_threshold"
 
+
+@pytest.mark.asyncio
+async def test_api_costs_review_queue_export_error_is_sanitized(client, mock_manager):
+    config_snapshot = _build_snapshot({"api": {"presets": []}, "bot": {}, "logging": {}})
+
+    with (
+        patch.object(
+            api_module.cost_service,
+            "export_review_queue",
+            AsyncMock(side_effect=RuntimeError("sensitive-export-error")),
+        ),
+        patch.object(api_module.config_service, "get_snapshot", return_value=config_snapshot),
+    ):
+        response = await client.get("/api/costs/review_queue_export?period=7d")
+
+    assert response.status_code == 500
+    data = await response.get_json()
+    assert data["success"] is False
+    assert data["message"] == "export_cost_review_queue_failed"
+    assert data["code"] == "export_cost_review_queue_failed"
+    assert "sensitive-export-error" not in str(data)
+
+
 @pytest.mark.asyncio
 async def test_api_messages_error(client, mock_manager):
     mock_manager.get_memory_manager().get_message_page.side_effect = Exception("DB Error")
     response = await client.get('/api/messages?limit=10')
-    assert response.status_code == 200
+    assert response.status_code == 500
     data = await response.get_json()
     assert data["success"] is False
     assert "DB Error" in data["message"]
@@ -649,19 +1092,21 @@ async def test_api_messages_error(client, mock_manager):
 async def test_api_send_error(client, mock_manager):
     mock_manager.send_message.side_effect = Exception("Send Error")
     response = await client.post('/api/send', json={"target": "User", "content": "Hello"})
-    assert response.status_code == 200
+    assert response.status_code == 500
     data = await response.get_json()
     assert data["success"] is False
-    assert "Send Error" in data["message"]
+    assert data["message"] == "send_failed"
+    assert data["code"] == "send_failed"
 
 @pytest.mark.asyncio
 async def test_api_usage_error(client, mock_manager):
     mock_manager.get_usage.side_effect = Exception("Usage Error")
     response = await client.get('/api/usage')
-    assert response.status_code == 200
+    assert response.status_code == 500
     data = await response.get_json()
     assert data["success"] is False
-    assert "Usage Error" in data["message"]
+    assert data["message"] == "get_usage_failed"
+    assert data["code"] == "get_usage_failed"
 
 
 @pytest.mark.asyncio
@@ -958,6 +1403,39 @@ async def test_api_config_uses_cached_oauth_status_snapshot(client):
 
 
 @pytest.mark.asyncio
+async def test_api_config_sanitizes_oauth_sensitive_paths(client):
+    test_config = {
+        "api": {"active_preset": "OpenAI", "presets": []},
+        "bot": {},
+        "logging": {},
+        "agent": {},
+        "services": {},
+    }
+    oauth_payload = {
+        "success": True,
+        "providers": {
+            "openai_codex": {
+                "configured": True,
+                "session_path": "C:/Users/demo/AppData/Roaming/auth/session.json",
+                "message": "ready",
+            }
+        },
+        "message": "ok",
+    }
+
+    with (
+        patch.object(api_module.config_service, "get_snapshot", return_value=_build_snapshot(test_config)),
+        patch.object(api_module, "get_cached_oauth_provider_statuses", return_value=oauth_payload),
+    ):
+        response = await client.get("/api/config")
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["oauth"]["providers"]["openai_codex"]["configured"] is True
+    assert data["oauth"]["providers"]["openai_codex"]["session_path"] == ".../session.json"
+
+
+@pytest.mark.asyncio
 async def test_api_config_does_not_expose_removed_reply_or_stream_fields(client):
     test_config = {
         "api": {"presets": []},
@@ -1029,6 +1507,50 @@ async def test_api_ollama_models(client):
     assert data["success"] is True
     assert data["models"] == ["qwen3:8b", "llama3.1:8b"]
     mock_get.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_api_ollama_models_rejects_non_local_base_url(client):
+    with patch("backend.api.httpx.get") as mock_get:
+        response = await client.get("/api/ollama/models?base_url=http://example.com")
+
+    assert response.status_code == 400
+    data = await response.get_json()
+    assert data["success"] is False
+    assert "localhost" in data["message"]
+    mock_get.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_api_ollama_models_failure_is_sanitized(client):
+    with patch("backend.api.asyncio.to_thread", AsyncMock(side_effect=RuntimeError("ollama-secret"))):
+        response = await client.get("/api/ollama/models?base_url=http://127.0.0.1:11434/v1")
+
+    assert response.status_code == 502
+    data = await response.get_json()
+    assert data["success"] is False
+    assert data["message"] == "fetch_ollama_models_failed"
+    assert data["code"] == "fetch_ollama_models_failed"
+    assert data["models"] == []
+    assert "ollama-secret" not in str(data)
+
+
+@pytest.mark.asyncio
+async def test_api_logs_rejects_log_file_outside_data_root(client):
+    snapshot = _build_snapshot(
+        {
+            "api": {"presets": []},
+            "bot": {},
+            "logging": {"file": "C:/Windows/system32/drivers/etc/hosts"},
+        }
+    )
+    with patch.object(api_module.config_service, "get_snapshot", return_value=snapshot):
+        response = await client.get("/api/logs")
+
+    assert response.status_code == 400
+    data = await response.get_json()
+    assert data["success"] is False
+    assert "data directory" in data["message"]
 
 
 @pytest.mark.asyncio
@@ -1368,14 +1890,24 @@ async def test_api_backups_create_and_dry_run_restore(client, mock_manager):
     async def _fake_to_thread(func, *args, **kwargs):
         return func(*args, **kwargs)
 
+    mock_manager.is_running = False
+    growth_manager = MagicMock()
+    growth_manager.is_running = False
+
     with (
         patch("backend.api.asyncio.to_thread", AsyncMock(side_effect=_fake_to_thread)),
+        patch("backend.api.get_growth_manager", return_value=growth_manager),
         patch.object(api_module.backup_service, "create_backup", return_value={"id": "b1", "mode": "quick"}) as create_mock,
         patch.object(
             api_module.backup_service,
             "list_backups",
             return_value={"success": True, "backups": [{"id": "b1"}], "summary": {"latest_quick_backup_at": 1}},
         ) as list_mock,
+        patch.object(
+            api_module.config_service,
+            "get_snapshot",
+            return_value=_build_snapshot({"api": {}, "bot": {}, "logging": {}, "agent": {}, "services": {}}),
+        ),
         patch.object(
             api_module.backup_service,
             "build_restore_plan",
@@ -1396,7 +1928,100 @@ async def test_api_backups_create_and_dry_run_restore(client, mock_manager):
     dry_run_data = await dry_run_response.get_json()
     assert dry_run_data["success"] is True
     assert dry_run_data["dry_run"] is True
-    plan_mock.assert_called_once_with("b1")
+    plan_mock.assert_called_once_with("b1", allow_legacy_unverified=False)
+
+
+@pytest.mark.asyncio
+async def test_api_backups_create_replays_idempotent_response(client, mock_manager):
+    async def _fake_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    mock_manager.is_running = False
+    growth_manager = MagicMock()
+    growth_manager.is_running = False
+    headers = {"Idempotency-Key": "backup-idem-1"}
+
+    with (
+        patch("backend.api.asyncio.to_thread", AsyncMock(side_effect=_fake_to_thread)),
+        patch("backend.api.get_growth_manager", return_value=growth_manager),
+        patch.object(api_module.backup_service, "create_backup", return_value={"id": "b1", "mode": "quick"}) as create_mock,
+        patch.object(
+            api_module.backup_service,
+            "list_backups",
+            return_value={"success": True, "backups": [{"id": "b1"}], "summary": {"latest_quick_backup_at": 1}},
+        ) as list_mock,
+        patch.object(
+            api_module.config_service,
+            "get_snapshot",
+            return_value=_build_snapshot({"api": {}, "bot": {}, "logging": {}, "agent": {}, "services": {}}),
+        ),
+    ):
+        first = await client.post("/api/backups", json={"mode": "quick", "label": "nightly"}, headers=headers)
+        second = await client.post("/api/backups", json={"mode": "quick", "label": "nightly"}, headers=headers)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    second_data = await second.get_json()
+    assert second_data["success"] is True
+    assert second.headers.get("X-Idempotency-Replayed") == "1"
+    create_mock.assert_called_once_with("quick", label="nightly")
+    list_mock.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_api_backups_create_rejects_when_runtime_is_running(client, mock_manager):
+    mock_manager.is_running = True
+    growth_manager = MagicMock()
+    growth_manager.is_running = False
+
+    with patch("backend.api.get_growth_manager", return_value=growth_manager):
+        response = await client.post("/api/backups", json={"mode": "quick", "label": "nightly"})
+
+    assert response.status_code == 409
+    data = await response.get_json()
+    assert data["success"] is False
+    assert data["running"]["bot"] is True
+
+
+@pytest.mark.asyncio
+async def test_api_backups_restore_requires_backup_id_field(client, mock_manager):
+    response = await client.post(
+        "/api/backups/restore",
+        json={"path": "C:/temp/backup", "dry_run": True},
+    )
+    assert response.status_code == 400
+    data = await response.get_json()
+    assert data["success"] is False
+    assert "backup_id is required" in data["message"]
+
+
+@pytest.mark.asyncio
+async def test_api_backups_restore_defaults_to_dry_run(client, mock_manager):
+    async def _fake_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    with (
+        patch("backend.api.asyncio.to_thread", AsyncMock(side_effect=_fake_to_thread)),
+        patch.object(
+            api_module.config_service,
+            "get_snapshot",
+            return_value=_build_snapshot({"api": {}, "bot": {}, "logging": {}, "agent": {}, "services": {}}),
+        ),
+        patch.object(
+            api_module.backup_service,
+            "build_restore_plan",
+            return_value={"backup": {"id": "b1"}, "included_files": ["app_config.json"], "missing_files": [], "valid": True},
+        ) as plan_mock,
+        patch.object(api_module.backup_service, "apply_restore") as apply_mock,
+    ):
+        response = await client.post("/api/backups/restore", json={"backup_id": "b1"})
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["success"] is True
+    assert data["dry_run"] is True
+    plan_mock.assert_called_once_with("b1", allow_legacy_unverified=False)
+    apply_mock.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -1464,21 +2089,276 @@ async def test_api_backups_cleanup_supports_dry_run_and_apply(client, mock_manag
 
 
 @pytest.mark.asyncio
+async def test_api_backups_cleanup_failure_is_sanitized(client, mock_manager):
+    with patch("backend.api.asyncio.to_thread", AsyncMock(side_effect=RuntimeError("cleanup-secret"))):
+        response = await client.post(
+            "/api/backups/cleanup",
+            json={"keep_quick": 4, "keep_full": 2, "dry_run": False},
+        )
+
+    assert response.status_code == 500
+    data = await response.get_json()
+    assert data["success"] is False
+    assert data["message"] == "backup_cleanup_failed"
+    assert data["code"] == "backup_cleanup_failed"
+    assert "cleanup-secret" not in str(data)
+
+
+@pytest.mark.asyncio
+async def test_api_maintenance_lock_blocks_cleanup_apply(client, mock_manager):
+    lock = api_module.maintenance_lock
+    if lock.locked():
+        lock.release()
+    await lock.acquire()
+    try:
+        response = await client.post(
+            "/api/backups/cleanup",
+            json={"keep_quick": 4, "keep_full": 2, "dry_run": False},
+        )
+    finally:
+        if lock.locked():
+            lock.release()
+
+    assert response.status_code == 409
+    data = await response.get_json()
+    assert data["success"] is False
+    assert data["message"] == "maintenance_in_progress"
+
+
+@pytest.mark.asyncio
 async def test_api_backups_restore_applies_and_restarts_runtime(client, mock_manager):
     async def _fake_to_thread(func, *args, **kwargs):
         return func(*args, **kwargs)
 
+    events = []
+
+    async def _stop_growth(*args, **kwargs):
+        events.append("stop_growth")
+        return {"success": True, "message": "growth stopped"}
+
+    async def _start_growth(*args, **kwargs):
+        events.append("start_growth")
+        return {"success": True, "message": "growth started"}
+
+    async def _stop_bot(*args, **kwargs):
+        events.append("stop_bot")
+        return {"success": True, "message": "bot stopped"}
+
+    async def _start_bot(*args, **kwargs):
+        events.append("start_bot")
+        return {"success": True, "message": "bot started"}
+
+    async def _close_memory():
+        events.append("close_memory")
+
+    def _create_pre_restore(*args, **kwargs):
+        events.append("create_pre_restore")
+        return {"id": "pre-1", "mode": "quick"}
+
+    def _apply_restore(*args, **kwargs):
+        events.append("apply_restore")
+        return {"success": True, "restored_count": 1}
+
     growth_manager = MagicMock()
     growth_manager.is_running = True
-    growth_manager.stop = AsyncMock(return_value={"success": True, "message": "growth stopped"})
-    growth_manager.start = AsyncMock(return_value={"success": True, "message": "growth started"})
+    growth_manager.stop = AsyncMock(side_effect=_stop_growth)
+    growth_manager.start = AsyncMock(side_effect=_start_growth)
 
     mock_manager.is_running = True
-    mock_manager.stop = AsyncMock(return_value={"success": True, "message": "bot stopped"})
-    mock_manager.start = AsyncMock(return_value={"success": True, "message": "bot started"})
+    mock_manager.stop = AsyncMock(side_effect=_stop_bot)
+    mock_manager.start = AsyncMock(side_effect=_start_bot)
     mock_manager.memory_manager = MagicMock()
-    memory_close = AsyncMock()
+    memory_close = AsyncMock(side_effect=_close_memory)
     mock_manager.memory_manager.close = memory_close
+
+    with (
+        patch("backend.api.asyncio.to_thread", AsyncMock(side_effect=_fake_to_thread)),
+        patch("backend.api.get_growth_manager", return_value=growth_manager),
+        patch("backend.api.close_reply_quality_tracker", side_effect=lambda: events.append("close_reply_tracker")) as close_reply_tracker_mock,
+        patch.object(api_module, "_collect_restore_auth_checks", return_value={"success": True, "warning_count": 1, "warnings": [{"provider_id": "openai"}]}),
+        patch.object(
+            api_module.backup_service,
+            "build_restore_plan",
+            return_value={"backup": {"id": "b1"}, "included_files": ["app_config.json"], "missing_files": [], "valid": True},
+        ),
+        patch.object(api_module.backup_service, "create_backup", side_effect=_create_pre_restore),
+        patch.object(api_module.backup_service, "apply_restore", side_effect=_apply_restore),
+        patch.object(api_module.backup_service, "save_restore_result") as save_result_mock,
+        patch.object(api_module.config_service, "reload", return_value=_build_snapshot({"api": {}, "bot": {}, "logging": {}, "agent": {}, "services": {}})),
+    ):
+        response = await client.post("/api/backups/restore", json={"backup_id": "b1", "dry_run": False})
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["success"] is True
+    assert data["pre_restore_backup"]["id"] == "pre-1"
+    assert data["auth_restore_checks"]["warning_count"] == 1
+    mock_manager.stop.assert_awaited_once()
+    mock_manager.start.assert_awaited_once()
+    growth_manager.stop.assert_awaited_once()
+    growth_manager.start.assert_awaited_once()
+    memory_close.assert_awaited_once()
+    close_reply_tracker_mock.assert_called_once()
+    assert events.index("create_pre_restore") > events.index("stop_growth")
+    assert events.index("create_pre_restore") > events.index("stop_bot")
+    assert events.index("create_pre_restore") > events.index("close_memory")
+    assert events.index("create_pre_restore") > events.index("close_reply_tracker")
+    save_result_mock.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_api_backups_restore_fails_fast_when_stop_stage_returns_success_false(client, mock_manager):
+    async def _fake_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    growth_manager = MagicMock()
+    growth_manager.is_running = False
+
+    mock_manager.is_running = True
+    mock_manager.bot = MagicMock()
+    mock_manager.stop = AsyncMock(return_value={"success": False, "message": "bot stop rejected"})
+    mock_manager.start = AsyncMock(return_value={"success": True, "message": "bot started"})
+    mock_manager.memory_manager = None
+
+    with (
+        patch("backend.api.asyncio.to_thread", AsyncMock(side_effect=_fake_to_thread)),
+        patch("backend.api.get_growth_manager", return_value=growth_manager),
+        patch.object(
+            api_module.config_service,
+            "get_snapshot",
+            return_value=_build_snapshot({"api": {}, "bot": {}, "logging": {}, "agent": {}, "services": {}}),
+        ),
+        patch.object(
+            api_module.backup_service,
+            "build_restore_plan",
+            return_value={"backup": {"id": "b1"}, "included_files": ["app_config.json"], "missing_files": [], "valid": True},
+        ),
+        patch.object(api_module.backup_service, "create_backup", return_value={"id": "pre-1", "mode": "quick"}),
+        patch.object(api_module.backup_service, "apply_restore", return_value={"success": True, "restored_count": 1}) as apply_restore_mock,
+        patch.object(api_module.backup_service, "save_restore_result"),
+        patch.object(
+            api_module.config_service,
+            "reload",
+            return_value=_build_snapshot({"api": {}, "bot": {}, "logging": {}, "agent": {}, "services": {}}),
+        ),
+        patch.object(api_module, "_collect_restore_auth_checks", return_value={"success": True, "warning_count": 0, "warnings": []}),
+    ):
+        response = await client.post("/api/backups/restore", json={"backup_id": "b1", "dry_run": False})
+
+    assert response.status_code >= 400
+    data = await response.get_json()
+    assert data["success"] is False
+    apply_restore_mock.assert_not_called()
+    mock_manager.start.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_api_backups_restore_fails_when_restart_stage_returns_success_false(client, mock_manager):
+    async def _fake_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    growth_manager = MagicMock()
+    growth_manager.is_running = False
+
+    mock_manager.is_running = True
+    mock_manager.bot = MagicMock()
+    mock_manager.stop = AsyncMock(return_value={"success": True, "message": "bot stopped"})
+    mock_manager.start = AsyncMock(return_value={"success": False, "message": "bot restart failed"})
+    mock_manager.memory_manager = None
+
+    with (
+        patch("backend.api.asyncio.to_thread", AsyncMock(side_effect=_fake_to_thread)),
+        patch("backend.api.get_growth_manager", return_value=growth_manager),
+        patch.object(
+            api_module.config_service,
+            "get_snapshot",
+            return_value=_build_snapshot({"api": {}, "bot": {}, "logging": {}, "agent": {}, "services": {}}),
+        ),
+        patch.object(
+            api_module.backup_service,
+            "build_restore_plan",
+            return_value={"backup": {"id": "b1"}, "included_files": ["app_config.json"], "missing_files": [], "valid": True},
+        ),
+        patch.object(api_module.backup_service, "create_backup", return_value={"id": "pre-1", "mode": "quick"}),
+        patch.object(api_module.backup_service, "apply_restore", return_value={"success": True, "restored_count": 1}) as apply_restore_mock,
+        patch.object(api_module.backup_service, "save_restore_result"),
+        patch.object(
+            api_module.config_service,
+            "reload",
+            return_value=_build_snapshot({"api": {}, "bot": {}, "logging": {}, "agent": {}, "services": {}}),
+        ),
+        patch.object(api_module, "_collect_restore_auth_checks", return_value={"success": True, "warning_count": 0, "warnings": []}),
+    ):
+        response = await client.post("/api/backups/restore", json={"backup_id": "b1", "dry_run": False})
+
+    assert response.status_code >= 400
+    data = await response.get_json()
+    assert data["success"] is False
+    assert data["restart_results"]["bot"]["success"] is False
+    assert apply_restore_mock.call_count == 2
+    first_call = apply_restore_mock.call_args_list[0]
+    second_call = apply_restore_mock.call_args_list[1]
+    assert first_call.args == ("b1",)
+    assert first_call.kwargs == {"allow_legacy_unverified": False}
+    assert second_call.args == ("pre-1",)
+
+
+@pytest.mark.asyncio
+async def test_api_backups_restore_forwards_legacy_opt_in_flag(client, mock_manager):
+    async def _fake_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    growth_manager = MagicMock()
+    growth_manager.is_running = False
+    mock_manager.is_running = False
+    mock_manager.bot = None
+    mock_manager.memory_manager = None
+
+    with (
+        patch("backend.api.asyncio.to_thread", AsyncMock(side_effect=_fake_to_thread)),
+        patch("backend.api.get_growth_manager", return_value=growth_manager),
+        patch.object(
+            api_module.backup_service,
+            "build_restore_plan",
+            return_value={"backup": {"id": "legacy-1"}, "included_files": ["app_config.json"], "missing_files": [], "valid": True},
+        ) as plan_mock,
+        patch.object(api_module.backup_service, "create_backup", return_value={"id": "pre-legacy", "mode": "quick"}),
+        patch.object(api_module.backup_service, "apply_restore", return_value={"success": True, "restored_count": 1}) as apply_mock,
+        patch.object(api_module.backup_service, "save_restore_result"),
+        patch.object(api_module.config_service, "reload", return_value=_build_snapshot({"api": {}, "bot": {}, "logging": {}, "agent": {}, "services": {}})),
+    ):
+        response = await client.post(
+            "/api/backups/restore",
+            json={"backup_id": "legacy-1", "dry_run": False, "allow_legacy_unverified": True},
+        )
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["success"] is True
+    plan_mock.assert_called_once_with("legacy-1", allow_legacy_unverified=True)
+    apply_mock.assert_called_once_with("legacy-1", allow_legacy_unverified=True)
+
+
+@pytest.mark.asyncio
+async def test_api_backups_restore_attempts_pre_restore_rollback_when_apply_fails(client, mock_manager):
+    async def _fake_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    mock_manager.is_running = False
+    mock_manager.bot = None
+    mock_manager.memory_manager = None
+    growth_manager = MagicMock()
+    growth_manager.is_running = False
+
+    apply_calls = []
+
+    def _apply_restore(backup_ref, **kwargs):
+        apply_calls.append({"backup_ref": backup_ref, "kwargs": kwargs})
+        if backup_ref == "b1":
+            raise RuntimeError("restore failed")
+        if backup_ref == "pre-1":
+            return {"success": True, "restored_count": 1}
+        raise AssertionError("unexpected backup ref")
 
     with (
         patch("backend.api.asyncio.to_thread", AsyncMock(side_effect=_fake_to_thread)),
@@ -1489,19 +2369,404 @@ async def test_api_backups_restore_applies_and_restarts_runtime(client, mock_man
             return_value={"backup": {"id": "b1"}, "included_files": ["app_config.json"], "missing_files": [], "valid": True},
         ),
         patch.object(api_module.backup_service, "create_backup", return_value={"id": "pre-1", "mode": "quick"}),
-        patch.object(api_module.backup_service, "apply_restore", return_value={"success": True, "restored_count": 1}),
-        patch.object(api_module.backup_service, "save_restore_result") as save_result_mock,
+        patch.object(api_module.backup_service, "apply_restore", side_effect=_apply_restore),
+        patch.object(api_module.backup_service, "save_restore_result"),
         patch.object(api_module.config_service, "reload", return_value=_build_snapshot({"api": {}, "bot": {}, "logging": {}, "agent": {}, "services": {}})),
     ):
         response = await client.post("/api/backups/restore", json={"backup_id": "b1", "dry_run": False})
 
+    assert response.status_code == 500
+    data = await response.get_json()
+    assert data["success"] is False
+    assert data["rollback_result"]["success"] is True
+    assert apply_calls[0]["backup_ref"] == "b1"
+    assert apply_calls[1]["backup_ref"] == "pre-1"
+
+
+@pytest.mark.asyncio
+async def test_api_backups_restore_attempts_rollback_when_reload_fails_after_apply(client, mock_manager):
+    async def _fake_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    mock_manager.is_running = False
+    mock_manager.bot = None
+    mock_manager.memory_manager = None
+    growth_manager = MagicMock()
+    growth_manager.is_running = False
+
+    apply_calls = []
+    reload_calls = {"count": 0}
+
+    def _apply_restore(backup_ref, **kwargs):
+        apply_calls.append({"backup_ref": backup_ref, "kwargs": kwargs})
+        return {"success": True, "restored_count": 1}
+
+    def _reload(*args, **kwargs):
+        reload_calls["count"] += 1
+        if reload_calls["count"] == 1:
+            raise RuntimeError("reload failed")
+        return _build_snapshot({"api": {}, "bot": {}, "logging": {}, "agent": {}, "services": {}})
+
+    with (
+        patch("backend.api.asyncio.to_thread", AsyncMock(side_effect=_fake_to_thread)),
+        patch("backend.api.get_growth_manager", return_value=growth_manager),
+        patch.object(
+            api_module.backup_service,
+            "build_restore_plan",
+            return_value={"backup": {"id": "b1"}, "included_files": ["app_config.json"], "missing_files": [], "valid": True},
+        ),
+        patch.object(api_module.backup_service, "create_backup", return_value={"id": "pre-1", "mode": "quick"}),
+        patch.object(api_module.backup_service, "apply_restore", side_effect=_apply_restore),
+        patch.object(api_module.backup_service, "save_restore_result"),
+        patch.object(api_module.config_service, "reload", side_effect=_reload),
+    ):
+        response = await client.post("/api/backups/restore", json={"backup_id": "b1", "dry_run": False})
+
+    assert response.status_code == 500
+    data = await response.get_json()
+    assert data["success"] is False
+    assert data["rollback_result"]["success"] is True
+    assert data["message"] == "restore_backup_failed"
+    assert data["code"] == "restore_backup_failed"
+    assert apply_calls[0]["backup_ref"] == "b1"
+    assert apply_calls[1]["backup_ref"] == "pre-1"
+
+
+@pytest.mark.asyncio
+async def test_api_backups_restore_sanitizes_restart_exception_message(client, mock_manager):
+    async def _fake_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    mock_manager.is_running = True
+    mock_manager.stop = AsyncMock(return_value={"success": True, "message": "bot stopped"})
+    mock_manager.start = AsyncMock(side_effect=RuntimeError("bot restart secret"))
+    mock_manager.memory_manager = MagicMock()
+    mock_manager.memory_manager.close = AsyncMock(return_value=None)
+
+    growth_manager = MagicMock()
+    growth_manager.is_running = False
+
+    apply_calls = []
+
+    def _apply_restore(backup_ref, **kwargs):
+        apply_calls.append(backup_ref)
+        if backup_ref == "b1":
+            raise RuntimeError("restore failed")
+        return {"success": True, "restored_count": 1}
+
+    with (
+        patch("backend.api.asyncio.to_thread", AsyncMock(side_effect=_fake_to_thread)),
+        patch("backend.api.get_growth_manager", return_value=growth_manager),
+        patch.object(
+            api_module.backup_service,
+            "build_restore_plan",
+            return_value={"backup": {"id": "b1"}, "included_files": ["app_config.json"], "missing_files": [], "valid": True},
+        ),
+        patch.object(api_module.backup_service, "create_backup", return_value={"id": "pre-1", "mode": "quick"}),
+        patch.object(api_module.backup_service, "apply_restore", side_effect=_apply_restore),
+        patch.object(api_module.backup_service, "save_restore_result"),
+    ):
+        response = await client.post("/api/backups/restore", json={"backup_id": "b1", "dry_run": False})
+
+    assert response.status_code == 500
+    data = await response.get_json()
+    assert data["success"] is False
+    assert data["restart_results"]["bot"]["success"] is False
+    assert data["restart_results"]["bot"]["message"] == "restart_failed"
+    assert data["restart_results"]["bot"]["code"] == "restart_failed"
+    assert "bot restart secret" not in str(data)
+    assert apply_calls == ["b1", "pre-1"]
+
+
+@pytest.mark.asyncio
+async def test_api_backups_restore_recovers_runtime_when_stop_or_close_stage_fails(client, mock_manager):
+    async def _fake_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    async def _stop_growth(*args, **kwargs):
+        return {"success": True, "message": "growth stopped"}
+
+    async def _start_growth(*args, **kwargs):
+        return {"success": True, "message": "growth started"}
+
+    async def _stop_bot(*args, **kwargs):
+        return {"success": True, "message": "bot stopped"}
+
+    async def _start_bot(*args, **kwargs):
+        return {"success": True, "message": "bot started"}
+
+    async def _close_memory():
+        raise RuntimeError("close memory failed")
+
+    growth_manager = MagicMock()
+    growth_manager.is_running = True
+    growth_manager.stop = AsyncMock(side_effect=_stop_growth)
+    growth_manager.start = AsyncMock(side_effect=_start_growth)
+
+    mock_manager.is_running = True
+    mock_manager.stop = AsyncMock(side_effect=_stop_bot)
+    mock_manager.start = AsyncMock(side_effect=_start_bot)
+    mock_manager.memory_manager = MagicMock()
+    mock_manager.memory_manager.close = AsyncMock(side_effect=_close_memory)
+
+    with (
+        patch("backend.api.asyncio.to_thread", AsyncMock(side_effect=_fake_to_thread)),
+        patch("backend.api.get_growth_manager", return_value=growth_manager),
+        patch.object(
+            api_module.backup_service,
+            "build_restore_plan",
+            return_value={"backup": {"id": "b1"}, "included_files": ["app_config.json"], "missing_files": [], "valid": True},
+        ),
+        patch.object(api_module.backup_service, "create_backup") as create_backup_mock,
+        patch.object(api_module.backup_service, "apply_restore") as apply_restore_mock,
+        patch.object(api_module.backup_service, "save_restore_result"),
+    ):
+        response = await client.post("/api/backups/restore", json={"backup_id": "b1", "dry_run": False})
+
+    assert response.status_code == 500
+    data = await response.get_json()
+    assert data["success"] is False
+    assert data["pre_restore_backup"] is None
+    assert data["message"] == "restore_backup_failed"
+    assert data["code"] == "restore_backup_failed"
+    growth_manager.stop.assert_awaited_once()
+    mock_manager.stop.assert_awaited_once()
+    mock_manager.start.assert_awaited_once()
+    growth_manager.start.assert_awaited_once()
+    create_backup_mock.assert_not_called()
+    apply_restore_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_api_backups_restore_reports_invalid_files_message(client, mock_manager):
+    async def _fake_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    with (
+        patch("backend.api.asyncio.to_thread", AsyncMock(side_effect=_fake_to_thread)),
+        patch.object(
+            api_module.backup_service,
+            "build_restore_plan",
+            return_value={
+                "backup": {"id": "bad-1"},
+                "included_files": [],
+                "missing_files": [],
+                "invalid_files": ["../escape.txt"],
+                "valid": False,
+            },
+        ),
+    ):
+        response = await client.post("/api/backups/restore", json={"backup_id": "bad-1", "dry_run": False})
+
+    assert response.status_code == 400
+    data = await response.get_json()
+    assert data["success"] is False
+    assert "unsupported paths" in data["message"]
+
+
+@pytest.mark.asyncio
+async def test_api_data_controls_get_returns_supported_scopes(client, mock_manager):
+    async def _fake_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    with (
+        patch("backend.api.asyncio.to_thread", AsyncMock(side_effect=_fake_to_thread)),
+        patch.object(
+            api_module.data_control_service,
+            "build_clear_plan",
+            return_value={"success": True, "scopes": ["memory"], "targets": [], "target_count": 0, "existing_target_count": 0, "reclaimable_bytes": 0},
+        ) as plan_mock,
+        patch.object(
+            api_module.data_control_service,
+            "list_supported_scopes",
+            return_value=["memory", "usage", "export_rag"],
+        ),
+    ):
+        response = await client.get("/api/data_controls")
+
     assert response.status_code == 200
     data = await response.get_json()
     assert data["success"] is True
-    assert data["pre_restore_backup"]["id"] == "pre-1"
-    mock_manager.stop.assert_awaited_once()
-    mock_manager.start.assert_awaited_once()
-    growth_manager.stop.assert_awaited_once()
-    growth_manager.start.assert_awaited_once()
-    memory_close.assert_awaited_once()
-    save_result_mock.assert_called_once()
+    assert data["supported_scopes"] == ["memory", "usage", "export_rag"]
+    plan_mock.assert_called_once_with(None)
+
+
+@pytest.mark.asyncio
+async def test_api_data_controls_clear_supports_dry_run_and_apply(client, mock_manager):
+    async def _fake_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    mock_manager.is_running = False
+    growth_manager = MagicMock()
+    growth_manager.is_running = False
+
+    with (
+        patch("backend.api.asyncio.to_thread", AsyncMock(side_effect=_fake_to_thread)),
+        patch("backend.api.get_growth_manager", return_value=growth_manager),
+        patch.object(
+            api_module.data_control_service,
+            "clear",
+            side_effect=[
+                {
+                    "success": True,
+                    "dry_run": True,
+                    "scopes": ["memory"],
+                    "existing_target_count": 2,
+                    "reclaimable_bytes": 4096,
+                },
+                {
+                    "success": True,
+                    "dry_run": False,
+                    "scopes": ["memory"],
+                    "deleted_count": 2,
+                    "reclaimed_bytes": 4096,
+                    "failed_targets": [],
+                },
+            ],
+        ) as clear_mock,
+    ):
+        preview_response = await client.post(
+            "/api/data_controls/clear",
+            json={"scopes": ["memory"], "dry_run": True},
+        )
+        apply_response = await client.post(
+            "/api/data_controls/clear",
+            json={"scopes": ["memory"], "dry_run": False},
+        )
+
+    assert preview_response.status_code == 200
+    preview_data = await preview_response.get_json()
+    assert preview_data["success"] is True
+    assert preview_data["dry_run"] is True
+
+    assert apply_response.status_code == 200
+    apply_data = await apply_response.get_json()
+    assert apply_data["success"] is True
+    assert apply_data["dry_run"] is False
+    assert apply_data["deleted_count"] == 2
+
+    assert clear_mock.call_args_list[0].args == (["memory"],)
+    assert clear_mock.call_args_list[0].kwargs == {"apply": False}
+    assert clear_mock.call_args_list[1].args == (["memory"],)
+    assert clear_mock.call_args_list[1].kwargs == {"apply": True}
+
+
+@pytest.mark.asyncio
+async def test_api_data_controls_clear_apply_replays_idempotent_response(client, mock_manager):
+    async def _fake_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    mock_manager.is_running = False
+    growth_manager = MagicMock()
+    growth_manager.is_running = False
+    headers = {"Idempotency-Key": "data-clear-idem-1"}
+
+    with (
+        patch("backend.api.asyncio.to_thread", AsyncMock(side_effect=_fake_to_thread)),
+        patch("backend.api.get_growth_manager", return_value=growth_manager),
+        patch.object(
+            api_module.data_control_service,
+            "clear",
+            return_value={
+                "success": True,
+                "dry_run": False,
+                "scopes": ["memory"],
+                "deleted_count": 2,
+                "reclaimed_bytes": 4096,
+                "failed_targets": [],
+            },
+        ) as clear_mock,
+    ):
+        first = await client.post(
+            "/api/data_controls/clear",
+            json={"scopes": ["memory"], "dry_run": False},
+            headers=headers,
+        )
+        second = await client.post(
+            "/api/data_controls/clear",
+            json={"scopes": ["memory"], "dry_run": False},
+            headers=headers,
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    second_data = await second.get_json()
+    assert second_data["success"] is True
+    assert second.headers.get("X-Idempotency-Replayed") == "1"
+    clear_mock.assert_called_once_with(["memory"], apply=True)
+
+
+@pytest.mark.asyncio
+async def test_api_data_controls_apply_closes_local_sqlite_handles(client, mock_manager):
+    async def _fake_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    mock_manager.is_running = False
+    memory_manager = MagicMock()
+    memory_manager.close = AsyncMock()
+    mock_manager.memory_manager = memory_manager
+    growth_manager = MagicMock()
+    growth_manager.is_running = False
+
+    with (
+        patch("backend.api.asyncio.to_thread", AsyncMock(side_effect=_fake_to_thread)),
+        patch("backend.api.get_growth_manager", return_value=growth_manager),
+        patch("backend.api.close_reply_quality_tracker") as close_tracker_mock,
+        patch.object(
+            api_module.data_control_service,
+            "clear",
+            return_value={
+                "success": True,
+                "dry_run": False,
+                "scopes": ["memory"],
+                "deleted_count": 1,
+                "reclaimed_bytes": 128,
+                "failed_targets": [],
+            },
+        ),
+    ):
+        response = await client.post(
+            "/api/data_controls/clear",
+            json={"scopes": ["memory"], "dry_run": False},
+        )
+
+    assert response.status_code == 200
+    memory_manager.close.assert_awaited_once()
+    assert mock_manager.memory_manager is None
+    close_tracker_mock.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_api_data_controls_apply_requires_explicit_scopes(client, mock_manager):
+    mock_manager.is_running = False
+    growth_manager = MagicMock()
+    growth_manager.is_running = False
+
+    with patch("backend.api.get_growth_manager", return_value=growth_manager):
+        response = await client.post(
+            "/api/data_controls/clear",
+            json={"dry_run": False},
+        )
+
+    assert response.status_code == 400
+    data = await response.get_json()
+    assert data["success"] is False
+    assert "scopes is required" in data["message"]
+
+
+@pytest.mark.asyncio
+async def test_api_data_controls_apply_rejects_when_runtime_is_running(client, mock_manager):
+    mock_manager.is_running = True
+    growth_manager = MagicMock()
+    growth_manager.is_running = False
+
+    with patch("backend.api.get_growth_manager", return_value=growth_manager):
+        response = await client.post(
+            "/api/data_controls/clear",
+            json={"scopes": ["memory"], "dry_run": False},
+        )
+
+    assert response.status_code == 409
+    data = await response.get_json()
+    assert data["success"] is False
+    assert data["running"]["bot"] is True

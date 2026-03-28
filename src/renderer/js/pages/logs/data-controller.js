@@ -42,6 +42,17 @@ function updateMeta(page, deps = {}) {
     updateMetaView(page, page._allLogs.length, page._visibleLogs.length);
 }
 
+function markRefreshRequest(page) {
+    const nextSeq = Number(page._refreshSeq || 0) + 1;
+    page._refreshSeq = nextSeq;
+    page._latestRefreshSeq = nextSeq;
+    return nextSeq;
+}
+
+function isLatestRefreshRequest(page, seq) {
+    return page._latestRefreshSeq === seq;
+}
+
 export function applyFilters(page, deps = {}) {
     const keyword = page._keyword;
     const level = page._level;
@@ -71,6 +82,7 @@ export async function refreshLogs(page, options = {}, deps = {}) {
     const container = page.$('#log-content');
     const { silent = false } = options;
     const currentToast = getToast(deps);
+    const requestSeq = markRefreshRequest(page);
 
     if (!page.getState('bot.connected')) {
         page._allLogs = [];
@@ -88,6 +100,9 @@ export async function refreshLogs(page, options = {}, deps = {}) {
 
     try {
         const result = await getApiService(deps).getLogs(page._lineCount);
+        if (!isLatestRefreshRequest(page, requestSeq)) {
+            return;
+        }
         if (!result?.success) {
             throw new Error(result?.message || LOG_TEXT.loadFailed);
         }
@@ -100,6 +115,9 @@ export async function refreshLogs(page, options = {}, deps = {}) {
             visible: page._visibleLogs.length,
         });
     } catch (error) {
+        if (!isLatestRefreshRequest(page, requestSeq)) {
+            return;
+        }
         console.error('[LogsPage] load failed:', error);
         if (container) {
             container.textContent = currentToast.getErrorMessage(error, LOG_TEXT.loadFailed);
@@ -165,11 +183,16 @@ export async function copyLogs(page, deps = {}) {
     }
 }
 
-export function exportLogs(page, deps = {}) {
+export async function exportLogs(page, deps = {}) {
     const currentToast = getToast(deps);
     const downloader = deps.downloadLogTextFile || downloadLogTextFile;
     const nowFn = deps.nowFn || Date.now;
     const content = page._visibleLogs.join('\n');
-    downloader(`wechat-ai-assistant-logs-${nowFn()}.log`, content || '');
-    currentToast.success(LOG_TEXT.exported);
+    try {
+        await Promise.resolve(downloader(`wechat-ai-assistant-logs-${nowFn()}.log`, content || ''));
+        currentToast.success(LOG_TEXT.exported);
+    } catch (error) {
+        console.error('[LogsPage] export failed:', error);
+        currentToast.error(currentToast.getErrorMessage(error, '日志导出失败'));
+    }
 }

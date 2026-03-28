@@ -1,6 +1,5 @@
-/**
- * 微信 AI 助手渲染进程入口。
- */
+﻿/**
+ * 闂佽娴烽弫濠氬磻婵犲洤绐楅柡鍥╁枔閳?AI 闂傚倷绀侀幉锟犲蓟閿熺姴鐤炬繝濠傚濞呯姵绻濇繝鍌氭殧闁逞屽墯鐢€崇暦閿濆棗绶為悘鐐舵閼搭垶姊洪崫鍕垫Т闁哄懏绮庣划娆撳箻鐠囪尙鍘烘繝闈涘€婚…鍫㈢矆閸岀偞鐓忓璺虹墕閸旀氨绱撳鍡樺磳闁? */
 
 if (typeof window !== 'undefined' && typeof window.dragEvent === 'undefined') {
     window.dragEvent = window.DragEvent;
@@ -25,6 +24,7 @@ import {
     shouldCompleteFirstRun,
     shouldShowFirstRunGuide,
 } from './app/readiness-helpers.js';
+import { setupGlobalButtonFeedback } from './app/button-feedback.js';
 
 const DEFAULT_IDLE_DELAY_MS = 15 * 60 * 1000;
 const AUTO_WAKE_PAGES = new Set(['dashboard', 'costs', 'messages', 'models', 'logs']);
@@ -72,12 +72,16 @@ class App {
         this._eventSource = null;
         this._sseReconnectTimer = null;
         this._sseReconnectAttempt = 0;
+        this._pageSwitchInProgress = false;
     }
 
     async init() {
-        console.log('[App] 正在初始化...');
+        console.log('[App] 濠电姵顔栭崰妤冩崲閹邦喖绶ら柦妯侯檧閼版寧銇勮箛鎾跺缂佲偓閸℃绡€闂傚牊绋掗敍宥嗙箾閸忕⒈娈滈柡?..');
 
         notificationService.init();
+        if (typeof document !== 'undefined') {
+            setupGlobalButtonFeedback(document);
+        }
         await this._runInitStep('apiService.init', () => apiService.init());
         await this._runInitStep('_setupRuntimeIdleState', () => this._setupRuntimeIdleState());
         await this._runInitStep('_loadFirstRunState', () => this._loadFirstRunState());
@@ -85,8 +89,6 @@ class App {
         await this._runInitStep('_setupVersion', () => this._setupVersion());
         await this._runInitStep('_setupUpdater', () => this._setupUpdater());
 
-        this._bindGlobalEvents();
-        this._bindKeyboardShortcuts();
         this._setupCloseChoiceModal();
         this._setupConfirmModal();
         this._setupUpdateModal();
@@ -95,6 +97,8 @@ class App {
         for (const [pageName, page] of Object.entries(this.pages)) {
             await this._runInitStep(`${pageName}.onInit`, () => page.onInit());
         }
+        this._bindGlobalEvents();
+        this._bindKeyboardShortcuts();
 
         await this._runInitStep('_ensureLightweightBackend', () => this._ensureLightweightBackend());
         await this._runInitStep('_checkBackendConnection', () => this._checkBackendConnection());
@@ -102,7 +106,7 @@ class App {
         const initialPage = stateManager.get('currentPage') || 'dashboard';
         await this._runInitStep('_switchPage', () => this._switchPage(initialPage, { source: 'init' }));
         this._startStatusRefresh();
-        console.log('[App] 初始化完成');
+        console.log('[App] initialized');
 
     }
 
@@ -110,8 +114,8 @@ class App {
         try {
             return await fn();
         } catch (error) {
-            console.error(`[App] 初始化步骤失败: ${stepName}`, error);
-            notificationService.error(`初始化步骤失败：${stepName}`);
+            console.error(`[App] 闂傚倷绀侀幉锛勬暜濡ゅ啯宕查柛宀€鍎戠紞鏍煙閻楀牊绶茬紒鈧畝鍕厸鐎广儱娴烽崢娑㈡煕閺傚灝顏╅摶鏍煟濮楀棗鏋涢柍褜鍓氬ú鐔镐繆閻㈢绠ｉ柣妯哄暱椤? ${stepName}`, error);
+            notificationService.error(`Initialization step failed: ${stepName}`);
             return null;
         }
     }
@@ -226,7 +230,12 @@ class App {
             'updater.downloadProgress': Number(updateState.downloadProgress || 0),
             'updater.readyToInstall': !!updateState.readyToInstall,
             'updater.downloadedVersion': updateState.downloadedVersion || '',
-            'updater.downloadedInstallerPath': updateState.downloadedInstallerPath || ''
+            'updater.downloadedInstallerPath': updateState.downloadedInstallerPath || '',
+            'updater.downloadedInstallerSha256': updateState.downloadedInstallerSha256 || '',
+            'updater.checksumAssetUrl': updateState.checksumAssetUrl || '',
+            'updater.checksumExpected': updateState.checksumExpected || '',
+            'updater.checksumActual': updateState.checksumActual || '',
+            'updater.checksumVerified': !!updateState.checksumVerified,
         });
 
         this._updateVersionText();
@@ -241,7 +250,7 @@ class App {
             this._lastUpdateToastVersion !== nextVersion
         ) {
             this._lastUpdateToastVersion = nextVersion;
-            notificationService.info(`发现新版本 v${nextVersion}，可在关于页下载更新。`, 5000);
+            notificationService.info(`Update available: v${nextVersion}`, 5000);
         }
 
         this._maybePromptForUpdate(options);
@@ -339,17 +348,17 @@ class App {
 
     async _startBackendWithFeedback() {
         try {
-            notificationService.info('正在启动 Python 服务...');
+            notificationService.info('Starting Python backend service...');
             await this._wakeBackend();
 
             if (!stateManager.get('bot.connected')) {
-                notificationService.error('Python 服务启动失败，请检查环境或日志');
+                notificationService.error('Python backend failed to start.');
             } else {
-                notificationService.success('Python 服务已连接');
+                notificationService.success('Python backend started.');
             }
         } catch (error) {
             console.error('[App] backend start failed:', error);
-            notificationService.error('Python 服务启动失败，请检查环境或日志');
+            notificationService.error('Python backend failed to start.');
         }
     }
 
@@ -471,7 +480,7 @@ class App {
 
             if (key === 'f5') {
                 event.preventDefault();
-                notificationService.info('正在刷新状态...');
+                notificationService.info('濠电姵顔栭崰妤冩崲閹邦喖绶ら柦妯侯檧閼版寧銇勮箛鎾跺缂佲偓閸℃稒鈷戦柛顭戝櫘閸庢劙鏌ｉ幘顖氫壕闂傚倷鑳剁划顖炩€﹂崼銉ユ槬闁哄稁鍘奸悞?..');
                 this._refreshStatus();
                 return;
             }
@@ -510,6 +519,11 @@ class App {
                 this._switchPage('logs');
                 return;
             }
+            if (key === '7') {
+                event.preventDefault();
+                this._switchPage('about');
+                return;
+            }
             if (key === 'r') {
                 event.preventDefault();
                 void this._restartBotFromShortcut();
@@ -535,12 +549,12 @@ class App {
 
     async _restartBotFromShortcut() {
         try {
-            notificationService.info('正在重启机器人...');
+            notificationService.info('濠电姵顔栭崰妤冩崲閹邦喖绶ら柦妯侯檧閼版寧銇勮箛鎾跺闁绘挸鍊婚埀顒€绠嶉崕閬嶅箠韫囨稑纾挎繛鍡樻尰閻撴盯鏌涢锝囩畺闁诡垰鐗婄换娑㈠川椤旇偐鐟茬紓?..');
             const result = await apiService.restartBot();
             notificationService.show(result.message, result.success ? 'success' : 'error');
             await this._refreshStatus();
         } catch (error) {
-            notificationService.error('快捷键重启失败');
+            notificationService.error('Restart failed.');
 
         }
     }
@@ -566,11 +580,11 @@ class App {
             const paused = stateManager.get('bot.paused');
             if (statusText) {
                 if (!running) {
-                    statusText.textContent = '机器人已停止';
+                    statusText.textContent = 'Bot is stopped.';
                 } else if (paused) {
-                    statusText.textContent = '机器人已暂停';
+                    statusText.textContent = 'Bot is paused.';
                 } else {
-                    statusText.textContent = '机器人运行中';
+                    statusText.textContent = 'Bot is running.';
                 }
             }
 
@@ -647,12 +661,12 @@ class App {
         });
 
         window.appConfirm = (options = {}) => {
-            const title = String(options.title || '确认操作').trim();
-            const message = String(options.message || '确认是否继续？').trim();
-            const kicker = String(options.kicker || '操作确认').trim();
+            const title = String(options.title || 'Confirm action').trim();
+            const message = String(options.message || 'Please confirm this action.').trim();
+            const kicker = String(options.kicker || 'Please confirm').trim();
             const subtitle = String(options.subtitle || '').trim();
-            const confirmText = String(options.confirmText || '确认').trim();
-            const cancelText = String(options.cancelText || '取消').trim();
+            const confirmText = String(options.confirmText || 'Confirm').trim();
+            const cancelText = String(options.cancelText || 'Cancel').trim();
 
             const kickerElem = document.getElementById('confirm-modal-kicker');
             const titleElem = document.getElementById('confirm-modal-title');
@@ -666,7 +680,7 @@ class App {
                 titleElem.textContent = title;
             }
             if (subtitleElem) {
-                subtitleElem.textContent = subtitle || '请确认是否继续执行当前操作。';
+                subtitleElem.textContent = subtitle || 'This action cannot be undone.';
             }
             if (messageElem) {
                 messageElem.textContent = message;
@@ -721,21 +735,41 @@ class App {
             if (!latestVersion) {
                 return;
             }
-            const result = await window.electronAPI.skipUpdateVersion(latestVersion);
-            if (!result?.success) {
-                notificationService.warning(result?.error || '跳过版本失败');
-                return;
+            btnSkip.disabled = true;
+            try {
+                const result = await window.electronAPI.skipUpdateVersion(latestVersion);
+                if (!result?.success) {
+                    const errorText = String(result?.error || '').trim();
+                    if (/(sha256|checksum|sha256sums)/i.test(errorText)) {
+                        await this._openUpdateDownload();
+                        notificationService.info('Checksum metadata missing, opening release page.');
+                        return;
+                    }
+                    notificationService.warning(result?.error || 'Skip update failed.');
+                    return;
+                }
+                notificationService.info(`闂佽姘﹂～澶愭偤閺囩姳鐒婃い蹇撶墛閸婂鏌ㄩ弮鍥撳ù?v${latestVersion}`);
+                closeModal();
+            } catch (error) {
+                notificationService.error('Failed to skip this version.');
+            } finally {
+                btnSkip.disabled = false;
             }
-            notificationService.info(`已跳过 v${latestVersion}`);
-            closeModal();
         });
 
         btnAction?.addEventListener('click', async () => {
-            if (stateManager.get('updater.readyToInstall')) {
-                await this._installDownloadedUpdate();
-                return;
+            btnAction.disabled = true;
+            try {
+                if (stateManager.get('updater.readyToInstall')) {
+                    await this._installDownloadedUpdate();
+                    return;
+                }
+                await this._downloadUpdate();
+            } catch (error) {
+                notificationService.error('Update operation failed.');
+            } finally {
+                btnAction.disabled = false;
             }
-            await this._downloadUpdate();
         });
 
         this._renderUpdateModal();
@@ -894,8 +928,8 @@ class App {
         title.textContent = normalized.summary.title;
         subtitle.textContent = normalized.summary.detail;
         summary.textContent = blockingChecks.length > 0
-            ? `先完成这 ${blockingChecks.length} 项，应用就更接近“开箱即用”。`
-            : '先补齐下面的阻塞项，再启动机器人会更稳妥。';
+            ? `开箱即用检查还有 ${blockingChecks.length} 项待处理。`
+            : 'All required checks are complete. You can continue.';
         settingsButton.hidden = !blockingChecks.some((check) => check.action === 'open_settings');
 
         list.textContent = '';
@@ -1020,22 +1054,32 @@ class App {
             modal?.classList.remove('active');
             stateManager.set('readiness.firstRunGuideDismissed', true);
             await this._switchPage('settings', { source: 'readiness' });
-            notificationService.info('已切换到设置页，请补齐配置后再回来重新检查。');
+            notificationService.info('Switched to settings page. Complete setup and retry.');
             return;
         }
 
         if (normalizedAction === 'open_wechat') {
-            modal?.classList.remove('active');
-            stateManager.set('readiness.firstRunGuideDismissed', true);
             try {
                 if (window.electronAPI?.openWeChat) {
-                    await window.electronAPI.openWeChat();
-                    notificationService.success('正在打开微信客户端...');
+                    const result = await window.electronAPI.openWeChat();
+                    if (result?.success) {
+                        modal?.classList.remove('active');
+                        stateManager.set('readiness.firstRunGuideDismissed', true);
+                        notificationService.success(result?.message || '婵犳鍠楃换鎰緤閽樺鑰挎い蹇撶墕缁犮儵鏌熼幆褏锛嶇痪鎹愬吹閳ь剛鏁婚崑濠囧窗閺囩喓鈹嶅┑鐘插閸嬫捇鐛崹顔句痪闂佺硶鏅滅粙鎾跺垝?..');
+                    } else {
+                        stateManager.set('readiness.firstRunGuideDismissed', false);
+                        modal?.classList.add('active');
+                        notificationService.error(result?.error || result?.message || 'Failed to open WeChat client');
+                    }
                 } else {
-                    notificationService.info('请先手动打开并登录微信客户端。');
+                    stateManager.set('readiness.firstRunGuideDismissed', false);
+                    modal?.classList.add('active');
+                    notificationService.info('Please open and sign in to WeChat manually.');
                 }
             } catch (error) {
-                notificationService.error('打开微信客户端失败');
+                stateManager.set('readiness.firstRunGuideDismissed', false);
+                modal?.classList.add('active');
+                notificationService.error('Failed to open WeChat client');
             }
             await this._refreshStatus({ force: true, refreshReadiness: true });
             return;
@@ -1045,23 +1089,23 @@ class App {
             modal?.classList.remove('active');
             stateManager.set('readiness.firstRunGuideDismissed', true);
             if (!window.electronAPI?.restartAppAsAdmin) {
-                notificationService.warning('当前环境暂不支持自动提权重启，请手动以管理员身份重新启动应用。');
+                notificationService.warning('This environment does not support automatic admin relaunch.');
                 return;
             }
 
             try {
                 const result = await window.electronAPI.restartAppAsAdmin();
                 if (result?.success) {
-                    notificationService.success(result.message || '正在以管理员身份重新启动应用...');
+                    notificationService.success(result.message || '濠电姵顔栭崰妤冩崲閹邦喖绶ら柦妯侯檧閼版寧銇勮箛鎾村櫧妞も晝鍏橀弻鏇熺珶椤栨俺瀚伴柟顔荤窔濮婃椽鎳￠妶鍛捕濠碘槅鍋呴〃濠囩嵁婢舵劕绠柣锝呰嫰瑜板棗顪冮妶鍡楀闁逞屽墲濞呮洟寮抽崨瀛樷拻濞达絿鎳撶徊鑽ょ磼婢跺本鏆€殿喚绮换婵嬪炊瑜戣婵＄偑鍊栭悧妤呮嚌閹规劦鏉介梻浣告贡閸樠囨偤閵娿儺娼栧┑鐘宠壘閺?..');
                     return;
                 }
                 if (result?.canceled) {
-                    notificationService.info(result.message || '已取消管理员权限授权');
+                    notificationService.info(result.message || 'Admin restart was canceled');
                     return;
                 }
-                notificationService.error(result?.message || '管理员重启失败');
+                notificationService.error(result?.message || 'Admin restart failed');
             } catch (error) {
-                notificationService.error('管理员重启失败');
+                notificationService.error('Admin restart failed');
             }
             return;
         }
@@ -1080,69 +1124,106 @@ class App {
 
     async _exportDiagnosticsSnapshot() {
         if (!window.electronAPI?.exportDiagnosticsSnapshot) {
-            notificationService.warning('当前版本暂不支持导出诊断快照。');
+            notificationService.warning('Diagnostics snapshot export is not supported in this environment.');
             return;
         }
 
         try {
             const result = await window.electronAPI.exportDiagnosticsSnapshot();
             if (result?.success) {
-                notificationService.success(result.message || '诊断快照已导出');
+                notificationService.success(result.message || 'Diagnostics snapshot exported.');
                 return;
             }
             if (!result?.canceled) {
-                notificationService.error(result?.message || '导出诊断快照失败');
+                notificationService.error(result?.message || 'Failed to export diagnostics snapshot.');
             }
         } catch (error) {
-            notificationService.error('导出诊断快照失败');
+            notificationService.error('Failed to export diagnostics snapshot.');
         }
     }
 
     async _downloadUpdate() {
-        if (window.electronAPI?.downloadUpdate) {
-            const result = await window.electronAPI.downloadUpdate();
-            if (!result?.success) {
-                notificationService.warning(result?.error || '下载安装包失败');
+        try {
+            if (window.electronAPI?.downloadUpdate) {
+                const result = await window.electronAPI.downloadUpdate();
+                if (!result?.success) {
+                    const errorMessage = result?.error || 'Failed to download installer';
+                    if (this._shouldFallbackToReleasePage(errorMessage) && window.electronAPI?.openUpdateDownload) {
+                        const openResult = await window.electronAPI.openUpdateDownload();
+                        if (openResult?.success) {
+                            notificationService.info('Checksum metadata missing. Opened release page for full installer.');
+                            return;
+                        }
+                    }
+                    notificationService.warning(errorMessage);
+                    return;
+                }
+                if (result?.alreadyDownloaded) {
+                    notificationService.info('Update installer already downloaded.');
+                } else {
+                    notificationService.info('闁诲孩顔栭崰鎺楀磻閹炬枼鏀芥い鏃傗拡閸庡海绱掑Δ鈧幊蹇擃焽椤忓牊鍤嶉柕澶涘閸戜粙姊洪崫鍕偓鍛婃償濠婂懏顫曟繝闈涚墛鐎氭艾顪冪€ｎ亞宀告俊顐畵閺?..');
+                }
+                this._openUpdateModal();
                 return;
             }
-            if (result?.alreadyDownloaded) {
-                notificationService.info('更新安装包已下载完成');
-            } else {
-                notificationService.info('开始下载更新，请稍候...');
-            }
-            this._openUpdateModal();
-            return;
+            await this._openUpdateDownload();
+        } catch (error) {
+            notificationService.error('Failed to download installer, please retry later.');
         }
-        await this._openUpdateDownload();
+    }
+
+    _shouldFallbackToReleasePage(errorMessage = '') {
+        const normalized = String(errorMessage || '').trim();
+        if (!normalized) {
+            return false;
+        }
+        return /(sha256|checksum|SHA256SUMS)/i.test(normalized);
     }
 
     async _installDownloadedUpdate() {
-        if (!window.electronAPI?.installDownloadedUpdate) {
-            notificationService.warning('当前环境不支持安装更新');
-            return;
-        }
+        try {
+            if (!window.electronAPI?.installDownloadedUpdate) {
+                notificationService.warning('Installing updates is not supported in this environment.');
+                return;
+            }
 
-        const result = await window.electronAPI.installDownloadedUpdate();
-        if (!result?.success) {
-            notificationService.warning(result?.error || '启动更新安装失败');
-            return;
+            const result = await window.electronAPI.installDownloadedUpdate();
+            if (!result?.success) {
+                notificationService.warning(result?.error || 'Failed to start update installation.');
+                return;
+            }
+            notificationService.info('濠电姵顔栭崰妤冩崲閹邦喖绶ら柦妯侯檧閼版寧銇勮箛鎾跺闁绘帒顭烽弻宥堫檨闁告挾鍠庨悾宄扳枎閹惧厖绱堕梺鍛婃处閸樺ジ鎮鹃妸鈺傗拺婵炶尙绮繛鍥煕閺傝法鐒搁柟宕囧枛閹垽鎮℃惔銇版洖顪冮妶鍡欏闁艰宕橀·鍕⒑鐠囧弶鎹ｉ柟铏崌钘濋柟璺哄婢跺绡€闁告洦鍘鹃悡鎾绘煟鎼搭垳绉靛ù婊呭仧閸?..');
+        } catch (error) {
+            notificationService.error('Failed to launch update installer.');
         }
-        notificationService.info('正在退出应用并启动安装程序...');
     }
 
     async _openUpdateDownload() {
-        if (!window.electronAPI?.openUpdateDownload) {
-            return;
-        }
+        try {
+            if (!window.electronAPI?.openUpdateDownload) {
+                return;
+            }
 
-        const result = await window.electronAPI.openUpdateDownload();
-        if (!result?.success) {
-            notificationService.warning('未找到 GitHub Releases 下载地址。');
+            const result = await window.electronAPI.openUpdateDownload();
+            if (!result?.success) {
+                notificationService.warning('GitHub Releases URL not found.');
+            }
+        } catch (error) {
+            notificationService.warning('Failed to open download page, please retry later.');
         }
     }
 
     async _switchPage(pageName, options = {}) {
-        const nextPageName = this.pages[pageName] ? pageName : 'dashboard';
+        const requestedPageName = String(pageName || '').trim();
+        let nextPageName = requestedPageName;
+        if (!this.pages[nextPageName]) {
+            if (String(options?.source || '').trim() === 'init') {
+                nextPageName = 'dashboard';
+            } else {
+                notificationService.warning(`闂傚倷鑳堕崕鐢稿疾閳哄懎绐楁俊銈呮噺閸嬪鏌ㄥ┑鍡橆棑濞存粍绮撻弻锝夊閻樺啿鏆堝┑鈩冦仠閸斿矂鍩ユ径鎰鐎规洖娉﹂姀銈嗙厽閹烘娊宕濋幋婵堟殾闁绘垼袙閳ь剨绠撻獮鎺楀籍閸屾粌鐐?{requestedPageName || 'unknown'}`);
+                return;
+            }
+        }
         const nextPage = this.pages[nextPageName];
         if (!nextPage) {
             return;
@@ -1153,45 +1234,86 @@ class App {
             && stateManager.get('currentPage') === nextPageName
             && typeof nextPage.isActive === 'function'
             && nextPage.isActive()
+            && !this._pageSwitchInProgress
         ) {
             return;
         }
 
         const switchToken = (this._pageSwitchSeq || 0) + 1;
         this._pageSwitchSeq = switchToken;
+        this._pageSwitchInProgress = true;
         const previousPage = this.currentPage;
+        const previousPageName = this.pages[stateManager.get('currentPage')]
+            ? String(stateManager.get('currentPage'))
+            : (Object.entries(this.pages).find(([, page]) => page === previousPage)?.[0] || 'dashboard');
 
-        if (previousPage && previousPage !== nextPage) {
-            await previousPage.onLeave();
+        try {
+            if (previousPage && previousPage !== nextPage) {
+                await previousPage.onLeave();
+                if (switchToken !== this._pageSwitchSeq) {
+                    return;
+                }
+            }
+
+            if (!this._syncPageVisibility(nextPageName)) {
+                throw new Error(`missing page container: page-${nextPageName}`);
+            }
+
+            stateManager.set('currentPage', nextPageName);
+            this.currentPage = nextPage;
+
+            await this._ensureBackendForPage(nextPageName, options);
             if (switchToken !== this._pageSwitchSeq) {
                 return;
             }
-        }
 
+            if (this.currentPage === nextPage) {
+                await nextPage.onEnter();
+                if (switchToken !== this._pageSwitchSeq) {
+                    return;
+                }
+            }
+
+            console.log(`[App] 闂傚倷绀侀幉锛勬暜閹烘嚚娲晝閳ь剟鎮鹃悜钘夎摕闁靛鍎抽ˇ顐ｇ箾閺夋垵鎮戦柣锝庝邯閸┾偓妞ゆ巻鍋撴い锕傛涧铻? ${nextPageName}`);
+        } catch (error) {
+            console.error(`[App] switch page failed: ${nextPageName}`, error);
+            notificationService.error(`Failed to switch page: ${nextPageName}`);
+            if (this.pages[previousPageName]) {
+                this._syncPageVisibility(previousPageName);
+                stateManager.set('currentPage', previousPageName);
+                this.currentPage = this.pages[previousPageName];
+                try {
+                    if (previousPage && previousPage !== nextPage) {
+                        await this.pages[previousPageName].onEnter();
+                    }
+                } catch (rollbackError) {
+                    console.error(`[App] rollback onEnter failed: ${previousPageName}`, rollbackError);
+                }
+            }
+        } finally {
+            if (switchToken === this._pageSwitchSeq) {
+                this._pageSwitchInProgress = false;
+            }
+        }
+    }
+
+    _syncPageVisibility(pageName) {
+        if (typeof document === 'undefined') {
+            return false;
+        }
         document.querySelectorAll('.nav-item').forEach(item => {
-            item.classList.toggle('active', item.dataset.page === nextPageName);
+            item.classList.toggle('active', item.dataset.page === pageName);
         });
 
+        let hasTargetPage = false;
         document.querySelectorAll('.page').forEach(page => {
-            page.classList.toggle('active', page.id === `page-${nextPageName}`);
-        });
-
-        stateManager.set('currentPage', nextPageName);
-        this.currentPage = nextPage;
-
-        await this._ensureBackendForPage(nextPageName, options);
-        if (switchToken !== this._pageSwitchSeq) {
-            return;
-        }
-
-        if (this.currentPage === nextPage) {
-            await nextPage.onEnter();
-            if (switchToken !== this._pageSwitchSeq) {
-                return;
+            const isTarget = page.id === `page-${pageName}`;
+            if (isTarget) {
+                hasTargetPage = true;
             }
-        }
-
-        console.log(`[App] 切换到页面: ${nextPageName}`);
+            page.classList.toggle('active', isTarget);
+        });
+        return hasTargetPage;
     }
 
     async _refreshStatus(options = {}) {
@@ -1212,7 +1334,7 @@ class App {
             this._statusFailureCount = 0;
         } catch (error) {
             if (!this._isIdleStopped()) {
-                console.error('[App] 刷新状态失败:', error);
+                console.error('[App] 闂傚倷绀侀幉锛勬暜閿熺姴缁╅梺顒€绉撮拑鐔封攽閻樺弶澶勯柛瀣姍閺屻倝宕妷顔芥瘜闂佺顑嗛幐濠氬箯閸涙潙绠归柣鎰濠⑩偓闂?', error);
             }
             const previousStatus = stateManager.get('bot.status');
             this._closeSSE();
@@ -1281,7 +1403,7 @@ class App {
 
     _handleSSEError(err) {
         if (!this._isIdleStopped()) {
-            console.warn('[App] SSE 连接异常，准备重连:', err);
+            console.warn('[App] SSE 闂備礁鎼ˇ顐﹀疾濠靛纾婚柣鎰仛閺嗘粓鏌℃径瀣劸闁搞倖娲熼弻娑氫沪閻愵剛娈ら梺绯曟櫆椤ㄥ﹪寮婚妸銉㈡婵☆垰鐏濋顓㈡⒑闂堚晝绉甸柛銊ュ船椤曘儵宕熼姘卞€炲銈嗗坊閸嬫挻绻涢崨顐㈢伈鐎?', err);
         }
         const status = stateManager.get('bot.status') || {};
         const shouldReconnect = !!(
@@ -1417,11 +1539,15 @@ export { App };
 
 if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
     document.addEventListener('DOMContentLoaded', async () => {
+        ensureAppFrame();
         const app = new App();
         await app.init();
 
-        window.__app = app;
-        window.__state = stateManager;
-        window.__events = eventBus;
+        const allowDebugGlobals = String(window.location?.search || '').includes('debug_globals=1');
+        if (allowDebugGlobals) {
+            window.__app = app;
+            window.__state = stateManager;
+            window.__events = eventBus;
+        }
     });
 }

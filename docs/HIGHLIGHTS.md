@@ -82,6 +82,7 @@
 当前后端和桌面端已经具备一套比较完整的运行反馈闭环：
 
 - `/api/status`：启动进度、诊断、健康检查、系统指标、检索统计
+- 本地 API 鉴权兼容 `X-Api-Token` 与 `Authorization: Bearer <token>`，并完善了 `file:///` 与 `IPv6 (::1)` 场景下的来源校验，降低桌面端误报 `forbidden_origin` 的概率
 - `/api/status.reply_quality`：当前会话与近 `24h / 7d` 的回复成功率、空回复、超时补发、检索增强和人工反馈摘要
 - `/api/metrics`：Prometheus 风格导出
 - 备份能力不再停留在“能创建和恢复”，而是补齐了保留策略与清理闭环：CLI / Web API / 设置页都能先 Dry Run 预览、再正式清理旧备份，并默认保护最近恢复前快照
@@ -96,7 +97,7 @@
 - 消息页现在统一优先显示好友备注名/昵称，不再把内部 `chat_id` 或微信号直接当作“发送者 / 会话”展示
 - `/api/pricing` 与 `/api/costs/*`：把价格目录、模型聚合和会话级成本分析暴露为可复用接口
 - Windows 发布链路：默认只发 `setup + portable`，通过 GitHub Actions 自动构建并生成“相对上个版本”的 Release Notes
-- 安装版应用内自动更新：启动即检查 GitHub 最新 Release，弹窗展示更新说明，并支持跳过版本、后台下载和安装重启
+- 安装版应用内自动更新：启动即检查 GitHub 最新 Release，弹窗展示更新说明，并支持跳过版本、后台下载、SHA256 校验与安装重启
 - `/api/config/audit`：排查未知配置、未消费字段和预计生效策略
 
 这意味着项目不是“出了问题只能翻日志”，而是能直接告诉使用者现在卡在哪、退化到了什么模式、哪些配置已经生效。
@@ -294,7 +295,8 @@ Provider 分层策略也更清晰：
 这一轮补的是“长期使用能力”，不是再堆一层 demo 功能：
 
 - 回复策略前置到统一 evaluator，命中新联系人、静音时段、敏感词或显式手动模式时，不再冒险直接发送，而是进入可审阅、可编辑、可拒绝的持久化待审批队列。
-- 工作区备份与恢复形成闭环：支持 `quick/full` 两种备份、`backup_manifest.json` 清单、恢复前 `dry-run` 校验、`checksum_summary` 完整性校验，以及 `pre-restore` 自动快照，强调可恢复而不是只做导出。
+- 工作区备份与恢复形成闭环：支持 `quick/full` 两种备份、`backup_manifest.json` 清单、恢复前 `dry-run` 校验（默认 dry-run）、`checksum_summary` 完整性校验、`provider_credentials.json` 凭据快照、SQLite sidecar（`chat_memory.db-wal/-shm`）与 `vector_db` 全量快照，以及 `pre-restore` 自动快照；对缺失 `checksum_summary` 的旧备份，需显式 `allow_legacy_unverified=true` 才允许 apply，强调可恢复且可控。
+- 设置页新增数据治理清理：`memory / usage / export_rag` 支持 dry-run / apply，`apply` 仅在显式 scope 且 bot/growth 已停止时可执行，避免长期运行后历史产物无上限膨胀。
 - `run.py backup list/create/verify/cleanup/restore` 让这套恢复能力从“只有界面里能点”升级成“可以脚本化演练和 headless 运维”，同时控制长期运行下的备份膨胀。
 - 离线评测从“主观感觉质量还行”升级成确定性门禁：固定 smoke 数据集、固定指标、固定回归阈值，并直接接入 CI。
 - Electron renderer 目录单独声明 ESM 边界，消除了 `MODULE_TYPELESS_PACKAGE_JSON` 警告，同时保持主进程 CommonJS，不把模块制式切换扩散成全仓重构。
@@ -324,3 +326,12 @@ Provider 分层策略也更清晰：
 - API Key 与 Session 改为后端安全存储；本地 CLI/Auth 同步则优先保存绑定关系与来源信息，不复制长期明文凭据。
 - `OpenAI / Codex / ChatGPT` 与 `Google / Gemini / Gemini CLI` 的 OAuth 现已支持直接进入对话链路，真正做到“登录后即可用”。
 - 详细矩阵、扩展方式与安全边界见 `docs/MODEL_AUTH_CENTER.md`。
+
+## Security Hardening (2026-03)
+
+- API token 不再支持通过 query 传递；SSE 改为独立 `ticket` 机制（`/api/events?ticket=<ticket>`），降低事件流被本机其他进程误订阅风险。
+- Electron 主窗口与启动页统一启用 `sandbox + webSecurity`，并收紧 IPC sender 校验为“仅允许主渲染入口页”。
+- `/api/model_auth/*` 与 `/api/auth/providers*` 的本地路径字段默认脱敏（仅保留文件名）并移除 `watch_paths`，降低诊断信息外泄风险。
+- `python run.py backup restore --apply` 默认新增运行中硬阻断，检测到本地服务仍在运行时直接拒绝恢复；需显式传 `--allow-running-service` 才可越过。
+- /api/ollama/models 新增本地地址边界，仅允许 localhost/127.0.0.1/::1（防止被滥用为 SSRF 探测入口）。
+- 日志读取与清理新增路径边界校验：日志文件必须位于 data 目录；日志读取增加最大行数上限，避免资源放大风险。

@@ -49,6 +49,29 @@ function renderLoadMore(page) {
     renderMessageLoadMore(page, page._hasMore);
 }
 
+function renderRefreshButton(page) {
+    const button = page.$('#btn-refresh-messages');
+    if (!button) {
+        return;
+    }
+    if (!button.dataset.defaultLabel) {
+        button.dataset.defaultLabel = String(button.textContent || '').trim() || '刷新';
+    }
+    button.disabled = !!page._refreshing;
+    button.textContent = page._refreshing ? '刷新中...' : button.dataset.defaultLabel;
+}
+
+function markMessagesRequest(page) {
+    const nextSeq = Number(page._messagesRequestSeq || 0) + 1;
+    page._messagesRequestSeq = nextSeq;
+    page._latestMessagesRequestSeq = nextSeq;
+    return nextSeq;
+}
+
+function isLatestMessagesRequest(page, seq) {
+    return Number(page._latestMessagesRequestSeq || 0) === Number(seq || 0);
+}
+
 function renderMessageFailureState(page, message, deps = {}) {
     const container = page.$('#all-messages');
     if (!container) {
@@ -97,6 +120,7 @@ export function renderMessagesPage(page, deps = {}) {
     renderSummary(page);
     renderMessages(page, deps);
     renderLoadMore(page);
+    renderRefreshButton(page);
 }
 
 export async function refreshMessages(page, deps = {}) {
@@ -115,21 +139,51 @@ export async function refreshMessages(page, deps = {}) {
             container.textContent = '';
             container.appendChild(createMessageStateBlock(MESSAGE_TEXT.offline, 'empty-state'));
         }
+        page._refreshing = false;
+        page._pendingRefresh = false;
+        renderRefreshButton(page);
         return;
     }
 
+    if (page._refreshing) {
+        page._pendingRefresh = true;
+        return;
+    }
+
+    page._refreshing = true;
+    page._pendingRefresh = false;
+    renderRefreshButton(page);
     page._offset = 0;
-    await fetchMessages(page, { append: false }, deps);
+    const requestSeq = markMessagesRequest(page);
+    try {
+        await fetchMessages(page, { append: false, requestSeq }, deps);
+    } finally {
+        page._refreshing = false;
+        renderRefreshButton(page);
+        if (page._pendingRefresh) {
+            page._pendingRefresh = false;
+            void refreshMessages(page, deps);
+        }
+    }
 }
 
 export async function loadMoreMessages(page, deps = {}) {
-    if (!page.getState('bot.connected') || !page._hasMore) {
+    if (!page.getState('bot.connected') || !page._hasMore || page._loadingMore || page._refreshing) {
         return;
     }
-    await fetchMessages(page, { append: true }, deps);
+    page._loadingMore = true;
+    renderLoadMore(page);
+    const requestSeq = markMessagesRequest(page);
+    try {
+        await fetchMessages(page, { append: true, requestSeq }, deps);
+    } finally {
+        page._loadingMore = false;
+        renderLoadMore(page);
+    }
 }
 
-export async function fetchMessages(page, { append }, deps = {}) {
+export async function fetchMessages(page, { append, requestSeq }, deps = {}) {
+    const activeRequestSeq = Number(requestSeq || markMessagesRequest(page));
     const currentToast = getToast(deps);
     const container = page.$('#all-messages');
     if (!append && container) {
@@ -148,6 +202,9 @@ export async function fetchMessages(page, { append }, deps = {}) {
         if (!result?.success) {
             throw new Error(result?.message || MESSAGE_TEXT.loadFailed);
         }
+        if (!isLatestMessagesRequest(page, activeRequestSeq)) {
+            return;
+        }
 
         const nextMessages = Array.isArray(result.messages) ? result.messages : [];
         page._messages = append ? [...page._messages, ...nextMessages] : nextMessages;
@@ -165,6 +222,9 @@ export async function fetchMessages(page, { append }, deps = {}) {
             hasMore: page._hasMore,
         });
     } catch (error) {
+        if (!isLatestMessagesRequest(page, activeRequestSeq)) {
+            return;
+        }
         console.error('[MessagesPage] load failed:', error);
         renderMessageFailureState(page, currentToast.getErrorMessage(error, MESSAGE_TEXT.loadFailed), deps);
         currentToast.error(currentToast.getErrorMessage(error, MESSAGE_TEXT.loadFailed));
@@ -185,7 +245,29 @@ export function handleRealtimeMessage(page, payload, deps = {}) {
         return;
     }
 
-    page._messages = [message, ...page._messages].slice(0, Math.max(page._limit, page._messages.length + 1));
+    const normalizeKey = (item) => {
+        if (!item || typeof item !== 'object') {
+            return '';
+        }
+        const explicitId = item.id ?? item.message_id;
+        if (explicitId !== undefined && explicitId !== null && explicitId !== '') {
+            return `id:${String(explicitId)}`;
+        }
+        return [
+            String(item.wx_id || ''),
+            String(item.timestamp || ''),
+            String(item.role || ''),
+            String(item.content || ''),
+        ].join('|');
+    };
+
+    const incomingKey = normalizeKey(message);
+    if (incomingKey && (page._messages || []).some((item) => normalizeKey(item) === incomingKey)) {
+        return;
+    }
+
+    page._messages = [message, ...page._messages];
     page._total += 1;
+    page._offset = Math.max(0, Number(page._offset || 0) + 1);
     renderMessagesPage(page, deps);
 }

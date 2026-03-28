@@ -253,10 +253,12 @@ async def test_bot_run_exits_when_initialize_returns_none():
     with patch("backend.bot.get_bot_manager", return_value=mock_bot_manager):
         bot = WeChatBot("config.yaml")
         bot.initialize = AsyncMock(return_value=None)
+        bot.shutdown = AsyncMock()
 
         await bot.run()
 
         bot.initialize.assert_awaited_once()
+        bot.shutdown.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -1004,6 +1006,66 @@ async def test_approve_pending_reply_keeps_pending_when_send_fails():
     bot._record_pending_reply_resolved.assert_not_called()
     bot._record_reply_attempt.assert_not_called()
     bot._finalize_reply_delivery.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_approve_pending_reply_serializes_same_pending_id():
+    bot = WeChatBot("config.yaml")
+    bot.bot_manager = _build_mock_bot_manager()
+    bot.memory = MagicMock()
+    current = {
+        "id": 7,
+        "chat_id": "friend:alice",
+        "draft_reply": "draft",
+        "metadata": {"trace_id": "trace-1"},
+        "status": "pending",
+    }
+
+    async def _get_pending_reply(_pending_id):
+        return dict(current)
+
+    async def _resolve_pending_reply(_pending_id, **kwargs):
+        current.update(
+            {
+                "status": "approved",
+                "draft_reply": kwargs.get("draft_reply") or current.get("draft_reply"),
+            }
+        )
+        return dict(current)
+
+    bot.memory.get_pending_reply = AsyncMock(side_effect=_get_pending_reply)
+    bot.memory.resolve_pending_reply = AsyncMock(side_effect=_resolve_pending_reply)
+    bot.memory.update_pending_reply = AsyncMock()
+    bot.expire_stale_pending_replies = AsyncMock()
+    bot.refresh_pending_reply_stats = AsyncMock(return_value={"pending": 0})
+    bot._notify_runtime_status_changed = MagicMock()
+    bot._record_pending_reply_resolved = MagicMock()
+    bot._record_reply_attempt = MagicMock()
+    bot._rehydrate_pending_prepared_request = MagicMock(
+        return_value=SimpleNamespace(
+            event=SimpleNamespace(chat_name="alice", sender="alice"),
+            user_text="hello",
+        )
+    )
+
+    async def _send_once(*_args, **_kwargs):
+        await asyncio.sleep(0.05)
+        return "reply-once"
+
+    bot._send_smart_reply = AsyncMock(side_effect=_send_once)
+    bot._finalize_reply_delivery = AsyncMock()
+    bot.wx = MagicMock()
+    bot.ai_client = MagicMock()
+
+    first_task = asyncio.create_task(bot.approve_pending_reply(7, edited_reply="edited reply"))
+    second_task = asyncio.create_task(bot.approve_pending_reply(7, edited_reply="edited reply"))
+    first_result, second_result = await asyncio.gather(first_task, second_task)
+
+    assert first_result["success"] is True
+    assert second_result["success"] is False
+    assert "already resolved" in str(second_result.get("message") or "")
+    assert bot._send_smart_reply.await_count == 1
+    assert bot.memory.resolve_pending_reply.await_count == 1
 
 
 @pytest.mark.asyncio

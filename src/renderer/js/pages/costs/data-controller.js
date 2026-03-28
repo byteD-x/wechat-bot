@@ -91,6 +91,8 @@ export function renderCostPage(page, deps = {}) {
 
 export async function refreshCosts(page, deps = {}) {
     if (page._loading) {
+        readCostFilters(page);
+        page._pendingRefresh = true;
         return;
     }
 
@@ -133,6 +135,10 @@ export async function refreshCosts(page, deps = {}) {
     } finally {
         syncCostFilters(page);
         page._loading = false;
+        if (page._pendingRefresh) {
+            page._pendingRefresh = false;
+            void refreshCosts(page, deps);
+        }
     }
 }
 

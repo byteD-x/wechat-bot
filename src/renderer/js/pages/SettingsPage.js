@@ -140,6 +140,11 @@ export class SettingsPage extends PageController {
             summary: {},
             latestEval: null,
             restoreFeedback: '',
+            dataControlFeedback: '',
+            supportedDataControlScopes: [],
+            backupBusy: false,
+            dataControlBusy: false,
+            dataControlDryRunScope: '',
         };
         this._backupPromise = null;
         this._activeSettingsSection = 'common';
@@ -292,6 +297,60 @@ export class SettingsPage extends PageController {
         renderBackupPanel(this);
     }
 
+    _syncDataControlScopeOptions(scopes = []) {
+        const select = this.$('#settings-data-control-scope');
+        if (!select || typeof document === 'undefined' || typeof document.createElement !== 'function') {
+            return;
+        }
+        const normalized = Array.from(
+            new Set(
+                (Array.isArray(scopes) ? scopes : [])
+                    .map((item) => String(item || '').trim())
+                    .filter(Boolean),
+            ),
+        );
+        const previousValue = String(select.value || '').trim();
+        select.textContent = '';
+
+        const placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = normalized.length ? '请选择清理范围' : '暂无可清理范围';
+        select.appendChild(placeholder);
+
+        normalized.forEach((scope) => {
+            const option = document.createElement('option');
+            option.value = scope;
+            option.textContent = scope;
+            select.appendChild(option);
+        });
+
+        if (normalized.includes(previousValue)) {
+            select.value = previousValue;
+        } else {
+            select.value = '';
+        }
+        if (this._backupState.dataControlDryRunScope && !normalized.includes(this._backupState.dataControlDryRunScope)) {
+            this._backupState.dataControlDryRunScope = '';
+        }
+    }
+
+    _buildDataControlFailureMessage(error, fallback) {
+        const baseMessage = toast.getErrorMessage(error, fallback);
+        const payload = (error && typeof error === 'object') ? error.data : null;
+        const failedTargets = Array.isArray(payload?.failed_targets) ? payload.failed_targets : [];
+        if (!failedTargets.length) {
+            return baseMessage;
+        }
+        const details = failedTargets
+            .slice(0, 3)
+            .map((item) => String(item?.relative_path || item?.path || '').trim())
+            .filter(Boolean)
+            .join(', ');
+        return details
+            ? `${baseMessage}（失败 ${failedTargets.length} 项：${details}）`
+            : `${baseMessage}（失败 ${failedTargets.length} 项）`;
+    }
+
     async _loadWorkspaceBackups(options = {}) {
         const { silent = false } = options;
         if (this._backupPromise) {
@@ -300,16 +359,26 @@ export class SettingsPage extends PageController {
 
         this._backupPromise = (async () => {
             try {
-                const [backupsResult, evalResult] = await Promise.all([
+                const [backupsResult, evalResult, dataControlsResult] = await Promise.all([
                     apiService.getBackups(10),
                     apiService.getLatestEvalReport(),
+                    apiService.getDataControls().catch(() => null),
                 ]);
+                const supportedDataControlScopes = Array.isArray(dataControlsResult?.supported_scopes)
+                    ? dataControlsResult.supported_scopes
+                    : (this._backupState.supportedDataControlScopes || []);
                 this._backupState = {
                     backups: Array.isArray(backupsResult?.backups) ? backupsResult.backups : [],
                     summary: backupsResult?.summary || {},
                     latestEval: evalResult?.report || null,
                     restoreFeedback: this._backupState.restoreFeedback || '',
+                    dataControlFeedback: this._backupState.dataControlFeedback || '',
+                    supportedDataControlScopes,
+                    backupBusy: !!this._backupState.backupBusy,
+                    dataControlBusy: !!this._backupState.dataControlBusy,
+                    dataControlDryRunScope: this._backupState.dataControlDryRunScope || '',
                 };
+                this._syncDataControlScopeOptions(supportedDataControlScopes);
                 this._renderBackupPanel();
                 return this._backupState;
             } catch (error) {
@@ -321,7 +390,13 @@ export class SettingsPage extends PageController {
                     summary: {},
                     latestEval: null,
                     restoreFeedback: '加载备份信息失败',
+                    dataControlFeedback: this._backupState.dataControlFeedback || '',
+                    supportedDataControlScopes: this._backupState.supportedDataControlScopes || [],
+                    backupBusy: !!this._backupState.backupBusy,
+                    dataControlBusy: !!this._backupState.dataControlBusy,
+                    dataControlDryRunScope: this._backupState.dataControlDryRunScope || '',
                 };
+                this._syncDataControlScopeOptions(this._backupState.supportedDataControlScopes || []);
                 this._renderBackupPanel();
                 return this._backupState;
             } finally {
@@ -333,6 +408,13 @@ export class SettingsPage extends PageController {
     }
 
     async _createWorkspaceBackup(mode) {
+        if (this._backupState.backupBusy) {
+            toast.info('备份任务执行中，请稍候...');
+            return;
+        }
+        this._backupState.backupBusy = true;
+        this._backupState.restoreFeedback = '正在创建备份，请稍候...';
+        this._renderBackupPanel();
         try {
             const result = await apiService.createBackup(mode);
             if (!result?.success) {
@@ -345,32 +427,82 @@ export class SettingsPage extends PageController {
             await this._loadWorkspaceBackups({ silent: true });
         } catch (error) {
             toast.error(toast.getErrorMessage(error, '创建备份失败'));
+        } finally {
+            this._backupState.backupBusy = false;
+            this._renderBackupPanel();
         }
     }
 
     async _restoreWorkspaceBackup(dryRun = false) {
+        if (this._backupState.backupBusy) {
+            toast.info('备份任务执行中，请稍候...');
+            return;
+        }
         const backupId = String(this.$('#settings-backup-select')?.value || '').trim();
         if (!backupId) {
             toast.info('请先选择一个可恢复时间点');
             return;
         }
+        this._backupState.backupBusy = true;
+        this._backupState.restoreFeedback = dryRun ? '正在检查备份完整性...' : '正在执行备份恢复...';
+        this._renderBackupPanel();
 
         try {
-            const result = await apiService.restoreBackup({
+            const requestRestore = async (allowLegacyUnverified = false) => apiService.restoreBackup({
                 backup_id: backupId,
                 dry_run: !!dryRun,
+                ...(allowLegacyUnverified ? { allow_legacy_unverified: true } : {}),
             });
+            const detectLegacyBlocked = (error) => {
+                const plan = (error && typeof error === 'object') ? error?.data?.plan : null;
+                const message = String((error && typeof error === 'object') ? error?.message || '' : '').toLowerCase();
+                return !!(plan?.legacy_unverified || message.includes('allow_legacy_unverified'));
+            };
+
+            let legacyOptIn = false;
+            let result;
+            try {
+                result = await requestRestore(false);
+            } catch (error) {
+                if (!detectLegacyBlocked(error)) {
+                    throw error;
+                }
+                const confirmLegacyRestore = typeof window !== 'undefined' && typeof window.confirm === 'function'
+                    ? window.confirm('该历史备份缺少校验摘要，无法进行完整性校验。是否继续恢复？')
+                    : false;
+                if (!confirmLegacyRestore) {
+                    const message = '已取消恢复：该历史备份缺少校验摘要。';
+                    this._backupState.restoreFeedback = message;
+                    this._renderBackupPanel();
+                    toast.info(message);
+                    return;
+                }
+                legacyOptIn = true;
+                result = await requestRestore(true);
+            }
             if (!result?.success && !dryRun) {
                 throw new Error(result?.message || '恢复备份失败');
             }
 
             if (dryRun) {
                 const plan = result?.plan || {};
-                this._backupState.restoreFeedback = `检查完成，本次预计会恢复 ${plan.included_files?.length || 0} 个文件。`;
+                this._backupState.restoreFeedback = legacyOptIn
+                    ? `检查完成，本次预计会恢复 ${plan.included_files?.length || 0} 个文件。该备份缺少校验摘要，应用恢复时将按确认继续。`
+                    : `检查完成，本次预计会恢复 ${plan.included_files?.length || 0} 个文件。`;
                 toast.success('恢复检查完成');
             } else {
-                this._backupState.restoreFeedback = `已恢复到所选时间点，恢复前自动保留的保险备份：${result?.pre_restore_backup?.id || '--'}`;
+                const authChecks = result?.auth_restore_checks || {};
+                const warningCount = Number(authChecks?.warning_count || 0);
+                this._backupState.restoreFeedback = warningCount > 0
+                    ? `已恢复到所选时间点，保险备份：${result?.pre_restore_backup?.id || '--'}，认证告警 ${warningCount} 项`
+                    : `已恢复到所选时间点，保险备份：${result?.pre_restore_backup?.id || '--'}`;
                 toast.success('已恢复到所选时间点');
+                if (warningCount > 0) {
+                    toast.warning(`恢复后检测到 ${warningCount} 项认证风险，请在模型认证中心检查`);
+                }
+                if (legacyOptIn) {
+                    toast.warning('本次恢复使用了 legacy 模式（缺少校验摘要）。建议立即创建一份新备份。');
+                }
                 await this.loadSettings({ silent: true, preserveFeedback: true });
             }
 
@@ -381,10 +513,20 @@ export class SettingsPage extends PageController {
             this._backupState.restoreFeedback = message;
             this._renderBackupPanel();
             toast.error(message);
+        } finally {
+            this._backupState.backupBusy = false;
+            this._renderBackupPanel();
         }
     }
 
     async _cleanupWorkspaceBackups(dryRun = true) {
+        if (this._backupState.backupBusy) {
+            toast.info('备份任务执行中，请稍候...');
+            return;
+        }
+        this._backupState.backupBusy = true;
+        this._backupState.restoreFeedback = dryRun ? '正在检查可清理备份...' : '正在清理旧备份...';
+        this._renderBackupPanel();
         try {
             const result = await apiService.cleanupBackups({
                 dry_run: !!dryRun,
@@ -407,7 +549,87 @@ export class SettingsPage extends PageController {
             this._backupState.restoreFeedback = message;
             this._renderBackupPanel();
             toast.error(message);
+        } finally {
+            this._backupState.backupBusy = false;
+            this._renderBackupPanel();
         }
+    }
+
+    async _runDataControls(dryRun = true) {
+        if (this._backupState.dataControlBusy || this._backupState.backupBusy) {
+            return;
+        }
+
+        const selectedScope = String(this.$('#settings-data-control-scope')?.value || '').trim();
+        if (!selectedScope) {
+            const message = '请先选择清理范围';
+            this._backupState.dataControlFeedback = message;
+            this._renderBackupPanel();
+            toast.info(message);
+            return;
+        }
+
+        if (!dryRun) {
+            if (this._backupState.dataControlDryRunScope !== selectedScope) {
+                const message = '请先对当前范围执行一次检查，再执行清理';
+                this._backupState.dataControlFeedback = message;
+                this._renderBackupPanel();
+                toast.info(message);
+                return;
+            }
+            const botRunning = !!this.getState('bot.running');
+            const growthRunning = !!this.getState('bot.status.growth_running');
+            if (botRunning || growthRunning) {
+                const runningServices = [
+                    botRunning ? '机器人' : '',
+                    growthRunning ? '成长任务' : '',
+                ].filter(Boolean).join('、');
+                const message = `请先停止${runningServices}后再执行数据清理`;
+                this._backupState.dataControlFeedback = message;
+                this._renderBackupPanel();
+                toast.info(message);
+                return;
+            }
+            const confirmApply = typeof window !== 'undefined' && typeof window.confirm === 'function'
+                ? window.confirm(`确认要清理 ${selectedScope} 范围的数据吗？该操作不可撤销。`)
+                : true;
+            if (!confirmApply) {
+                return;
+            }
+        }
+
+        this._backupState.dataControlBusy = true;
+        this._backupState.dataControlFeedback = dryRun ? `正在检查 ${selectedScope} ...` : `正在清理 ${selectedScope} ...`;
+        this._renderBackupPanel();
+        try {
+            const result = await apiService.clearDataControls({
+                scopes: [selectedScope],
+                dry_run: !!dryRun,
+            });
+            if (!result?.success) {
+                throw new Error(result?.message || 'data cleanup failed');
+            }
+
+            const sizeText = dryRun
+                ? formatBackupSize(result?.reclaimable_bytes)
+                : formatBackupSize(result?.reclaimed_bytes);
+            this._backupState.dataControlFeedback = dryRun
+                ? `检查完成：${selectedScope} 可清理 ${result?.existing_target_count || 0} 项，预计释放 ${sizeText}`
+                : `清理完成：${selectedScope} 已删除 ${result?.deleted_count || 0} 项，释放 ${sizeText}`;
+            this._backupState.dataControlDryRunScope = dryRun ? selectedScope : '';
+            this._renderBackupPanel();
+            toast.success(dryRun ? '数据清理检查完成' : '数据清理已执行');
+        } catch (error) {
+            const message = this._buildDataControlFailureMessage(error, '数据清理失败');
+            this._backupState.dataControlFeedback = message;
+            this._backupState.dataControlDryRunScope = '';
+            this._renderBackupPanel();
+            toast.error(message);
+        } finally {
+            this._backupState.dataControlBusy = false;
+            this._renderBackupPanel();
+        }
+        return;
     }
 
     _hydrateSettingsSections() {

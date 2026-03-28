@@ -110,6 +110,7 @@ class WeChatBot:
         self.last_reply_ts: Dict[str, float] = {"ts": 0.0}
         self.pending_tasks: Set[asyncio.Task] = set()
         self.chat_locks: Dict[str, asyncio.Lock] = {}
+        self.pending_reply_locks: Dict[int, asyncio.Lock] = {}
         
         # 合并消息状态
         self.pending_merge_messages: Dict[str, List[str]] = {}
@@ -522,6 +523,7 @@ class WeChatBot:
     async def run(self) -> None:
         wx = await self.initialize()
         if not wx:
+            await self.shutdown()
             return
 
         logging.info("机器人主循环启动")
@@ -1429,6 +1431,20 @@ class WeChatBot:
             self.chat_locks[chat_id] = lock
         return lock
 
+    def _get_pending_reply_lock(self, pending_id: int) -> asyncio.Lock:
+        pending_key = int(pending_id)
+        lock = self.pending_reply_locks.get(pending_key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self.pending_reply_locks[pending_key] = lock
+        return lock
+
+    def _release_pending_reply_lock_if_idle(self, pending_id: int) -> None:
+        pending_key = int(pending_id)
+        lock = self.pending_reply_locks.get(pending_key)
+        if lock is not None and not lock.locked():
+            self.pending_reply_locks.pop(pending_key, None)
+
     async def _send_smart_reply(
         self,
         wx: BaseTransport,
@@ -1953,128 +1969,138 @@ class WeChatBot:
         *,
         edited_reply: str = "",
     ) -> Dict[str, Any]:
-        if self.memory is None:
-            return {"success": False, "message": "memory manager unavailable"}
-        if not self.wx or not self.ai_client:
-            return {"success": False, "message": "bot transport unavailable"}
-
-        await self.expire_stale_pending_replies(notify=False)
-        pending_reply = await self.memory.get_pending_reply(pending_id)
-        if pending_reply is None:
-            return {"success": False, "message": "pending reply not found"}
-        if str(pending_reply.get("status") or "") != "pending":
-            return {"success": False, "message": "pending reply already resolved"}
-
-        prepared = self._rehydrate_pending_prepared_request(pending_reply)
-        event = prepared.event
-        chat_id = str(pending_reply.get("chat_id") or "")
-        final_reply = str(edited_reply or pending_reply.get("draft_reply") or "").strip()
-        if not final_reply:
-            return {"success": False, "message": "reply text cannot be empty"}
-
+        pending_lock = self._get_pending_reply_lock(pending_id)
         try:
-            async with self._get_chat_lock(chat_id):
-                reply_text = await self._send_smart_reply(
-                    self.wx,
-                    event,
-                    final_reply,
-                    trace_id=str((pending_reply.get("metadata") or {}).get("trace_id") or ""),
+            async with pending_lock:
+                if self.memory is None:
+                    return {"success": False, "message": "memory manager unavailable"}
+                if not self.wx or not self.ai_client:
+                    return {"success": False, "message": "bot transport unavailable"}
+
+                await self.expire_stale_pending_replies(notify=False)
+                pending_reply = await self.memory.get_pending_reply(pending_id)
+                if pending_reply is None:
+                    return {"success": False, "message": "pending reply not found"}
+                if str(pending_reply.get("status") or "") != "pending":
+                    return {"success": False, "message": "pending reply already resolved"}
+
+                prepared = self._rehydrate_pending_prepared_request(pending_reply)
+                event = prepared.event
+                chat_id = str(pending_reply.get("chat_id") or "")
+                final_reply = str(edited_reply or pending_reply.get("draft_reply") or "").strip()
+                if not final_reply:
+                    return {"success": False, "message": "reply text cannot be empty"}
+
+                try:
+                    async with self._get_chat_lock(chat_id):
+                        reply_text = await self._send_smart_reply(
+                            self.wx,
+                            event,
+                            final_reply,
+                            trace_id=str((pending_reply.get("metadata") or {}).get("trace_id") or ""),
+                        )
+                except Exception as exc:
+                    metadata = dict(pending_reply.get("metadata") or {})
+                    metadata["approval_error"] = str(exc)
+                    metadata["approval_failed_at"] = int(time.time())
+                    await self.memory.update_pending_reply(
+                        pending_id,
+                        draft_reply=final_reply,
+                        metadata=metadata,
+                    )
+                    await self.refresh_pending_reply_stats(notify=False)
+                    await self.bot_manager.broadcast_event(
+                        "pending_reply",
+                        {
+                            "action": "failed",
+                            "pending_id": int(pending_id),
+                            "message": str(exc),
+                            "pending_count": int(self.pending_reply_stats.get("pending", 0) or 0),
+                        },
+                    )
+                    self._notify_runtime_status_changed()
+                    return {"success": False, "message": f"approve failed: {exc}"}
+
+                self._record_pending_reply_resolved()
+                self._record_reply_attempt()
+                finalize_error = ""
+                try:
+                    await self._finalize_reply_delivery(
+                        prepared=prepared,
+                        event=event,
+                        chat_id=chat_id,
+                        user_text=str(prepared.user_text or ""),
+                        reply_text=reply_text,
+                        trace_id=str((pending_reply.get("metadata") or {}).get("trace_id") or ""),
+                        streamed=False,
+                    )
+                except Exception as exc:
+                    finalize_error = str(exc)
+                    logging.warning("Pending reply finalize failed after send: %s", exc)
+
+                resolution_metadata = {
+                    "approved_at": int(time.time()),
+                    "approved_reply": reply_text,
+                    "approval_mode": "edited" if bool(str(edited_reply or "").strip()) else "original",
+                }
+                if finalize_error:
+                    resolution_metadata["approval_finalize_error"] = finalize_error
+
+                resolved = await self.memory.resolve_pending_reply(
+                    pending_id,
+                    status="approved",
+                    draft_reply=reply_text,
+                    metadata=resolution_metadata,
                 )
-        except Exception as exc:
-            metadata = dict(pending_reply.get("metadata") or {})
-            metadata["approval_error"] = str(exc)
-            metadata["approval_failed_at"] = int(time.time())
-            await self.memory.update_pending_reply(
-                pending_id,
-                draft_reply=final_reply,
-                metadata=metadata,
-            )
-            await self.refresh_pending_reply_stats(notify=False)
-            await self.bot_manager.broadcast_event(
-                "pending_reply",
-                {
-                    "action": "failed",
-                    "pending_id": int(pending_id),
-                    "message": str(exc),
-                    "pending_count": int(self.pending_reply_stats.get("pending", 0) or 0),
-                },
-            )
-            self._notify_runtime_status_changed()
-            return {"success": False, "message": f"approve failed: {exc}"}
-
-        self._record_pending_reply_resolved()
-        self._record_reply_attempt()
-        finalize_error = ""
-        try:
-            await self._finalize_reply_delivery(
-                prepared=prepared,
-                event=event,
-                chat_id=chat_id,
-                user_text=str(prepared.user_text or ""),
-                reply_text=reply_text,
-                trace_id=str((pending_reply.get("metadata") or {}).get("trace_id") or ""),
-                streamed=False,
-            )
-        except Exception as exc:
-            finalize_error = str(exc)
-            logging.warning("Pending reply finalize failed after send: %s", exc)
-
-        resolution_metadata = {
-            "approved_at": int(time.time()),
-            "approved_reply": reply_text,
-            "approval_mode": "edited" if bool(str(edited_reply or "").strip()) else "original",
-        }
-        if finalize_error:
-            resolution_metadata["approval_finalize_error"] = finalize_error
-
-        resolved = await self.memory.resolve_pending_reply(
-            pending_id,
-            status="approved",
-            draft_reply=reply_text,
-            metadata=resolution_metadata,
-        )
-        await self.refresh_pending_reply_stats(notify=False)
-        await self.bot_manager.broadcast_event(
-            "pending_reply",
-            {
-                "action": "approved",
-                "pending_reply": resolved,
-                "pending_count": int(self.pending_reply_stats.get("pending", 0) or 0),
-            },
-        )
-        self._notify_runtime_status_changed()
-        response = {"success": True, "pending_reply": resolved, "reply_text": reply_text}
-        if finalize_error:
-            response["warning"] = f"reply sent but finalize failed: {finalize_error}"
-        return response
+                await self.refresh_pending_reply_stats(notify=False)
+                await self.bot_manager.broadcast_event(
+                    "pending_reply",
+                    {
+                        "action": "approved",
+                        "pending_reply": resolved,
+                        "pending_count": int(self.pending_reply_stats.get("pending", 0) or 0),
+                    },
+                )
+                self._notify_runtime_status_changed()
+                response = {"success": True, "pending_reply": resolved, "reply_text": reply_text}
+                if finalize_error:
+                    response["warning"] = f"reply sent but finalize failed: {finalize_error}"
+                return response
+        finally:
+            self._release_pending_reply_lock_if_idle(pending_id)
 
     async def reject_pending_reply(self, pending_id: int) -> Dict[str, Any]:
-        if self.memory is None:
-            return {"success": False, "message": "memory manager unavailable"}
-        await self.expire_stale_pending_replies(notify=False)
-        pending_reply = await self.memory.get_pending_reply(pending_id)
-        if pending_reply is None:
-            return {"success": False, "message": "pending reply not found"}
-        if str(pending_reply.get("status") or "") != "pending":
-            return {"success": False, "message": "pending reply already resolved"}
+        pending_lock = self._get_pending_reply_lock(pending_id)
+        try:
+            async with pending_lock:
+                if self.memory is None:
+                    return {"success": False, "message": "memory manager unavailable"}
+                await self.expire_stale_pending_replies(notify=False)
+                pending_reply = await self.memory.get_pending_reply(pending_id)
+                if pending_reply is None:
+                    return {"success": False, "message": "pending reply not found"}
+                if str(pending_reply.get("status") or "") != "pending":
+                    return {"success": False, "message": "pending reply already resolved"}
 
-        self._record_pending_reply_resolved()
-        resolved = await self.memory.resolve_pending_reply(
-            pending_id,
-            status="rejected",
-            metadata={"rejected_at": int(time.time())},
-        )
-        await self.refresh_pending_reply_stats(notify=False)
-        await self.bot_manager.broadcast_event(
-            "pending_reply",
-            {
-                "action": "rejected",
-                "pending_reply": resolved,
-                "pending_count": int(self.pending_reply_stats.get("pending", 0) or 0),
-            },
-        )
-        self._notify_runtime_status_changed()
-        return {"success": True, "pending_reply": resolved}
+                self._record_pending_reply_resolved()
+                resolved = await self.memory.resolve_pending_reply(
+                    pending_id,
+                    status="rejected",
+                    metadata={"rejected_at": int(time.time())},
+                )
+                await self.refresh_pending_reply_stats(notify=False)
+                await self.bot_manager.broadcast_event(
+                    "pending_reply",
+                    {
+                        "action": "rejected",
+                        "pending_reply": resolved,
+                        "pending_count": int(self.pending_reply_stats.get("pending", 0) or 0),
+                    },
+                )
+                self._notify_runtime_status_changed()
+                return {"success": True, "pending_reply": resolved}
+        finally:
+            self._release_pending_reply_lock_if_idle(pending_id)
 
     def _build_reply_metadata(
         self,

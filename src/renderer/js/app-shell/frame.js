@@ -1,4 +1,4 @@
-import { renderIconSprite } from './icons.js';
+﻿import { renderIconSprite } from './icons.js';
 import { renderGlobalOverlays } from './modals.js';
 
 const NAV_GROUPS = [
@@ -14,7 +14,7 @@ const NAV_GROUPS = [
         label: '配置',
         items: [
             { page: 'models', icon: 'bot', label: '模型' },
-            { page: 'settings', icon: 'settings', label: '配置' },
+            { page: 'settings', icon: 'settings', label: '设置' },
         ],
     },
     {
@@ -31,7 +31,7 @@ const PAGE_MOUNTS = [
     { id: 'costs', label: '成本' },
     { id: 'messages', label: '消息' },
     { id: 'models', label: '模型' },
-    { id: 'settings', label: '配置' },
+    { id: 'settings', label: '设置' },
     { id: 'logs', label: '日志' },
     { id: 'about', label: '关于' },
 ];
@@ -74,17 +74,17 @@ export function renderAppFrame() {
                 </div>
             </div>
             <div class="titlebar-controls">
-                <button class="titlebar-btn" id="btn-minimize" title="最小化">
+                <button class="titlebar-btn" id="btn-minimize" type="button" title="最小化" aria-label="最小化窗口">
                     <svg class="icon">
                         <use href="#icon-minus" />
                     </svg>
                 </button>
-                <button class="titlebar-btn" id="btn-maximize" title="最大化">
+                <button class="titlebar-btn" id="btn-maximize" type="button" title="最大化" aria-label="最大化窗口">
                     <svg class="icon">
                         <use href="#icon-maximize" />
                     </svg>
                 </button>
-                <button class="titlebar-btn btn-close" id="btn-close" title="关闭">
+                <button class="titlebar-btn btn-close" id="btn-close" type="button" title="关闭" aria-label="关闭窗口">
                     <svg class="icon">
                         <use href="#icon-x" />
                     </svg>

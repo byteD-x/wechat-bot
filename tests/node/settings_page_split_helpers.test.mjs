@@ -40,6 +40,7 @@ import ModelsPage, {
     sortCardsForDisplay,
     summarizeCards,
 } from '../../src/renderer/js/pages/ModelsPage.js';
+import { Events } from '../../src/renderer/js/core/EventBus.js';
 import { apiService } from '../../src/renderer/js/services/ApiService.js';
 import { toast } from '../../src/renderer/js/services/NotificationService.js';
 import { installDomStub } from './dom-stub.mjs';
@@ -1509,12 +1510,48 @@ test('settings hero stays focused on generic config status instead of model test
 
         renderSettingsHero(page);
         const renderedText = String(container.textContent || '');
+        const summaryButton = container.querySelector('#btn-open-models');
 
         assert.equal(renderedText.includes('测试当前连接'), false);
         assert.equal(renderedText.includes('当前运行预设'), false);
         assert.equal(renderedText.includes('API Key'), false);
         assert.equal(renderedText.includes('Ollama'), false);
         assert.equal(renderedText.includes('LangSmith'), true);
+        assert.equal(renderedText.includes('前往模型页'), true);
+        assert.ok(container.querySelector('#settings-model-summary-title'));
+        assert.ok(container.querySelector('#settings-model-summary-meta'));
+        assert.ok(summaryButton);
+        assert.equal(summaryButton?.textContent, '前往模型页');
+    });
+});
+
+test('settings model summary button routes back to the models page', async () => {
+    await withDom(async () => {
+        const summaryButton = document.createElement('button');
+        summaryButton.id = 'btn-open-models';
+
+        const calls = [];
+        const page = {
+            $(selector) {
+                if (selector === '#btn-open-models') {
+                    return summaryButton;
+                }
+                return null;
+            },
+            bindEvent(target, eventName, handler) {
+                target.addEventListener(eventName, handler);
+            },
+            emit(eventName, payload) {
+                calls.push({ eventName, payload });
+            },
+        };
+
+        bindSettingsEvents(page);
+        summaryButton.click();
+
+        assert.deepEqual(calls, [
+            { eventName: Events.PAGE_CHANGE, payload: 'models' },
+        ]);
     });
 });
 

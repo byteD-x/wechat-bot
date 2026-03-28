@@ -177,6 +177,28 @@ class FakeNode {
         }
     }
 
+    getAttribute(name) {
+        const nextName = String(name || '');
+        if (Object.prototype.hasOwnProperty.call(this.attributes, nextName)) {
+            return this.attributes[nextName];
+        }
+        return null;
+    }
+
+    removeAttribute(name) {
+        const nextName = String(name || '');
+        if (!Object.prototype.hasOwnProperty.call(this.attributes, nextName)) {
+            return;
+        }
+        delete this.attributes[nextName];
+        if (nextName === 'class') {
+            this.className = '';
+        }
+        if (nextName === 'id') {
+            this.id = '';
+        }
+    }
+
     setAttributeNS(_namespace, name, value) {
         this.setAttribute(name, value);
     }

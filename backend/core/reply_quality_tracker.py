@@ -205,3 +205,13 @@ def get_reply_quality_tracker(db_path: str = "data/reply_quality_history.db") ->
     if _reply_quality_tracker is None:
         _reply_quality_tracker = ReplyQualityTracker(db_path)
     return _reply_quality_tracker
+
+
+def close_reply_quality_tracker() -> None:
+    global _reply_quality_tracker
+    if _reply_quality_tracker is None:
+        return
+    try:
+        _reply_quality_tracker.close()
+    finally:
+        _reply_quality_tracker = None

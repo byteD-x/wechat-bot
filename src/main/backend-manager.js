@@ -1,4 +1,4 @@
-const { decodeBufferText } = require('./text-codec');
+﻿const { decodeBufferText } = require('./text-codec');
 
 function createBackendManager({
     http,
@@ -32,14 +32,14 @@ function createBackendManager({
             if (await this.checkServer()) {
                 runtimeIdleController.setWindowVisible(getMainWindowVisible());
                 runtimeIdleController.setServiceRunning(true);
-                console.log('[Backend] 服务已在运行');
-                updateSplashStatus('后端服务已就绪，正在加载界面...', 60);
+                console.log('[Backend] 鏈嶅姟宸插湪杩愯');
+                updateSplashStatus('鍚庣鏈嶅姟宸插氨缁紝姝ｅ湪鍔犺浇鐣岄潰...', 60);
                 return;
             }
 
             if (GLOBAL_STATE.pythonProcess) {
-                console.log('[Backend] 后端正在启动');
-                updateSplashStatus('后端服务启动中...', 50);
+                console.log('[Backend] 鍚庣姝ｅ湪鍚姩');
+                updateSplashStatus('鍚庣鏈嶅姟鍚姩涓?..', 50);
                 return;
             }
 
@@ -51,8 +51,8 @@ function createBackendManager({
                 GLOBAL_STATE.flaskPort.toString(),
             ]);
 
-            console.log(`[Backend] 启动: ${cmd} ${args.join(' ')}`);
-            updateSplashStatus('正在启动后端服务...', 35);
+            console.log(`[Backend] 鍚姩: ${cmd} ${args.join(' ')}`);
+            updateSplashStatus('姝ｅ湪鍚姩鍚庣鏈嶅姟...', 35);
 
             GLOBAL_STATE.pythonProcess = spawn(cmd, args, options);
             this._setupProcessListeners(GLOBAL_STATE.pythonProcess);
@@ -69,7 +69,7 @@ function createBackendManager({
                 }
                 await new Promise((resolve) => setTimeout(resolve, 400));
             }
-            throw new Error('Python 服务启动超时');
+            throw new Error('Python 鏈嶅姟鍚姩瓒呮椂');
         },
 
         stop(reason = 'manual') {
@@ -82,7 +82,7 @@ function createBackendManager({
                     resolved = true;
                     resolve();
                 };
-                console.log('[Backend] 正在停止...');
+                console.log('[Backend] 姝ｅ湪鍋滄...');
                 proc.__backendStopReason = reason;
                 proc.once('exit', done);
                 try {
@@ -120,7 +120,7 @@ function createBackendManager({
                 proc.stdout.on('data', (data) => {
                     const str = decodeSafe(data);
                     console.log(`[Backend] ${str.trim()}`);
-                    updateSplashStatus('后端服务启动中...', 50);
+                    updateSplashStatus('鍚庣鏈嶅姟鍚姩涓?..', 50);
                 });
             }
 
@@ -135,7 +135,7 @@ function createBackendManager({
             }
 
             proc.on('exit', (code) => {
-                console.log(`[Backend] 退出代码: ${code}`);
+                console.log(`[Backend] 閫€鍑轰唬鐮? ${code}`);
                 GLOBAL_STATE.pythonProcess = null;
                 runtimeIdleController.setServiceStopped(proc.__backendStopReason || 'process_exit');
             });
@@ -144,6 +144,14 @@ function createBackendManager({
         requestJson(method, endpoint, payload = null, timeoutMs = 10000) {
             return new Promise((resolve, reject) => {
                 const body = payload == null ? null : JSON.stringify(payload);
+                const buildHttpError = (status, data, fallbackMessage) => {
+                    const error = new Error(data?.message || fallbackMessage || `后端请求失败 (${status})`);
+                    error.status = Number(status || 500);
+                    error.code = data?.code || 'http_error';
+                    error.endpoint = endpoint;
+                    error.data = data || {};
+                    return error;
+                };
                 const req = http.request(
                     {
                         hostname: '127.0.0.1',
@@ -167,20 +175,38 @@ function createBackendManager({
                                 try {
                                     data = JSON.parse(raw);
                                 } catch (_) {
-                                    reject(new Error(`后端返回了无效 JSON: ${raw.slice(0, 200)}`));
+                                    const error = new Error(`后端返回了无效 JSON: ${raw.slice(0, 200)}`);
+                                    error.status = Number(res.statusCode || 500);
+                                    error.code = 'invalid_json';
+                                    error.endpoint = endpoint;
+                                    error.data = { raw: raw.slice(0, 200) };
+                                    reject(error);
                                     return;
                                 }
                             }
                             if ((res.statusCode || 500) >= 400) {
-                                reject(new Error(data?.message || `后端请求失败 (${res.statusCode})`));
+                                reject(buildHttpError(res.statusCode || 500, data, `后端请求失败 (${res.statusCode})`));
                                 return;
                             }
                             resolve(data);
                         });
                     }
                 );
-                req.on('error', reject);
-                req.on('timeout', () => req.destroy(new Error('请求超时')));
+                req.on('error', (error) => {
+                    const requestError = error || new Error('后端请求失败');
+                    if (!requestError.code) {
+                        requestError.code = 'network_error';
+                    }
+                    requestError.endpoint = requestError.endpoint || endpoint;
+                    reject(requestError);
+                });
+                req.on('timeout', () => {
+                    const timeoutError = new Error('请求超时');
+                    timeoutError.code = 'timeout';
+                    timeoutError.status = 504;
+                    timeoutError.endpoint = endpoint;
+                    req.destroy(timeoutError);
+                });
                 if (body) {
                     req.write(body);
                 }

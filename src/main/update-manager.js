@@ -3,7 +3,9 @@ const fsp = require('fs/promises');
 const http = require('http');
 const https = require('https');
 const path = require('path');
+const crypto = require('crypto');
 const { spawn } = require('child_process');
+const { validateExternalOpenUrl } = require('./external-url-policy');
 
 const DEFAULT_HEADERS = {
     'accept': 'application/vnd.github+json',
@@ -12,6 +14,10 @@ const DEFAULT_HEADERS = {
 };
 
 const SETUP_ASSET_PATTERN = /^wechat-ai-assistant-setup-.*\.exe$/i;
+const CHECKSUM_ASSET_PATTERN = /^sha256sums\.txt$/i;
+const UPDATE_METADATA_TIMEOUT_MS = 15000;
+const UPDATE_DOWNLOAD_TIMEOUT_MS = 3 * 60 * 1000;
+const TRUSTED_RELEASE_HOSTS = new Set(['github.com', 'www.github.com']);
 
 function normalizeVersion(value) {
     return String(value || '').trim().replace(/^v/i, '');
@@ -95,6 +101,34 @@ function selectSetupAsset(assets) {
     }) || null;
 }
 
+function selectChecksumAsset(assets) {
+    const normalizedAssets = Array.isArray(assets) ? assets : [];
+    return normalizedAssets.find((asset) => {
+        const name = String(asset?.name || '').trim();
+        return CHECKSUM_ASSET_PATTERN.test(name);
+    }) || null;
+}
+
+function parseChecksumManifest(rawText = '') {
+    const checksums = new Map();
+    String(rawText || '')
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .forEach((line) => {
+            const match = line.match(/^([a-f0-9]{64})\s+\*?(.+)$/i);
+            if (!match?.[1] || !match?.[2]) {
+                return;
+            }
+            const checksum = String(match[1] || '').trim().toLowerCase();
+            const filename = path.basename(String(match[2] || '').trim()).toLowerCase();
+            if (checksum && filename) {
+                checksums.set(filename, checksum);
+            }
+        });
+    return checksums;
+}
+
 function isRedirectStatus(statusCode) {
     return [301, 302, 303, 307, 308].includes(Number(statusCode || 0));
 }
@@ -124,10 +158,43 @@ async function safeUnlink(filePath) {
     }
 }
 
+function isSha256(value) {
+    return /^[a-f0-9]{64}$/i.test(String(value || '').trim());
+}
+
+async function computeFileSha256(filePath) {
+    return new Promise((resolve, reject) => {
+        const hash = crypto.createHash('sha256');
+        const reader = fs.createReadStream(filePath);
+        reader.on('error', reject);
+        reader.on('data', (chunk) => hash.update(chunk));
+        reader.on('end', () => resolve(hash.digest('hex').toLowerCase()));
+    });
+}
+
+function computeFileSha256Sync(filePath) {
+    const hash = crypto.createHash('sha256');
+    const fd = fs.openSync(filePath, 'r');
+    const buffer = Buffer.allocUnsafe(1024 * 1024);
+    try {
+        let bytesRead = 0;
+        do {
+            bytesRead = fs.readSync(fd, buffer, 0, buffer.length, null);
+            if (bytesRead > 0) {
+                hash.update(buffer.subarray(0, bytesRead));
+            }
+        } while (bytesRead > 0);
+    } finally {
+        fs.closeSync(fd);
+    }
+    return hash.digest('hex').toLowerCase();
+}
+
 function requestJson(url, options = {}) {
     const {
         headers = {},
         maxRedirects = 5,
+        timeoutMs = UPDATE_METADATA_TIMEOUT_MS,
     } = options;
 
     return new Promise((resolve, reject) => {
@@ -144,12 +211,12 @@ function requestJson(url, options = {}) {
             if (isRedirectStatus(statusCode) && response.headers.location) {
                 if (maxRedirects <= 0) {
                     response.resume();
-                    reject(new Error('请求重定向次数过多'));
+                    reject(new Error('too many redirects'));
                     return;
                 }
                 const redirectUrl = new URL(response.headers.location, urlObject).toString();
                 response.resume();
-                resolve(requestJson(redirectUrl, { headers, maxRedirects: maxRedirects - 1 }));
+                resolve(requestJson(redirectUrl, { headers, maxRedirects: maxRedirects - 1, timeoutMs }));
                 return;
             }
 
@@ -158,16 +225,16 @@ function requestJson(url, options = {}) {
             response.on('end', () => {
                 const raw = Buffer.concat(chunks).toString('utf8');
                 if (statusCode < 200 || statusCode >= 300) {
-                    let message = `请求失败 (${statusCode})`;
+                    let message = `闂傚倷娴囧畷鍨叏閺夋嚚娲敇閵忕姷鍝楅梻渚囧墮缁夌敻宕曢幋锔界厽婵°倐鍋撻柣妤€妫涘▎銏ゆ倷閸濆嫮楠囬梺鍓插亽閸嬪嫭绂嶉婊勫仏?(${statusCode})`;
                     try {
                         const payload = JSON.parse(raw);
                         const detail = String(payload?.message || '').trim();
                         if (detail) {
-                            message = `请求失败 (${statusCode}): ${detail}`;
+                            message = `闂傚倷娴囧畷鍨叏閺夋嚚娲敇閵忕姷鍝楅梻渚囧墮缁夌敻宕曢幋锔界厽婵°倐鍋撻柣妤€妫涘▎銏ゆ倷閸濆嫮楠囬梺鍓插亽閸嬪嫭绂嶉婊勫仏?(${statusCode}): ${detail}`;
                         }
                     } catch (_) {
                         if (raw.trim()) {
-                            message = `请求失败 (${statusCode}): ${raw.trim()}`;
+                            message = `闂傚倷娴囧畷鍨叏閺夋嚚娲敇閵忕姷鍝楅梻渚囧墮缁夌敻宕曢幋锔界厽婵°倐鍋撻柣妤€妫涘▎銏ゆ倷閸濆嫮楠囬梺鍓插亽閸嬪嫭绂嶉婊勫仏?(${statusCode}): ${raw.trim()}`;
                         }
                     }
                     reject(new Error(message));
@@ -177,11 +244,68 @@ function requestJson(url, options = {}) {
                 try {
                     resolve(JSON.parse(raw));
                 } catch (error) {
-                    reject(new Error('更新服务返回了无效 JSON'));
+                    reject(new Error('闂傚倸鍊风粈渚€骞栭鈷氭椽濡舵径瀣槐闂侀潧艌閺呮盯鎷戦悢灏佹斀闁绘ê寮堕幖鎰版倵濮橆剦妲洪柍褜鍓欑粻宥夊磿闁秴绠犻幖鎼厜缂嶆牠鏌曢崼婵愭Ц缂佺嫏鍥ㄧ厓闁告繂瀚埀顒€缍婇幃锟犲Ψ閿斿墽顔曢梺鍛婄懃椤﹁鲸鏅堕鍌滅＜闁稿本姘ㄦ晥閻庤娲栧畷顒冪亽婵炴潙鍚嬮悷鈺呮偘濠婂牊鈷?JSON'));
                 }
             });
         });
 
+        if (Number(timeoutMs) > 0) {
+            request.setTimeout(Number(timeoutMs), () => {
+                request.destroy(new Error('request timeout'));
+            });
+        }
+        request.on('error', reject);
+        request.end();
+    });
+}
+
+function requestText(url, options = {}) {
+    const {
+        headers = {},
+        maxRedirects = 5,
+        timeoutMs = UPDATE_METADATA_TIMEOUT_MS,
+    } = options;
+
+    return new Promise((resolve, reject) => {
+        const urlObject = new URL(url);
+        const client = getHttpModule(urlObject);
+        const request = client.request(urlObject, {
+            method: 'GET',
+            headers: {
+                ...DEFAULT_HEADERS,
+                ...headers,
+            },
+        }, (response) => {
+            const statusCode = Number(response.statusCode || 0);
+            if (isRedirectStatus(statusCode) && response.headers.location) {
+                if (maxRedirects <= 0) {
+                    response.resume();
+                    reject(new Error('request timeout'));
+                    return;
+                }
+                const redirectUrl = new URL(response.headers.location, urlObject).toString();
+                response.resume();
+                resolve(requestText(redirectUrl, { headers, maxRedirects: maxRedirects - 1, timeoutMs }));
+                return;
+            }
+
+            const chunks = [];
+            response.on('data', (chunk) => chunks.push(chunk));
+            response.on('end', () => {
+                const raw = Buffer.concat(chunks).toString('utf8');
+                if (statusCode < 200 || statusCode >= 300) {
+                    reject(new Error(`濠电姷鏁搁崑鐐哄垂閸洖绠伴柟闂寸贰閺佸嫰鏌涢锝囪穿鐟滅増甯掗悙濠冦亜閹哄棗浜鹃梺鍛婂姀閸嬫捇姊绘担鑺ョ《闁哥姵鎸婚幈銊ョ暋閹殿喗娈鹃梺鎸庣箓椤︿即鎮″☉銏＄厱閻忕偛澧介。鏌ユ煟椤撶噥娈曠紒缁樼洴瀹曢亶骞囬鍌欑棯闁诲骸鐏氬妯尖偓姘煎幖椤洩绠涘☉杈ㄦ櫇闂?(${statusCode})`));
+                    return;
+                }
+                resolve(raw);
+            });
+        });
+
+        if (Number(timeoutMs) > 0) {
+            request.setTimeout(Number(timeoutMs), () => {
+                request.destroy(new Error('request timeout'));
+            });
+        }
         request.on('error', reject);
         request.end();
     });
@@ -192,6 +316,7 @@ function downloadToFile(url, destinationPath, options = {}) {
         headers = {},
         onProgress = null,
         maxRedirects = 5,
+        timeoutMs = UPDATE_DOWNLOAD_TIMEOUT_MS,
     } = options;
 
     return new Promise((resolve, reject) => {
@@ -208,7 +333,7 @@ function downloadToFile(url, destinationPath, options = {}) {
             if (isRedirectStatus(statusCode) && response.headers.location) {
                 if (maxRedirects <= 0) {
                     response.resume();
-                    reject(new Error('下载重定向次数过多'));
+                    reject(new Error('request timeout'));
                     return;
                 }
                 const redirectUrl = new URL(response.headers.location, urlObject).toString();
@@ -217,13 +342,14 @@ function downloadToFile(url, destinationPath, options = {}) {
                     headers,
                     onProgress,
                     maxRedirects: maxRedirects - 1,
+                    timeoutMs,
                 }));
                 return;
             }
 
             if (statusCode < 200 || statusCode >= 300) {
                 response.resume();
-                reject(new Error(`下载安装包失败 (${statusCode})`));
+                reject(new Error(`濠电姷鏁搁崑鐐哄垂閸洖绠伴柟闂寸贰閺佸嫰鏌涢锝囪穿鐟滅増甯掗悙濠囨煃鐟欏嫬鍔ゅù婊堢畺閺岋綁鎮㈤悡搴濆枈濠碘剝褰冮崥瀣Φ閸曨垰唯闁靛鍨甸崥顐︽倵鐟欏嫭绀堝┑鐐╁亾閻庤娲忛崝鎴︺€佸Ο渚叆闁逞屽墴瀵爼顢橀姀锛勫幗?(${statusCode})`));
                 return;
             }
 
@@ -264,6 +390,11 @@ function downloadToFile(url, destinationPath, options = {}) {
             response.pipe(writer);
         });
 
+        if (Number(timeoutMs) > 0) {
+            request.setTimeout(Number(timeoutMs), () => {
+                request.destroy(new Error('download timeout'));
+            });
+        }
         request.on('error', reject);
         request.end();
     });
@@ -277,6 +408,7 @@ class UpdateManager {
         isDev = false,
         getMainWindow,
         requestJsonImpl = requestJson,
+        requestTextImpl = requestText,
         downloadToFileImpl = downloadToFile,
     }) {
         this.app = app;
@@ -285,11 +417,13 @@ class UpdateManager {
         this.isDev = !!isDev;
         this.getMainWindow = getMainWindow;
         this._requestJson = requestJsonImpl;
+        this._requestText = requestTextImpl;
         this._downloadToFile = downloadToFileImpl;
         this._packageMetadata = null;
         this._autoCheckTimer = null;
         this._currentDownloadPromise = null;
         this._pendingInstallerPath = '';
+        this._pendingInstallerSha256 = '';
         this.state = this._buildInitialState();
     }
 
@@ -337,7 +471,7 @@ class UpdateManager {
         if (this.state.checking) {
             return {
                 success: false,
-                error: '正在检查更新，请稍后再试',
+                error: 'update check failed',
                 state: this.getState(),
             };
         }
@@ -351,20 +485,49 @@ class UpdateManager {
         });
 
         try {
-            const release = await this._requestJson(this._getLatestReleaseApiUrl());
+            const release = await this._requestJson(this._getLatestReleaseApiUrl(), {
+                timeoutMs: UPDATE_METADATA_TIMEOUT_MS,
+            });
             const latestVersion = normalizeVersion(release?.tag_name || release?.name || '');
             if (!latestVersion) {
-                throw new Error('未解析到最新版本号');
+                throw new Error('checksum manifest is required before download');
             }
 
             this.clearSkippedVersionIfOutdated(latestVersion);
 
             const asset = selectSetupAsset(release?.assets);
+            const assetName = String(asset?.name || '').trim();
             const downloadUrl = String(asset?.browser_download_url || '').trim();
+            const checksumAsset = selectChecksumAsset(release?.assets);
+            const checksumAssetUrl = String(checksumAsset?.browser_download_url || '').trim();
+            let checksumExpected = '';
             const releasePageUrl = String(release?.html_url || this._getReleasePageUrl()).trim();
             const notes = parseReleaseNotes(release?.body);
             const updateAvailable = compareVersions(latestVersion, this.app.getVersion()) > 0;
             const readyToInstall = this._hasDownloadedInstallerForVersion(latestVersion);
+            const downloadedChecksum = String(this.state.downloadedInstallerSha256 || '').trim().toLowerCase();
+            let checksumError = '';
+            if (updateAvailable && !readyToInstall && downloadUrl && assetName) {
+                if (!checksumAssetUrl) {
+                    checksumError = 'Release is missing SHA256SUMS.txt, in-app install is blocked';
+                } else {
+                    try {
+                        const checksumManifest = await this._requestText(checksumAssetUrl, {
+                            timeoutMs: UPDATE_METADATA_TIMEOUT_MS,
+                        });
+                        const checksumMap = parseChecksumManifest(checksumManifest);
+                        checksumExpected = String(checksumMap.get(assetName.toLowerCase()) || '').trim().toLowerCase();
+                        if (!isSha256(checksumExpected)) {
+                            checksumError = 'Setup checksum is missing from SHA256SUMS.txt';
+                        }
+                    } catch (checksumFetchError) {
+                        checksumError = this._formatErrorMessage(
+                            checksumFetchError,
+                            'Failed to load SHA256SUMS.txt',
+                        );
+                    }
+                }
+            }
             const statePatch = {
                 checking: false,
                 enabled: true,
@@ -378,16 +541,28 @@ class UpdateManager {
                 readyToInstall,
                 downloadedVersion: readyToInstall ? latestVersion : this.state.downloadedVersion,
                 downloadedInstallerPath: readyToInstall ? this.state.downloadedInstallerPath : this.state.downloadedInstallerPath,
+                checksumAssetUrl: updateAvailable ? checksumAssetUrl : '',
+                checksumExpected: checksumExpected || (readyToInstall ? downloadedChecksum : ''),
+                checksumActual: readyToInstall ? downloadedChecksum : '',
+                checksumVerified: readyToInstall,
             };
 
-            if (updateAvailable && !downloadUrl) {
-                statePatch.error = '发现新版本，但未找到可下载的安装包';
+            if (updateAvailable && !readyToInstall && !downloadUrl) {
+                statePatch.error = 'Update found but no downloadable installer asset was detected.';
+            }
+
+            if (!statePatch.error && checksumError) {
+                statePatch.error = checksumError;
             }
 
             if (!updateAvailable && !readyToInstall) {
                 statePatch.downloadUrl = '';
                 statePatch.releaseDate = release?.published_at || '';
                 statePatch.notes = [];
+                statePatch.checksumAssetUrl = '';
+                statePatch.checksumExpected = '';
+                statePatch.checksumActual = '';
+                statePatch.checksumVerified = false;
             }
 
             this._setState(statePatch);
@@ -399,7 +574,7 @@ class UpdateManager {
                 error: statePatch.error || '',
             };
         } catch (error) {
-            const message = this._formatErrorMessage(error, '检查更新失败');
+            const message = this._formatErrorMessage(error, 'Failed to check updates');
             this._setState({
                 checking: false,
                 enabled: this._isUpdateSupported(),
@@ -416,17 +591,40 @@ class UpdateManager {
     async openDownloadPage() {
         const targetUrl = this.state.releasePageUrl || this._getReleasePageUrl();
         if (!targetUrl) {
-            return { success: false, error: '未找到 GitHub Releases 地址' };
+            return { success: false, error: 'GitHub Releases URL was not found.' };
         }
 
-        await this.shell.openExternal(targetUrl);
-        return { success: true, url: targetUrl };
+        const policy = validateExternalOpenUrl(targetUrl);
+        if (!policy.success) {
+            return { success: false, error: policy.error };
+        }
+
+        const normalizedUrl = String(policy.normalizedUrl || '').trim();
+        if (!normalizedUrl) {
+            return { success: false, error: 'invalid_url' };
+        }
+
+        let parsed;
+        try {
+            parsed = new URL(normalizedUrl);
+        } catch (_) {
+            return { success: false, error: 'invalid_url' };
+        }
+        if (parsed.protocol !== 'https:') {
+            return { success: false, error: 'blocked_protocol' };
+        }
+        if (!this._isTrustedReleaseHost(parsed.hostname)) {
+            return { success: false, error: 'untrusted_release_host' };
+        }
+
+        await this.shell.openExternal(normalizedUrl);
+        return { success: true, url: normalizedUrl };
     }
 
     skipVersion(version) {
         const nextVersion = normalizeVersion(version || this.state.latestVersion);
         if (!nextVersion) {
-            return { success: false, error: '未指定要跳过的版本' };
+            return { success: false, error: 'No downloadable update is available right now.', state: this.getState() };
         }
 
         this._storeSet('update.skippedVersion', nextVersion);
@@ -451,15 +649,19 @@ class UpdateManager {
 
     async downloadUpdate() {
         if (!this.state.available || !this.state.latestVersion) {
-            return { success: false, error: '当前没有可下载的新版本', state: this.getState() };
-        }
-
-        if (!this.state.downloadUrl) {
-            return { success: false, error: '未找到更新下载地址', state: this.getState() };
+            return { success: false, error: 'Installer package is not ready yet', state: this.getState() };
         }
 
         if (this.state.readyToInstall && this._hasDownloadedInstallerForVersion(this.state.latestVersion)) {
             return { success: true, alreadyDownloaded: true, state: this.getState() };
+        }
+
+        if (!isSha256(this.state.checksumExpected)) {
+            return { success: false, error: 'Missing trusted checksum metadata, please check updates again', state: this.getState() };
+        }
+
+        if (!this.state.downloadUrl) {
+            return { success: false, error: 'Missing update download URL', state: this.getState() };
         }
 
         if (this._currentDownloadPromise) {
@@ -474,21 +676,41 @@ class UpdateManager {
 
     prepareInstall() {
         const installerPath = this.state.downloadedInstallerPath;
-        if (!this.state.readyToInstall || !installerPath || !fs.existsSync(installerPath)) {
-            return { success: false, error: '更新安装包尚未准备好' };
+        this._pendingInstallerPath = '';
+        this._pendingInstallerSha256 = '';
+        if (!this.state.readyToInstall || !installerPath || !fs.existsSync(installerPath) || !this.state.checksumVerified || !isSha256(this.state.downloadedInstallerSha256 || '')) {
+            return { success: false, error: 'Failed to download installer, please retry later', state: this.getState() };
+        }
+
+        const expectedChecksum = String(this.state.downloadedInstallerSha256 || '').trim().toLowerCase();
+        const integrity = this._validateInstallerChecksum(installerPath, expectedChecksum);
+        if (!integrity.valid) {
+            this._markInstallerUnverified(installerPath, integrity.actualChecksum);
+            return { success: false, error: 'Installer checksum mismatch, please re-download update' };
         }
 
         this._pendingInstallerPath = installerPath;
+        this._pendingInstallerSha256 = expectedChecksum;
         return { success: true, state: this.getState() };
     }
 
     launchPreparedInstaller() {
         if (!this._pendingInstallerPath || !fs.existsSync(this._pendingInstallerPath)) {
-            return { success: false, error: '未找到待安装的更新包' };
+            return { success: false, error: 'Missing prepared installer file' };
         }
 
         const installerPath = this._pendingInstallerPath;
+        const expectedChecksum = String(this._pendingInstallerSha256 || '').trim().toLowerCase();
+        const integrity = this._validateInstallerChecksum(installerPath, expectedChecksum);
+        if (!integrity.valid) {
+            this._pendingInstallerPath = '';
+            this._pendingInstallerSha256 = '';
+            this._markInstallerUnverified(installerPath, integrity.actualChecksum);
+            return { success: false, error: 'Installer checksum mismatch, install aborted' };
+        }
+
         this._pendingInstallerPath = '';
+        this._pendingInstallerSha256 = '';
 
         const command = `Start-Sleep -Seconds 2; Start-Process -FilePath '${powershellSingleQuote(installerPath)}'`;
         const child = spawn('powershell.exe', [
@@ -510,7 +732,23 @@ class UpdateManager {
         const currentVersion = normalizeVersion(this.app.getVersion());
         const storedPath = String(this._storeGet('update.downloadedInstallerPath', '') || '').trim();
         const storedVersion = normalizeVersion(this._storeGet('update.downloadedVersion', ''));
-        const hasDownloaded = !!(storedPath && storedVersion && fs.existsSync(storedPath) && compareVersions(storedVersion, currentVersion) > 0);
+        const storedChecksum = String(this._storeGet('update.downloadedInstallerSha256', '') || '').trim().toLowerCase();
+        const storedVerified = !!this._storeGet('update.downloadedInstallerVerified', false);
+        const storedIntegrity = this._validateInstallerChecksum(storedPath, storedChecksum);
+        const hasDownloaded = !!(
+            storedPath
+            && storedVersion
+            && storedVerified
+            && isSha256(storedChecksum)
+            && storedIntegrity.valid
+            && compareVersions(storedVersion, currentVersion) > 0
+        );
+        if (storedPath && storedVerified && !storedIntegrity.valid) {
+            this._storeSet('update.downloadedInstallerVerified', false);
+        }
+        const verifiedChecksum = hasDownloaded
+            ? (storedIntegrity.actualChecksum || storedChecksum)
+            : '';
         return {
             enabled: this._isUpdateSupported(),
             checking: false,
@@ -529,13 +767,18 @@ class UpdateManager {
             readyToInstall: hasDownloaded,
             downloadedVersion: hasDownloaded ? storedVersion : '',
             downloadedInstallerPath: hasDownloaded ? storedPath : '',
+            downloadedInstallerSha256: verifiedChecksum,
+            checksumAssetUrl: '',
+            checksumExpected: verifiedChecksum,
+            checksumActual: verifiedChecksum,
+            checksumVerified: hasDownloaded,
         };
     }
 
     _refreshStateFromDisk() {
         const nextState = this._buildInitialState();
         if (nextState.readyToInstall) {
-            nextState.notes = ['已下载更新安装包，确认后即可安装并重启。'];
+            nextState.notes = ['Update package is ready. Please install and restart to complete update.'];
         }
         this.state = nextState;
     }
@@ -592,6 +835,14 @@ class UpdateManager {
         return buildReleasePageUrl(this._getRepositoryInfo());
     }
 
+    _isTrustedReleaseHost(hostname) {
+        const normalized = String(hostname || '').trim().toLowerCase();
+        if (!normalized) {
+            return false;
+        }
+        return TRUSTED_RELEASE_HOSTS.has(normalized);
+    }
+
     _getLatestReleaseApiUrl() {
         return buildLatestReleaseApiUrl(this._getRepositoryInfo());
     }
@@ -604,13 +855,47 @@ class UpdateManager {
         const normalizedVersion = normalizeVersion(version);
         const downloadedVersion = normalizeVersion(this.state.downloadedVersion || this._storeGet('update.downloadedVersion', ''));
         const installerPath = String(this.state.downloadedInstallerPath || this._storeGet('update.downloadedInstallerPath', '') || '').trim();
+        const downloadedChecksum = String(this.state.downloadedInstallerSha256 || this._storeGet('update.downloadedInstallerSha256', '') || '').trim().toLowerCase();
+        const downloadedVerified = !!(this.state.checksumVerified || this._storeGet('update.downloadedInstallerVerified', false));
+        const integrity = this._validateInstallerChecksum(installerPath, downloadedChecksum);
         return !!(
             normalizedVersion
             && downloadedVersion
             && compareVersions(downloadedVersion, normalizedVersion) === 0
             && installerPath
-            && fs.existsSync(installerPath)
+            && downloadedVerified
+            && isSha256(downloadedChecksum)
+            && integrity.valid
         );
+    }
+
+    _validateInstallerChecksum(installerPath, expectedChecksum) {
+        const normalizedPath = String(installerPath || '').trim();
+        const normalizedExpected = String(expectedChecksum || '').trim().toLowerCase();
+        if (!normalizedPath || !isSha256(normalizedExpected) || !fs.existsSync(normalizedPath)) {
+            return { valid: false, actualChecksum: '' };
+        }
+        try {
+            const actualChecksum = computeFileSha256Sync(normalizedPath);
+            return {
+                valid: actualChecksum === normalizedExpected,
+                actualChecksum,
+            };
+        } catch (_) {
+            return { valid: false, actualChecksum: '' };
+        }
+    }
+
+    _markInstallerUnverified(installerPath, actualChecksum = '') {
+        const normalizedPath = String(installerPath || '').trim();
+        const normalizedActual = String(actualChecksum || '').trim().toLowerCase();
+        this._storeSet('update.downloadedInstallerVerified', false);
+        this._setState({
+            readyToInstall: false,
+            checksumVerified: false,
+            checksumActual: normalizedActual || '',
+            downloadedInstallerPath: normalizedPath || this.state.downloadedInstallerPath,
+        });
     }
 
     _isPortableEnvironment() {
@@ -627,9 +912,9 @@ class UpdateManager {
 
     _getUnsupportedMessage() {
         if (this._isPortableEnvironment()) {
-            return '应用内自动更新仅支持安装版，请前往 GitHub Releases 下载最新版本。';
+            return 'Automatic in-app update is unavailable in this environment. Please download from GitHub Releases.';
         }
-        return '当前环境未启用更新检查。';
+        return 'Current environment does not support update checks.';
     }
 
     _formatErrorMessage(error, fallback) {
@@ -655,8 +940,17 @@ class UpdateManager {
         const latestVersion = this.state.latestVersion;
         const downloadUrl = this.state.downloadUrl;
         const releasePageUrl = this.state.releasePageUrl || this._getReleasePageUrl();
-        if (!latestVersion || !downloadUrl) {
-            return { success: false, error: '未找到更新下载地址', state: this.getState() };
+        const expectedChecksum = String(this.state.checksumExpected || '').trim().toLowerCase();
+        if (!latestVersion) {
+            return { success: false, error: 'No target version is available yet, please check updates first', state: this.getState() };
+        }
+
+        if (!isSha256(expectedChecksum)) {
+            return { success: false, error: 'Missing checksum metadata, please check updates again', state: this.getState() };
+        }
+
+        if (!downloadUrl) {
+            return { success: false, error: 'Missing trusted checksum metadata, please check updates again', state: this.getState() };
         }
 
         const downloadDir = this._getDownloadDirectory();
@@ -673,10 +967,14 @@ class UpdateManager {
             readyToInstall: false,
             error: '',
             releasePageUrl,
+            checksumExpected: expectedChecksum,
+            checksumActual: '',
+            checksumVerified: false,
         });
 
         try {
             await this._downloadToFile(downloadUrl, tempPath, {
+                timeoutMs: UPDATE_DOWNLOAD_TIMEOUT_MS,
                 onProgress: ({ downloadedBytes, totalBytes }) => {
                     if (!totalBytes || totalBytes <= 0) {
                         return;
@@ -690,6 +988,11 @@ class UpdateManager {
 
             await safeUnlink(finalPath);
             await fsp.rename(tempPath, finalPath);
+            const actualChecksum = await computeFileSha256(finalPath);
+            if (actualChecksum !== expectedChecksum) {
+                await safeUnlink(finalPath);
+                throw new Error('Update package SHA256 verification failed, please re-download');
+            }
 
             if (previousPath && previousPath !== finalPath) {
                 await safeUnlink(previousPath);
@@ -697,12 +1000,18 @@ class UpdateManager {
 
             this._storeSet('update.downloadedInstallerPath', finalPath);
             this._storeSet('update.downloadedVersion', latestVersion);
+            this._storeSet('update.downloadedInstallerSha256', actualChecksum);
+            this._storeSet('update.downloadedInstallerVerified', true);
             this._setState({
                 downloading: false,
                 downloadProgress: 100,
                 readyToInstall: true,
                 downloadedVersion: latestVersion,
                 downloadedInstallerPath: finalPath,
+                downloadedInstallerSha256: actualChecksum,
+                checksumExpected: expectedChecksum,
+                checksumActual: actualChecksum,
+                checksumVerified: true,
                 notes: [
                     ...(Array.isArray(this.state.notes) ? this.state.notes : []),
                 ],
@@ -714,11 +1023,18 @@ class UpdateManager {
             };
         } catch (error) {
             await safeUnlink(tempPath);
-            const message = this._formatErrorMessage(error, '下载安装包失败');
+            const message = this._formatErrorMessage(error, 'Failed to download installer');
+            const fallbackReady = this._hasDownloadedInstallerForVersion(latestVersion);
+            const fallbackChecksum = fallbackReady
+                ? String(this.state.downloadedInstallerSha256 || this._storeGet('update.downloadedInstallerSha256', '') || '').trim().toLowerCase()
+                : '';
             this._setState({
                 downloading: false,
                 downloadProgress: 0,
-                readyToInstall: this._hasDownloadedInstallerForVersion(latestVersion),
+                readyToInstall: fallbackReady,
+                checksumExpected: fallbackReady ? fallbackChecksum : expectedChecksum,
+                checksumActual: fallbackReady ? fallbackChecksum : '',
+                checksumVerified: fallbackReady,
                 error: message,
             });
             return {
@@ -740,5 +1056,8 @@ module.exports = {
         buildLatestReleaseApiUrl,
         parseReleaseNotes,
         selectSetupAsset,
+        selectChecksumAsset,
+        parseChecksumManifest,
+        isSha256,
     },
 };

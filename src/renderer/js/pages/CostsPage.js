@@ -22,6 +22,7 @@ export class CostsPage extends PageController {
         this._sessions = [];
         this._details = new Map();
         this._loading = false;
+        this._pendingRefresh = false;
         this._lastLoadedAt = 0;
     }
 

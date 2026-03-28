@@ -30,6 +30,19 @@ function isSensitiveKey(key = '') {
     );
 }
 
+const LOG_SECRET_PATTERNS = [
+    /(authorization\s*:\s*bearer\s+)[^\s"']+/ig,
+    /((?:api[_-]?key|token|secret|password)\s*[=:]\s*)[^\s,;]+/ig,
+];
+
+function sanitizeLogLine(value) {
+    let text = String(value || '');
+    LOG_SECRET_PATTERNS.forEach((pattern) => {
+        text = text.replace(pattern, '$1***');
+    });
+    return text;
+}
+
 function sanitizeSnapshotPayload(value) {
     if (Array.isArray(value)) {
         return value.map((item) => sanitizeSnapshotPayload(item));
@@ -80,6 +93,7 @@ function buildDiagnosticsSnapshot({
     configPayload = {},
     logs = [],
     updateState = {},
+    backupSummary = null,
     idleState = {},
     platform = {},
     collectionErrors = [],
@@ -97,12 +111,27 @@ function buildDiagnosticsSnapshot({
             readiness,
             idle_state: idleState,
         },
-        update: updateState,
+        update: {
+            ...(updateState || {}),
+            integrity: {
+                checksum_verified: !!updateState?.checksumVerified,
+                checksum_expected: String(updateState?.checksumExpected || ''),
+                checksum_actual: String(updateState?.checksumActual || ''),
+                downloaded_version: String(updateState?.downloadedVersion || ''),
+            },
+        },
+        operations: {
+            backup: {
+                latest_quick_backup_at: backupSummary?.latest_quick_backup_at ?? null,
+                latest_full_backup_at: backupSummary?.latest_full_backup_at ?? null,
+                last_restore_result: backupSummary?.last_restore_result || null,
+            },
+        },
         config: {
             audit: configAudit,
             effective: pickSafeConfig(configPayload),
         },
-        logs: Array.isArray(logs) ? logs.slice(0, 200) : [],
+        logs: Array.isArray(logs) ? logs.slice(0, 200).map((item) => sanitizeLogLine(item)) : [],
         collection_errors: Array.isArray(collectionErrors)
             ? collectionErrors.filter(Boolean).map((item) => String(item))
             : [],

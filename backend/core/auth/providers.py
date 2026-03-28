@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shlex
 import shutil
 import sqlite3
 import subprocess
@@ -220,9 +221,15 @@ class _ClaudeApiKeyHelperRuntime:
             self._cached_at = 0.0
 
     def _invoke_helper(self) -> str:
+        try:
+            helper_args = shlex.split(self._command, posix=(os.name != "nt"))
+        except ValueError as exc:
+            raise AuthSupportError(f"Claude apiKeyHelper 命令解析失败: {exc}") from exc
+        if not helper_args:
+            raise AuthSupportError("Claude apiKeyHelper 命令为空，无法执行。")
         completed = subprocess.run(
-            self._command,
-            shell=True,
+            helper_args,
+            shell=False,
             capture_output=True,
             text=False,
             timeout=15,

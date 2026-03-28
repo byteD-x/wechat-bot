@@ -171,7 +171,7 @@ class BotConfig(BaseModel):
     max_context_facts: int = 20
     profile_inject_in_prompt: bool = True
     rag_enabled: bool = False
-    export_rag_enabled: bool = True
+    export_rag_enabled: bool = False
     export_rag_dir: str = "data/chat_exports/聊天记录"
     export_rag_auto_ingest: bool = True
     export_rag_max_chunks_per_chat: int = 500
@@ -195,7 +195,7 @@ class BotConfig(BaseModel):
     reply_policy: ReplyPolicyConfig = Field(default_factory=ReplyPolicyConfig)
 
     # Usage tracking
-    usage_tracking_enabled: bool = True
+    usage_tracking_enabled: bool = False
     daily_token_limit: int = 0
     token_warning_threshold: float = 0.8
 

@@ -12,6 +12,7 @@ import {
     bindLogsEvents,
     syncLogsPageOptions,
 } from '../../src/renderer/js/pages/logs/page-shell.js';
+import { renderLogsPageShell } from '../../src/renderer/js/app-shell/pages/logs.js';
 import {
     clearRefreshTimer,
     scrollToBottom,
@@ -48,6 +49,16 @@ function createToastRecorder() {
             return error?.message || fallback;
         },
     };
+}
+
+function createDeferred() {
+    let resolve;
+    let reject;
+    const promise = new Promise((res, rej) => {
+        resolve = res;
+        reject = rej;
+    });
+    return { promise, resolve, reject };
 }
 
 function setStateValue(target, path, value) {
@@ -236,7 +247,7 @@ test('logs data helpers support copy and export flows', async () => withDom(asyn
     assert.deepEqual(clipboardWrites, ['line 1\nline 2']);
     assert.equal(toast.calls.at(-1)?.message, '日志已复制到剪贴板');
 
-    exportLogs(page, {
+    await exportLogs(page, {
         toast,
         downloadLogTextFile: (filename, content) => {
             exports.push({ filename, content });
@@ -245,6 +256,61 @@ test('logs data helpers support copy and export flows', async () => withDom(asyn
     });
     assert.equal(exports[0].filename, 'wechat-ai-assistant-logs-123.log');
     assert.equal(exports[0].content, 'line 1\nline 2');
+
+    const errors = [];
+    await exportLogs(page, {
+        toast: {
+            ...toast,
+            success: (message) => {
+                errors.push(['success', message]);
+            },
+            error: (message) => {
+                errors.push(['error', message]);
+            },
+        },
+        downloadLogTextFile: () => {
+            throw new Error('boom');
+        },
+        nowFn: () => 456,
+    });
+    assert.deepEqual(errors, [['error', 'boom']]);
+}));
+
+test('logs refresh helpers ignore stale responses from older requests', async () => withDom(async ({ document }) => {
+    const selectors = {
+        '#log-content': document.createElement('div'),
+        '#log-count': document.createElement('div'),
+        '#log-visible-count': document.createElement('div'),
+        '#log-updated': document.createElement('div'),
+    };
+    const page = createLogsPage({
+        bot: { connected: true },
+        logs: { autoScroll: false },
+    }, selectors);
+
+    const first = createDeferred();
+    const second = createDeferred();
+    const apiService = {
+        getLogs: async () => {
+            if (!apiService.calls) {
+                apiService.calls = 0;
+            }
+            apiService.calls += 1;
+            return apiService.calls === 1 ? first.promise : second.promise;
+        },
+    };
+
+    const firstRefresh = refreshLogs(page, {}, { apiService });
+    const secondRefresh = refreshLogs(page, {}, { apiService });
+
+    second.resolve({ success: true, logs: ['second latest'] });
+    await secondRefresh;
+    assert.equal(page._allLogs[0], 'second latest');
+
+    first.resolve({ success: true, logs: ['first stale'] });
+    await firstRefresh;
+    assert.equal(page._allLogs[0], 'second latest');
+    assert.equal(page._visibleLogs[0], 'second latest');
 }));
 
 test('logs page shell binds controls and watcher side effects stably', async () => {
@@ -258,6 +324,9 @@ test('logs page shell binds controls and watcher side effects stably', async () 
         bindings: [],
         watchers: [],
         state: {},
+        _keyword: 'keep',
+        _level: 'error',
+        _lineCount: 200,
         bindEvent(selector, type, handler) {
             this.bindings.push({ selector, type, handler });
         },
@@ -276,6 +345,9 @@ test('logs page shell binds controls and watcher side effects stably', async () 
         },
         setState(path, value) {
             setStateValue(this.state, path, value);
+        },
+        getState(path) {
+            return getStateValue(this.state, path);
         },
         isActive() {
             return true;
@@ -310,7 +382,7 @@ test('logs page shell binds controls and watcher side effects stably', async () 
         },
     });
 
-    assert.equal(page.bindings.length, 5);
+    assert.equal(page.bindings.length, 6);
     assert.equal(page.watchers.length, 1);
 
     searchInput.value = 'Err';
@@ -325,7 +397,7 @@ test('logs page shell binds controls and watcher side effects stably', async () 
     wrap.checked = true;
     wrap.listeners.change();
 
-    assert.deepEqual(calls[0], ['filter', 'err', undefined]);
+    assert.deepEqual(calls[0], ['filter', 'err', 'error']);
     assert.deepEqual(calls[1], ['filter', 'err', 'error']);
     assert.deepEqual(calls[2], ['refresh', {}]);
     assert.deepEqual(calls[3], ['scroll']);
@@ -336,13 +408,23 @@ test('logs page shell binds controls and watcher side effects stably', async () 
     const clearBtn = page.bindings.find((item) => item.selector === '#btn-clear-logs');
     const copyBtn = page.bindings.find((item) => item.selector === '#btn-copy-logs');
     const exportBtn = page.bindings.find((item) => item.selector === '#btn-export-logs');
+    const restoreBtn = page.bindings.find((item) => item.selector === '#btn-restore-log-default-view');
     await refreshBtn.handler();
     await clearBtn.handler();
     await copyBtn.handler();
-    exportBtn.handler();
+    await exportBtn.handler();
+    await restoreBtn.handler();
     assert.equal(calls.some((item) => item[0] === 'clear'), true);
     assert.equal(calls.some((item) => item[0] === 'copy'), true);
     assert.equal(calls.some((item) => item[0] === 'export'), true);
+    assert.equal(page.getState('logs.autoScroll'), true);
+    assert.equal(page.getState('logs.autoRefresh'), true);
+    assert.equal(page.getState('logs.wrap'), true);
+    assert.equal(page._lineCount, 500);
+    assert.equal(page._keyword, '');
+    assert.equal(page._level, '');
+    assert.equal(calls.some((item) => item[0] === 'setup'), true);
+    assert.equal(calls.some((item) => item[0] === 'wrap'), true);
 
     const connectedWatcher = page.watchers[0];
     connectedWatcher.handler(true);
@@ -358,4 +440,12 @@ test('logs page shell sync helper delegates to runtime sync', () => {
         },
     });
     assert.equal(synced, 1);
+});
+
+test('logs page shell contains unique reset and restore actions', () => {
+    const shell = renderLogsPageShell();
+    const resetMatches = shell.match(/id="btn-reset-log-filters"/g) || [];
+    const restoreMatches = shell.match(/id="btn-restore-log-default-view"/g) || [];
+    assert.equal(resetMatches.length, 1);
+    assert.equal(restoreMatches.length, 1);
 });

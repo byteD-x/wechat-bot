@@ -276,11 +276,18 @@ export function updatePresetHelpLink(page, providerId) {
     link.href = provider.api_key_url;
     link.onclick = async (event) => {
         event.preventDefault();
-        if (globalThis.window?.electronAPI?.openExternal) {
-            await globalThis.window.electronAPI.openExternal(provider.api_key_url);
-            return;
+        try {
+            if (globalThis.window?.electronAPI?.openExternal) {
+                const result = await globalThis.window.electronAPI.openExternal(provider.api_key_url);
+                if (!result?.success) {
+                    throw new Error(result?.error || 'open_external_failed');
+                }
+                return;
+            }
+            globalThis.window?.open?.(provider.api_key_url, '_blank', 'noopener,noreferrer');
+        } catch (error) {
+            toast.error('打开链接失败，请稍后重试');
         }
-        globalThis.window?.open?.(provider.api_key_url, '_blank', 'noopener,noreferrer');
     };
 }
 

@@ -82,7 +82,7 @@
    - 功能：定义全部 `/api/*` 接口。
    - 实现：
      - `before_request` 中限制仅本机访问。
-     - 当 `WECHAT_BOT_API_TOKEN` 存在时校验 `X-Api-Token` 或 `?token=`.
+     - 当 `WECHAT_BOT_API_TOKEN` 存在时，普通 API 校验 `X-Api-Token`/`Authorization`；SSE 校验 `ticket`.
      - 输出 JSON 或 SSE。
 
 2. `/api/status`

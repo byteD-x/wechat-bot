@@ -144,7 +144,15 @@ export function setSavingState(page, isSaving, triggerButton = null) {
 export function renderLoadError(page, message) {
     const hero = page.$('#current-config-hero');
     if (hero) {
-        hero.innerHTML = `<div class="config-hero-card"><div class="hero-content"><div class="hero-title"><span class="hero-name">${message}</span></div></div></div>`;
+        hero.textContent = '';
+        const card = createElement('div', 'config-hero-card');
+        const content = createElement('div', 'hero-content');
+        const title = createElement('div', 'hero-title');
+        const name = createElement('span', 'hero-name', String(message || ''));
+        title.appendChild(name);
+        content.appendChild(title);
+        card.appendChild(content);
+        hero.appendChild(card);
     }
 }
 

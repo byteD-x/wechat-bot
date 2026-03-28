@@ -6,6 +6,64 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
+const listenerRegistry = new Map();
+
+function ensureCallback(name, callback) {
+    if (typeof callback === 'function') {
+        return callback;
+    }
+    console.warn(`[Preload] ${name} callback must be a function`);
+    return null;
+}
+
+function trackListener(channel, callback, handler) {
+    let channelMap = listenerRegistry.get(channel);
+    if (!channelMap) {
+        channelMap = new Map();
+        listenerRegistry.set(channel, channelMap);
+    }
+    channelMap.set(callback, handler);
+}
+
+function removeRegisteredListeners(channel, callback) {
+    const channelMap = listenerRegistry.get(channel);
+    if (!channelMap || channelMap.size === 0) {
+        return;
+    }
+    if (typeof callback === 'function') {
+        const handler = channelMap.get(callback);
+        if (handler) {
+            ipcRenderer.removeListener(channel, handler);
+            channelMap.delete(callback);
+        }
+    } else {
+        for (const handler of channelMap.values()) {
+            ipcRenderer.removeListener(channel, handler);
+        }
+        channelMap.clear();
+    }
+    if (channelMap.size === 0) {
+        listenerRegistry.delete(channel);
+    }
+}
+
+function onChannel(channel, callback, transform) {
+    const safeCallback = ensureCallback(channel, callback);
+    if (!safeCallback) {
+        return () => {};
+    }
+    const handler = (...args) => {
+        try {
+            safeCallback(transform(...args));
+        } catch (error) {
+            console.error(`[Preload] ${channel} callback failed:`, error);
+        }
+    };
+    ipcRenderer.on(channel, handler);
+    trackListener(channel, safeCallback, handler);
+    return () => removeRegisteredListeners(channel, safeCallback);
+}
+
 // 暴露安全的 API 到渲染进程
 contextBridge.exposeInMainWorld('electronAPI', {
     // ═══════════════════════════════════════════════════════════════════════
@@ -16,8 +74,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
      * 获取 Flask 服务地址
      */
     getFlaskUrl: () => ipcRenderer.invoke('get-flask-url'),
-
-    getApiToken: () => ipcRenderer.invoke('get-api-token'),
+    getSseTicket: () => ipcRenderer.invoke('get-sse-ticket'),
+    backendRequest: (options) => ipcRenderer.invoke('backend:request', options || {}),
 
     /**
      * 检查后端是否运行
@@ -101,40 +159,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /**
      * 监听托盘操作
      */
-    onTrayAction: (callback) => {
-        ipcRenderer.on('tray-action', (event, action) => callback(action));
-    },
+    onTrayAction: (callback) => onChannel('tray-action', callback, (_event, action) => action),
 
     /**
      * 移除托盘操作监听
      */
-    removeTrayActionListener: () => {
-        ipcRenderer.removeAllListeners('tray-action');
-    },
+    removeTrayActionListener: (callback) => removeRegisteredListeners('tray-action', callback),
 
-    onAppCloseDialog: (callback) => {
-        ipcRenderer.on('app-close-dialog', () => callback());
-    },
+    onAppCloseDialog: (callback) => onChannel('app-close-dialog', callback, () => undefined),
 
-    onConfigChanged: (callback) => {
-        const handler = (_, payload) => callback(payload);
-        ipcRenderer.on('config:changed', handler);
-        return () => ipcRenderer.removeListener('config:changed', handler);
-    },
+    onConfigChanged: (callback) => onChannel('config:changed', callback, (_event, payload) => payload),
 
-    onRuntimeIdleStateChanged: (callback) => {
-        const handler = (_, payload) => callback(payload);
-        ipcRenderer.on('runtime:idle-state-changed', handler);
-        return () => ipcRenderer.removeListener('runtime:idle-state-changed', handler);
-    },
+    onRuntimeIdleStateChanged: (callback) => onChannel('runtime:idle-state-changed', callback, (_event, payload) => payload),
 
-    removeConfigChangedListener: () => {
-        ipcRenderer.removeAllListeners('config:changed');
-    },
+    removeConfigChangedListener: (callback) => removeRegisteredListeners('config:changed', callback),
 
-    removeRuntimeIdleStateListener: () => {
-        ipcRenderer.removeAllListeners('runtime:idle-state-changed');
-    },
+    removeRuntimeIdleStateListener: (callback) => removeRegisteredListeners('runtime:idle-state-changed', callback),
 
     confirmCloseAction: (action, remember) => ipcRenderer.invoke('confirm-close-action', { action, remember }),
 
@@ -153,14 +193,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
      * 标记首次运行完成
      */
     setFirstRunComplete: () => ipcRenderer.invoke('set-first-run-complete'),
-    onUpdateStateChanged: (callback) => {
-        const handler = (_, state) => callback(state);
-        ipcRenderer.on('update-state-changed', handler);
-        return () => ipcRenderer.removeListener('update-state-changed', handler);
-    },
-    removeUpdateStateListener: () => {
-        ipcRenderer.removeAllListeners('update-state-changed');
-    }
+    onUpdateStateChanged: (callback) => onChannel('update-state-changed', callback, (_event, state) => state),
+    removeUpdateStateListener: (callback) => removeRegisteredListeners('update-state-changed', callback)
 });
 
 console.log('[Preload] API 已暴露到 window.electronAPI');

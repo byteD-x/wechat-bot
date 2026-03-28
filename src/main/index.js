@@ -18,6 +18,7 @@ const Store = require('electron-store');
 const { UpdateManager } = require('./update-manager');
 const { BackendIdleController, DEFAULT_IDLE_SHUTDOWN_MS } = require('./backend-idle-controller');
 const { createBackendManager } = require('./backend-manager');
+const { validateExternalOpenUrl } = require('./external-url-policy');
 const {
     createConfigCli,
     createSharedConfigService,
@@ -62,7 +63,6 @@ const store = new Store({
         flaskPort: 5000,
         isFirstRun: true,
         closeBehavior: 'ask',
-        apiToken: '',
         growthEnableCostPromptSeen: false,
         growthDisableRiskPromptSeen: false,
         update: {
@@ -73,10 +73,24 @@ const store = new Store({
             skippedVersion: '',
             lastCheckedAt: '',
             downloadedVersion: '',
-            downloadedInstallerPath: ''
+            downloadedInstallerPath: '',
+            downloadedInstallerSha256: '',
+            downloadedInstallerVerified: false
         }
     }
 });
+
+function createRuntimeSecret(label) {
+    try {
+        return crypto.randomBytes(24).toString('hex');
+    } catch (_) {
+        try {
+            return String(crypto.randomUUID()).replace(/-/g, '');
+        } catch (error) {
+            throw new Error(`failed to generate runtime ${label}: ${error?.message || error}`);
+        }
+    }
+}
 
 const GLOBAL_STATE = {
     mainWindow: null,
@@ -88,15 +102,8 @@ const GLOBAL_STATE = {
     isQuitting: false,
     isDev: process.argv.includes('--dev'),
     flaskPort: store.get('flaskPort'),
-    apiToken: (() => {
-        const existing = String(store.get('apiToken') || '').trim();
-        if (existing) {
-            return existing;
-        }
-        const next = crypto.randomBytes(24).toString('hex');
-        store.set('apiToken', next);
-        return next;
-    })(),
+    apiToken: createRuntimeSecret('api token'),
+    sseTicket: createRuntimeSecret('sse ticket'),
     get flaskUrl() { return `http://localhost:${this.flaskPort}`; }
 };
 
@@ -220,6 +227,7 @@ function getBackendSpawnOptions() {
     const env = {
         ...process.env,
         WECHAT_BOT_API_TOKEN: GLOBAL_STATE.apiToken,
+        WECHAT_BOT_SSE_TICKET: GLOBAL_STATE.sseTicket,
         WECHAT_BOT_DATA_DIR: getSharedDataRoot(),
         PYTHONLEGACYWINDOWSSTDIO: '1',
     };
@@ -427,6 +435,14 @@ async function installDownloadedUpdateAndQuit() {
         return prepareResult;
     }
 
+    const launchResult = GLOBAL_STATE.updateManager?.launchPreparedInstaller() || {
+        success: false,
+        error: 'installer launch unavailable',
+    };
+    if (!launchResult.success) {
+        return launchResult;
+    }
+
     GLOBAL_STATE.installingUpdate = true;
     setTimeout(async () => {
         try {
@@ -462,7 +478,12 @@ const WindowManager = {
             skipTaskbar: true,
             alwaysOnTop: true,
             focusable: false,
-            webPreferences: { contextIsolation: true, nodeIntegration: false }
+            webPreferences: {
+                contextIsolation: true,
+                nodeIntegration: false,
+                sandbox: true,
+                webSecurity: true,
+            }
         });
         // Splash is display-only. Never let it intercept clicks intended for the main window.
         try {
@@ -501,6 +522,8 @@ const WindowManager = {
                 preload: path.join(__dirname, '..', 'preload', 'index.js'),
                 contextIsolation: true,
                 nodeIntegration: false,
+                sandbox: true,
+                webSecurity: true,
                 devTools: GLOBAL_STATE.isDev
             }
         });
@@ -528,11 +551,19 @@ const WindowManager = {
         });
 
         GLOBAL_STATE.mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-            if (typeof url === 'string' && /^(https?|mailto):/i.test(url)) {
-                shell.openExternal(url);
-            } else {
-                console.warn('[WindowOpen] Blocked:', url);
+            const policy = validateExternalOpenUrl(url);
+            if (!policy.success) {
+                console.warn(`[WindowOpen] Blocked (${policy.error}):`, url);
+                return { action: 'deny' };
             }
+            const targetUrl = String(policy.normalizedUrl || '').trim();
+            if (!targetUrl) {
+                console.warn('[WindowOpen] Blocked (invalid_url):', url);
+                return { action: 'deny' };
+            }
+            Promise.resolve(shell.openExternal(targetUrl)).catch((error) => {
+                console.warn(`[WindowOpen] openExternal failed: ${targetUrl}`, error);
+            });
             return { action: 'deny' };
         });
 
@@ -553,8 +584,41 @@ const WindowManager = {
             return;
         }
 
+        const normalizeLocalPath = (rawPath) => {
+            let value = decodeURIComponent(String(rawPath || '')).replace(/\\/g, '/');
+            if (/^\/[a-zA-Z]:\//.test(value)) {
+                value = value.slice(1);
+            }
+            return path
+                .normalize(value)
+                .replace(/\\/g, '/')
+                .toLowerCase();
+        };
+        const allowedRendererEntryPath = normalizeLocalPath(
+            path.resolve(path.join(__dirname, '..', 'renderer', 'index.html')),
+        );
+        const isAllowedInternalNavigation = (url) => {
+            const target = String(url || '').trim();
+            if (!target) {
+                return false;
+            }
+            if (target === 'about:blank') {
+                return true;
+            }
+            try {
+                const parsed = new URL(target);
+                if (parsed.protocol !== 'file:') {
+                    return false;
+                }
+                const normalizedPath = normalizeLocalPath(parsed.pathname || '');
+                return normalizedPath === allowedRendererEntryPath;
+            } catch (_) {
+                return false;
+            }
+        };
+
         win.webContents.on('will-navigate', (event, url) => {
-            if (typeof url === 'string' && (url.startsWith('file:') || url.startsWith('about:'))) {
+            if (isAllowedInternalNavigation(url)) {
                 return;
             }
             event.preventDefault();
@@ -562,7 +626,7 @@ const WindowManager = {
         });
 
         win.webContents.on('will-redirect', (event, url) => {
-            if (typeof url === 'string' && (url.startsWith('file:') || url.startsWith('about:'))) {
+            if (isAllowedInternalNavigation(url)) {
                 return;
             }
             event.preventDefault();
@@ -775,11 +839,6 @@ if (!app.requestSingleInstanceLock()) {
         BackendManager.stop(GLOBAL_STATE.installingUpdate ? 'install-update' : 'quit');
     });
 
-    app.on('will-quit', () => {
-        if (GLOBAL_STATE.installingUpdate) {
-            GLOBAL_STATE.updateManager?.launchPreparedInstaller();
-        }
-    });
 
     app.on('window-all-closed', () => {
         // 保持托盘运行

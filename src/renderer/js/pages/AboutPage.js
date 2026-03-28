@@ -67,7 +67,10 @@ export class AboutPage extends PageController {
 
         try {
             if (window.electronAPI?.openExternal) {
-                await window.electronAPI.openExternal(url);
+                const result = await window.electronAPI.openExternal(url);
+                if (!result?.success) {
+                    throw new Error(result?.error || 'open_external_failed');
+                }
                 return;
             }
 

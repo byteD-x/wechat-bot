@@ -19,6 +19,11 @@ export class MessagesPage extends PageController {
         this._searchKeyword = '';
         this._selectedChatId = '';
         this._searchTimer = null;
+        this._refreshing = false;
+        this._pendingRefresh = false;
+        this._loadingMore = false;
+        this._messagesRequestSeq = 0;
+        this._latestMessagesRequestSeq = 0;
         this._detailRequestToken = 0;
         this._lastLoadedAt = 0;
         this._openMessageDetail = (message) => openDetailModal(this, message);

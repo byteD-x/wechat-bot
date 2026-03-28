@@ -10,7 +10,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from backend.shared_config import ensure_data_root, get_app_config_path, get_project_root
 
 
-BACKUP_SCHEMA_VERSION = 1
+BACKUP_SCHEMA_VERSION = 2
+LEGACY_UNVERIFIED_MAX_SCHEMA_VERSION = 1
 DEFAULT_KEEP_QUICK_BACKUPS = 5
 DEFAULT_KEEP_FULL_BACKUPS = 3
 
@@ -30,19 +31,27 @@ class WorkspaceBackupService:
         "data/config_override.json",
         "data/api_keys.py",
         "prompt_overrides.py",
+        "provider_credentials.json",
         "chat_memory.db",
+        "chat_memory.db-wal",
+        "chat_memory.db-shm",
         "reply_quality_history.db",
         "usage_history.db",
         "pricing_catalog.json",
         "export_rag_manifest.json",
     )
-    FULL_DIRS: Tuple[str, ...] = ("chat_exports",)
+    FULL_DIRS: Tuple[str, ...] = ("chat_exports", "vector_db")
 
-    def __init__(self, *, data_root: Optional[Path] = None) -> None:
+    def __init__(self, *, data_root: Optional[Path] = None, bot_config: Optional[Dict[str, Any]] = None) -> None:
         self.data_root = (data_root or ensure_data_root()).resolve()
         self.backup_root = (self.data_root / "backups" / "workspace").resolve()
         self.backup_root.mkdir(parents=True, exist_ok=True)
         self.last_restore_result_path = self.backup_root / "last_restore_result.json"
+        self._bot_config: Dict[str, Any] = {}
+        self.update_config(bot_config or {})
+
+    def update_config(self, bot_config: Optional[Dict[str, Any]] = None) -> None:
+        self._bot_config = dict(bot_config or {})
 
     def list_backups(self, *, limit: int = 20) -> Dict[str, Any]:
         entries = self._load_backup_entries()
@@ -204,14 +213,21 @@ class WorkspaceBackupService:
         if not candidate.is_absolute():
             candidate = self.backup_root / raw
         candidate = candidate.resolve()
+        try:
+            candidate.relative_to(self.backup_root)
+        except ValueError as exc:
+            raise FileNotFoundError(f"backup not found: {backup_ref}") from exc
         manifest_path = candidate / "backup_manifest.json"
         manifest = self._load_json(manifest_path)
         if not candidate.exists() or not candidate.is_dir() or not isinstance(manifest, dict):
             raise FileNotFoundError(f"backup not found: {backup_ref}")
         return candidate, manifest
 
-    def build_restore_plan(self, backup_ref: str) -> Dict[str, Any]:
-        verification = self.verify_backup(backup_ref)
+    def build_restore_plan(self, backup_ref: str, *, allow_legacy_unverified: bool = False) -> Dict[str, Any]:
+        verification = self.verify_backup(
+            backup_ref,
+            allow_legacy_unverified=allow_legacy_unverified,
+        )
         return {
             "backup": verification.get("backup"),
             "missing_files": list(verification.get("missing_files") or []),
@@ -219,15 +235,26 @@ class WorkspaceBackupService:
             "included_files": list(verification.get("included_files") or []),
             "checksum_missing_files": list(verification.get("checksum_missing_files") or []),
             "checksum_mismatches": list(verification.get("checksum_mismatches") or []),
+            "checksum_verification_performed": bool(verification.get("checksum_verification_performed")),
+            "checksum_verification_required": bool(verification.get("checksum_verification_required")),
+            "checksum_verification_skipped_reason": str(verification.get("checksum_verification_skipped_reason") or ""),
+            "manifest_schema_version": int(verification.get("manifest_schema_version") or 0),
+            "legacy_unverified": bool(verification.get("legacy_unverified")),
+            "allow_legacy_unverified": bool(allow_legacy_unverified),
             "valid": bool(verification.get("valid")),
         }
 
-    def verify_backup(self, backup_ref: str) -> Dict[str, Any]:
+    def verify_backup(self, backup_ref: str, *, allow_legacy_unverified: bool = False) -> Dict[str, Any]:
         backup_path, manifest = self.resolve_backup(backup_ref)
         included_files: List[str] = []
         invalid_files: List[str] = []
         checksum_summary = manifest.get("checksum_summary")
         checksum_map = dict(checksum_summary or {}) if isinstance(checksum_summary, dict) else {}
+        try:
+            manifest_schema_version = int(manifest.get("schema_version") or 0)
+        except (TypeError, ValueError):
+            manifest_schema_version = 0
+        checksum_verification_required = bool(checksum_map)
         for item in list(manifest.get("included_files") or []):
             raw_path = str(item or "").strip()
             if not raw_path:
@@ -245,25 +272,34 @@ class WorkspaceBackupService:
         ]
         checksum_missing_files: List[str] = []
         checksum_mismatches: List[Dict[str, str]] = []
-        for relative_path in included_files:
-            backup_file = backup_path / relative_path
-            if not backup_file.exists():
-                continue
+        if checksum_verification_required:
+            for relative_path in included_files:
+                backup_file = backup_path / relative_path
+                if not backup_file.exists():
+                    continue
 
-            expected_checksum = str(checksum_map.get(relative_path) or "").strip().lower()
-            if not expected_checksum:
-                checksum_missing_files.append(relative_path)
-                continue
+                expected_checksum = str(checksum_map.get(relative_path) or "").strip().lower()
+                if not expected_checksum:
+                    checksum_missing_files.append(relative_path)
+                    continue
 
-            actual_checksum = self._sha256_file(backup_file).lower()
-            if actual_checksum != expected_checksum:
-                checksum_mismatches.append(
-                    {
-                        "path": relative_path,
-                        "expected": expected_checksum,
-                        "actual": actual_checksum,
-                    }
-                )
+                actual_checksum = self._sha256_file(backup_file).lower()
+                if actual_checksum != expected_checksum:
+                    checksum_mismatches.append(
+                        {
+                            "path": relative_path,
+                            "expected": expected_checksum,
+                            "actual": actual_checksum,
+                        }
+                    )
+        checksum_verification_skipped_reason = ""
+        if not checksum_verification_required:
+            checksum_verification_skipped_reason = "manifest_checksum_missing"
+        legacy_unverified = bool(checksum_verification_skipped_reason) and (
+            manifest_schema_version <= LEGACY_UNVERIFIED_MAX_SCHEMA_VERSION
+        )
+        checksum_missing_nonlegacy = bool(checksum_verification_skipped_reason) and not legacy_unverified
+        legacy_opt_in_required = legacy_unverified and not allow_legacy_unverified
         return {
             "backup": self._backup_entry_from_manifest(backup_path, manifest),
             "missing_files": missing_files,
@@ -271,16 +307,36 @@ class WorkspaceBackupService:
             "included_files": included_files,
             "checksum_missing_files": checksum_missing_files,
             "checksum_mismatches": checksum_mismatches,
-            "valid": not missing_files and not invalid_files and not checksum_missing_files and not checksum_mismatches,
+            "checksum_verification_performed": checksum_verification_required,
+            "checksum_verification_required": checksum_verification_required,
+            "checksum_verification_skipped_reason": checksum_verification_skipped_reason,
+            "manifest_schema_version": manifest_schema_version,
+            "legacy_unverified": legacy_unverified,
+            "allow_legacy_unverified": bool(allow_legacy_unverified),
+            "legacy_opt_in_required": legacy_opt_in_required,
+            "valid": not missing_files and not invalid_files and (
+                not checksum_missing_nonlegacy
+                and
+                (not legacy_opt_in_required)
+                and (
+                    (not checksum_verification_required)
+                    or (not checksum_missing_files and not checksum_mismatches)
+                )
+            ),
         }
 
-    def apply_restore(self, backup_ref: str) -> Dict[str, Any]:
-        plan = self.build_restore_plan(backup_ref)
+    def apply_restore(self, backup_ref: str, *, allow_legacy_unverified: bool = False) -> Dict[str, Any]:
+        plan = self.build_restore_plan(
+            backup_ref,
+            allow_legacy_unverified=allow_legacy_unverified,
+        )
         if not plan["valid"]:
             if list(plan.get("invalid_files") or []):
                 raise ValueError("backup files contain unsupported paths")
             if list(plan.get("missing_files") or []):
                 raise FileNotFoundError("backup files are incomplete")
+            if plan.get("legacy_unverified") and not allow_legacy_unverified:
+                raise ValueError("legacy backup is missing checksum summary; set allow_legacy_unverified=true to continue")
             raise ValueError("backup checksum verification failed")
 
         restored_files: List[str] = []
@@ -305,12 +361,25 @@ class WorkspaceBackupService:
 
     def _collect_sources(self, mode: str) -> List[Tuple[Path, str]]:
         sources: List[Tuple[Path, str]] = []
+        memory_db_path = self._resolve_runtime_path(
+            self._bot_config.get("memory_db_path") or self._bot_config.get("sqlite_db_path"),
+            fallback=self.data_root / "chat_memory.db",
+        )
+        memory_db_wal_path = memory_db_path.parent / f"{memory_db_path.name}-wal"
+        memory_db_shm_path = memory_db_path.parent / f"{memory_db_path.name}-shm"
+        export_rag_dir = self._resolve_runtime_path(
+            self._bot_config.get("export_rag_dir"),
+            fallback=self.data_root / "chat_exports",
+        )
         data_candidates = {
             "app_config.json": Path(get_app_config_path()).resolve(),
             "data/config_override.json": (get_project_root() / "data" / "config_override.json").resolve(),
             "data/api_keys.py": (get_project_root() / "data" / "api_keys.py").resolve(),
             "prompt_overrides.py": (get_project_root() / "prompt_overrides.py").resolve(),
-            "chat_memory.db": (self.data_root / "chat_memory.db").resolve(),
+            "provider_credentials.json": (self.data_root / "provider_credentials.json").resolve(),
+            "chat_memory.db": memory_db_path,
+            "chat_memory.db-wal": memory_db_wal_path.resolve(),
+            "chat_memory.db-shm": memory_db_shm_path.resolve(),
             "reply_quality_history.db": (self.data_root / "reply_quality_history.db").resolve(),
             "usage_history.db": (self.data_root / "usage_history.db").resolve(),
             "pricing_catalog.json": (self.data_root / "pricing_catalog.json").resolve(),
@@ -322,13 +391,18 @@ class WorkspaceBackupService:
                 sources.append((source, relative_path))
 
         if mode == "full":
+            full_dir_mapping = {
+                "chat_exports": export_rag_dir,
+                "vector_db": (self.data_root / "vector_db").resolve(),
+            }
             for directory_name in self.FULL_DIRS:
-                source_dir = self.data_root / directory_name
+                source_dir = full_dir_mapping.get(directory_name, (self.data_root / directory_name).resolve())
                 if not source_dir.exists() or not source_dir.is_dir():
                     continue
                 for file_path in source_dir.rglob("*"):
                     if file_path.is_file():
-                        relative_path = str(file_path.relative_to(self.data_root)).replace("\\", "/")
+                        relative_child = str(file_path.relative_to(source_dir)).replace("\\", "/")
+                        relative_path = f"{directory_name}/{relative_child}" if relative_child else directory_name
                         sources.append((file_path, relative_path))
         return sources
 
@@ -419,6 +493,16 @@ class WorkspaceBackupService:
 
     def _resolve_restore_target(self, relative_path: str) -> Path:
         normalized = self._normalize_backup_relative_path(relative_path)
+        memory_db_path = self._resolve_runtime_path(
+            self._bot_config.get("memory_db_path") or self._bot_config.get("sqlite_db_path"),
+            fallback=self.data_root / "chat_memory.db",
+        )
+        memory_db_wal_path = memory_db_path.parent / f"{memory_db_path.name}-wal"
+        memory_db_shm_path = memory_db_path.parent / f"{memory_db_path.name}-shm"
+        export_rag_dir = self._resolve_runtime_path(
+            self._bot_config.get("export_rag_dir"),
+            fallback=self.data_root / "chat_exports",
+        )
         if normalized == "app_config.json":
             return Path(get_app_config_path()).resolve()
         if normalized == "data/config_override.json":
@@ -427,13 +511,24 @@ class WorkspaceBackupService:
             return (get_project_root() / "data" / "api_keys.py").resolve()
         if normalized == "prompt_overrides.py":
             return (get_project_root() / "prompt_overrides.py").resolve()
-        if normalized.startswith("chat_exports/") or normalized in {
-            "chat_memory.db",
+        if normalized == "chat_memory.db":
+            return memory_db_path
+        if normalized == "chat_memory.db-wal":
+            return memory_db_wal_path.resolve()
+        if normalized == "chat_memory.db-shm":
+            return memory_db_shm_path.resolve()
+        if normalized.startswith("chat_exports/"):
+            suffix = normalized[len("chat_exports/") :]
+            return (export_rag_dir / suffix).resolve()
+        if normalized in {
+            "provider_credentials.json",
             "reply_quality_history.db",
             "usage_history.db",
             "pricing_catalog.json",
             "export_rag_manifest.json",
         }:
+            return (self.data_root / normalized).resolve()
+        if normalized.startswith("vector_db/"):
             return (self.data_root / normalized).resolve()
         raise ValueError(f"unsupported backup path: {relative_path}")
 
@@ -455,6 +550,20 @@ class WorkspaceBackupService:
         if normalized in {".", ""}:
             raise ValueError("backup path is required")
         return normalized
+
+    def _resolve_runtime_path(self, value: Any, *, fallback: Path) -> Path:
+        text = str(value or "").strip()
+        if not text:
+            return fallback.resolve()
+        candidate = Path(text).expanduser()
+        if candidate.is_absolute():
+            return candidate.resolve()
+        normalized = text.replace("\\", "/")
+        if normalized == "data":
+            return self.data_root
+        if normalized.startswith("data/"):
+            return (self.data_root / normalized[5:]).resolve()
+        return (get_project_root() / normalized).resolve()
 
     @staticmethod
     def _load_json(path: Path) -> Optional[Dict[str, Any]]:

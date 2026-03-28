@@ -41,6 +41,7 @@ import {
     getRecoveryButtonModel,
     pickSuggestedSelfHealAction,
 } from '../../src/renderer/js/app/self-heal.js';
+import { renderAppFrame } from '../../src/renderer/js/app-shell/frame.js';
 import { App } from '../../src/renderer/js/app.module.js';
 import { stateManager } from '../../src/renderer/js/core/StateManager.js';
 import { apiService } from '../../src/renderer/js/services/ApiService.js';
@@ -83,6 +84,28 @@ function resetReadinessState() {
         'currentPage': 'dashboard',
     });
 }
+
+test('app frame titlebar controls expose explicit aria labels', () => {
+    const markup = renderAppFrame();
+    assert.match(markup, /id="btn-minimize"[^>]*type="button"[^>]*aria-label=/);
+    assert.match(markup, /id="btn-maximize"[^>]*type="button"[^>]*aria-label=/);
+    assert.match(markup, /id="btn-close"[^>]*type="button"[^>]*aria-label=/);
+});
+
+test('notification service creates fallback toast container when missing', () => withDom(({ document }) => {
+    notificationService.container = null;
+    const existing = document.getElementById('toast-container');
+    if (existing && typeof existing.remove === 'function') {
+        existing.remove();
+    }
+
+    notificationService.init();
+
+    const container = document.getElementById('toast-container');
+    assert.ok(container);
+    assert.equal(container.getAttribute('role'), 'status');
+    assert.equal(container.getAttribute('aria-live'), 'polite');
+}));
 
 test('message renderer keeps summary and detail rendering stable', () => withDom(({ document, createPage }) => {
     const selectors = {
@@ -668,6 +691,55 @@ test('app readiness action restart_as_admin delegates to electron api', async ()
 
         assert.equal(restartCalls, 1);
         assert.equal(stateManager.get('readiness.firstRunGuideDismissed'), true);
+    } finally {
+        resetReadinessState();
+        env.restore();
+        if (previousWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = previousWindow;
+        }
+    }
+});
+
+test('app readiness action open_wechat keeps guide visible when open fails', async () => {
+    const previousWindow = globalThis.window;
+    const env = installDomStub();
+    try {
+        const { document, registerElement } = env;
+        const modal = document.createElement('div');
+        modal.classList.add('active');
+        registerElement('first-run-modal', modal);
+
+        let openWechatCalls = 0;
+        globalThis.window = {
+            electronAPI: {
+                async openWeChat() {
+                    openWechatCalls += 1;
+                    return { success: false, error: 'boom' };
+                },
+            },
+        };
+
+        resetReadinessState();
+        stateManager.batchUpdate({
+            'readiness.firstRunPending': true,
+            'readiness.firstRunGuideDismissed': false,
+        });
+
+        let refreshCalls = 0;
+        const app = Object.create(App.prototype);
+        app._refreshStatus = async () => {
+            refreshCalls += 1;
+        };
+        app._switchPage = async () => {};
+
+        await app._handleReadinessAction('open_wechat');
+
+        assert.equal(openWechatCalls, 1);
+        assert.equal(refreshCalls, 1);
+        assert.equal(stateManager.get('readiness.firstRunGuideDismissed'), false);
+        assert.equal(modal.classList.contains('active'), true);
     } finally {
         resetReadinessState();
         env.restore();

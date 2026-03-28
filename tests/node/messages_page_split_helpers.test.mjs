@@ -170,6 +170,7 @@ test('messages data helper applies realtime message filter and renders list', as
     }, selectors);
     page._messages = [{ wx_id: 'room-a', sender: 'old', content: 'old', timestamp: 1 }];
     page._total = 1;
+    page._offset = 1;
     page._selectedChatId = 'room-a';
     page._searchKeyword = 'hello';
 
@@ -183,6 +184,19 @@ test('messages data helper applies realtime message filter and renders list', as
     });
     assert.equal(page._messages.length, 2);
     assert.equal(page._total, 2);
+    assert.equal(page._offset, 2);
+
+    handleRealtimeMessage(page, {
+        wx_id: 'room-a',
+        sender: 'new',
+        content: 'hello there',
+        timestamp: 2,
+    }, {
+        onOpenDetail: () => {},
+    });
+    assert.equal(page._messages.length, 2);
+    assert.equal(page._total, 2);
+    assert.equal(page._offset, 2);
 
     handleRealtimeMessage(page, {
         wx_id: 'room-b',
@@ -686,7 +700,7 @@ test('messages page shell binds controls, debounce search and close modal flows'
         },
     });
 
-    assert.equal(page.bindings.length, 4);
+    assert.equal(page.bindings.length, 6);
     assert.equal(page.watchers.length, 1);
     assert.equal(page.listeners.length, 1);
 
@@ -697,13 +711,18 @@ test('messages page shell binds controls, debounce search and close modal flows'
     assert.deepEqual(calls[0], ['refresh', 'alice', '']);
     assert.deepEqual(calls[1], ['refresh', 'alice', 'room-1']);
 
-    closeBtn.click();
+    const closeBinding = page.bindings.find((item) => item.target === closeBtn && item.type === 'click');
+    closeBinding.handler();
     assert.equal(calls.some((item) => item[0] === 'close'), true);
+
+    const modalBinding = page.bindings.find((item) => item.target === modal && item.type === 'click');
+    modalBinding.handler({ target: { id: 'message-detail-modal' } });
+    assert.equal(calls.filter((item) => item[0] === 'close').length >= 2, true);
 
     modal.classList.add('active');
     const keydown = page.bindings.find((item) => item.type === 'keydown');
     keydown.handler({ key: 'Escape' });
-    assert.equal(calls.filter((item) => item[0] === 'close').length >= 2, true);
+    assert.equal(calls.filter((item) => item[0] === 'close').length >= 3, true);
 
     page.watchers[0].handler(true);
     assert.equal(calls.some((item) => item[0] === 'refresh'), true);

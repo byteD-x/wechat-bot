@@ -275,6 +275,18 @@ class BotManager:
                 growth_result.get("message"),
             )
 
+    async def _cancel_growth_start_task(self) -> None:
+        task = self._growth_start_task
+        if task is None:
+            return
+        if task.done():
+            self._growth_start_task = None
+            return
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        if self._growth_start_task is task:
+            self._growth_start_task = None
+
     async def _run_bot(self):
         """内部运行逻辑"""
         try:
@@ -304,6 +316,7 @@ class BotManager:
                     progress=0,
                     active=False,
                 )
+            await self._cancel_growth_start_task()
             self._invalidate_status_cache()
             await self.notify_status_change()
             logger.info("机器人已停止")
@@ -322,6 +335,7 @@ class BotManager:
             try:
                 # 设置停止信号
                 self.stop_event.set()
+                await self._cancel_growth_start_task()
 
                 # 等待任务完成或超时后取消
                 if self.task and not self.task.done():
@@ -389,7 +403,14 @@ class BotManager:
 
     async def restart(self) -> Dict[str, Any]:
         """重启机器人"""
-        await self.stop()
+        stop_result = await self.stop()
+        if not stop_result.get("success"):
+            return {
+                "success": False,
+                "message": "restart aborted: stop failed",
+                "code": "restart_stop_failed",
+                "stop_result": stop_result,
+            }
         return await self.start()
 
     async def recover(self) -> Dict[str, Any]:

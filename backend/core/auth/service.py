@@ -111,6 +111,10 @@ class AuthFlowRunner:
         return payload
 
     def cancel(self, provider: BaseAuthProvider, flow_id: str) -> Dict[str, Any]:
+        flow = self._get(flow_id)
+        if flow is None:
+            return {"success": True, "message": "Authorization flow already expired."}
+        self._assert_provider_match(provider, flow)
         flow = self._pop(flow_id)
         if flow is None:
             return {"success": True, "message": "Authorization flow already expired."}
@@ -128,6 +132,7 @@ class AuthFlowRunner:
         flow = self._get(flow_id)
         if flow is None:
             raise AuthSupportError("Authorization flow expired or does not exist.")
+        self._assert_provider_match(provider, flow)
         result = provider.submit_callback(flow.state, payload=payload, settings=flow.settings)
         next_state = dict(result.pop("flow_state", {}) or {})
         completed = bool(result.get("completed"))
@@ -152,6 +157,13 @@ class AuthFlowRunner:
         wanted = normalize_text(flow_id)
         with self._lock:
             return self._flows.pop(wanted, None)
+
+    @staticmethod
+    def _assert_provider_match(provider: BaseAuthProvider, flow: PendingAuthFlow) -> None:
+        expected = normalize_text(flow.provider_id)
+        current = normalize_text(provider.id)
+        if expected and current and expected != current:
+            raise AuthSupportError("Authorization flow provider does not match.")
 
 
 _FLOW_RUNNER = AuthFlowRunner()

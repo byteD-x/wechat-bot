@@ -21,6 +21,8 @@ export class LogsPage extends PageController {
         this._keyword = '';
         this._level = '';
         this._refreshTimer = null;
+        this._refreshSeq = 0;
+        this._latestRefreshSeq = 0;
     }
 
     async onInit() {

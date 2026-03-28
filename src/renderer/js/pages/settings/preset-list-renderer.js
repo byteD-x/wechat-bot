@@ -139,7 +139,17 @@ function createPresetCard(page, preset, index) {
 
     const testButton = createElement('button', 'btn btn-secondary btn-sm', '测试');
     testButton.type = 'button';
-    testButton.addEventListener('click', () => void page._testPreset?.(index, status));
+    testButton.addEventListener('click', async () => {
+        if (testButton.disabled) {
+            return;
+        }
+        testButton.disabled = true;
+        try {
+            await page._testPreset?.(index, status);
+        } finally {
+            testButton.disabled = false;
+        }
+    });
 
     const editButton = createElement('button', 'btn btn-primary btn-sm', '编辑');
     editButton.type = 'button';

@@ -212,8 +212,11 @@ python run.py web
 注意：
 
 - Web API 默认仅允许本机访问（`127.0.0.1/localhost`）。
-- 若设置了环境变量 `WECHAT_BOT_API_TOKEN`（桌面端会自动设置），访问 `/api/*` 需要携带 `X-Api-Token` 请求头；SSE（`/api/events`）也支持 `?token=` 参数。
-- `python run.py web` 若未显式设置 token，会自动生成并注入环境变量，但不会打印到控制台；如需手工调试，请在启动前自行设置 `WECHAT_BOT_API_TOKEN`（并妥善保管）。
+- 若设置了环境变量 `WECHAT_BOT_API_TOKEN`（桌面端会自动设置），`/api/*` 访问需要携带 `X-Api-Token` 或 `Authorization: Bearer <token>`。
+- SSE 访问需要额外 `ticket`：先调用 `/api/events_ticket` 获取票据，再连接 `/api/events?ticket=<ticket>`。
+- `/api/ollama/models` 仅允许本地回环地址（`localhost / 127.0.0.1 / ::1`），用于避免被误用为外部探测入口。
+- 日志接口新增边界：`/api/logs` 单次读取行数存在上限，且日志文件路径必须位于 `data` 目录。
+- `python run.py web` 在本机回环地址（默认 `127.0.0.1`）下若未显式设置 token，会自动生成并注入环境变量，但不会打印到控制台；如需绑定非回环地址（如 `0.0.0.0`），必须先显式设置 `WECHAT_BOT_API_TOKEN`。
 
 ## 6. 验证是否正常工作
 
@@ -223,14 +226,14 @@ python run.py web
 2. 访问仪表盘，确认启动状态、健康检查和系统指标正常。
 3. 给允许回复的联系人发送一条简单文本。
 4. 查看 `data/logs/bot.log`。
-5. 检查 API `/api/status`、`/api/config`、`/api/config/audit` 和 `/api/metrics`（仅本机可访问；若设置了 `WECHAT_BOT_API_TOKEN`，需要携带 `X-Api-Token` 或 `?token=`）。
+5. 检查 API `/api/status`、`/api/config`、`/api/config/audit` 和 `/api/metrics`（仅本机可访问；若设置了 `WECHAT_BOT_API_TOKEN`，需要携带 `X-Api-Token` 或 `Authorization: Bearer <token>`）。
 
 示例（PowerShell）：
 
 ```powershell
 $env:WECHAT_BOT_API_TOKEN = "your_token"
 python run.py web
-Invoke-RestMethod -Headers @{ "X-Api-Token" = "your_token" } http://127.0.0.1:5000/api/status
+Invoke-RestMethod -Headers @{ "Authorization" = "Bearer your_token" } http://127.0.0.1:5000/api/status
 ```
 
 如需快速观察运行状态，重点看：
@@ -354,7 +357,7 @@ Invoke-RestMethod -Headers @{ "X-Api-Token" = "your_token" } http://127.0.0.1:50
 相关字段：
 
 ```python
-"export_rag_enabled": True,
+"export_rag_enabled": False,
 "export_rag_dir": "data/chat_exports/聊天记录",
 "export_rag_top_k": 3,
 "export_rag_max_chunks_per_chat": 500,
@@ -513,6 +516,8 @@ python -m tools.prompt_gen.generator
   - `POST /api/backups`
   - `POST /api/backups/cleanup`
   - `POST /api/backups/restore`
+  - `GET /api/data_controls`
+  - `POST /api/data_controls/clear`
 - 新增 CLI：
   - `python run.py backup list --json`
   - `python run.py backup create --mode quick --label nightly`
@@ -521,16 +526,20 @@ python -m tools.prompt_gen.generator
   - `python run.py backup cleanup --keep-quick 5 --keep-full 3 --apply`
   - `python run.py backup restore --backup-id <backup-id>`
   - `python run.py backup restore --backup-id <backup-id> --apply`
-- `POST /api/backups` 仅接受 `mode = quick | full`
+  - `python run.py backup restore --backup-id <backup-id> --apply --allow-running-service`（仅在明确知晓风险时使用）
+- `POST /api/backups` 仅接受 `mode = quick | full`，且要求 bot/growth 运行态已停止（避免热备份 SQLite 产生不完整快照）
 - `POST /api/backups/cleanup` 默认 `dry_run = true`，可用 `keep_quick` / `keep_full` 调整保留策略
-- `POST /api/backups/restore` 支持 `dry_run = true | false`
-- `quick` 备份固定包含 `app_config.json`、`chat_memory.db`、`reply_quality_history.db`、`usage_history.db`、`pricing_catalog.json`、`export_rag_manifest.json`。
-- `full` 备份会额外包含 `data/chat_exports/`
+- `POST /api/backups/restore` 默认 `dry_run = true`，需显式传 `dry_run = false` 才会真正执行恢复
+- `python run.py backup restore --apply` 会先探测本地运行服务是否仍在运行；若检测到运行中会直接阻断，避免在热运行态覆盖数据
+- `quick` 备份固定包含 `app_config.json`、`chat_memory.db`、`chat_memory.db-wal`、`chat_memory.db-shm`、`reply_quality_history.db`、`usage_history.db`、`pricing_catalog.json`、`export_rag_manifest.json`、`provider_credentials.json`。
+- `full` 备份会额外包含 `data/chat_exports/` 与 `data/vector_db/`
 - 每个备份目录都会写入 `backup_manifest.json`，记录 `app_version`、`schema_version`、`mode`、`created_at`、`included_files`、`checksum_summary`。
-- `python run.py backup verify` 会校验清单中的文件存在性、路径合法性和 `checksum_summary` 一致性。
+- `python run.py backup verify` 会校验清单中的文件存在性、路径合法性和 `checksum_summary` 一致性；旧备份若无 `checksum_summary` 会标记为 `legacy_unverified`，仅在恢复请求显式传入 `allow_legacy_unverified=true` 时允许 apply。
 - 旧备份清理默认保留最近 `5` 份 Quick 和 `3` 份 Full 备份，并保护最近一次恢复产生的 `pre_restore_backup`，防止误删回滚锚点。
-- 恢复固定流程为 `dry-run 校验 -> checksum 校验 -> 自动创建 pre-restore quick backup -> 停止 bot/backend 相关运行态 -> 应用恢复 -> 重启 backend -> 写入恢复结果摘要`。
-- 设置页的“数据与恢复”卡片会展示最近 quick/full 备份、备份大小、最近一次恢复结果和最近一次离线评测摘要。
+- 恢复固定流程为 `dry-run 校验 -> checksum 校验 -> 自动创建 pre-restore quick backup -> 停止 bot/backend 相关运行态 -> 应用恢复 -> 重启 backend -> 写入恢复结果摘要`，并在响应中返回 `auth_restore_checks` 认证风险摘要。
+- 破坏性维护接口（恢复、清理、数据清理 apply）在后端共享维护锁串行执行；并发请求会返回 `409 maintenance_in_progress`。
+- 设置页的“数据与恢复”卡片会展示最近 quick/full 备份、备份大小、最近一次恢复结果、最近一次离线评测摘要，以及数据治理清理（memory/usage/export_rag 的 dry-run/apply）。
+- 数据治理清理在 `dry_run=false` 时要求显式 `scopes`，并要求 bot 与 growth 任务都已停止；界面层会先要求同 scope 完成一次 dry-run 才允许 apply。
 
 #### 8.7.3 离线评测与质量门禁
 
@@ -556,6 +565,8 @@ python run.py eval --dataset tests/fixtures/evals/smoke_cases.json --preset smok
 - `POST /api/backups`
 - `POST /api/backups/cleanup`
 - `POST /api/backups/restore`
+- `GET /api/data_controls`
+- `POST /api/data_controls/clear`
 - `GET /api/evals/latest`
 
 ## 9. 常见问题

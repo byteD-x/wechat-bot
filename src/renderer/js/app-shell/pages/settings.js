@@ -113,6 +113,28 @@ export function renderSettingsPageShell() {
                                 </div>
                             </div>
 
+                            <div class="backup-action-card backup-action-card-wide">
+                                <span class="backup-action-kicker">数据治理清理</span>
+                                <h3 class="backup-action-title">按类别清理本地数据，并支持先预览后执行</h3>
+                                <p class="backup-action-text">可按 memory / usage / export_rag 分类执行 dry-run 或 apply，避免误删。</p>
+                                <div class="backup-detail-grid">
+                                    <div class="detail-item">
+                                        <label class="detail-label" for="settings-data-control-scope">清理范围</label>
+                                        <select class="form-input" id="settings-data-control-scope">
+                                            <option value="">请先选择清理范围</option>
+                                        </select>
+                                    </div>
+                                    <div class="detail-item">
+                                        <span class="detail-label">结果</span>
+                                        <div class="detail-help" id="settings-data-control-feedback">尚未执行数据清理</div>
+                                    </div>
+                                </div>
+                                <div class="backup-button-row backup-button-row-end">
+                                    <button class="btn btn-secondary btn-sm" id="btn-data-control-dry-run" type="button">先检查</button>
+                                    <button class="btn btn-secondary btn-sm" id="btn-data-control-apply" type="button">执行清理</button>
+                                </div>
+                            </div>
+
                             <div class="dashboard-subsection backup-list-section">
                                 <div class="dashboard-subsection-title">最近保存的备份</div>
                                 <div class="dashboard-model-list" id="settings-backup-list">
@@ -531,7 +553,7 @@ export function renderSettingsPageShell() {
                             <div class="form-group">
                                 <label class="form-checkbox form-checkbox-inline">
                                     <input type="checkbox" id="setting-export-rag-enabled">
-                                    <span class="form-checkbox-label">启用导出聊天记录 RAG</span>
+                                    <span class="form-checkbox-label">启用导出聊天记录 RAG（默认关闭）</span>
                                 </label>
                             </div>
                             <div class="form-group">
@@ -615,7 +637,7 @@ export function renderSettingsPageShell() {
                             <div class="form-group">
                                 <label class="form-checkbox form-checkbox-inline">
                                     <input type="checkbox" id="setting-usage-tracking-enabled">
-                                    <span class="form-checkbox-label">启用用量追踪</span>
+                                    <span class="form-checkbox-label">启用用量追踪（默认关闭）</span>
                                 </label>
                             </div>
                             <div class="form-group">

@@ -65,7 +65,7 @@ export function renderLogsPageShell() {
                             </svg>
                             <span>导出</span>
                         </button>
-                        <button class="btn btn-ghost btn-sm" id="btn-reset-log-filters">
+                        <button class="btn btn-ghost btn-sm" id="btn-restore-log-default-view">
                             <span>恢复默认视图</span>
                         </button>
                     </div>
