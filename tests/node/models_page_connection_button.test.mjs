@@ -62,6 +62,41 @@ test('models page falls back to another testable auth state when the selected on
     assert.match(detailMarkup, /data-model-auth-action="test_profile"/);
 });
 
+test('models page still renders set-active button when provider is not ready', () => {
+    const page = new ModelsPage();
+    page.applyModelCatalog({
+        providers: [
+            {
+                id: 'ollama',
+                label: 'Ollama',
+                models: ['qwen3'],
+                auth_methods: [
+                    { id: 'api_key', type: 'api_key', label: 'API Key' },
+                ],
+            },
+        ],
+    });
+
+    const detailMarkup = page.renderProviderDetail({
+        provider: { id: 'ollama', label: 'Ollama', default_model: 'qwen3' },
+        state: 'not_configured',
+        selected_label: '',
+        auth_states: [],
+        metadata: {
+            is_active_provider: false,
+            can_set_active_provider: false,
+            active_provider_reason: 'Need auth first',
+            default_model: 'qwen3',
+            provider_sync: { code: 'not_detected', source_message: '' },
+            provider_health: { code: 'idle', message: '' },
+        },
+    });
+
+    assert.match(detailMarkup, /data-model-auth-action="set_active_provider"/);
+    assert.match(detailMarkup, /disabled/);
+    assert.match(detailMarkup, /Need auth first/);
+});
+
 test('models page localizes legacy english runtime health details', () => {
     const page = new ModelsPage();
     const card = {

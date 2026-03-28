@@ -1001,6 +1001,7 @@ def _build_dynamic_provider(definition: Dict[str, object]) -> Optional[ProviderD
     base_url = str(definition.get("base_url") or "").strip()
     default_model = str(definition.get("default_model") or "").strip()
     api_key_url = str(definition.get("api_key_url") or "").strip()
+    allow_empty_key = bool(definition.get("allow_empty_key", False))
     models = tuple(
         str(item).strip()
         for item in (definition.get("models") or [])
@@ -1020,8 +1021,17 @@ def _build_dynamic_provider(definition: Dict[str, object]) -> Optional[ProviderD
                 id="api_key",
                 type=AuthMethodType.API_KEY,
                 label="API Key",
-                description=f"为 {label} 配置一组 API Key。",
+                description=(
+                    f"{label} 支持免 API Key 直连，可直接保存并启用。"
+                    if allow_empty_key
+                    else f"为 {label} 配置一组 API Key。"
+                ),
                 api_key_url=api_key_url,
+                metadata={
+                    "allow_empty_key": allow_empty_key,
+                    "recommended_base_url": base_url,
+                    "recommended_model": default_model,
+                },
             ),
         ),
         default_auth_order=("api_key",),
@@ -1030,6 +1040,7 @@ def _build_dynamic_provider(definition: Dict[str, object]) -> Optional[ProviderD
         metadata={
             "research_summary": f"{label} 当前作为共享目录里的动态 API Key 服务方接入。",
             "last_reviewed": "2026-03-25",
+            "allow_empty_key": allow_empty_key,
         },
     )
 

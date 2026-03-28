@@ -92,6 +92,60 @@ test('app frame titlebar controls expose explicit aria labels', () => {
     assert.match(markup, /id="btn-close"[^>]*type="button"[^>]*aria-label=/);
 });
 
+test('app runtime readonly lock toggles target pages with bot running state', () => withDom(({ document, registerElement }) => {
+    const costsPage = registerElement('page-costs', document.createElement('section'));
+    const messagesPage = registerElement('page-messages', document.createElement('section'));
+    const exportsPage = registerElement('page-exports', document.createElement('section'));
+    const costsNav = registerElement('nav-costs', document.createElement('a'));
+    const messagesNav = registerElement('nav-messages', document.createElement('a'));
+    const exportsNav = registerElement('nav-exports', document.createElement('a'));
+    costsNav.className = 'nav-item';
+    messagesNav.className = 'nav-item';
+    exportsNav.className = 'nav-item';
+    costsNav.dataset.page = 'costs';
+    messagesNav.dataset.page = 'messages';
+    exportsNav.dataset.page = 'exports';
+    document.body.appendChild(costsPage);
+    document.body.appendChild(messagesPage);
+    document.body.appendChild(exportsPage);
+    document.body.appendChild(costsNav);
+    document.body.appendChild(messagesNav);
+    document.body.appendChild(exportsNav);
+
+    const app = new App();
+    stateManager.set('bot.running', false);
+    app._syncRuntimeReadonlyPages();
+
+    assert.equal(costsPage.classList.contains('runtime-readonly'), true);
+    assert.equal(messagesPage.classList.contains('runtime-readonly'), true);
+    assert.equal(exportsPage.classList.contains('runtime-readonly'), true);
+    assert.ok(costsPage.querySelector('.runtime-readonly-note'));
+    assert.ok(messagesPage.querySelector('.runtime-readonly-note'));
+    assert.ok(exportsPage.querySelector('.runtime-readonly-note'));
+    assert.equal(costsNav.classList.contains('is-readonly-route'), true);
+    assert.equal(messagesNav.classList.contains('is-readonly-route'), true);
+    assert.equal(exportsNav.classList.contains('is-readonly-route'), true);
+    assert.equal(costsNav.getAttribute('data-runtime-badge'), 'READ-ONLY');
+    assert.equal(messagesNav.getAttribute('data-runtime-badge'), 'READ-ONLY');
+    assert.equal(exportsNav.getAttribute('data-runtime-badge'), 'READ-ONLY');
+
+    stateManager.set('bot.running', true);
+    app._syncRuntimeReadonlyPages();
+
+    assert.equal(costsPage.classList.contains('runtime-readonly'), false);
+    assert.equal(messagesPage.classList.contains('runtime-readonly'), false);
+    assert.equal(exportsPage.classList.contains('runtime-readonly'), false);
+    assert.equal(costsPage.querySelector('.runtime-readonly-note'), null);
+    assert.equal(messagesPage.querySelector('.runtime-readonly-note'), null);
+    assert.equal(exportsPage.querySelector('.runtime-readonly-note'), null);
+    assert.equal(costsNav.classList.contains('is-readonly-route'), false);
+    assert.equal(messagesNav.classList.contains('is-readonly-route'), false);
+    assert.equal(exportsNav.classList.contains('is-readonly-route'), false);
+    assert.equal(costsNav.getAttribute('data-runtime-badge'), null);
+    assert.equal(messagesNav.getAttribute('data-runtime-badge'), null);
+    assert.equal(exportsNav.getAttribute('data-runtime-badge'), null);
+}));
+
 test('notification service creates fallback toast container when missing', () => withDom(({ document }) => {
     notificationService.container = null;
     const existing = document.getElementById('toast-container');

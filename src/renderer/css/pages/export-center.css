@@ -1,0 +1,125 @@
+.export-center-grid {
+    display: grid;
+    gap: 16px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.export-card {
+    border: 1px solid var(--border-color);
+    border-radius: 14px;
+    background: #fff;
+    padding: 16px;
+    display: grid;
+    gap: 12px;
+}
+
+.export-card-wide {
+    grid-column: 1 / -1;
+}
+
+.export-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.export-card-title {
+    font-size: 16px;
+    font-weight: 700;
+    margin: 0;
+}
+
+.export-card-text {
+    margin: 0;
+    color: var(--text-secondary);
+    white-space: pre-wrap;
+}
+
+.export-form-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px 12px;
+}
+
+.export-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.export-help {
+    font-size: 12px;
+    color: var(--text-secondary);
+    background: rgba(15, 23, 42, 0.04);
+    border: 1px solid rgba(148, 163, 184, 0.26);
+    border-radius: 10px;
+    padding: 8px 10px;
+    word-break: break-word;
+}
+
+.export-contact-list {
+    max-height: 260px;
+    overflow: auto;
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 8px;
+    display: grid;
+    gap: 6px;
+}
+
+.export-contact-row {
+    display: grid;
+    grid-template-columns: 20px 1fr;
+    column-gap: 10px;
+    align-items: center;
+    border: 1px solid rgba(148, 163, 184, 0.24);
+    border-radius: 10px;
+    padding: 8px 10px;
+    cursor: pointer;
+}
+
+.export-contact-name {
+    font-weight: 600;
+}
+
+.export-contact-meta {
+    grid-column: 2;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.export-preview {
+    margin: 0;
+    min-height: 130px;
+    max-height: 260px;
+    overflow: auto;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: #0f172a;
+    color: #e2e8f0;
+    padding: 10px 12px;
+    font-size: 12px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.export-chip {
+    font-size: 12px;
+    color: #0369a1;
+    background: rgba(14, 165, 233, 0.12);
+    border: 1px solid rgba(14, 165, 233, 0.25);
+    border-radius: 999px;
+    padding: 2px 8px;
+}
+
+@media (max-width: 1080px) {
+    .export-center-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .export-form-grid {
+        grid-template-columns: 1fr;
+    }
+}

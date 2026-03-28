@@ -44,6 +44,7 @@ export function bindSettingsEvents(page, deps = {}) {
     bindOptional('#btn-data-control-dry-run', 'click', () => void page._runDataControls(true));
     bindOptional('#btn-data-control-apply', 'click', () => void page._runDataControls(false));
     bindOptional('#btn-open-models', 'click', () => page.emit(Events.PAGE_CHANGE, 'models'));
+    bindOptional('#btn-open-export-center', 'click', () => page.emit(Events.PAGE_CHANGE, 'exports'));
     bindOptional('#settings-data-control-scope', 'change', () => page._renderBackupPanel?.());
     bindOptional('#settings-section-nav', 'click', (event) => {
         const button = event?.target?.closest?.('[data-settings-section]');

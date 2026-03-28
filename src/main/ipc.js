@@ -123,10 +123,17 @@ function registerIpcHandlers({
         '/api/costs/sessions',
         '/api/costs/session_details',
         '/api/costs/review_queue_export',
+        '/api/wechat_export/probe',
+        '/api/wechat_export/decrypt/start',
+        '/api/wechat_export/contacts',
+        '/api/wechat_export/export',
+        '/api/wechat_export/apply/preview',
+        '/api/wechat_export/apply',
     ]);
     const ALLOWED_BACKEND_PATH_PATTERNS = [
         /^\/api\/growth\/tasks\/[^/?#]+\/(clear|run|pause|resume)$/,
         /^\/api\/pending_replies\/[^/?#]+\/(approve|reject)$/,
+        /^\/api\/wechat_export\/decrypt\/jobs\/[^/?#]+$/,
     ];
     const isPlainObject = (value) => (
         value != null
@@ -409,7 +416,7 @@ function registerIpcHandlers({
 
     handleTrusted('restart-app-as-admin', async () => {
         if (process.platform !== 'win32') {
-            return { success: false, message: '浠呮敮鎸?Windows 鑷姩鎻愭潈閲嶅惎' };
+            return { success: false, message: 'Automatic elevated relaunch is only supported on Windows' };
         }
 
         try {
@@ -424,8 +431,8 @@ function registerIpcHandlers({
                 success: false,
                 canceled,
                 message: canceled
-                    ? '宸插彇娑堢鐞嗗憳鏉冮檺鎺堟潈'
-                    : `绠＄悊鍛橀噸鍚け璐? ${error?.message || error}`,
+                    ? 'Administrator permission request was canceled'
+                    : `Administrator relaunch failed: ${error?.message || error}`,
             };
         }
 
@@ -450,7 +457,7 @@ function registerIpcHandlers({
         return {
             success: true,
             pendingRestart: true,
-            message: '姝ｅ湪浠ョ鐞嗗憳韬唤閲嶆柊鍚姩搴旂敤...',
+            message: 'Relaunching application with administrator privileges...',
         };
     });
 
@@ -603,14 +610,14 @@ function registerIpcHandlers({
             buildSnapshotFilename(new Date()),
         );
         const saveResult = await dialog.showSaveDialog(win, {
-            title: '瀵煎嚭璇婃柇蹇収',
+            title: 'Export diagnostics snapshot',
             defaultPath,
             filters: [
-                { name: 'JSON 鏂囦欢', extensions: ['json'] },
+                { name: 'JSON files', extensions: ['json'] },
             ],
         });
         if (saveResult.canceled || !saveResult.filePath) {
-            return { success: false, canceled: true, message: '鐢ㄦ埛鍙栨秷瀵煎嚭' };
+            return { success: false, canceled: true, message: 'Export canceled by user' };
         }
 
         fs.mkdirSync(path.dirname(saveResult.filePath), { recursive: true });

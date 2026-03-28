@@ -1,0 +1,70 @@
+.page.runtime-readonly {
+    position: relative;
+    border: 1px dashed var(--border-default, #d1d5db);
+    border-radius: 14px;
+    background: linear-gradient(180deg, rgba(148, 163, 184, 0.05), rgba(148, 163, 184, 0.1));
+}
+
+.page.runtime-readonly::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 14px;
+    pointer-events: none;
+    background-image: repeating-linear-gradient(
+        -45deg,
+        rgba(148, 163, 184, 0.09) 0,
+        rgba(148, 163, 184, 0.09) 8px,
+        transparent 8px,
+        transparent 16px
+    );
+    z-index: 0;
+}
+
+.runtime-readonly-note {
+    margin: 0 0 12px 0;
+    padding: 10px 12px;
+    border: 1px solid var(--border-default, #d1d5db);
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.75);
+    color: var(--text-secondary, #334155);
+    font-size: 13px;
+    line-height: 1.4;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    position: sticky;
+    top: 0;
+    z-index: 2;
+}
+
+.runtime-readonly-note::before {
+    content: "READ ONLY";
+    font-size: 10px;
+    line-height: 1;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    padding: 4px 6px;
+    border-radius: 999px;
+    border: 1px solid rgba(71, 85, 105, 0.3);
+    color: #334155;
+    background: rgba(226, 232, 240, 0.6);
+}
+
+.page.runtime-readonly :is(
+    button,
+    input,
+    select,
+    textarea,
+    a[href],
+    [role="button"],
+    [contenteditable="true"],
+    [data-action],
+    [data-readiness-action],
+    [data-model-auth-action]
+) {
+    pointer-events: none !important;
+    cursor: not-allowed !important;
+    opacity: 0.5;
+    filter: grayscale(0.25);
+}

@@ -1,7 +1,8 @@
 /**
- * API 鏈嶅姟
+ * API service wrapper.
  *
- * 灏佽娓叉煋杩涚▼涓庡悗绔?API 鐨勯€氫俊銆? */
+ * Bridges renderer requests with backend APIs.
+ */
 
 import { debugLog } from '../core/Debug.js';
 
@@ -25,14 +26,17 @@ class ApiService {
         this.backendRequest = null;
         this.endpointTimeoutMs = Object.freeze({
             '/api/test_connection': 12000,
+            '/api/restart': 30000,
         });
         this.idempotentPostEndpoints = new Set([
             '/api/send',
             '/api/backups',
             '/api/backups/restore',
             '/api/data_controls/clear',
+            '/api/restart',
         ]);
         this.idempotencyNonce = 0;
+        this._restartPromise = null;
     }
 
     async init() {
@@ -40,18 +44,35 @@ class ApiService {
             if (window.electronAPI?.getFlaskUrl) {
                 this.baseUrl = await window.electronAPI.getFlaskUrl();
             }
-            if (window.electronAPI?.getSseTicket) {
-                this.sseTicket = String(await window.electronAPI.getSseTicket() || '').trim();
-            }
+            await this.refreshSseTicket({ force: true });
             if (typeof window.electronAPI?.backendRequest === 'function') {
                 this.backendRequest = window.electronAPI.backendRequest;
             }
         } catch (error) {
-            console.error('[ApiService] 鍒濆鍖栧け璐ワ紝鍥為€€鍒伴粯璁ゅ湴鍧€', error);
+            console.error('[ApiService] initialization failed, using default base URL', error);
         }
 
         this.initialized = true;
-        debugLog('[ApiService] 鍒濆鍖栧畬鎴愶紝baseUrl:', this.baseUrl);
+        debugLog('[ApiService] initialized, baseUrl:', this.baseUrl);
+    }
+
+    async refreshSseTicket(options = {}) {
+        const force = !!options?.force;
+        if (!window.electronAPI?.getSseTicket) {
+            return this.sseTicket;
+        }
+        if (!force && this.sseTicket) {
+            return this.sseTicket;
+        }
+        try {
+            this.sseTicket = String(await window.electronAPI.getSseTicket() || '').trim();
+        } catch (error) {
+            console.warn('[ApiService] failed to refresh SSE ticket:', error);
+            if (force) {
+                this.sseTicket = '';
+            }
+        }
+        return this.sseTicket;
     }
 
     async request(endpoint, options = {}, retries = undefined) {
@@ -128,7 +149,7 @@ class ApiService {
                 clearTimeout(timer);
                 const normalized = this._normalizeError(error, endpoint);
                 console.error(
-                    `[ApiService] 璇锋眰澶辫触 (${attempt + 1}/${retryBudget + 1}): ${endpoint}`,
+                    `[ApiService] request failed (${attempt + 1}/${retryBudget + 1}): ${endpoint}`,
                     normalized
                 );
                 lastError = normalized;
@@ -206,7 +227,7 @@ class ApiService {
             try {
                 return await response.json();
             } catch (_) {
-                const parseError = new Error('鏈嶅姟绔繑鍥炰簡鏃犳晥 JSON');
+                const parseError = new Error('Backend returned invalid JSON');
                 parseError.code = 'invalid_json';
                 parseError.status = Number(response.status || 500);
                 parseError.data = { contentType };
@@ -249,27 +270,26 @@ class ApiService {
         }
         return error;
     }
-
     _formatHttpErrorMessage(status, data) {
-        const detail = data?.message ? `锛?{data.message}` : '';
+        const detail = data?.message ? `: ${data.message}` : '';
         if (status === 401 || status === 403) {
-            return `鏉冮檺楠岃瘉澶辫触${detail}`;
+            return `Authentication failed${detail}`;
         }
         if (status === 404) {
-            return `鎺ュ彛涓嶅瓨鍦?{detail}`;
+            return `Endpoint not found${detail}`;
         }
         if (status === 429) {
-            return `璇锋眰杩囦簬棰戠箒${detail}`;
+            return `Too many requests${detail}`;
         }
         if (status >= 500) {
-            return `鏈嶅姟绔紓甯?{detail}`;
+            return `Backend internal error${detail}`;
         }
-        return `璇锋眰澶辫触 (${status})${detail}`;
+        return `Request failed (${status})${detail}`;
     }
 
     _normalizeError(error, endpoint) {
         if (error?.name === 'AbortError') {
-            const timeoutError = new Error('璇锋眰瓒呮椂锛岃绋嶅悗閲嶈瘯');
+            const timeoutError = new Error('请求超时，请稍后重试');
             timeoutError.code = 'timeout';
             timeoutError.endpoint = endpoint;
             return timeoutError;
@@ -277,7 +297,7 @@ class ApiService {
 
         const upperCode = String(error?.code || '').toUpperCase();
         if (NODE_NETWORK_ERROR_CODES.has(upperCode)) {
-            const networkError = error instanceof Error ? error : new Error('缃戠粶寮傚父鎴栨湇鍔′笉鍙敤');
+            const networkError = error instanceof Error ? error : new Error('网络异常或服务不可用');
             networkError.code = 'network_error';
             networkError.endpoint = endpoint;
             networkError.status = 0;
@@ -294,7 +314,7 @@ class ApiService {
             return error;
         }
 
-        const networkError = new Error('缃戠粶寮傚父鎴栨湇鍔′笉鍙敤');
+        const networkError = new Error('网络异常或服务不可用');
         networkError.code = 'network';
         networkError.endpoint = endpoint;
         return networkError;
@@ -319,14 +339,23 @@ class ApiService {
     }
 
     async restartBot() {
-        return this.request('/api/restart', { method: 'POST' });
+        if (this._restartPromise) {
+            return this._restartPromise;
+        }
+        this._restartPromise = this.request('/api/restart', {
+            method: 'POST',
+            timeoutMs: this.endpointTimeoutMs['/api/restart'],
+        }).finally(() => {
+            this._restartPromise = null;
+        });
+        return this._restartPromise;
     }
 
     async recoverBot() {
         return this.request('/api/recover', { method: 'POST' });
     }
 
-    async pauseBot(reason = '鐢ㄦ埛鏆傚仠') {
+    async pauseBot(reason = 'paused by user') {
         return this.request('/api/pause', {
             method: 'POST',
             body: { reason }
@@ -374,6 +403,59 @@ class ApiService {
     async resumeGrowthTask(taskType) {
         const encoded = encodeURIComponent(String(taskType || '').trim());
         return this.request(`/api/growth/tasks/${encoded}/resume`, { method: 'POST' }, 0);
+    }
+
+    async probeWechatExport() {
+        return this.request('/api/wechat_export/probe', {
+            method: 'POST',
+            body: {},
+            timeoutMs: 30000,
+        });
+    }
+
+    async startWechatExportDecrypt(payload = {}) {
+        return this.request('/api/wechat_export/decrypt/start', {
+            method: 'POST',
+            body: payload,
+            timeoutMs: 30000,
+        });
+    }
+
+    async getWechatExportDecryptJob(jobId) {
+        const encoded = encodeURIComponent(String(jobId || '').trim());
+        return this.request(`/api/wechat_export/decrypt/jobs/${encoded}`, {}, 0);
+    }
+
+    async listWechatExportContacts(payload = {}) {
+        return this.request('/api/wechat_export/contacts', {
+            method: 'POST',
+            body: payload,
+            timeoutMs: 30000,
+        });
+    }
+
+    async runWechatExport(payload = {}) {
+        return this.request('/api/wechat_export/export', {
+            method: 'POST',
+            body: payload,
+            timeoutMs: 300000,
+        });
+    }
+
+    async previewWechatExportApply(payload = {}) {
+        return this.request('/api/wechat_export/apply/preview', {
+            method: 'POST',
+            body: payload,
+            timeoutMs: 30000,
+        });
+    }
+
+    async applyWechatExport(payload = {}) {
+        return this.request('/api/wechat_export/apply', {
+            method: 'POST',
+            body: payload,
+            timeoutMs: 60000,
+        });
     }
 
     connectSSE(onMessage, onError, onOpen) {

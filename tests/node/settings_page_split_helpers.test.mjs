@@ -1555,6 +1555,36 @@ test('settings model summary button routes back to the models page', async () =>
     });
 });
 
+test('settings export center button routes to the exports page', async () => {
+    await withDom(async () => {
+        const exportButton = document.createElement('button');
+        exportButton.id = 'btn-open-export-center';
+
+        const calls = [];
+        const page = {
+            $(selector) {
+                if (selector === '#btn-open-export-center') {
+                    return exportButton;
+                }
+                return null;
+            },
+            bindEvent(target, eventName, handler) {
+                target.addEventListener(eventName, handler);
+            },
+            emit(eventName, payload) {
+                calls.push({ eventName, payload });
+            },
+        };
+
+        bindSettingsEvents(page);
+        exportButton.click();
+
+        assert.deepEqual(calls, [
+            { eventName: Events.PAGE_CHANGE, payload: 'exports' },
+        ]);
+    });
+});
+
 test('settings shell exposes common section as the default entry', () => {
     const markup = renderSettingsPageShell();
     assert.equal(markup.includes('data-settings-section="common"'), true);
@@ -2920,6 +2950,7 @@ test('models page provider model form saves defaults and can immediately switch 
             payload: {
                 provider_id: 'openai',
                 default_model: 'gpt-4.1',
+                force_sync_selected_profile: true,
             },
             options: {
                 preserveSelection: true,
@@ -2931,6 +2962,7 @@ test('models page provider model form saves defaults and can immediately switch 
             payload: {
                 provider_id: 'qwen',
                 default_model: 'qwen-max-latest',
+                force_sync_selected_profile: true,
             },
             options: {
                 preserveSelection: true,
@@ -2949,6 +2981,74 @@ test('models page provider model form saves defaults and can immediately switch 
         },
     ]);
     assert.equal(closeCalls, 1);
+});
+
+test('models page prefers saved provider default model when no auth profile is bound', () => {
+    const page = new ModelsPage();
+    page.applyModelCatalog({
+        providers: [
+            {
+                id: 'openai',
+                label: 'OpenAI',
+                default_model: 'gpt-5.4-mini',
+                models: ['gpt-5.4-mini', 'gpt-4.1'],
+                auth_methods: [{ id: 'api_key', type: 'api_key', label: 'API Key' }],
+            },
+        ],
+    });
+
+    const markup = page.renderProviderDetail({
+        provider: { id: 'openai', label: 'OpenAI', default_model: 'gpt-5.4-mini', models: ['gpt-5.4-mini', 'gpt-4.1'] },
+        state: 'not_configured',
+        selected_method_id: 'api_key',
+        auth_states: [
+            {
+                method_id: 'api_key',
+                status: 'not_configured',
+                metadata: {
+                    model: 'gpt-5.4-mini',
+                    base_url: 'https://api.openai.com/v1',
+                },
+            },
+        ],
+        metadata: {
+            default_model: 'gpt-4.1',
+            default_base_url: 'https://api.openai.com/v1',
+            can_set_active_provider: false,
+            is_active_provider: false,
+            provider_sync: { code: 'unsupported' },
+            provider_health: { code: 'idle', message: '' },
+        },
+    });
+
+    assert.match(markup, /<option value="gpt-4\.1" selected>/);
+});
+
+test('models page keeps overview provider defaults when merging catalog metadata', () => {
+    const page = new ModelsPage();
+    page.applyModelCatalog({
+        providers: [
+            {
+                id: 'openai',
+                label: 'OpenAI',
+                default_model: 'gpt-5.4-mini',
+                base_url: 'https://api.openai.com/v1',
+                auth_methods: [{ id: 'api_key', type: 'api_key', label: 'API Key' }],
+            },
+        ],
+    });
+
+    const merged = page.getProvider('openai', {
+        id: 'openai',
+        label: 'OpenAI',
+        default_model: 'gpt-4.1',
+        base_url: 'https://api.openai-proxy.example/v1',
+        metadata: { source: 'overview' },
+    });
+
+    assert.equal(merged.default_model, 'gpt-4.1');
+    assert.equal(merged.base_url, 'https://api.openai-proxy.example/v1');
+    assert.equal(merged.metadata?.source, 'overview');
 });
 
 test('models page summary counters and dangerous actions stay in the unified flow', async () => {

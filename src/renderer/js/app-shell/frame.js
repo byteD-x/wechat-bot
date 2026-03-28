@@ -13,6 +13,7 @@ const NAV_GROUPS = [
     {
         label: '配置',
         items: [
+            { page: 'exports', icon: 'download', label: '导出接入' },
             { page: 'models', icon: 'bot', label: '模型' },
             { page: 'settings', icon: 'settings', label: '设置' },
         ],
@@ -30,6 +31,7 @@ const PAGE_MOUNTS = [
     { id: 'dashboard', label: '仪表盘', active: true },
     { id: 'costs', label: '成本' },
     { id: 'messages', label: '消息' },
+    { id: 'exports', label: '导出接入' },
     { id: 'models', label: '模型' },
     { id: 'settings', label: '设置' },
     { id: 'logs', label: '日志' },

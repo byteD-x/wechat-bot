@@ -539,44 +539,12 @@ export function renderSettingsPageShell() {
                                     <span class="form-checkbox-label">在提示词注入画像</span>
                                 </label>
                             </div>
-                            <div class="form-group">
-                                <label class="form-checkbox form-checkbox-inline">
-                                    <input type="checkbox" id="setting-vector-memory-enabled">
-                                    <span class="form-checkbox-label">启用向量记忆 / RAG 总开关</span>
-                                </label>
-                            </div>
                             <div class="form-group full-width">
-                                <label class="form-label">单独 embedding 模型</label>
-                                <input type="text" id="setting-vector-memory-embedding-model" placeholder="留空则跟随当前预设；Ollama 可填 nomic-embed-text">
-                                <div class="form-help-text" id="vector-memory-help">关闭总开关后，运行期 RAG 和导出聊天记录 RAG 都不会建立向量索引或执行召回。</div>
-                            </div>
-                            <div class="form-group">
-                                <label class="form-checkbox form-checkbox-inline">
-                                    <input type="checkbox" id="setting-export-rag-enabled">
-                                    <span class="form-checkbox-label">启用导出聊天记录 RAG（默认关闭）</span>
-                                </label>
-                            </div>
-                            <div class="form-group">
-                                <label class="form-checkbox form-checkbox-inline">
-                                    <input type="checkbox" id="setting-export-rag-auto-ingest">
-                                    <span class="form-checkbox-label">自动扫描并增量导入</span>
-                                </label>
-                            </div>
-                            <div class="form-group full-width">
-                                <label class="form-label">导出目录</label>
-                                <input type="text" id="setting-export-rag-dir" placeholder="chat_exports/聊天记录">
-                            </div>
-                            <div class="form-group">
-                                <label class="form-label">每次注入片段数</label>
-                                <input type="number" id="setting-export-rag-top-k" min="1" step="1">
-                            </div>
-                            <div class="form-group">
-                                <label class="form-label">每联系人最大片段数</label>
-                                <input type="number" id="setting-export-rag-max-chunks-per-chat" min="1" step="1">
-                            </div>
-                            <div class="form-group full-width">
-                                <label class="form-label">索引状态</label>
-                                <div id="export-rag-status" class="form-help-text">状态：未加载</div>
+                                <label class="form-label">聊天导出接入</label>
+                                <div class="form-help-text">导出聊天记录、RAG 接入和索引状态已迁移到“导出接入”页面统一处理。</div>
+                                <button class="btn btn-secondary btn-sm" id="btn-open-export-center" type="button">
+                                    <span>前往导出接入页</span>
+                                </button>
                             </div>
                         </div>
                     </div>

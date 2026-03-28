@@ -2464,7 +2464,7 @@ class KimiCodeLocalAuthProvider(BaseAuthProvider):
             else "还没有检测到可同步的 Kimi Code 本机登录源。"
         )
         if config_api_key_available:
-            message = f"{message} 宸插彂鐜?config.toml 涓殑 Kimi Code API Key锛屽彲鐩存帴鐢ㄤ簬瀵硅瘽銆?"
+            message = f"{message} 已发现 config.toml 中的 Kimi Code API Key，可直接用于对话。"
         if provider_names:
             message = f"{message} 当前配置的 Provider：{provider_names}。"
         if model_name:

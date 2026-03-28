@@ -268,6 +268,28 @@ test('backend:request rejects endpoints outside the trusted allowlist', async ()
     assert.deepEqual(harness.backendCalls, []);
 });
 
+test('backend:request allows wechat export endpoints and pattern-based job query', async () => {
+    const harness = createHarness();
+    const event = createTrustedEvent();
+
+    const probeResult = await harness.backendRequestHandler(event, {
+        method: 'POST',
+        endpoint: '/api/wechat_export/probe',
+        payload: {},
+    });
+    const jobResult = await harness.backendRequestHandler(event, {
+        method: 'GET',
+        endpoint: '/api/wechat_export/decrypt/jobs/job_abc123',
+    });
+
+    assert.equal(probeResult.ok, true);
+    assert.equal(jobResult.ok, true);
+    assert.deepEqual(harness.backendCalls, [
+        { method: 'POST', endpoint: '/api/wechat_export/probe', payload: {} },
+        { method: 'GET', endpoint: '/api/wechat_export/decrypt/jobs/job_abc123', payload: null },
+    ]);
+});
+
 test('backend:request enforces payload policy for GET and oversized POST payloads', async () => {
     const harness = createHarness();
     const event = createTrustedEvent();

@@ -1,8 +1,8 @@
 """
-闂傚倸鍊峰ù鍥敋瑜嶉湁闁绘垼妫勯弸浣糕攽閻樺疇澹樼痪鎹愵嚙閳规垿鎮╅崣澶嬫倷缂備焦鍔栭〃濠囧蓟閿熺姴鐐婇柍杞扮劍閻忎線姊哄畷鍥ㄥ殌缂佸鎸抽垾锕傚锤濡も偓缁€鍫澝归敐鍥у妺闁告帗鐩濠氬磼濮橆兘鍋撴搴ｇ焼濞撴埃鍋撴鐐差樀閺佹捇鎮╅懠鑸垫啺闂備浇娉曢崰鎾存叏閹绢喗鍋柣鎰靛墰缁♀偓婵犵數濮撮崐鎼侇敂椤忓懐绠?- Quart 闂?闂傚倸鍊烽懗鍫曗€﹂崼銉︽櫇闁靛牆娲ㄧ粈濠傗攽閻樺弶鍌ㄩ柍?API 闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗〒姘ｅ亾妤犵偞鐗犻、鏇㈡晜閽樺缃曢梻浣虹《閸撴繈鎮疯閹矂骞樼紒妯衡偓鍨箾閹寸儐浼嗛柟杈剧畱閻?
+Quart API service for the desktop app.
 
-濠?Electron 闂傚倸鍊搁崐宄懊归崶顒夋晪鐟滃酣銆冮妷鈺佷紶闁靛／鍌滅憹闁诲骸绠嶉崕閬嵥囬鐐插瀭闁稿本绋撶粻鍓р偓鐟板閸犳洜鑺辨繝姘厸闁告洍鏅涢崝婊呯磼缂佹娲存鐐差儔閹瑧鈧潧鎲￠濠氭⒒娴ｅ憡鍟炴い銊ユ閸犲﹤顓兼径濞箓鏌涢弴銊ョ仩闁告劏鍋撻梻渚€娼ц噹闁逞屽墮鍗遍柛顐犲灮绾捐棄霉閿濆牊顥夐柣銊︽そ閺岀喖鎼归锝呯３婵犵鍓濋幐鎶界嵁閹烘绠ｆい鎾跺枎閸忓﹥淇婇悙顏勨偓鏍箰閻愵剚鍙忔い鎾跺€ｉ敐澶婇唶闁靛鑵归幏娲煟閻樺弶绀岄柍褜鍓濆▍鏇㈡倶瀹ュ拋娓婚柕鍫濆暙婵″ジ鏌ｅΔ鈧换妯虹暦?API 闂傚倸鍊搁崐鎼佸磹瀹勬噴褰掑炊椤掑﹦绋忔繝銏ｆ硾椤戝洭銆呴幓鎹楀綊鎮╁顔煎壈缂佺偓鍎冲鈥愁嚕閸洖閱囨い鎰垫線缁ㄥ瓨绻涚€涙鐭庢い顐㈩槺閹广垹鈽夐姀鐘殿吅濠电偛妫楃换鎺撶婵傜绾?
-濠电姷鏁告慨鐑藉极閹间礁纾婚柣妯款嚙缁犲灚銇勮箛鎾搭棤缂佲偓婵犲洦鐓冪憸婊堝礈濮樿鲸宕叉繛鎴炵懃缁剁偤鎮楅敐搴′簽妞わ缚鍗抽幃?Quart闂傚倸鍊搁崐鎼佸磹閻戣姤鍊块柨鏃堟暜閸嬫挾绮☉妯诲櫧闁活厽鐟╅弻鐔衡偓娑欘焽缁犱即鏌ら悧鍫濐嚋闁逛究鍔嶇换婵嬪礃椤忓棛宕秙k 闂?闂傚倸鍊烽懗鍫曗€﹂崼銉︽櫇闁靛牆娲ㄧ粈濠傗攽閻樺弶鍌ㄩ柍褜鍏涚粈浣界亙闂佸憡渚楅崰鏍焵椤掑倸鍘撮柡宀嬬秮楠炲鎮樺ú璁崇凹缂佸倸绉归弻鍡楊吋閸″繑瀚奸梻浣告啞閹告槒銇愰崘鈺冾洸闁绘劗鍎ら悡鏇㈡煟濡搫鏆卞┑顔肩У椤ㄣ儵鎮欓懠顒傤啋闂佸搫鑻Λ妤咁敇婵傜骞㈡繛鍡楃箰濮规彃鈹?闂傚倸鍊搁崐鐑芥倿閿曞倹鍎戠憸鐗堝笒绾惧綊鏌￠崶鈺佇涢柛瀣尭椤繈顢曢姀鐘点偖婵°倗濮烽崑娑㈠疮閹绢喚宓侀幖娣妽鐎电姴顭跨捄铏圭劸闁?闂傚倸鍊烽懗鍓佹兜閸洖鐤炬繝闈涙处閸欏繘鏌熺紒銏犳灈闁绘挴鈧剚鐔嗛柤鎼佹涧婵洨绱掗悩鐢靛笡闁靛洤瀚板浠嬪Ω瑜忛崣婵囩節閵忥綆娼愭繛鑼枎椤?asyncio 濠电姷鏁告慨鐑藉极閹间礁纾绘繛鎴欏灪閸嬨倝鏌曟繛褍鍟悘?濠电姷鏁告慨鐑藉极閹间礁纾绘繛鎴烆焸濞戞瑦鍎熼柕濞垮劚閻?濠电姷顣槐鏇㈠磻閹达箑纾归柡鍥╁У瀹曟煡鏌熼柇锕€鍔︽繛鎴烆焸閺冨牆绀冩い蹇撳暟閻熸繃绻濆▓鍨灍妞ゎ厼鐗撳畷娲冀椤撶喎浜?
+This module exposes bot control, runtime status, configuration management,
+and operational endpoints used by the Electron renderer process.
 """
 
 from quart import Quart, jsonify, request, make_response
@@ -55,6 +55,7 @@ from backend.core.workspace_backup import (
     DEFAULT_KEEP_QUICK_BACKUPS,
     WorkspaceBackupService,
 )
+from backend.core.wechat_export_service import WechatExportService
 from backend.model_catalog import (
     get_model_catalog,
     infer_provider_id,
@@ -112,6 +113,7 @@ _MODEL_AUTH_SENSITIVE_KEYWORDS = (
 
 _IDEMPOTENT_ENDPOINTS = {
     ("POST", "/api/send"),
+    ("POST", "/api/restart"),
     ("POST", "/api/backups"),
     ("POST", "/api/backups/restore"),
     ("POST", "/api/data_controls/clear"),
@@ -463,6 +465,10 @@ def _is_cross_site_browser_request() -> bool:
         return True
     fetch_site = str(request.headers.get("Sec-Fetch-Site") or "").strip().lower()
     if fetch_site == "cross-site":
+        # Electron EventSource requests from local file:// renderer may be marked as
+        # cross-site without an Origin header. Treat local Electron requests as trusted.
+        if _is_electron_user_agent() and _is_local_request():
+            return False
         if origin:
             return not _is_trusted_local_origin(origin)
         return True
@@ -570,7 +576,6 @@ def _apply_local_api_cors_headers(response, path: str) -> None:
     _append_vary_header(response, "Origin")
 
 
-# 闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗〒姘ｅ亾妤犵偛顦甸弫宥夊礋椤掍焦顔囨繝寰锋澘鈧洟宕导瀛樺剹婵炲棙鎸婚悡娆撴倵閻㈡鐒鹃崯鍝ョ磼?Quart 闂傚倸鍊搁崐椋庣矆娴ｉ潻鑰块梺顒€绉撮崒銊ф喐閺冨牆绠栨繛宸簻鎯熼梺闈涱樈閸犳绱炴惔銏㈢瘈闁汇垽娼ф牎闂佺厧缍婄粻鏍ь嚕?app = Quart(__name__)
 
 # Security note: API is intended for local Electron clients only.
 # - Run server defaults bind to 127.0.0.1.
@@ -717,11 +722,11 @@ async def _handle_api_unexpected_error(error: Exception):
     raise error
 
 
-# 闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗〒姘ｅ亾鐎规洏鍎抽埀顒婄秵閸犳牜澹曢崸妤佺厵闁诡垳澧楅ˉ澶愬箹閺夋埊韬柡灞诲€濋幊婵嬪箥椤旇偐澧┑?BotManager 闂傚倸鍊搁崐宄懊归崶顒夋晪鐟滃酣銆冮妷褏鐭欓柛鏌倐鍋撻崸妤佲拺妞ゆ巻鍋撶紒澶婎嚟婢规洜绱掑Ο鍦畾濡炪倖鐗楅懝楣冨箖閹寸偑浜?
 manager = get_bot_manager()
 cost_service = CostAnalyticsService()
 backup_service = WorkspaceBackupService()
 data_control_service = DataControlService()
+wechat_export_service = WechatExportService()
 model_auth_center_service = get_model_auth_center_service()
 maintenance_lock = asyncio.Lock()
 
@@ -744,7 +749,6 @@ def _mask_preset(
     credential_ref = str(masked.get("credential_ref") or "").strip()
     allow_empty = bool(masked.get("allow_empty_key", False))
     if allow_empty:
-        # 濠电姷鏁告慨鐑藉极閹间礁纾婚柣鎰惈閸ㄥ倿鏌涢锝嗙缂佺姳鍗抽弻娑樷攽閸曨偄濮㈤梺娲诲幗閹瑰洭寮婚敐澶嬪亜閻犲洩灏欓崝鐑芥⒑闁偛鑻晶顖炴偨椤栨せ鍋撳畷鍥ㄦ濠电姴锕ょ€氼厽鍒婇幘顔界厽闁绘柨鎼。鍏兼叏?Key 闂傚倸鍊搁崐鎼佸磹閻戣姤鍊块柨鏇炲€归崕鎴犳喐閻楀牆绗掔紒鈧径灞稿亾閸忓浜鹃梺閫炲苯澧撮柛鈹惧亾濡炪倖甯婄粈渚€宕甸鍕厱婵☆垱浜介崑銏ゆ煛娴ｇ鏆ｅ┑顔瑰亾闂侀潧鐗嗛幊鎰板磹閻愬樊娓婚柕鍫濇閸у﹪鏌涚€ｎ偅灏电紒杈ㄥ浮閸┾偓妞ゆ帊绀佺欢鐐烘煙闁箑骞橀柛妯绘崌濮婃椽鎳為妷鍐句邯钘濆ù鍏兼綑闂傤垶鏌ｉ敐鍛伇缁炬儳銈搁弻宥堫檨闁告挾鍠庨悾鐑芥偄绾拌鲸鏅濋梺缁樻煥閹诧繝寮?Ollama闂傚倸鍊搁崐鎼佸磹閻戣姤鍊块柨鏃堟暜閸嬫挾绮☉妯诲櫧闁?濠电姷鏁告慨鐑姐€傞挊澹╋綁宕ㄩ弶鎴狅紱婵炴挻鍩冮崑鎾垛偓瑙勬礃閸旀洟鍩為幋锕€绐楁い鏃傛櫕閳洜绱掑Δ鍐ㄦ灈闁糕斁鍋撳銈嗗笒鐎氼剟寮伴妷鈺傜厓?闂傚倸鍊烽悞锔锯偓绗涘懐鐭欓柟鐑橆殔缁€澶愭煛閸ャ儱鐏╅柣鎾达耿閺岀喐娼忛崜褏鏆犲Δ鐘靛亼閸ㄤ粙寮诲澶婁紶闁告洦鍋€閸嬫捇鎮界粙鍨殤闁瑰吋鐣崝宥夊煕閹烘鐓曢悘鐐插⒔閹冲懘鏌涢弬璺ㄐｇ紒缁樼箞婵偓闁宠棄妫涢崝椋庣磽娓氬洤鏋熸俊顐㈠暙閻ｉ攱绺界粙鍨祮闂佺粯妫佸〒褰掓儉椤忓牊鈷掑ù锝堟閵嗗﹪鏌涢幘瀵哥畼缂侇喗鐟╅獮鎺懳旈埀顒勬偪閻愵兙浜滈柟鐑樺灥椤忣亪鏌涙繝鍌滃煟闁哄矉缍侀獮鍥敍濞戞哎鈧劖绻涚€涙鐭婃繝鈧潏鈺傤潟闁圭儤鏌￠崑鎾绘晲鎼粹€冲闂佹悶鍊栭悷鈺呭蓟瀹ュ瀵犲鑸瞪戦埢鍫ユ倵濞堝灝娅橀柛锝忕到閻ｇ兘骞掗幋顓熷兊濡炪倖鎸炬慨顓㈠磻閹剧粯鎯為柛锔诲幘閿涙繃绻涙潏鍓хК妞ゆ洘鐗曢埢鎾诲籍閳ь剟濡甸崟顖涙櫇闁稿本绋掗柨顓烆渻閵堝棙绌跨紒鎻掑⒔缁骞掗弬鍝勪壕闁挎繂绨肩花浠嬫煕?闂傚倸鍊风粈渚€骞楀鍫濈；闁绘ɑ绁撮弸鏍ㄧ箾閹存瑥鐏╅柣鎾偓鎰佺唵闁兼悂娼ф慨鍥╃磼閻樼數甯涙い銊ｅ劦閹瑩鎳犻浣烘闂備胶顭堥鍡涘箲閸ヮ剙鏄ラ柍褜鍓氶妵鍕箳閹存繍浠鹃梺?缂傚倸鍊搁崐椋庢閿熺姴绐楅柡宥庡幗閸庢鏌涚仦鐐殤闁哄棴闄勭换娑㈠幢濡闉嶉梺鍝勬噺閹倿寮婚敐鍛傜喖鎼归惂鍝ョ闂?Key闂?
         masked["api_key_configured"] = False
         masked["api_key_masked"] = ""
     elif (key and not key.startswith("YOUR_")) or credential_ref:
@@ -1100,9 +1104,6 @@ def _collect_restore_auth_checks() -> dict:
         }
 
 
-# 闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗ù锝呮惈椤ユ碍銇勯幘鍗炵仼缁炬儳娼￠弻鏇㈠醇濠垫劖笑缂備讲鍋撳鑸靛姉閸欐捇鏌涢妷锝呭闁宠棄顦甸弻锝夊Χ婢跺瞼鏆梺鍝勭焿缁辨洘绂掗敂鐐珰闁圭粯甯掗～鎾绘⒒娴ｈ櫣甯涢柟绋款煼閹嫰顢涢悙鑼舵憰闂佺粯鏌ㄩ崥瀣吹鐎ｎ偁浜滈柟鍝勬娴滅偓绻濆鏋€曡缂備胶绮惄顖氱暦閵娾晩鏁婇柛鎾楀懎甯ㄩ梻鍌欑閹碱偊鎳熼婊呯煋鐟滅増甯掔粻鏍ㄧ節婵犲倸鎮╅柣鏃傚帶娴肩娀鏌涢弴鐐典粵缂傚秴鍊垮濠氬磼濞嗘埈妲梺鍦拡閸嬪﹪鐛繝鍛杸婵炴垶鐟ユ禍妤呮⒑鐠恒劌鏋斿┑顔芥尦瀵即濡烽埡鍌滃弳闂佺粯鏌ㄩ幖顐㈢摥缂傚倷鑳舵慨鐢告儎椤栫偛钃熼柡鍥╁枔缁♀偓闂婎偄娲︾粙鎺楊敁瀹ュ鈷戠紓浣诡焽缁犳牕鈹戦悙璇у伐妞ゎ偄绻樺畷顐﹀礋椤撶喐顔曢梻浣规偠閸庢粓宕橀…鎴犫偓閬嶆⒒閸屾瑧顦﹂柟璇х節瀵濡歌瀹曞弶淇婇娆掝劅闁搞倖娲熼弻锛勪沪鐠囨彃濮庨梺钘夊暟閸犳牠寮婚弴鐔风窞闁割偅绻傛慨銏ゆ⒑閸涘鎴﹀箖閸屾凹娼栭柧蹇氼潐閸忔粓鏌涘☉鍗炲箻闁告梻鍏樺娲川婵犲啰鍙嗙紓浣割槹閹告娊宕洪姀鐙€鍚嬮柛婊€鑳堕崣鍡涙⒑閸撴彃浜為柛鐘虫崌瀹曘垽骞樼紒妯锋嫼缂傚倷鐒﹂敋闁诲骏绠撻弻銊ヮ潩椤戣姤鏂€濡炪倖姊婚幊鎾寸妤ｅ啯鈷掗柛灞剧懅椤︼箓鏌熺喊鍗炰喊妤犵偛锕ㄧ粻娑樷槈濞嗗繋绨甸梻浣芥硶閸犳挻鎱ㄩ幘顔煎強闁靛鏅滈悡銉╂煟閺傛寧鎯堢€涙繄绱撴担鍝勑ｉ柣鈺婂灦瀵寮撮悢铏圭槇闂婎偄娲︾粙鎺楊敁瀹ュ鈷戠紓浣诡焽缁犳牕鈹戦悙璇у伐妞ゎ偄绻樺畷顐﹀礋椤撶喐顔曢梻浣规偠閸庢粓宕橀…鎴犫偓閬嶆⒒閸屾瑧顦﹂柟璇х節瀵濡歌瀹曞弶淇婇娆掝劅闁搞倖娲熼弻锛勪沪鐠囨彃濮庨梺钘夊暟閸犳牠寮婚弴鐔风窞闁割偅绻傛慨銏ゆ⒑閸涘鎴﹀箖閸屾凹娼栭柧蹇氼潐閸忔粓鏌涘☉鍗炲箻闁告梻鍏樺娲川婵犲啰鍙嗙紓浣割槹閹告娊宕洪姀鐙€鍚嬮柛婊€鑳堕崣鍡涙⒑閸撴彃浜為柛鐘虫崌瀹曘垽骞樼紒妯锋嫼缂傚倷鐒﹂敋闁诲骏绠撻弻銊ヮ潩椤戣姤鏂€濡炪倖姊婚幊鎾寸妤ｅ啯鈷掗柛灞剧懅椤︼箓鏌熺喊鍗炰喊妤犵偛锕ㄧ粻娑樷槈濞嗗繋绨甸梻浣芥硶閸犳挻鎱ㄩ幘顔煎強闁靛鏅滈悡銉╂煟閺傛寧鎯堢€涙繄绱撴担鍝勑ｉ柣鈺婂灦瀵寮撮悢铏圭槇闂婎偄娲︾粙鎺楊敁瀹ュ鈷戠紓浣诡焽缁犳牕鈹戦悙璇у伐妞ゎ偄绻樺畷顐﹀礋椤撶喐顔曢梻浣规偠閸庢粓宕橀…鎴犫偓閬嶆⒒閸屾瑧顦﹂柟璇х節瀵濡歌瀹曞弶淇婇娆掝劅闁搞倖娲熼弻锛勪沪鐠囨彃濮庨梺钘夊暟閸犳牠寮婚弴鐔风窞闁割偅绻傛慨銏ゆ⒑閸涘鎴﹀箖閸屾凹娼栭柧蹇氼潐閸忔粓鏌涘☉鍗炲箻闁告梻鍏樺娲川婵犲啰鍙嗙紓浣割槹閹告娊宕洪姀鐙€鍚嬮柛婊€鑳堕崣鍡涙⒑閸撴彃浜為柛鐘虫崌瀹曘垽骞樼紒妯锋嫼缂傚倷鐒﹂敋闁诲骏绠撻弻銊ヮ潩椤戣姤鏂€濡炪倖姊婚幊鎾寸妤ｅ啯鈷掗柛灞剧懅椤︼箓鏌熺喊鍗炰喊妤犵偛锕ㄧ粻娑樷槈濞嗗繋绨甸梻浣芥硶閸犳挻鎱ㄩ幘顔煎強闁靛鏅滈悡銉╂煟閺傛寧鎯堢€涙繄绱撴担鍝勑ｉ柣鈺婂灦瀵寮撮悢铏圭槇闂婎偄娲︾粙鎺楊敁瀹ュ鈷戠紓浣诡焽缁犳牕鈹戦悙璇у伐妞ゎ偄绻樺畷顐﹀礋椤撶喐顔曢梻浣规偠閸庢粓宕橀…鎴犫偓閬嶆⒒閸屾瑧顦﹂柟璇х節瀵濡歌瀹曞弶淇婇娆掝劅闁搞倖娲熼弻锛勪沪鐠囨彃濮庨梺钘夊暟閸犳牠寮婚弴鐔风窞闁割偅绻傛慨銏ゆ⒑閸涘鎴﹀箖閸屾凹娼栭柧蹇氼潐閸忔粓鏌涘☉鍗炲箻闁告梻鍏樺娲川婵犲啰鍙嗙紓浣割槹閹告娊宕洪姀鐙€鍚嬮柛婊€鑳堕崣鍡涙⒑閸撴彃浜為柛鐘虫崌瀹曘垽骞樼紒妯锋嫼缂傚倷鐒﹂敋闁诲骏绠撻弻銊ヮ潩椤戣姤鏂€濡炪倖姊婚幊鎾寸妤ｅ啯鈷掗柛灞剧懅椤︼箓鏌熺喊鍗炰喊妤犵偛锕ㄧ粻娑樷槈濞嗗繋绨甸梻浣芥硶閸犳挻鎱ㄩ幘顔煎強闁靛鏅滈悡銉╂煟閺傛寧鎯堢€涙繄绱撴担鍝勑ｉ柣鈺婂灦瀵寮撮悢铏圭槇闂婎偄娲︾粙鎺楊敁瀹ュ鈷戠紓浣诡焽缁犳牕鈹戦悙璇у伐妞ゎ偄绻樺畷顐﹀礋椤撶喐顔曢梻浣规偠閸庢粓宕橀…鎴犫偓閬嶆⒒閸屾瑧顦﹂柟璇х節瀵濡歌瀹曞弶淇婇娆掝劅闁搞倖娲熼弻锛勪沪鐠囨彃濮庨梺钘夊暟閸犳牠寮婚弴鐔风窞闁割偅绻傛慨銏ゆ⒑閸涘鎴﹀箖閸屾凹娼栭柧蹇氼潐閸忔粓鏌涘☉鍗炲箻闁告梻鍏樺娲川婵犲啰鍙嗙紓浣割槹閹告娊宕洪姀鐙€鍚嬮柛婊€鑳堕崣鍡涙⒑閸撴彃浜為柛鐘虫崌瀹曘垽骞樼紒妯锋嫼缂傚倷鐒﹂敋闁诲骏绠撻弻銊ヮ潩椤戣姤鏂€濡炪倖姊婚幊鎾寸妤ｅ啯鈷掗柛灞剧懅椤︼箓鏌熺喊鍗炰喊妤犵偛锕ㄧ粻娑樷槈濞嗗繋绨甸梻浣芥硶閸犳挻鎱ㄩ幘顔煎強闁靛鏅滈悡銉╂煟閺傛寧鎯堢€涙繄绱撴担鍝勑ｉ柣鈺婂灦瀵寮撮悢铏圭槇闂婎偄娲︾粙鎺楊敁瀹ュ鈷戠紓浣诡焽缁犳牕鈹戦悙璇у伐妞ゎ偄绻樺畷顐﹀礋椤撶喐顔曢梻浣规偠閸庢粓宕橀…鎴犫偓閬嶆⒒閸屾瑧顦﹂柟璇х節瀵濡歌瀹曞弶淇婇娆掝劅闁搞倖娲熼弻锛勪沪鐠囨彃濮庨梺钘夊暟閸犳牠寮婚弴鐔风窞闁割偅绻傛慨銏ゆ⒑閸涘鎴﹀箖閸屾凹娼栭柧蹇氼潐閸忔粓鏌涘☉鍗炲箻闁告梻鍏樺娲川婵犲啰鍙嗙紓浣割槹閹告娊宕洪姀鐙€鍚嬮柛婊€鑳堕崣鍡涙⒑閸撴彃浜為柛鐘虫崌瀹曘垽骞樼紒妯锋嫼缂傚倷鐒﹂敋闁诲骏绠撻弻銊ヮ潩椤戣姤鏂€濡炪倖姊婚幊鎾寸妤ｅ啯鈷掗柛灞剧懅椤︼箓鏌熺喊鍗炰喊妤犵偛锕ㄧ粻娑樷槈濞嗗繋绨甸梻浣芥硶閸犳挻鎱ㄩ幘顔煎強闁靛鏅滈悡銉╂煟閺傛寧鎯堢€涙繄绱撴担鍝勑ｉ柣鈺婂灦瀵寮撮悢铏圭槇闂婎偄娲︾粙鎺楊敁瀹ュ鈷戠紓浣诡焽缁犳牕鈹戦悙璇у伐妞ゎ偄绻樺畷顐﹀礋椤撶喐顔曢梻浣规偠閸庢粓宕橀…鎴犫偓閬嶆⒒閸屾瑧顦﹂柟璇х節瀵濡歌瀹曞弶淇婇娆掝劅闁搞倖娲熼弻锛勪沪鐠囨彃濮庨梺钘夊暟閸犳牠寮婚弴鐔风窞闁割偅绻傛慨銏ゆ⒑閸涘鎴﹀箖閸屾凹娼栭柧蹇氼潐閸忔粓鏌涘☉鍗炲箻闁告梻鍏樺娲川婵犲啰鍙嗙紓浣割槹閹告娊宕洪姀鐙€鍚嬮柛婊€鑳堕崣鍡涙⒑閸撴彃浜為柛鐘虫崌瀹曘垽骞樼紒妯锋嫼缂傚倷鐒﹂敋闁诲骏绠撻弻銊ヮ潩椤戣姤鏂€濡炪倖姊婚幊鎾寸妤ｅ啯鈷掗柛灞剧懅椤︼箓鏌熺喊鍗炰喊妤犵偛锕ㄧ粻娑樷槈濞嗗繋绨甸梻浣芥硶閸犳挻鎱ㄩ幘顔煎強闁靛鏅滈悡銉╂煟閺傛寧鎯堢€涙繄绱撴担鍝勑ｉ柣鈺婂灦瀵寮撮悢铏圭槇闂婎偄娲︾粙鎺楊敁瀹ュ鈷戠紓浣诡焽缁犳牕鈹戦悙璇у伐妞ゎ偄绻樺畷顐﹀礋椤撶喐顔曢梻浣规偠閸庢粓宕橀…鎴犫偓閬嶆⒒閸屾瑧顦﹂柟璇х節瀵濡歌瀹曞弶淇婇娆掝劅闁搞倖娲熼弻锛勪沪鐠囨彃濮庨梺钘夊暟閸犳牠寮婚弴鐔风窞闁割偅绻傛慨銏ゆ⒑閸涘鎴﹀箖閸屾凹娼栭柧蹇氼潐閸忔粓鏌涘☉鍗炲箻闁告梻鍏樺娲川婵犲啰鍙嗙紓浣割槹閹告娊宕洪姀鐙€鍚嬮柛婊€鑳堕崣鍡涙⒑閸撴彃浜為柛鐘虫崌瀹曘垽骞樼紒妯锋嫼缂傚倷鐒﹂敋闁诲骏绠撻弻銊ヮ潩椤戣姤鏂€濡炪倖姊婚幊鎾寸妤ｅ啯鈷掗柛灞剧懅椤︼箓鏌熺喊鍗炰喊妤犵偛锕ㄧ粻娑樷槈濞嗗繋绨甸梻浣芥硶閸犳挻鎱ㄩ幘顔煎強闁靛鏅滈悡銉╂煟閺傛寧鎯堢€涙繄绱撴担鍝勑ｉ柣鈺婂灦瀵寮撮悢铏圭槇闂婎偄娲︾粙鎺楊敁瀹ュ鈷戠紓浣诡焽缁犳牕鈹戦悙璇у伐妞ゎ偄绻樺畷顐﹀礋椤撶喐顔曢梻浣规偠閸庢粓宕橀…鎴犫偓閬嶆⒒閸屾瑧顦﹂柟璇х節瀵濡歌瀹曞弶淇婇娆掝劅闁搞倖娲熼弻锛勪沪鐠囨彃濮庨梺钘夊暟閸犳牠寮婚弴鐔风窞闁割偅绻傛慨銏ゆ⒑閸涘鎴﹀箖閸屾凹娼栭柧蹇氼潐閸忔粓鏌涘☉鍗炲箻闁告梻鍏樺娲川婵犲啰鍙嗙紓浣割槹閹告娊宕洪姀鐙€鍚嬮柛婊€鑳堕崣鍡涙⒑閸撴彃浜為柛鐘虫崌瀹曘垽骞樼紒妯锋嫼缂傚倷鐒﹂敋闁诲骏绠撻弻銊ヮ潩椤戣姤鏂€濡炪倖姊婚幊鎾寸妤ｅ啯鈷掗柛灞剧懅椤︼箓鏌熺喊鍗炰喊妤犵偛锕ㄧ粻娑樷槈濞嗗繋绨甸梻浣芥硶閸犳挻鎱ㄩ幘顔煎強?
-#                               API 闂傚倸鍊搁崐宄懊归崶褏鏆﹂柛顭戝亝閸欏繒鈧娲栧ú锔藉垔娴煎瓨鐓ラ柡鍥╁仜閳ь剚鎮傚畷褰掑磼閻愬鍘甸梺璇″灣婢ф藟婢舵劖鐓?
-# 闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗ù锝呮惈椤ユ碍銇勯幘鍗炵仼缁炬儳娼￠弻鏇㈠醇濠垫劖笑缂備讲鍋撳鑸靛姉閸欐捇鏌涢妷锝呭闁宠棄顦甸弻锝夊Χ婢跺瞼鏆梺鍝勭焿缁辨洘绂掗敂鐐珰闁圭粯甯掗～鎾绘⒒娴ｈ櫣甯涢柟绋款煼閹嫰顢涢悙鑼舵憰闂佺粯鏌ㄩ崥瀣吹鐎ｎ偁浜滈柟鍝勬娴滅偓绻濆鏋€曡缂備胶绮惄顖氱暦閵娾晩鏁婇柛鎾楀懎甯ㄩ梻鍌欑閹碱偊鎳熼婊呯煋鐟滅増甯掔粻鏍ㄧ節婵犲倸鎮╅柣鏃傚帶娴肩娀鏌涢弴鐐典粵缂傚秴鍊垮濠氬磼濞嗘埈妲梺鍦拡閸嬪﹪鐛繝鍛杸婵炴垶鐟ユ禍妤呮⒑鐠恒劌鏋斿┑顔芥尦瀵即濡烽埡鍌滃弳闂佺粯鏌ㄩ幖顐㈢摥缂傚倷鑳舵慨鐢告儎椤栫偛钃熼柡鍥╁枔缁♀偓闂婎偄娲︾粙鎺楊敁瀹ュ鈷戠紓浣诡焽缁犳牕鈹戦悙璇у伐妞ゎ偄绻樺畷顐﹀礋椤撶喐顔曢梻浣规偠閸庢粓宕橀…鎴犫偓閬嶆⒒閸屾瑧顦﹂柟璇х節瀵濡歌瀹曞弶淇婇娆掝劅闁搞倖娲熼弻锛勪沪鐠囨彃濮庨梺钘夊暟閸犳牠寮婚弴鐔风窞闁割偅绻傛慨銏ゆ⒑閸涘鎴﹀箖閸屾凹娼栭柧蹇氼潐閸忔粓鏌涘☉鍗炲箻闁告梻鍏樺娲川婵犲啰鍙嗙紓浣割槹閹告娊宕洪姀鐙€鍚嬮柛婊€鑳堕崣鍡涙⒑閸撴彃浜為柛鐘虫崌瀹曘垽骞樼紒妯锋嫼缂傚倷鐒﹂敋闁诲骏绠撻弻銊ヮ潩椤戣姤鏂€濡炪倖姊婚幊鎾寸妤ｅ啯鈷掗柛灞剧懅椤︼箓鏌熺喊鍗炰喊妤犵偛锕ㄧ粻娑樷槈濞嗗繋绨甸梻浣芥硶閸犳挻鎱ㄩ幘顔煎強闁靛鏅滈悡銉╂煟閺傛寧鎯堢€涙繄绱撴担鍝勑ｉ柣鈺婂灦瀵寮撮悢铏圭槇闂婎偄娲︾粙鎺楊敁瀹ュ鈷戠紓浣诡焽缁犳牕鈹戦悙璇у伐妞ゎ偄绻樺畷顐﹀礋椤撶喐顔曢梻浣规偠閸庢粓宕橀…鎴犫偓閬嶆⒒閸屾瑧顦﹂柟璇х節瀵濡歌瀹曞弶淇婇娆掝劅闁搞倖娲熼弻锛勪沪鐠囨彃濮庨梺钘夊暟閸犳牠寮婚弴鐔风窞闁割偅绻傛慨銏ゆ⒑閸涘鎴﹀箖閸屾凹娼栭柧蹇氼潐閸忔粓鏌涘☉鍗炲箻闁告梻鍏樺娲川婵犲啰鍙嗙紓浣割槹閹告娊宕洪姀鐙€鍚嬮柛婊€鑳堕崣鍡涙⒑閸撴彃浜為柛鐘虫崌瀹曘垽骞樼紒妯锋嫼缂傚倷鐒﹂敋闁诲骏绠撻弻銊ヮ潩椤戣姤鏂€濡炪倖姊婚幊鎾寸妤ｅ啯鈷掗柛灞剧懅椤︼箓鏌熺喊鍗炰喊妤犵偛锕ㄧ粻娑樷槈濞嗗繋绨甸梻浣芥硶閸犳挻鎱ㄩ幘顔煎強闁靛鏅滈悡銉╂煟閺傛寧鎯堢€涙繄绱撴担鍝勑ｉ柣鈺婂灦瀵寮撮悢铏圭槇闂婎偄娲︾粙鎺楊敁瀹ュ鈷戠紓浣诡焽缁犳牕鈹戦悙璇у伐妞ゎ偄绻樺畷顐﹀礋椤撶喐顔曢梻浣规偠閸庢粓宕橀…鎴犫偓閬嶆⒒閸屾瑧顦﹂柟璇х節瀵濡歌瀹曞弶淇婇娆掝劅闁搞倖娲熼弻锛勪沪鐠囨彃濮庨梺钘夊暟閸犳牠寮婚弴鐔风窞闁割偅绻傛慨銏ゆ⒑閸涘鎴﹀箖閸屾凹娼栭柧蹇氼潐閸忔粓鏌涘☉鍗炲箻闁告梻鍏樺娲川婵犲啰鍙嗙紓浣割槹閹告娊宕洪姀鐙€鍚嬮柛婊€鑳堕崣鍡涙⒑閸撴彃浜為柛鐘虫崌瀹曘垽骞樼紒妯锋嫼缂傚倷鐒﹂敋闁诲骏绠撻弻銊ヮ潩椤戣姤鏂€濡炪倖姊婚幊鎾寸妤ｅ啯鈷掗柛灞剧懅椤︼箓鏌熺喊鍗炰喊妤犵偛锕ㄧ粻娑樷槈濞嗗繋绨甸梻浣芥硶閸犳挻鎱ㄩ幘顔煎強闁靛鏅滈悡銉╂煟閺傛寧鎯堢€涙繄绱撴担鍝勑ｉ柣鈺婂灦瀵寮撮悢铏圭槇闂婎偄娲︾粙鎺楊敁瀹ュ鈷戠紓浣诡焽缁犳牕鈹戦悙璇у伐妞ゎ偄绻樺畷顐﹀礋椤撶喐顔曢梻浣规偠閸庢粓宕橀…鎴犫偓閬嶆⒒閸屾瑧顦﹂柟璇х節瀵濡歌瀹曞弶淇婇娆掝劅闁搞倖娲熼弻锛勪沪鐠囨彃濮庨梺钘夊暟閸犳牠寮婚弴鐔风窞闁割偅绻傛慨銏ゆ⒑閸涘鎴﹀箖閸屾凹娼栭柧蹇氼潐閸忔粓鏌涘☉鍗炲箻闁告梻鍏樺娲川婵犲啰鍙嗙紓浣割槹閹告娊宕洪姀鐙€鍚嬮柛婊€鑳堕崣鍡涙⒑閸撴彃浜為柛鐘虫崌瀹曘垽骞樼紒妯锋嫼缂傚倷鐒﹂敋闁诲骏绠撻弻銊ヮ潩椤戣姤鏂€濡炪倖姊婚幊鎾寸妤ｅ啯鈷掗柛灞剧懅椤︼箓鏌熺喊鍗炰喊妤犵偛锕ㄧ粻娑樷槈濞嗗繋绨甸梻浣芥硶閸犳挻鎱ㄩ幘顔煎強闁靛鏅滈悡銉╂煟閺傛寧鎯堢€涙繄绱撴担鍝勑ｉ柣鈺婂灦瀵寮撮悢铏圭槇闂婎偄娲︾粙鎺楊敁瀹ュ鈷戠紓浣诡焽缁犳牕鈹戦悙璇у伐妞ゎ偄绻樺畷顐﹀礋椤撶喐顔曢梻浣规偠閸庢粓宕橀…鎴犫偓閬嶆⒒閸屾瑧顦﹂柟璇х節瀵濡歌瀹曞弶淇婇娆掝劅闁搞倖娲熼弻锛勪沪鐠囨彃濮庨梺钘夊暟閸犳牠寮婚弴鐔风窞闁割偅绻傛慨銏ゆ⒑閸涘鎴﹀箖閸屾凹娼栭柧蹇氼潐閸忔粓鏌涘☉鍗炲箻闁告梻鍏樺娲川婵犲啰鍙嗙紓浣割槹閹告娊宕洪姀鐙€鍚嬮柛婊€鑳堕崣鍡涙⒑閸撴彃浜為柛鐘虫崌瀹曘垽骞樼紒妯锋嫼缂傚倷鐒﹂敋闁诲骏绠撻弻銊ヮ潩椤戣姤鏂€濡炪倖姊婚幊鎾寸妤ｅ啯鈷掗柛灞剧懅椤︼箓鏌熺喊鍗炰喊妤犵偛锕ㄧ粻娑樷槈濞嗗繋绨甸梻浣芥硶閸犳挻鎱ㄩ幘顔煎強闁靛鏅滈悡銉╂煟閺傛寧鎯堢€涙繄绱撴担鍝勑ｉ柣鈺婂灦瀵寮撮悢铏圭槇闂婎偄娲︾粙鎺楊敁瀹ュ鈷戠紓浣诡焽缁犳牕鈹戦悙璇у伐妞ゎ偄绻樺畷顐﹀礋椤撶喐顔曢梻浣规偠閸庢粓宕橀…鎴犫偓閬嶆⒒閸屾瑧顦﹂柟璇х節瀵濡歌瀹曞弶淇婇娆掝劅闁搞倖娲熼弻锛勪沪鐠囨彃濮庨梺钘夊暟閸犳牠寮婚弴鐔风窞闁割偅绻傛慨銏ゆ⒑閸涘鎴﹀箖閸屾凹娼栭柧蹇氼潐閸忔粓鏌涘☉鍗炲箻闁告梻鍏樺娲川婵犲啰鍙嗙紓浣割槹閹告娊宕洪姀鐙€鍚嬮柛婊€鑳堕崣鍡涙⒑閸撴彃浜為柛鐘虫崌瀹曘垽骞樼紒妯锋嫼缂傚倷鐒﹂敋闁诲骏绠撻弻銊ヮ潩椤戣姤鏂€濡炪倖姊婚幊鎾寸妤ｅ啯鈷掗柛灞剧懅椤︼箓鏌熺喊鍗炰喊妤犵偛锕ㄧ粻娑樷槈濞嗗繋绨甸梻浣芥硶閸犳挻鎱ㄩ幘顔煎強闁靛鏅滈悡銉╂煟閺傛寧鎯堢€涙繄绱撴担鍝勑ｉ柣鈺婂灦瀵寮撮悢铏圭槇闂婎偄娲︾粙鎺楊敁瀹ュ鈷戠紓浣诡焽缁犳牕鈹戦悙璇у伐妞ゎ偄绻樺畷顐﹀礋椤撶喐顔曢梻浣规偠閸庢粓宕橀…鎴犫偓閬嶆⒒閸屾瑧顦﹂柟璇х節瀵濡歌瀹曞弶淇婇娆掝劅闁搞倖娲熼弻锛勪沪鐠囨彃濮庨梺钘夊暟閸犳牠寮婚弴鐔风窞闁割偅绻傛慨銏ゆ⒑閸涘鎴﹀箖閸屾凹娼栭柧蹇氼潐閸忔粓鏌涘☉鍗炲箻闁告梻鍏樺娲川婵犲啰鍙嗙紓浣割槹閹告娊宕洪姀鐙€鍚嬮柛婊€鑳堕崣鍡涙⒑閸撴彃浜為柛鐘虫崌瀹曘垽骞樼紒妯锋嫼缂傚倷鐒﹂敋闁诲骏绠撻弻銊ヮ潩椤戣姤鏂€濡炪倖姊婚幊鎾寸妤ｅ啯鈷掗柛灞剧懅椤︼箓鏌熺喊鍗炰喊妤犵偛锕ㄧ粻娑樷槈濞嗗繋绨甸梻浣芥硶閸犳挻鎱ㄩ幘顔煎強闁靛鏅滈悡銉╂煟閺傛寧鎯堢€涙繄绱撴担鍝勑ｉ柣鈺婂灦瀵寮撮悢铏圭槇闂婎偄娲︾粙鎺楊敁瀹ュ鈷戠紓浣诡焽缁犳牕鈹戦悙璇у伐妞ゎ偄绻樺畷顐﹀礋椤撶喐顔曢梻浣规偠閸庢粓宕橀…鎴犫偓閬嶆⒒閸屾瑧顦﹂柟璇х節瀵濡歌瀹曞弶淇婇娆掝劅闁搞倖娲熼弻锛勪沪鐠囨彃濮庨梺钘夊暟閸犳牠寮婚弴鐔风窞闁割偅绻傛慨銏ゆ⒑閸涘鎴﹀箖閸屾凹娼栭柧蹇氼潐閸忔粓鏌涘☉鍗炲箻闁告梻鍏樺娲川婵犲啰鍙嗙紓浣割槹閹告娊宕洪姀鐙€鍚嬮柛婊€鑳堕崣鍡涙⒑閸撴彃浜為柛鐘虫崌瀹曘垽骞樼紒妯锋嫼缂傚倷鐒﹂敋闁诲骏绠撻弻銊ヮ潩椤戣姤鏂€濡炪倖姊婚幊鎾寸妤ｅ啯鈷掗柛灞剧懅椤︼箓鏌熺喊鍗炰喊妤犵偛锕ㄧ粻娑樷槈濞嗗繋绨甸梻浣芥硶閸犳挻鎱ㄩ幘顔煎強闁靛鏅滈悡銉╂煟閺傛寧鎯堢€涙繄绱撴担鍝勑ｉ柣鈺婂灦瀵寮撮悢铏圭槇闂婎偄娲︾粙鎺楊敁瀹ュ鈷戠紓浣诡焽缁犳牕鈹戦悙璇у伐妞ゎ偄绻樺畷顐﹀礋椤撶喐顔曢梻浣规偠閸庢粓宕橀…鎴犫偓閬嶆⒒閸屾瑧顦﹂柟璇х節瀵濡歌瀹曞弶淇婇娆掝劅闁搞倖娲熼弻锛勪沪鐠囨彃濮庨梺钘夊暟閸犳牠寮婚弴鐔风窞闁割偅绻傛慨銏ゆ⒑閸涘鎴﹀箖閸屾凹娼栭柧蹇氼潐閸忔粓鏌涘☉鍗炲箻闁告梻鍏樺娲川婵犲啰鍙嗙紓浣割槹閹告娊宕洪姀鐙€鍚嬮柛婊€鑳堕崣鍡涙⒑閸撴彃浜為柛鐘虫崌瀹曘垽骞樼紒妯锋嫼缂傚倷鐒﹂敋闁诲骏绠撻弻銊ヮ潩椤戣姤鏂€濡炪倖姊婚幊鎾寸妤ｅ啯鈷掗柛灞剧懅椤︼箓鏌熺喊鍗炰喊妤犵偛锕ㄧ粻娑樷槈濞嗗繋绨甸梻浣芥硶閸犳挻鎱ㄩ幘顔煎強?
 
 
 @app.route("/api/status", methods=["GET"])
@@ -1233,6 +1234,111 @@ async def resume_growth_task(task_type: str):
     return jsonify(result), (200 if result.get("success") else 400)
 
 
+@app.route("/api/wechat_export/probe", methods=["POST"])
+async def wechat_export_probe():
+    """Probe local WeChat sessions and decrypt prerequisites."""
+    try:
+        result = await wechat_export_service.probe()
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"wechat_export probe failed: {e}")
+        return _json_internal_error("wechat_export_probe_failed", code="wechat_export_probe_failed")
+
+
+@app.route("/api/wechat_export/decrypt/start", methods=["POST"])
+async def wechat_export_start_decrypt():
+    """Start a background decrypt job."""
+    try:
+        payload = await request.get_json(silent=True) or {}
+        result = await wechat_export_service.start_decrypt(payload)
+        return jsonify(result)
+    except ValueError as exc:
+        return jsonify({"success": False, "message": str(exc)}), 400
+    except Exception as e:
+        logger.error(f"wechat_export start decrypt failed: {e}")
+        return _json_internal_error("wechat_export_decrypt_start_failed", code="wechat_export_decrypt_start_failed")
+
+
+@app.route("/api/wechat_export/decrypt/jobs/<job_id>", methods=["GET"])
+async def wechat_export_decrypt_job(job_id: str):
+    """Fetch decrypt job status."""
+    try:
+        result = await wechat_export_service.get_decrypt_job(job_id)
+        return jsonify(result), (200 if result.get("success", True) else 404)
+    except ValueError as exc:
+        return jsonify({"success": False, "message": str(exc)}), 400
+    except Exception as e:
+        logger.error(f"wechat_export decrypt job query failed: {e}")
+        return _json_internal_error("wechat_export_decrypt_job_failed", code="wechat_export_decrypt_job_failed")
+
+
+@app.route("/api/wechat_export/contacts", methods=["POST"])
+async def wechat_export_contacts():
+    """List contacts from a decrypted Msg directory."""
+    try:
+        payload = await request.get_json(silent=True) or {}
+        result = await wechat_export_service.list_contacts(payload)
+        return jsonify(result)
+    except ValueError as exc:
+        return jsonify({"success": False, "message": str(exc)}), 400
+    except RuntimeError as exc:
+        return jsonify({"success": False, "message": str(exc)}), 400
+    except Exception as e:
+        logger.error(f"wechat_export contacts failed: {e}")
+        return _json_internal_error("wechat_export_contacts_failed", code="wechat_export_contacts_failed")
+
+
+@app.route("/api/wechat_export/export", methods=["POST"])
+async def wechat_export_run_export():
+    """Export selected contacts to CSV files."""
+    try:
+        payload = await request.get_json(silent=True) or {}
+        result = await wechat_export_service.export_contacts(payload)
+        return jsonify(result)
+    except ValueError as exc:
+        return jsonify({"success": False, "message": str(exc)}), 400
+    except RuntimeError as exc:
+        return jsonify({"success": False, "message": str(exc)}), 400
+    except Exception as e:
+        logger.error(f"wechat_export export failed: {e}")
+        return _json_internal_error("wechat_export_export_failed", code="wechat_export_export_failed")
+
+
+@app.route("/api/wechat_export/apply/preview", methods=["POST"])
+async def wechat_export_preview_apply():
+    """Preview config changes for export-rag application."""
+    try:
+        payload = await request.get_json(silent=True) or {}
+        result = await wechat_export_service.preview_apply(
+            payload,
+            config_service=config_service,
+        )
+        return jsonify(result)
+    except ValueError as exc:
+        return jsonify({"success": False, "message": str(exc)}), 400
+    except Exception as e:
+        logger.error(f"wechat_export apply preview failed: {e}")
+        return _json_internal_error("wechat_export_apply_preview_failed", code="wechat_export_apply_preview_failed")
+
+
+@app.route("/api/wechat_export/apply", methods=["POST"])
+async def wechat_export_apply():
+    """Persist export-rag settings and trigger sync."""
+    try:
+        payload = await request.get_json(silent=True) or {}
+        result = await wechat_export_service.apply(
+            payload,
+            config_service=config_service,
+            manager=manager,
+        )
+        return jsonify(result)
+    except ValueError as exc:
+        return jsonify({"success": False, "message": str(exc)}), 400
+    except Exception as e:
+        logger.error(f"wechat_export apply failed: {e}")
+        return _json_internal_error("wechat_export_apply_failed", code="wechat_export_apply_failed")
+
+
 @app.route("/api/pause", methods=["POST"])
 async def pause_bot():
     """Endpoint handler."""
@@ -1272,7 +1378,6 @@ async def get_messages():
         chat_id = request.args.get("chat_id", "", type=str)
         keyword = request.args.get("keyword", "", type=str)
 
-        # 濠电姷鏁告慨鐑藉极閹间礁纾婚柣妯款嚙缁犲灚銇勮箛鎾搭棤缂佲偓婵犲洦鐓冪憸婊堝礈濮樿鲸宕叉繛鎴炵懃缁剁偤鎮楅敐搴′簽妞わ缚鍗抽幃妤€鈻撻崹顔界彯闂佺顑呴敃銉︾┍婵犲洦鍤嬮梻鍫熺〒缁愮偞绻濋悽闈浶㈤悗姘槻鍗辨い鏍仦閳锋帒霉閿濆懏鍟為柛鐔哄仱閺岋綁鎮ら崒婊呮殼闂佽桨绀侀崯瀛樻叏閳ь剟鏌曢崼婵囶棞濞存粍顨婂娲礃閸欏鍎撻梺鐟板暱缁绘﹢骞?MemoryManager 闂傚倸鍊搁崐宄懊归崶顒夋晪鐟滃酣銆冮妷褏鐭欓柛鏌倐鍋撻崸妤佲拺妞ゆ巻鍋撶紒澶婎嚟婢规洜绱掑Ο鍦畾濡炪倖鐗楅懝楣冨箖閹寸偑浜?
         mem_mgr = manager.get_memory_manager()
 
         page = await mem_mgr.get_message_page(
@@ -1295,8 +1400,8 @@ async def get_messages():
             }
         )
     except Exception as e:
-        logger.error(f"闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗〒姘ｅ亾鐎规洏鍎抽埀顒婄秵閸犳牜澹曢崸妤佺厵闁诡垳澧楅ˉ澶愬箹閺夋埊韬柡灞诲€濋幊婵嬪箥椤旇偐澧┑鐐茬摠缁瞼绱炴繝鍥ц摕婵炴垯鍨瑰敮闂佺懓鐡ㄩ弻銊︾閹€鏀介柍鈺佸暙缁插鏌ｅΔ浣瑰磳鐎殿喛顕ч埥澶愬閳哄倹娅囬梻渚€娼ч悧鍡涘箠韫囨稒鍊甸柧蹇撴贡绾捐棄霉閿濆嫮鐭欓柛婵囨そ閺岋絽螖娴ｅ湱顦伴梺鐐藉劵缁犳挸鐣风粙璇炬棃鍩€椤掑倻涓嶆慨妯垮煐閻撴瑦绻涢崼婵堜虎闁哄鍊楃槐鎾诲醇閵夈倖鍠氶梺? {e}")
-        return jsonify({"success": False, "message": f"闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗〒姘ｅ亾鐎规洏鍎抽埀顒婄秵閸犳牜澹曢崸妤佺厵闁诡垳澧楅ˉ澶愬箹閺夋埊韬柡灞诲€濋幊婵嬪箥椤旇偐澧┑鐐茬摠缁瞼绱炴繝鍥ц摕婵炴垯鍨瑰敮闂佺懓鐡ㄩ弻銊︾閹€鏀介柍鈺佸暙缁插鏌ｅΔ浣瑰磳鐎殿喛顕ч埥澶愬閳哄倹娅囬梻渚€娼ч悧鍡涘箠韫囨稒鍊甸柧蹇撴贡绾捐棄霉閿濆嫮鐭欓柛婵囨そ閺岋絽螖娴ｅ湱顦伴梺鐐藉劵缁犳挸鐣风粙璇炬棃鍩€椤掑倻涓嶆慨妯垮煐閻撴瑦绻涢崼婵堜虎闁哄鍊楃槐鎾诲醇閵夈倖鍠氶梺? {str(e)}"}), 500
+        logger.error("Request handling failed: %s", e)
+        return jsonify({"success": False, "message": f"Request handling failed: {str(e)}"}), 500
 
 
 @app.route("/api/contact_profile", methods=["GET"])
@@ -1305,14 +1410,14 @@ async def get_contact_profile():
     try:
         chat_id = str(request.args.get("chat_id", "", type=str) or "").strip()
         if not chat_id:
-            return jsonify({"success": False, "message": "缂傚倸鍊搁崐鎼佸磹閹间礁纾归柟闂寸绾惧綊鏌熼梻瀵割槮缁炬儳缍婇弻鐔兼⒒鐎靛壊妲紓浣哄Ь椤濡甸崟顖氱疀闁割偅娲橀宥夋⒑?chat_id"}), 400
+            return jsonify({"success": False, "message": "chat_id is required"}), 400
 
         mem_mgr = manager.get_memory_manager()
         profile = await mem_mgr.get_contact_profile(chat_id)
         return jsonify({"success": True, "profile": profile})
     except Exception as e:
-        logger.error(f"闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗〒姘ｅ亾鐎规洏鍎抽埀顒婄秵閸犳牜澹曢崸妤佺厵闁诡垳澧楅ˉ澶愬箹閺夋埊韬柡灞诲€濋幊婵嬪箥椤旇偐澧┑鐐茬摠缁瞼绱炴繝鍥ц摕婵炴垯鍨瑰敮濡炪倖姊婚崢褔锝為鍫熲拺闁硅偐鍋涢埀顒佹礋瀹曟劙宕稿Δ鈧拑鐔兼煥閻斿搫孝缂佲偓閸愵喗鐓忓┑鐐茬仢閸旀鏌涚€ｎ偅宕岀€规洜顭堣灃闁逞屽墰缁牓宕掗悙瀵稿幈闂侀潧顦介崰姘瑜版帗鐓熼柣鏃傚帶娴滀即鏌ｉ幘鍗炲姦闁哄本鐩崺鍕礃婢跺摜杩斿┑鐐差嚟婵參寮查悩宸綎闁绘垶蓱婵粓鏌熷▓鍨灓闁绘稏鍨荤槐鎾存媴閸濆嫅锝夋煟濡や焦绀嬮柟顕€绠栭幃婊堟寠婢跺矈鍟嬮梻渚€娼荤€靛矂宕㈡ィ鍐ㄧ骇闁归棿鐒﹂埛鎴︽偡濞嗗繐顏╅柛鏂诲€楅幉鎼佸级濞嗙偓鈻堥悗娈垮枛閻栧ジ銆佸鈧慨鈧柨娑樺楠? {e}")
-        return jsonify({"success": False, "message": f"闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗〒姘ｅ亾鐎规洏鍎抽埀顒婄秵閸犳牜澹曢崸妤佺厵闁诡垳澧楅ˉ澶愬箹閺夋埊韬柡灞诲€濋幊婵嬪箥椤旇偐澧┑鐐茬摠缁瞼绱炴繝鍥ц摕婵炴垯鍨瑰敮濡炪倖姊婚崢褔锝為鍫熲拺闁硅偐鍋涢埀顒佹礋瀹曟劙宕稿Δ鈧拑鐔兼煥閻斿搫孝缂佲偓閸愵喗鐓忓┑鐐茬仢閸旀鏌涚€ｎ偅宕岀€规洜顭堣灃闁逞屽墰缁牓宕掗悙瀵稿幈闂侀潧顦介崰姘瑜版帗鐓熼柣鏃傚帶娴滀即鏌ｉ幘鍗炲姦闁哄本鐩崺鍕礃婢跺摜杩斿┑鐐差嚟婵參寮查悩宸綎闁绘垶蓱婵粓鏌熷▓鍨灓闁绘稏鍨荤槐鎾存媴閸濆嫅锝夋煟濡や焦绀嬮柟顕€绠栭幃婊堟寠婢跺矈鍟嬮梻渚€娼荤€靛矂宕㈡ィ鍐ㄧ骇闁归棿鐒﹂埛鎴︽偡濞嗗繐顏╅柛鏂诲€楅幉鎼佸级濞嗙偓鈻堥悗娈垮枛閻栧ジ銆佸鈧慨鈧柨娑樺楠? {str(e)}"}), 500
+        logger.error("Request handling failed: %s", e)
+        return jsonify({"success": False, "message": f"Request handling failed: {str(e)}"}), 500
 
 
 @app.route("/api/contact_prompt", methods=["POST"])
@@ -1325,7 +1430,7 @@ async def save_contact_prompt():
             str(data.get("contact_prompt") or "").strip()
         )
         if not chat_id:
-            return jsonify({"success": False, "message": "缂傚倸鍊搁崐鎼佸磹閹间礁纾归柟闂寸绾惧綊鏌熼梻瀵割槮缁炬儳缍婇弻鐔兼⒒鐎靛壊妲紓浣哄Ь椤濡甸崟顖氱疀闁割偅娲橀宥夋⒑?chat_id"}), 400
+            return jsonify({"success": False, "message": "chat_id is required"}), 400
         if not contact_prompt:
             return jsonify({"success": False, "message": "contact_prompt is required"}), 400
 
@@ -1337,8 +1442,8 @@ async def save_contact_prompt():
         )
         return jsonify({"success": True, "profile": profile})
     except Exception as e:
-        logger.error(f"濠电姷鏁告慨鐑藉极閹间礁纾块柟瀵稿Т缁躲倝鏌﹀Ο渚＆婵炲樊浜濋弲婊堟煟閹伴潧澧幖鏉戯躬濮婅櫣绮欑捄銊т紘闂佺顑囬崑銈呯暦閹达箑围濠㈣泛顑囬崢顏呯節閻㈤潧浠ч柛瀣尭閳诲秹宕卞☉娆戝幈闂侀潧鐗嗛幊搴ㄥ焵椤掆偓濞尖€愁嚕婵犳碍鏅搁柣妯垮皺椤︺劑姊洪棃娑辩劸闁稿寒鍣ｅ畷鎴﹀箻鐠囨煡鏁滃┑掳鍊愰崑鎾剁磼閳ь剟宕掗悙瀵稿幈闂侀潧顦介崰姘?Prompt 濠电姷鏁告慨鐑藉极閸涘﹥鍙忓ù鍏兼綑閸ㄥ倹绻涘顔荤盎缁炬儳娼￠弻銈吤圭€ｎ偅鐝旈梺鎼炲妽缁诲牓寮诲☉銏犵婵°倐鍋撻悗姘煎墴瀵? {e}")
-        return jsonify({"success": False, "message": f"濠电姷鏁告慨鐑藉极閹间礁纾块柟瀵稿Т缁躲倝鏌﹀Ο渚＆婵炲樊浜濋弲婊堟煟閹伴潧澧幖鏉戯躬濮婅櫣绮欑捄銊т紘闂佺顑囬崑銈呯暦閹达箑围濠㈣泛顑囬崢顏呯節閻㈤潧浠ч柛瀣尭閳诲秹宕卞☉娆戝幈闂侀潧鐗嗛幊搴ㄥ焵椤掆偓濞尖€愁嚕婵犳碍鏅搁柣妯垮皺椤︺劑姊洪棃娑辩劸闁稿寒鍣ｅ畷鎴﹀箻鐠囨煡鏁滃┑掳鍊愰崑鎾剁磼閳ь剟宕掗悙瀵稿幈闂侀潧顦介崰姘?Prompt 濠电姷鏁告慨鐑藉极閸涘﹥鍙忓ù鍏兼綑閸ㄥ倹绻涘顔荤盎缁炬儳娼￠弻銈吤圭€ｎ偅鐝旈梺鎼炲妽缁诲牓寮诲☉銏犵婵°倐鍋撻悗姘煎墴瀵? {str(e)}"}), 500
+        logger.error("Request handling failed: %s", e)
+        return jsonify({"success": False, "message": f"Request handling failed: {str(e)}"}), 500
 
 
 @app.route("/api/message_feedback", methods=["POST"])
@@ -1349,9 +1454,9 @@ async def save_message_feedback():
         message_id = data.get("message_id")
         feedback = str(data.get("feedback") or "").strip().lower()
         if message_id in (None, ""):
-            return jsonify({"success": False, "message": "缂傚倸鍊搁崐鎼佸磹閹间礁纾归柟闂寸绾惧綊鏌熼梻瀵割槮缁炬儳缍婇弻鐔兼⒒鐎靛壊妲紓浣哄Ь椤濡甸崟顖氱疀闁割偅娲橀宥夋⒑?message_id"}), 400
+            return jsonify({"success": False, "message": "message_id is required"}), 400
         if feedback not in {"helpful", "unhelpful", ""}:
-            return jsonify({"success": False, "message": "feedback 濠电姷鏁告慨鐑藉极閹间礁纾绘繛鎴欏焺閺佸銇勯幘璺烘瀾闁告瑥绻橀弻鐔虹磼閵忕姵鐏堢紓浣哄Х婵炩偓闁绘搩鍋婂畷鍫曞Ω瑜夊Σ鍫ユ⒑?婵?helpful / unhelpful"}), 400
+            return jsonify({"success": False, "message": "feedback must be 'helpful' or 'unhelpful'"}), 400
 
         mem_mgr = manager.get_memory_manager()
         result = await mem_mgr.update_message_feedback(message_id, feedback)
@@ -1380,8 +1485,8 @@ async def save_message_feedback():
             }
         )
     except Exception as e:
-        logger.error(f"濠电姷鏁告慨鐑藉极閹间礁纾块柟瀵稿Т缁躲倝鏌﹀Ο渚＆婵炲樊浜濋弲婊堟煟閹伴潧澧幖鏉戯躬濮婅櫣绮欑捄銊т紘闂佺顑囬崑銈呯暦閹达箑围濠㈣泛顑囬崢顏呯節閻㈤潧浠滈柣蹇旂箞瀹曟繂螖娴ｉ绠氶梺鍦帛鐢偞鏅堕敃鍌涚厸閻忕偛澧藉ú瀛樸亜閵忊剝绀嬪┑鈥崇埣瀹曘劑顢欓柨顖氫壕闁惧繐婀辩壕钘壝归敐鍕煓闁告繃妞介弻锝呂旈崘銊㈡瀰閻庢鍠涢褔鍩ユ径濞㈢喖鏌ㄧ€ｎ兘鍋撴繝姘棅妞ゆ劑鍨烘径鍕箾婢跺牆鈧盯藝閹惰姤鐓?闂備浇顕ф鎼佹倶濮橆剦鐔嗘俊顖氱毞閸嬫挸顫濋悡搴＄濡?闂? {e}")
-        return jsonify({"success": False, "message": f"濠电姷鏁告慨鐑藉极閹间礁纾块柟瀵稿Т缁躲倝鏌﹀Ο渚＆婵炲樊浜濋弲婊堟煟閹伴潧澧幖鏉戯躬濮婅櫣绮欑捄銊т紘闂佺顑囬崑銈呯暦閹达箑围濠㈣泛顑囬崢顏呯節閻㈤潧浠滈柣蹇旂箞瀹曟繂螖娴ｉ绠氶梺鍦帛鐢偞鏅堕敃鍌涚厸閻忕偛澧藉ú瀛樸亜閵忊剝绀嬪┑鈥崇埣瀹曘劑顢欓柨顖氫壕闁惧繐婀辩壕钘壝归敐鍕煓闁告繃妞介弻锝呂旈崘銊㈡瀰閻庢鍠涢褔鍩ユ径濞㈢喖鏌ㄧ€ｎ兘鍋撴繝姘棅妞ゆ劑鍨烘径鍕箾婢跺牆鈧盯藝閹惰姤鐓?闂備浇顕ф鎼佹倶濮橆剦鐔嗘俊顖氱毞閸嬫挸顫濋悡搴＄濡?闂? {str(e)}"}), 500
+        logger.error("Request handling failed: %s", e)
+        return jsonify({"success": False, "message": f"Request handling failed: {str(e)}"}), 500
 
 
 @app.route("/api/send", methods=["POST"])
@@ -1422,8 +1527,8 @@ async def get_reply_policies():
             }
         )
     except Exception as e:
-        logger.error(f"闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗〒姘ｅ亾鐎规洏鍎抽埀顒婄秵閸犳牜澹曢崸妤佺厵闁诡垳澧楅ˉ澶愬箹閺夋埊韬柡灞诲€濋幊婵嬪箥椤旇偐澧┑鐐茬摠缁瞼绱炴繝鍥ц摕婵炴垯鍨瑰敮濡炪倖姊婚崢褔锝為埡鍛拺缂備焦锚婵洭鏌ㄩ弴銊ら偗鐎殿喖顭烽弫鎰緞婵犲嫮鏉告俊鐐€栫敮濠勬媼閺屻儱鍑犳繛鍡楃箚閺€浠嬫⒔閸モ晙鐒婃い蹇撳閺嗭箓鏌ｉ姀鐘典粵妞ゎ偅娲熼弻鐔兼倻濡櫣浜跺┑鈩冨絻閻楀﹦鎹㈠☉銏犲耿婵☆垵娅ｆ禒鎾⒑閸愭彃妲婚柣妤佹尭椤繐煤椤忓嫪绱堕梺鍛婃处閸擄箑螞閿熺姵鈷戦柛娑橈攻閳锋劙鏌ｅΔ浣圭妞ゃ垺宀告俊鐑藉煛娴ｄ警妲规俊鐐€栫敮濠囨嚄閸撲胶鐭?闂? {e}")
-        return jsonify({"success": False, "message": f"闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗〒姘ｅ亾鐎规洏鍎抽埀顒婄秵閸犳牜澹曢崸妤佺厵闁诡垳澧楅ˉ澶愬箹閺夋埊韬柡灞诲€濋幊婵嬪箥椤旇偐澧┑鐐茬摠缁瞼绱炴繝鍥ц摕婵炴垯鍨瑰敮濡炪倖姊婚崢褔锝為埡鍛拺缂備焦锚婵洭鏌ㄩ弴銊ら偗鐎殿喖顭烽弫鎰緞婵犲嫮鏉告俊鐐€栫敮濠勬媼閺屻儱鍑犳繛鍡楃箚閺€浠嬫⒔閸モ晙鐒婃い蹇撳閺嗭箓鏌ｉ姀鐘典粵妞ゎ偅娲熼弻鐔兼倻濡櫣浜跺┑鈩冨絻閻楀﹦鎹㈠☉銏犲耿婵☆垵娅ｆ禒鎾⒑閸愭彃妲婚柣妤佹尭椤繐煤椤忓嫪绱堕梺鍛婃处閸擄箑螞閿熺姵鈷戦柛娑橈攻閳锋劙鏌ｅΔ浣圭妞ゃ垺宀告俊鐑藉煛娴ｄ警妲规俊鐐€栫敮濠囨嚄閸撲胶鐭?闂? {str(e)}"}), 500
+        logger.error("Request handling failed: %s", e)
+        return jsonify({"success": False, "message": f"Request handling failed: {str(e)}"}), 500
 
 
 @app.route("/api/reply_policies", methods=["POST"])
@@ -1475,8 +1580,8 @@ async def save_reply_policies():
             }
         )
     except Exception as e:
-        logger.error(f"濠电姷鏁告慨鐑藉极閹间礁纾块柟瀵稿Т缁躲倝鏌﹀Ο渚＆婵炲樊浜濋弲婊堟煟閹伴潧澧幖鏉戯躬濮婅櫣绮欑捄銊т紘闂佺顑囬崑銈呯暦閹达箑围濠㈣泛顑囬崢顏呯節閻㈤潧浠ч柛瀣尭閳诲秹宕ㄧ€涙鍘介梺褰掑亰閸撱劑鐓鍕厸鐎光偓鐎ｎ剛袦濡ょ姷鍋涘ú顓€佸Δ浣瑰闁告瑥顦辨禍鐐测攽閻樿尙妫勯柕鍫濇嚀閺佸潡鎮楃憴鍕闁轰胶顭堝嵄闁圭増婢樼粻鎶芥煙鐎涙ɑ鈷愭い顐㈢Т閳规垿鎮欓崣澶樻！闂佹悶鍔庨弫濠氬春濞戙垹閱囬柕澶涜吂閹锋椽姊洪崨濠勭畵閻庢凹鍙冭棢闁绘劗鍎ら悡鏇㈡煛閸愶絽浜鹃梺缁橆殕濞茬喖銆佸璺何ㄩ柍杞拌兌椤︽澘顪冮妶鍡楃瑐闁煎啿澧庣划?闂? {e}")
-        return jsonify({"success": False, "message": f"濠电姷鏁告慨鐑藉极閹间礁纾块柟瀵稿Т缁躲倝鏌﹀Ο渚＆婵炲樊浜濋弲婊堟煟閹伴潧澧幖鏉戯躬濮婅櫣绮欑捄銊т紘闂佺顑囬崑銈呯暦閹达箑围濠㈣泛顑囬崢顏呯節閻㈤潧浠ч柛瀣尭閳诲秹宕ㄧ€涙鍘介梺褰掑亰閸撱劑鐓鍕厸鐎光偓鐎ｎ剛袦濡ょ姷鍋涘ú顓€佸Δ浣瑰闁告瑥顦辨禍鐐测攽閻樿尙妫勯柕鍫濇嚀閺佸潡鎮楃憴鍕闁轰胶顭堝嵄闁圭増婢樼粻鎶芥煙鐎涙ɑ鈷愭い顐㈢Т閳规垿鎮欓崣澶樻！闂佹悶鍔庨弫濠氬春濞戙垹閱囬柕澶涜吂閹锋椽姊洪崨濠勭畵閻庢凹鍙冭棢闁绘劗鍎ら悡鏇㈡煛閸愶絽浜鹃梺缁橆殕濞茬喖銆佸璺何ㄩ柍杞拌兌椤︽澘顪冮妶鍡楃瑐闁煎啿澧庣划?闂? {str(e)}"}), 400
+        logger.error("Request handling failed: %s", e)
+        return jsonify({"success": False, "message": f"Request handling failed: {str(e)}"}), 500
 
 
 @app.route("/api/pending_replies", methods=["GET"])
@@ -1499,8 +1604,8 @@ async def list_pending_replies():
         stats = await mem_mgr.get_pending_reply_stats()
         return jsonify({"success": True, "items": items, "stats": stats})
     except Exception as e:
-        logger.error(f"闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗〒姘ｅ亾鐎规洏鍎抽埀顒婄秵閸犳牜澹曢崸妤佺厵闁诡垳澧楅ˉ澶愬箹閺夋埊韬柡灞诲€濋幊婵嬪箥椤旇偐澧┑鐐茬摠缁瞼绱炴繝鍥ц摕?闂?闂傚倸鍊风粈渚€骞夐敓鐘叉槬闁告劦鍠栫壕濠氭煙閸撗呭笡闁抽攱甯掗湁闁挎繂鎳忛崯鐐烘偣閹板墎绡€闁哄备鍓濋幏鍛喆閸曨偀鍋撻幇顓ф闁绘劘顕滈煬顒侇殽閻愭惌鐒介柟鑲╁亾閹峰懐鎲撮崟鈺€铏庨柣搴㈩問閸犳洜鍒掑▎鎰箚闁归棿绀佸敮閻熸粌绻橀幃浼搭敋閳ь剟寮婚敐鍡樺劅闁挎稑瀚弳娑㈡⒑缁嬪潡鍙勫ù婊冪埣閻涱喗绻濋崘鈺佸妳闂侀潧顭粻鎴﹀焵椤掑啫鐓愮紒缁樼洴瀹曞崬螣鐠囨煡鐎洪梻浣侯焾椤戝洦鎱ㄩ悽鍨床婵炴垯鍨圭粻锝夋煟閹扮増娑ч柍顏囶潐缁绘繄鍠婂Ο宄颁壕闁绘劘妫勬禒顕€姊洪崫鍕拱婵炶尙鍠庨悾鐑藉醇閺囩倣鈺呮煏婢诡垰鍊归崑鍛存⒒? {e}")
-        return jsonify({"success": False, "message": f"闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗〒姘ｅ亾鐎规洏鍎抽埀顒婄秵閸犳牜澹曢崸妤佺厵闁诡垳澧楅ˉ澶愬箹閺夋埊韬柡灞诲€濋幊婵嬪箥椤旇偐澧┑鐐茬摠缁瞼绱炴繝鍥ц摕?闂?闂傚倸鍊风粈渚€骞夐敓鐘叉槬闁告劦鍠栫壕濠氭煙閸撗呭笡闁抽攱甯掗湁闁挎繂鎳忛崯鐐烘偣閹板墎绡€闁哄备鍓濋幏鍛喆閸曨偀鍋撻幇顓ф闁绘劘顕滈煬顒侇殽閻愭惌鐒介柟鑲╁亾閹峰懐鎲撮崟鈺€铏庨柣搴㈩問閸犳洜鍒掑▎鎰箚闁归棿绀佸敮閻熸粌绻橀幃浼搭敋閳ь剟寮婚敐鍡樺劅闁挎稑瀚弳娑㈡⒑缁嬪潡鍙勫ù婊冪埣閻涱喗绻濋崘鈺佸妳闂侀潧顭粻鎴﹀焵椤掑啫鐓愮紒缁樼洴瀹曞崬螣鐠囨煡鐎洪梻浣侯焾椤戝洦鎱ㄩ悽鍨床婵炴垯鍨圭粻锝夋煟閹扮増娑ч柍顏囶潐缁绘繄鍠婂Ο宄颁壕闁绘劘妫勬禒顕€姊洪崫鍕拱婵炶尙鍠庨悾鐑藉醇閺囩倣鈺呮煏婢诡垰鍊归崑鍛存⒒? {str(e)}"}), 500
+        logger.error("Request handling failed: %s", e)
+        return jsonify({"success": False, "message": f"Request handling failed: {str(e)}"}), 500
 
 
 @app.route("/api/pending_replies/<int:pending_id>/approve", methods=["POST"])
@@ -1520,8 +1625,8 @@ async def approve_pending_reply(pending_id: int):
         status_code = 200 if result.get("success") else 400
         return jsonify(result), status_code
     except Exception as e:
-        logger.error(f"闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗ù锝夋交閼板潡姊洪鈧粔鎾几娓氣偓閺岀喖姊荤€靛壊妲紓浣哄Х婵炩偓闁哄瞼鍠栭獮鎴﹀箛闂堟稒顔勯梻??闂?闂傚倸鍊风粈渚€骞夐敓鐘叉槬闁告劦鍠栫壕濠氭煙閸撗呭笡闁抽攱甯掗湁闁挎繂鎳忛崯鐐烘煙椤栨氨澧㈢紒?濠电姷鏁告慨鐑藉极閹间礁纾绘繛鎴烇供閸ゆ洟鏌涢锝嗙闁稿顑嗘穱濠囧Χ閸屾矮澹曟俊鐐€栧ú蹇涘磿闂堟稓鏆﹂柣鏃傗拡閺佸啯銇勯幇鈺佺仾闁稿鍨跺缁樻媴閸涘﹤鏆堟繛鎾寸椤ㄥ﹤鐣烽幋锕€纾奸柣鎰皺妤犲洤顪冮妶鍡樺蔼闁搞劍妞介幃? {e}")
-        return jsonify({"success": False, "message": f"闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗ù锝夋交閼板潡姊洪鈧粔鎾几娓氣偓閺岀喖姊荤€靛壊妲紓浣哄Х婵炩偓闁哄瞼鍠栭獮鎴﹀箛闂堟稒顔勯梻??闂?闂傚倸鍊风粈渚€骞夐敓鐘叉槬闁告劦鍠栫壕濠氭煙閸撗呭笡闁抽攱甯掗湁闁挎繂鎳忛崯鐐烘煙椤栨氨澧㈢紒?濠电姷鏁告慨鐑藉极閹间礁纾绘繛鎴烇供閸ゆ洟鏌涢锝嗙闁稿顑嗘穱濠囧Χ閸屾矮澹曟俊鐐€栧ú蹇涘磿闂堟稓鏆﹂柣鏃傗拡閺佸啯銇勯幇鈺佺仾闁稿鍨跺缁樻媴閸涘﹤鏆堟繛鎾寸椤ㄥ﹤鐣烽幋锕€纾奸柣鎰皺妤犲洤顪冮妶鍡樺蔼闁搞劍妞介幃? {str(e)}"}), 500
+        logger.error("Request handling failed: %s", e)
+        return jsonify({"success": False, "message": f"Request handling failed: {str(e)}"}), 500
 
 
 @app.route("/api/pending_replies/<int:pending_id>/reject", methods=["POST"])
@@ -1550,8 +1655,8 @@ async def reject_pending_reply(pending_id: int):
         )
         return jsonify({"success": True, "pending_reply": resolved})
     except Exception as e:
-        logger.error(f"闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗ù锝堟缁€濠傗攽閻樺弶鎼愮紓浣叉櫊瀵爼宕煎顓熺彆闂佸搫妫欑划鎾诲蓟閿濆绠涢柣妤€鐗婇柨顓㈡⒑閹肩偛濡界紒璇插閸┾偓?闂?闂傚倸鍊风粈渚€骞夐敓鐘叉槬闁告劦鍠栫壕濠氭煙閸撗呭笡闁抽攱甯掗湁闁挎繂鎳忛崯鐐烘煙椤栨氨澧㈢紒?濠电姷鏁告慨鐑藉极閹间礁纾绘繛鎴烇供閸ゆ洟鏌涢锝嗙闁稿顑嗘穱濠囧Χ閸屾矮澹曟俊鐐€栧ú蹇涘磿闂堟稓鏆﹂柣鏃傗拡閺佸啯銇勯幇鈺佺仾闁稿鍨跺缁樻媴閸涘﹤鏆堟繛鎾寸椤ㄥ﹤鐣烽幋锕€纾奸柣鎰皺妤犲洤顪冮妶鍡樺蔼闁搞劍妞介幃? {e}")
-        return jsonify({"success": False, "message": f"闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗ù锝堟缁€濠傗攽閻樺弶鎼愮紓浣叉櫊瀵爼宕煎顓熺彆闂佸搫妫欑划鎾诲蓟閿濆绠涢柣妤€鐗婇柨顓㈡⒑閹肩偛濡界紒璇插閸┾偓?闂?闂傚倸鍊风粈渚€骞夐敓鐘叉槬闁告劦鍠栫壕濠氭煙閸撗呭笡闁抽攱甯掗湁闁挎繂鎳忛崯鐐烘煙椤栨氨澧㈢紒?濠电姷鏁告慨鐑藉极閹间礁纾绘繛鎴烇供閸ゆ洟鏌涢锝嗙闁稿顑嗘穱濠囧Χ閸屾矮澹曟俊鐐€栧ú蹇涘磿闂堟稓鏆﹂柣鏃傗拡閺佸啯銇勯幇鈺佺仾闁稿鍨跺缁樻媴閸涘﹤鏆堟繛鎾寸椤ㄥ﹤鐣烽幋锕€纾奸柣鎰皺妤犲洤顪冮妶鍡樺蔼闁搞劍妞介幃? {str(e)}"}), 500
+        logger.error("Request handling failed: %s", e)
+        return jsonify({"success": False, "message": f"Request handling failed: {str(e)}"}), 500
 
 
 @app.route("/api/backups", methods=["GET"])
@@ -1562,8 +1667,8 @@ async def list_backups():
         payload = await asyncio.to_thread(backup_service.list_backups, limit=limit)
         return jsonify(payload)
     except Exception as e:
-        logger.error(f"闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗〒姘ｅ亾鐎规洏鍎抽埀顒婄秵閸犳牜澹曢崸妤佺厵闁诡垳澧楅ˉ澶愬箹閺夋埊韬柡灞诲€濋幊婵嬪箥椤旇偐澧┑鐐茬摠缁瞼绱炴繝鍥ц摕婵炴垯鍨瑰敮闂佹寧绻傞幊搴ㄢ€栭崼銏㈢＝濞达絿顭堥。鎶芥煕鐎ｃ劌鈧繂顕ｇ拠娴嬫闁靛繒濮堥妸锔轰簻闁哄秲鍔庨惌宀勬煛閸℃瑥鈻堟慨濠勫劋濞碱亪骞嶉鐓庮瀴缂傚倷绶￠崰妤呭箲閸パ屽殨閻犲洦绁村Σ鍫ユ煏韫囨洖啸妞?闂傚倸鍊搁崐椋庢濮橆剦鐒界憸宥堢亱濠德板€曢幊搴ㄦ偪椤斿浜滈柡宥冨妼閸ゎ剟鏌涢妶鍡╂疁闁哄本鐩鎾Ω閵夈儺娼界紓?闂? {e}")
-        return jsonify({"success": False, "message": f"闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗〒姘ｅ亾鐎规洏鍎抽埀顒婄秵閸犳牜澹曢崸妤佺厵闁诡垳澧楅ˉ澶愬箹閺夋埊韬柡灞诲€濋幊婵嬪箥椤旇偐澧┑鐐茬摠缁瞼绱炴繝鍥ц摕婵炴垯鍨瑰敮闂佹寧绻傞幊搴ㄢ€栭崼銏㈢＝濞达絿顭堥。鎶芥煕鐎ｃ劌鈧繂顕ｇ拠娴嬫闁靛繒濮堥妸锔轰簻闁哄秲鍔庨惌宀勬煛閸℃瑥鈻堟慨濠勫劋濞碱亪骞嶉鐓庮瀴缂傚倷绶￠崰妤呭箲閸パ屽殨閻犲洦绁村Σ鍫ユ煏韫囨洖啸妞?闂傚倸鍊搁崐椋庢濮橆剦鐒界憸宥堢亱濠德板€曢幊搴ㄦ偪椤斿浜滈柡宥冨妼閸ゎ剟鏌涢妶鍡╂疁闁哄本鐩鎾Ω閵夈儺娼界紓?闂? {str(e)}"}), 500
+        logger.error("Request handling failed: %s", e)
+        return jsonify({"success": False, "message": f"Request handling failed: {str(e)}"}), 500
 
 
 @app.route("/api/backups", methods=["POST"])
@@ -1950,8 +2055,8 @@ async def get_latest_eval_report():
             }
         )
     except Exception as e:
-        logger.error(f"闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗〒姘ｅ亾鐎规洏鍎抽埀顒婄秵閸犳牜澹曢崸妤佺厵闁诡垳澧楅ˉ澶愬箹閺夋埊韬柡灞诲€濋幊婵嬪箥椤旇偐澧┑鐐茬摠缁瞼绱炴繝鍥ц摕婵炴垯鍨瑰敮闂侀潧绻嗛崜婵嬫偟閺囥垺鐓熼幖娣灮椤ｈ尙鈧厜鍋撻柟闂寸閽?闂傚倸鍊风欢姘焽瑜旈幃褎绻濋崶褏顔囬梺瑙勫劶濡嫰鎷戦悢鍏肩厽闁哄啫娲ゆ禍褰掓煕濞嗘劖绀嬮柡宀€鍠撶槐鎺懳熼搹鍦噯濠电姵顔栭崰鏍煀閿濆拋娼栭柧蹇氼潐閸犲棝鏌涢弴銊ュ箲闁稿鍋ゅ娲川婵犲啫闉嶇紓浣筋嚙閸婂潡銆佸璺何ㄩ柍杞拌兌椤︽澘顪冮妶鍡楃瑐闁煎啿澧庣划?闂? {e}")
-        return jsonify({"success": False, "message": f"闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗〒姘ｅ亾鐎规洏鍎抽埀顒婄秵閸犳牜澹曢崸妤佺厵闁诡垳澧楅ˉ澶愬箹閺夋埊韬柡灞诲€濋幊婵嬪箥椤旇偐澧┑鐐茬摠缁瞼绱炴繝鍥ц摕婵炴垯鍨瑰敮闂侀潧绻嗛崜婵嬫偟閺囥垺鐓熼幖娣灮椤ｈ尙鈧厜鍋撻柟闂寸閽?闂傚倸鍊风欢姘焽瑜旈幃褎绻濋崶褏顔囬梺瑙勫劶濡嫰鎷戦悢鍏肩厽闁哄啫娲ゆ禍褰掓煕濞嗘劖绀嬮柡宀€鍠撶槐鎺懳熼搹鍦噯濠电姵顔栭崰鏍煀閿濆拋娼栭柧蹇氼潐閸犲棝鏌涢弴銊ュ箲闁稿鍋ゅ娲川婵犲啫闉嶇紓浣筋嚙閸婂潡銆佸璺何ㄩ柍杞拌兌椤︽澘顪冮妶鍡楃瑐闁煎啿澧庣划?闂? {str(e)}"}), 500
+        logger.error("Request handling failed: %s", e)
+        return jsonify({"success": False, "message": f"Request handling failed: {str(e)}"}), 500
 
 
 @app.route("/api/usage", methods=["GET"])
@@ -1972,8 +2077,8 @@ async def get_pricing():
         snapshot = await cost_service.get_pricing_snapshot()
         return jsonify({"success": True, **snapshot})
     except Exception as e:
-        logger.error(f"闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗〒姘ｅ亾鐎规洏鍎抽埀顒婄秵閸犳牜澹曢崸妤佺厵闁诡垳澧楅ˉ澶愬箹閺夋埊韬柡灞诲€濋幊婵嬪箥椤旇偐澧┑鐐茬摠缁瞼绱炴繝鍥ц摕婵炴垯鍨瑰敮闂佹寧绻傞幊搴ㄢ€栫€ｎ亶娓婚柕鍫濆€瑰▍鍥煕韫囨枂顏堬綖韫囨拋娲敂閸曨偆鈧厼顪冮妶鍡樼闁瑰啿閰ｅ畷婊堟惞椤愩倗鐦堥梺闈涢獜缂嶅棗顭囬幇鐗堢厱闁哄啠鍋撻柣鐔叉櫅椤曪絾绻濆顓熸珳婵犮垼娉涢敃锕傚储閸涘﹦绡€闁汇垽娼у瓭闂佺锕ょ紞濠囧箖濮椻偓瀹曞ジ濮€閵忣澁绱抽梻浣侯焾閺堫剙顫濋妸銉ф懃缂傚倸鍊风粈渚€藝闂堟侗鐒界憸鏃堛€佸璺何ㄩ柍杞拌兌椤︽澘顪冮妶鍡楃瑐闁煎啿澧庣划?闂? {e}")
-        return jsonify({"success": False, "message": f"闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗〒姘ｅ亾鐎规洏鍎抽埀顒婄秵閸犳牜澹曢崸妤佺厵闁诡垳澧楅ˉ澶愬箹閺夋埊韬柡灞诲€濋幊婵嬪箥椤旇偐澧┑鐐茬摠缁瞼绱炴繝鍥ц摕婵炴垯鍨瑰敮闂佹寧绻傞幊搴ㄢ€栫€ｎ亶娓婚柕鍫濆€瑰▍鍥煕韫囨枂顏堬綖韫囨拋娲敂閸曨偆鈧厼顪冮妶鍡樼闁瑰啿閰ｅ畷婊堟惞椤愩倗鐦堥梺闈涢獜缂嶅棗顭囬幇鐗堢厱闁哄啠鍋撻柣鐔叉櫅椤曪絾绻濆顓熸珳婵犮垼娉涢敃锕傚储閸涘﹦绡€闁汇垽娼у瓭闂佺锕ょ紞濠囧箖濮椻偓瀹曞ジ濮€閵忣澁绱抽梻浣侯焾閺堫剙顫濋妸銉ф懃缂傚倸鍊风粈渚€藝闂堟侗鐒界憸鏃堛€佸璺何ㄩ柍杞拌兌椤︽澘顪冮妶鍡楃瑐闁煎啿澧庣划?闂? {str(e)}"}), 500
+        logger.error("Request handling failed: %s", e)
+        return jsonify({"success": False, "message": f"Request handling failed: {str(e)}"}), 500
 
 
 @app.route("/api/pricing/refresh", methods=["POST"])
@@ -1987,8 +2092,8 @@ async def refresh_pricing():
         )
         return jsonify(payload)
     except Exception as e:
-        logger.error(f"闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗〒姘ｅ亾妤犵偛顦甸弫宥夊礋椤掍焦顔囬梻浣芥硶閸犳挻鎱ㄧ€靛摜纾奸柍鍝勬噺閳锋垶銇勯幒鍡椾壕缂備礁顦伴幐鎶藉箯閹达附鍋勯悘蹇庣劍閺傗偓闂備胶绮摫鐟滄澘鍟村鎶芥偄閹肩偘绨婚梺鍐叉惈閸燁偊宕㈢€涙ɑ鍙忓┑鐘插暞閵囨繄鈧娲栫紞濠囥€佸璺哄窛妞ゆ挾鍋涢ˉ鎰節閻㈤潧袨闁搞劌銈搁敐鐐村緞閹邦剛顦┑鐐叉閹告悂鎷戦悢鍏肩叆婵犻潧妫Σ鎼佹煟閹惧鈽夐柍瑙勫灴閹晠骞撻幒鍡椾壕鐟滅増甯楅崐鍫曟煕椤愮姴鐏痪鍙ョ矙閺屾稓浠﹂悙顒傛閻庢稒绻勭槐鎾存媴閸撳弶鈻堝┑鐐板尃閸ヨ埖鏅梺闈涱槴閺呮稓绮堢€ｎ偁浜滈柟鍝勭Х閸忓瞼绱?闂? {e}")
-        return jsonify({"success": False, "message": f"闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗〒姘ｅ亾妤犵偛顦甸弫宥夊礋椤掍焦顔囬梻浣芥硶閸犳挻鎱ㄧ€靛摜纾奸柍鍝勬噺閳锋垶銇勯幒鍡椾壕缂備礁顦伴幐鎶藉箯閹达附鍋勯悘蹇庣劍閺傗偓闂備胶绮摫鐟滄澘鍟村鎶芥偄閹肩偘绨婚梺鍐叉惈閸燁偊宕㈢€涙ɑ鍙忓┑鐘插暞閵囨繄鈧娲栫紞濠囥€佸璺哄窛妞ゆ挾鍋涢ˉ鎰節閻㈤潧袨闁搞劌銈搁敐鐐村緞閹邦剛顦┑鐐叉閹告悂鎷戦悢鍏肩叆婵犻潧妫Σ鎼佹煟閹惧鈽夐柍瑙勫灴閹晠骞撻幒鍡椾壕鐟滅増甯楅崐鍫曟煕椤愮姴鐏痪鍙ョ矙閺屾稓浠﹂悙顒傛閻庢稒绻勭槐鎾存媴閸撳弶鈻堝┑鐐板尃閸ヨ埖鏅梺闈涱槴閺呮稓绮堢€ｎ偁浜滈柟鍝勭Х閸忓瞼绱?闂? {str(e)}"}), 500
+        logger.error("Request handling failed: %s", e)
+        return jsonify({"success": False, "message": f"Request handling failed: {str(e)}"}), 500
 
 
 @app.route("/api/costs/summary", methods=["GET"])
@@ -2003,8 +2108,8 @@ async def get_costs_summary():
         )
         return jsonify(payload)
     except Exception as e:
-        logger.error(f"闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗〒姘ｅ亾鐎规洏鍎抽埀顒婄秵閸犳牜澹曢崸妤佺厵闁诡垳澧楅ˉ澶愬箹閺夋埊韬柡灞诲€濋幊婵嬪箥椤旇偐澧┑鐐茬摠缁瞼绱炴繝鍥ц摕婵炴垯鍨瑰敮濡炪倖姊婚崢褔锝為埡鍐＝濞达絽鎼鎾剁磽瀹ュ嫮绐旂€?闂傚倸鍊风粈浣革耿闁秴绀傛俊顖濆吹椤╂煡鏌涢锝嗙闁?婵犵數濮烽。浠嬪焵椤掆偓閸熻法鐥閹粙顢涢妶鍥╃槇闂佽桨鐒﹂崝娆撳箖濞嗗浚鍟呮い鏂垮悑閸婎垶姊绘担铏广€婇柛鎾寸箞閵嗗啴宕奸姀銏㈠箵闂佺粯鍔楅崕銈夋偂?闂? {e}")
-        return jsonify({"success": False, "message": f"闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗〒姘ｅ亾鐎规洏鍎抽埀顒婄秵閸犳牜澹曢崸妤佺厵闁诡垳澧楅ˉ澶愬箹閺夋埊韬柡灞诲€濋幊婵嬪箥椤旇偐澧┑鐐茬摠缁瞼绱炴繝鍥ц摕婵炴垯鍨瑰敮濡炪倖姊婚崢褔锝為埡鍐＝濞达絽鎼鎾剁磽瀹ュ嫮绐旂€?闂傚倸鍊风粈浣革耿闁秴绀傛俊顖濆吹椤╂煡鏌涢锝嗙闁?婵犵數濮烽。浠嬪焵椤掆偓閸熻法鐥閹粙顢涢妶鍥╃槇闂佽桨鐒﹂崝娆撳箖濞嗗浚鍟呮い鏂垮悑閸婎垶姊绘担铏广€婇柛鎾寸箞閵嗗啴宕奸姀銏㈠箵闂佺粯鍔楅崕銈夋偂?闂? {str(e)}"}), 500
+        logger.error("Request handling failed: %s", e)
+        return jsonify({"success": False, "message": f"Request handling failed: {str(e)}"}), 500
 
 
 @app.route("/api/costs/sessions", methods=["GET"])
@@ -2019,8 +2124,8 @@ async def get_cost_sessions():
         )
         return jsonify(payload)
     except Exception as e:
-        logger.error(f"闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗〒姘ｅ亾鐎规洏鍎抽埀顒婄秵閸犳牜澹曢崸妤佺厵闁诡垳澧楅ˉ澶愬箹閺夋埊韬柡灞诲€濋幊婵嬪箥椤旇偐澧┑鐐茬摠缁瞼绱炴繝鍥ц摕婵炴垯鍨瑰敮闂佹寧绻傞幊搴ㄢ€栭崼婵愭富闁靛牆妫欑粈澶婎渻鐎涙ɑ鍊愭鐐茬墦婵℃悂濡锋惔锝呮灈闁圭厧缍婇幆鍌炲传閵壯屾Ц婵犵數濮烽。钘壩ｉ崨鏉戝瀭濞寸厧鐡ㄩ崑瀣煙閹规劦鍤欓柦鍐枛閺岋綁寮崶銉㈠亾閳ь剟鏌涚€ｎ偅灏柍钘夘槸閳诲秹顢樿缁ㄥジ鏌熸笟鍨鐎规洖銈搁幃銏ゆ惞閸︻厽顫岄梻鍌欑窔閳ь剛鍋涢懟顖涙櫠閹绢喗鐓欐い鏂诲妼濞层倝鏌嬮崶銊х瘈闂傚牊绋撴晶銏ゆ煟濞戝崬娅嶆慨?闂? {e}")
-        return jsonify({"success": False, "message": f"闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗〒姘ｅ亾鐎规洏鍎抽埀顒婄秵閸犳牜澹曢崸妤佺厵闁诡垳澧楅ˉ澶愬箹閺夋埊韬柡灞诲€濋幊婵嬪箥椤旇偐澧┑鐐茬摠缁瞼绱炴繝鍥ц摕婵炴垯鍨瑰敮闂佹寧绻傞幊搴ㄢ€栭崼婵愭富闁靛牆妫欑粈澶婎渻鐎涙ɑ鍊愭鐐茬墦婵℃悂濡锋惔锝呮灈闁圭厧缍婇幆鍌炲传閵壯屾Ц婵犵數濮烽。钘壩ｉ崨鏉戝瀭濞寸厧鐡ㄩ崑瀣煙閹规劦鍤欓柦鍐枛閺岋綁寮崶銉㈠亾閳ь剟鏌涚€ｎ偅灏柍钘夘槸閳诲秹顢樿缁ㄥジ鏌熸笟鍨鐎规洖銈搁幃銏ゆ惞閸︻厽顫岄梻鍌欑窔閳ь剛鍋涢懟顖涙櫠閹绢喗鐓欐い鏂诲妼濞层倝鏌嬮崶銊х瘈闂傚牊绋撴晶銏ゆ煟濞戝崬娅嶆慨?闂? {str(e)}"}), 500
+        logger.error("Request handling failed: %s", e)
+        return jsonify({"success": False, "message": f"Request handling failed: {str(e)}"}), 500
 
 
 @app.route("/api/costs/session_details", methods=["GET"])
@@ -2029,7 +2134,7 @@ async def get_cost_session_details():
     try:
         chat_id = str(request.args.get("chat_id", "", type=str) or "").strip()
         if not chat_id:
-            return jsonify({"success": False, "message": "缂傚倸鍊搁崐鎼佸磹閹间礁纾归柟闂寸绾惧綊鏌熼梻瀵割槮缁炬儳缍婇弻鐔兼⒒鐎靛壊妲紓浣哄Ь椤濡甸崟顖氱疀闁割偅娲橀宥夋⒑?chat_id"}), 400
+            return jsonify({"success": False, "message": "chat_id is required"}), 400
         snapshot = config_service.get_snapshot()
         payload = await cost_service.get_session_details(
             manager.get_memory_manager(),
@@ -2039,8 +2144,8 @@ async def get_cost_session_details():
         )
         return jsonify(payload)
     except Exception as e:
-        logger.error(f"闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗〒姘ｅ亾鐎规洏鍎抽埀顒婄秵閸犳牜澹曢崸妤佺厵闁诡垳澧楅ˉ澶愬箹閺夋埊韬柡灞诲€濋幊婵嬪箥椤旇偐澧┑鐐茬摠缁瞼绱炴繝鍥ц摕婵炴垯鍨瑰敮闂佹寧绻傞幊搴ㄢ€栭崼婵愭富闁靛牆妫欑粈澶婎渻鐎涙ɑ鍊愭鐐茬墦婵℃悂濡锋惔锝呮灈闁圭厧缍婇幆鍌炲传閵壯屾Ц婵犵數濮烽。钘壩ｉ崨鏉戝瀭濞寸厧鐡ㄩ崑瀣煙閹规劦鍤欓柦鍐枛閺岋綁寮崶銉㈠亾閳ь剟鏌涚€ｎ偅灏柍钘夘槸閳诲秹顢樿缁ㄥジ鏌熸笟鍨鐎规洖銈搁幃銏ゆ惞閸︻厽顫岄梻鍌欑窔閳ь剛鍋涢懟顖涙櫠椤栫偞鍊甸梻鍫熺◤閸嬨垻鈧鍠栭悥濂哥嵁鐎ｎ亖鏀介柛鈩兠惃銊╂⒒閸屾瑨鍏屾い銏狅攻缁旂喖宕奸妷銉ь唽濡炪倕绻愬Λ妤冩閵堝鐓曠憸搴ㄣ€冮崱娑樼？婵°倕鎳庣粻鍦磼椤旀娼愭い顐躬閺岋綁寮幐搴＆闂佸搫鐬奸崰鏍€佸☉妯锋婵妫欓ˉ瀣磽閸屾瑩妾烽柛鏂胯嫰椤洭鏁撻悩鑼暫? {e}")
-        return jsonify({"success": False, "message": f"闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗〒姘ｅ亾鐎规洏鍎抽埀顒婄秵閸犳牜澹曢崸妤佺厵闁诡垳澧楅ˉ澶愬箹閺夋埊韬柡灞诲€濋幊婵嬪箥椤旇偐澧┑鐐茬摠缁瞼绱炴繝鍥ц摕婵炴垯鍨瑰敮闂佹寧绻傞幊搴ㄢ€栭崼婵愭富闁靛牆妫欑粈澶婎渻鐎涙ɑ鍊愭鐐茬墦婵℃悂濡锋惔锝呮灈闁圭厧缍婇幆鍌炲传閵壯屾Ц婵犵數濮烽。钘壩ｉ崨鏉戝瀭濞寸厧鐡ㄩ崑瀣煙閹规劦鍤欓柦鍐枛閺岋綁寮崶銉㈠亾閳ь剟鏌涚€ｎ偅灏柍钘夘槸閳诲秹顢樿缁ㄥジ鏌熸笟鍨鐎规洖銈搁幃銏ゆ惞閸︻厽顫岄梻鍌欑窔閳ь剛鍋涢懟顖涙櫠椤栫偞鍊甸梻鍫熺◤閸嬨垻鈧鍠栭悥濂哥嵁鐎ｎ亖鏀介柛鈩兠惃銊╂⒒閸屾瑨鍏屾い銏狅攻缁旂喖宕奸妷銉ь唽濡炪倕绻愬Λ妤冩閵堝鐓曠憸搴ㄣ€冮崱娑樼？婵°倕鎳庣粻鍦磼椤旀娼愭い顐躬閺岋綁寮幐搴＆闂佸搫鐬奸崰鏍€佸☉妯锋婵妫欓ˉ瀣磽閸屾瑩妾烽柛鏂胯嫰椤洭鏁撻悩鑼暫? {str(e)}"}), 500
+        logger.error("Request handling failed: %s", e)
+        return jsonify({"success": False, "message": f"Request handling failed: {str(e)}"}), 500
 
 
 @app.route("/api/costs/review_queue_export", methods=["GET"])
@@ -2068,8 +2173,8 @@ async def get_model_catalog_api():
     try:
         return jsonify({"success": True, **get_model_catalog()})
     except Exception as e:
-        logger.error(f"闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗〒姘ｅ亾鐎规洏鍎抽埀顒婄秵閸犳牜澹曢崸妤佺厵闁诡垳澧楅ˉ澶愬箹閺夋埊韬柡灞诲€濋幊婵嬪箥椤旇偐澧┑鐐茬摠缁瞼绱炴繝鍥ц摕婵炴垯鍨瑰敮濡炪倖鏌ㄨぐ鐐靛垝閸洘鈷戠紓浣股戦埛鎺楁煕濡姴娲﹂崐鍓佲偓瑙勬礀濞茬娀宕戦幘鑸靛枂闁告洦鍓涢ˇ銉モ攽閻愯泛鐨哄┑鐐╁亾閻庤娲橀崹鍧楃嵁濡偐纾兼俊顖濄€€閸嬫挻绻濆顓犲幘闂佽鍘界敮鎺楀礉濮樿埖鐓曢柟鍨暙閺嬫稒銇勯鍕殻濠碘€崇埣瀹曞崬顫滈崱妯锋寘闂傚倷鑳堕…鍫ヮ敄閸℃稑绀夋俊銈呭暙閸ㄦ繈鏌￠崘銊у闁搞劌鍊归妵鍕即閻愭潙娅ч梺鍝ュ仧閺佽顫忛搹瑙勫珰闁炽儱纾禒顓熺節閵忋垺鍤€婵☆偅鐩幊鐐烘焼瀹ュ懘鏁滃┑掳鍊撶粈浣圭? {e}")
-        return jsonify({"success": False, "message": f"闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗〒姘ｅ亾鐎规洏鍎抽埀顒婄秵閸犳牜澹曢崸妤佺厵闁诡垳澧楅ˉ澶愬箹閺夋埊韬柡灞诲€濋幊婵嬪箥椤旇偐澧┑鐐茬摠缁瞼绱炴繝鍥ц摕婵炴垯鍨瑰敮濡炪倖鏌ㄨぐ鐐靛垝閸洘鈷戠紓浣股戦埛鎺楁煕濡姴娲﹂崐鍓佲偓瑙勬礀濞茬娀宕戦幘鑸靛枂闁告洦鍓涢ˇ銉モ攽閻愯泛鐨哄┑鐐╁亾閻庤娲橀崹鍧楃嵁濡偐纾兼俊顖濄€€閸嬫挻绻濆顓犲幘闂佽鍘界敮鎺楀礉濮樿埖鐓曢柟鍨暙閺嬫稒銇勯鍕殻濠碘€崇埣瀹曞崬顫滈崱妯锋寘闂傚倷鑳堕…鍫ヮ敄閸℃稑绀夋俊銈呭暙閸ㄦ繈鏌￠崘銊у闁搞劌鍊归妵鍕即閻愭潙娅ч梺鍝ュ仧閺佽顫忛搹瑙勫珰闁炽儱纾禒顓熺節閵忋垺鍤€婵☆偅鐩幊鐐烘焼瀹ュ懘鏁滃┑掳鍊撶粈浣圭? {str(e)}"}), 500
+        logger.error("Request handling failed: %s", e)
+        return jsonify({"success": False, "message": f"Request handling failed: {str(e)}"}), 500
 
 
 @app.route("/api/model_auth/overview", methods=["GET"])
@@ -2229,8 +2334,8 @@ async def get_config_audit():
             }
         )
     except Exception as e:
-        logger.error(f"闂傚倸鍊搁崐鎼佸磹閹间礁纾归柣鎴ｅГ閸婂潡鏌ㄩ弴妤€浜惧銈庡幖閻忔繆鐏掗梺鍏肩ゴ閺呮繈鎮＄€ｎ喗鈷戦柛鎾村絻娴滄繃绻涢崣澶涜€跨€规洘鍨块、鏃堝醇閻斿搫骞堥梻浣规灱閺呮盯宕导鏉戠疅闁秆勵殕閻撴洟鎮楅敐搴′簼閻忓繒鏁婚弻宥堫檨闁告挻姘ㄧ划娆掔疀濞戞锛欓梺纭呮彧缁犳垹澹曡ぐ鎺撶厪闁割偅绻嶅Σ鎼佹偡濞嗘瑧鐣甸柡灞界Х椤т線鏌涢幘瀛樼殤闁瑰箍鍨归埞鎴犫偓锝庝憾濞煎﹪姊洪悙钘夊姎闁哥喐瀵ч幈銊╁传閵壯咃紳婵炴挻鑹惧ú銈夊几濞戞﹩鐔嗙憸宀€鍒掑▎鎾跺祦? {e}")
-        return jsonify({"success": False, "message": f"闂傚倸鍊搁崐鎼佸磹閹间礁纾归柣鎴ｅГ閸婂潡鏌ㄩ弴妤€浜惧銈庡幖閻忔繆鐏掗梺鍏肩ゴ閺呮繈鎮＄€ｎ喗鈷戦柛鎾村絻娴滄繃绻涢崣澶涜€跨€规洘鍨块、鏃堝醇閻斿搫骞堥梻浣规灱閺呮盯宕导鏉戠疅闁秆勵殕閻撴洟鎮楅敐搴′簼閻忓繒鏁婚弻宥堫檨闁告挻姘ㄧ划娆掔疀濞戞锛欓梺纭呮彧缁犳垹澹曡ぐ鎺撶厪闁割偅绻嶅Σ鎼佹偡濞嗘瑧鐣甸柡灞界Х椤т線鏌涢幘瀛樼殤闁瑰箍鍨归埞鎴犫偓锝庝憾濞煎﹪姊洪悙钘夊姎闁哥喐瀵ч幈銊╁传閵壯咃紳婵炴挻鑹惧ú銈夊几濞戞﹩鐔嗙憸宀€鍒掑▎鎾跺祦? {str(e)}"}), 500
+        logger.error("Request handling failed: %s", e)
+        return jsonify({"success": False, "message": f"Request handling failed: {str(e)}"}), 500
 
 
 @app.route("/api/config", methods=["POST"])
@@ -2252,7 +2357,6 @@ async def save_config():
                 )
                 strict_active_preset = True
 
-        # 缂?闂傚倸鍊风粈渚€骞楀鍕弿闂傚牊鑰介崫鍕电叆闁割偅绻勯澶愭⒑闂堟稓绠冲┑顖ｅ幖椤洭鍩￠崨顔惧幘闂佸綊妫块悞锕€鈽夎閺屾盯骞欓崘銊︾亪濡炪値浜滈崯瀛樹繆閸洖骞㈡慨妤€妫欓埛鏍⒒娴ｄ警鐒炬い鎴濇瀹曟繂螖閸愩劌鐏婇梺鍝勫暙閻楀棝鏌ㄩ妶鍡曠箚闁靛牆瀚ˇ锕傛煃瑜滈崜娆撴倶濮樿鲸宕叉繛鎴欏灩缁狅綁鏌ｉ幋婵囶棛闁汇儺浜滈—鍐Χ閸涱垳顔囬柣搴㈢閹倿骞?
         config_path = getattr(manager, "config_path", None)
         if not isinstance(config_path, str) or not config_path.strip():
             config_path = None
@@ -2272,7 +2376,6 @@ async def save_config():
                 for path in changed_paths
             )
 
-        # 婵犵數濮烽。钘壩ｉ崨鏉戠；闁规崘娉涚欢銈吤归悩宸剰闁汇値鍠楅妵鍕冀椤愵澀绮堕梺?婵?闂傚倸鍊烽懗鍫曗€﹂崼銉晞闁糕剝绋戠粻浼存煠婵劕鈧牕鐣烽崣澶岀闁瑰瓨鐟ラ悘鈺冪磼?闂傚倸鍊烽懗鍫曞储瑜旈幃姗€宕奸妷銉ф煣闂佺粯顭堥褔鎷戦悢鍝ョ闁瑰瓨鐟ラ悘鈺呭箚?闂傚倸鍊搁崐鐑芥倿閿曞倸绠栭柛顐ｆ礀缁€澶屸偓鍏夊亾闁逞屽墴楠炴垿濮€閻欌偓濞笺劑鏌嶈閸撶喖骞冩导鎼晪闁逞屽墴閻涱喚鈧綆鍠楅弲婵嬫煃瑜滈崜鐔兼晲閻愬搫宸濋悗娑欘焽閸樿棄鈹戦埥鍡楃仯闁稿簺鍊濋獮鍡涘醇閵夛妇鍘藉┑鐘茬仛閸旀洟鎮橀敃鍌涚厸閻忕偟顭堟晶鑼偓鍨緲鐎氼厾鎹㈠┑瀣妞ゆ劦鍋呭鎴︽⒒閸屾瑨鍏岄柟铏崌楠炲鏁撻悩鑼暫闂佺鏈銊╁汲??濠电姷鏁告慨鐑姐€傞挊澹╋綁宕ㄩ弶鎴濈€梺瑙勫劶濡嫮绮婚悩缁樼厵闁告挆鍛闂佺楠搁敃顏堝蓟閺囩喓绠鹃柣鎰靛墯閻濇洟姊虹紒妯诲鞍闁烩晩鍨跺璇测槈閵忕姷鐤€闂佸憡鎸烽懗鍫曞汲閻樼粯鈷戦柛娑橈攻閳锋劖鎱ㄥΟ绋垮婵?
         new_api_cfg = snapshot.api
         new_active = new_api_cfg.get("active_preset")
 
@@ -2313,8 +2416,8 @@ async def save_config():
         )
 
     except Exception as e:
-        logger.error(f"濠电姷鏁告慨鐑藉极閹间礁纾块柟瀵稿Т缁躲倝鏌﹀Ο渚＆婵炲樊浜濋弲婊堟煟閹伴潧澧幖鏉戯躬濮婅櫣绮欑捄銊т紘闂佺顑囬崑銈呯暦閹达箑围濠㈣泛顑囬崢顏呯節閻㈤潧浠ч柛瀣尭閳诲秹宕卞☉娆戝幗闂佸湱铏庨崹鐗堢妤ｅ啯鈷戦悹鍥ㄧ叀椤庢绱掗悩鑼х€规洘娲熷畷锟犳倶缂佹ɑ銇濆┑鈩冩倐閸┾剝鎷呯粙鎸庮吇闂傚倷鑳堕…鍫ュ嫉椤掑嫬绀勭憸鐗堝笚閸嬪嫰鏌涢埄鍐姇闁绘挻鐟﹂妵鍕冀閵娧€妲堝銈冨劚椤戝洨妲愰幒妤€惟闁靛绠戞禒鎾⒑? {e}")
-        return jsonify({"success": False, "message": f"濠电姷鏁告慨鐑藉极閹间礁纾块柟瀵稿Т缁躲倝鏌﹀Ο渚＆婵炲樊浜濋弲婊堟煟閹伴潧澧幖鏉戯躬濮婅櫣绮欑捄銊т紘闂佺顑囬崑銈呯暦閹达箑围濠㈣泛顑囬崢顏呯節閻㈤潧孝缂佺粯甯￠幃鐐綇閳哄啰锛滈梺鍛婃尫缁€浣圭鏉堚斁鍋?闂? {str(e)}"}), 500
+        logger.error("Request handling failed: %s", e)
+        return jsonify({"success": False, "message": f"Request handling failed: {str(e)}"}), 500
 
 
 @app.route("/api/test_connection", methods=["POST"])
@@ -2339,8 +2442,8 @@ async def test_connection():
         )
 
     except Exception as e:
-        logger.error(f"闂傚倸鍊搁崐椋庣矆娓氣偓楠炴牠顢曚綅閸ヮ剦鏁冮柨鏇楀亾闁汇倗鍋撶换婵嬫濞戝崬鍓扮紒鐐劤椤兘寮婚敐澶婄疀妞ゆ帒鍊风划鐢告⒑閸濆嫭顥炵紒顔芥崌瀵鍩勯崘銊х獮闁诲函缍嗘禍婵嬵敊閸涘瓨鈷戦梻鍫氭櫅閻︽粓鏌涘Ο缁樺€愮€?婵犵數濮烽。浠嬪礈濠靛浜归柛鎰靛枛缁犵儤绻濇繝鍌滃闁?闂傚倸鍊烽懗鍫曗€﹂崼銉︽櫇闁靛鏅涚粻鏍煕瀹€鈧崑娑氱不? {e}")
-        return jsonify({"success": False, "message": f"婵犵數濮烽弫鍛婃叏閻戣棄鏋侀柟闂寸绾惧鏌ｉ幇顒佲枙闁?闂??闂傚倸鍊搁崐鐑芥嚄閸洍鈧箓宕奸妷銉ョ彉濡炪倖宸婚崑鎾淬亜椤愶絿绠炲┑鈩冩倐閸┾剝鎷呯憴鍕? {str(e)}"}), 500
+        logger.error("Request handling failed: %s", e)
+        return jsonify({"success": False, "message": f"Request handling failed: {str(e)}"}), 500
 
 
 @app.route("/api/preview_prompt", methods=["POST"])
@@ -2420,8 +2523,8 @@ async def preview_prompt():
             }
         )
     except Exception as e:
-        logger.error(f"濠电姷鏁告慨鐑姐€傞挊澹╋綁宕ㄩ弶鎴狅紱闂佸憡渚楅崣搴ㄦ偄閸℃ü绻嗘い鏍ㄦ皑濮ｇ偤鏌涚€ｎ偅灏い顐ｇ箞閹剝鎯旈敐鍕敇闂傚倷鐒︾€笛呮崲閸曨垰纾绘繛鎴欏焺閺佸洭鏌涜箛鏇炲付缂佸墎鍋涢埞鎴︽偐閹绘帩浼岄梺鍝ュ仒缁瑥顫?濠电姷鏁搁崑娑㈩敋椤撶喐鍙忛柣銏犳啞閸庡孩銇勯弽顐粶缂佺姵鐗滈幉鎼佹偋閸繄鐟ㄩ梺缁樺姇閿曪箓骞夊宀€鐤€闁规崘鍩栭幊鍐⒒閸屾艾鈧娆㈠顒夌劷鐟滃秶鍙呴梺鎸庢礀閸婃悂宕归崒婊勫枑闁绘鐗嗙粭鎺旂磼? {e}")
-        return jsonify({"success": False, "message": f"濠电姷鏁告慨鐑姐€傞挊澹╋綁宕ㄩ弶鎴狅紱闂佸憡渚楅崣搴ㄦ偄閸℃ü绻嗘い鏍ㄦ皑濮ｇ偤鏌涚€ｎ偅灏い顐ｇ箞閹剝鎯旈敐鍕敇闂傚倷鐒︾€笛呮崲閸曨垰纾绘繛鎴欏焺閺佸洤鈹戦崒婊庣劸妤犵偑鍨烘穱濠囧Χ閸涱厽娈堕梺缁樹緱閸ｏ絽顫?闂? {str(e)}"}), 500
+        logger.error("Request handling failed: %s", e)
+        return jsonify({"success": False, "message": f"Request handling failed: {str(e)}"}), 500
 
 
 @app.route("/api/logs", methods=["GET"])
@@ -2488,14 +2591,9 @@ async def clear_logs():
         logger.error(f"failed to clear logs: {e}")
         return jsonify({"success": False, "message": "failed to clear logs"}), 500
 
-# 
-# 闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗ù锝呮惈椤ユ碍銇勯幘鍗炵仼缁炬儳娼￠弻鏇㈠醇濠垫劖笑缂備讲鍋撳鑸靛姉閸欐捇鏌涢妷锝呭闁宠棄顦甸弻锝夊Χ婢跺瞼鏆梺鍝勭焿缁辨洘绂掗敂鐐珰闁圭粯甯掗～鎾绘⒒娴ｈ櫣甯涢柟绋款煼閹嫰顢涢悙鑼舵憰闂佺粯鏌ㄩ崥瀣吹鐎ｎ偁浜滈柟鍝勬娴滅偓绻濆鏋€曡缂備胶绮惄顖氱暦閵娾晩鏁婇柛鎾楀懎甯ㄩ梻鍌欑閹碱偊鎳熼婊呯煋鐟滅増甯掔粻鏍ㄧ節婵犲倸鎮╅柣鏃傚帶娴肩娀鏌涢弴鐐典粵缂傚秴鍊垮濠氬磼濞嗘埈妲梺鍦拡閸嬪﹪鐛繝鍛杸婵炴垶鐟ユ禍妤呮⒑鐠恒劌鏋斿┑顔芥尦瀵即濡烽埡鍌滃弳闂佺粯鏌ㄩ幖顐㈢摥缂傚倷鑳舵慨鐢告儎椤栫偛钃熼柡鍥╁枔缁♀偓闂婎偄娲︾粙鎺楊敁瀹ュ鈷戠紓浣诡焽缁犳牕鈹戦悙璇у伐妞ゎ偄绻樺畷顐﹀礋椤撶喐顔曢梻浣规偠閸庢粓宕橀…鎴犫偓閬嶆⒒閸屾瑧顦﹂柟璇х節瀵濡歌瀹曞弶淇婇娆掝劅闁搞倖娲熼弻锛勪沪鐠囨彃濮庨梺钘夊暟閸犳牠寮婚弴鐔风窞闁割偅绻傛慨銏ゆ⒑閸涘鎴﹀箖閸屾凹娼栭柧蹇氼潐閸忔粓鏌涘☉鍗炲箻闁告梻鍏樺娲川婵犲啰鍙嗙紓浣割槹閹告娊宕洪姀鐙€鍚嬮柛婊€鑳堕崣鍡涙⒑閸撴彃浜為柛鐘虫崌瀹曘垽骞樼紒妯锋嫼缂傚倷鐒﹂敋闁诲骏绠撻弻銊ヮ潩椤戣姤鏂€濡炪倖姊婚幊鎾寸妤ｅ啯鈷掗柛灞剧懅椤︼箓鏌熺喊鍗炰喊妤犵偛锕ㄧ粻娑樷槈濞嗗繋绨甸梻浣芥硶閸犳挻鎱ㄩ幘顔煎強闁靛鏅滈悡銉╂煟閺傛寧鎯堢€涙繄绱撴担鍝勑ｉ柣鈺婂灦瀵寮撮悢铏圭槇闂婎偄娲︾粙鎺楊敁瀹ュ鈷戠紓浣诡焽缁犳牕鈹戦悙璇у伐妞ゎ偄绻樺畷顐﹀礋椤撶喐顔曢梻浣规偠閸庢粓宕橀…鎴犫偓閬嶆⒒閸屾瑧顦﹂柟璇х節瀵濡歌瀹曞弶淇婇娆掝劅闁搞倖娲熼弻锛勪沪鐠囨彃濮庨梺钘夊暟閸犳牠寮婚弴鐔风窞闁割偅绻傛慨銏ゆ⒑閸涘鎴﹀箖閸屾凹娼栭柧蹇氼潐閸忔粓鏌涘☉鍗炲箻闁告梻鍏樺娲川婵犲啰鍙嗙紓浣割槹閹告娊宕洪姀鐙€鍚嬮柛婊€鑳堕崣鍡涙⒑閸撴彃浜為柛鐘虫崌瀹曘垽骞樼紒妯锋嫼缂傚倷鐒﹂敋闁诲骏绠撻弻銊ヮ潩椤戣姤鏂€濡炪倖姊婚幊鎾寸妤ｅ啯鈷掗柛灞剧懅椤︼箓鏌熺喊鍗炰喊妤犵偛锕ㄧ粻娑樷槈濞嗗繋绨甸梻浣芥硶閸犳挻鎱ㄩ幘顔煎強闁靛鏅滈悡銉╂煟閺傛寧鎯堢€涙繄绱撴担鍝勑ｉ柣鈺婂灦瀵寮撮悢铏圭槇闂婎偄娲︾粙鎺楊敁瀹ュ鈷戠紓浣诡焽缁犳牕鈹戦悙璇у伐妞ゎ偄绻樺畷顐﹀礋椤撶喐顔曢梻浣规偠閸庢粓宕橀…鎴犫偓閬嶆⒒閸屾瑧顦﹂柟璇х節瀵濡歌瀹曞弶淇婇娆掝劅闁搞倖娲熼弻锛勪沪鐠囨彃濮庨梺钘夊暟閸犳牠寮婚弴鐔风窞闁割偅绻傛慨銏ゆ⒑閸涘鎴﹀箖閸屾凹娼栭柧蹇氼潐閸忔粓鏌涘☉鍗炲箻闁告梻鍏樺娲川婵犲啰鍙嗙紓浣割槹閹告娊宕洪姀鐙€鍚嬮柛婊€鑳堕崣鍡涙⒑閸撴彃浜為柛鐘虫崌瀹曘垽骞樼紒妯锋嫼缂傚倷鐒﹂敋闁诲骏绠撻弻銊ヮ潩椤戣姤鏂€濡炪倖姊婚幊鎾寸妤ｅ啯鈷掗柛灞剧懅椤︼箓鏌熺喊鍗炰喊妤犵偛锕ㄧ粻娑樷槈濞嗗繋绨甸梻浣芥硶閸犳挻鎱ㄩ幘顔煎強闁靛鏅滈悡銉╂煟閺傛寧鎯堢€涙繄绱撴担鍝勑ｉ柣鈺婂灦瀵寮撮悢铏圭槇闂婎偄娲︾粙鎺楊敁瀹ュ鈷戠紓浣诡焽缁犳牕鈹戦悙璇у伐妞ゎ偄绻樺畷顐﹀礋椤撶喐顔曢梻浣规偠閸庢粓宕橀…鎴犫偓閬嶆⒒閸屾瑧顦﹂柟璇х節瀵濡歌瀹曞弶淇婇娆掝劅闁搞倖娲熼弻锛勪沪鐠囨彃濮庨梺钘夊暟閸犳牠寮婚弴鐔风窞闁割偅绻傛慨銏ゆ⒑閸涘鎴﹀箖閸屾凹娼栭柧蹇氼潐閸忔粓鏌涘☉鍗炲箻闁告梻鍏樺娲川婵犲啰鍙嗙紓浣割槹閹告娊宕洪姀鐙€鍚嬮柛婊€鑳堕崣鍡涙⒑閸撴彃浜為柛鐘虫崌瀹曘垽骞樼紒妯锋嫼缂傚倷鐒﹂敋闁诲骏绠撻弻銊ヮ潩椤戣姤鏂€濡炪倖姊婚幊鎾寸妤ｅ啯鈷掗柛灞剧懅椤︼箓鏌熺喊鍗炰喊妤犵偛锕ㄧ粻娑樷槈濞嗗繋绨甸梻浣芥硶閸犳挻鎱ㄩ幘顔煎強闁靛鏅滈悡銉╂煟閺傛寧鎯堢€涙繄绱撴担鍝勑ｉ柣鈺婂灦瀵寮撮悢铏圭槇闂婎偄娲︾粙鎺楊敁瀹ュ鈷戠紓浣诡焽缁犳牕鈹戦悙璇у伐妞ゎ偄绻樺畷顐﹀礋椤撶喐顔曢梻浣规偠閸庢粓宕橀…鎴犫偓閬嶆⒒閸屾瑧顦﹂柟璇х節瀵濡歌瀹曞弶淇婇娆掝劅闁搞倖娲熼弻锛勪沪鐠囨彃濮庨梺钘夊暟閸犳牠寮婚弴鐔风窞闁割偅绻傛慨銏ゆ⒑閸涘鎴﹀箖閸屾凹娼栭柧蹇氼潐閸忔粓鏌涘☉鍗炲箻闁告梻鍏樺娲川婵犲啰鍙嗙紓浣割槹閹告娊宕洪姀鐙€鍚嬮柛婊€鑳堕崣鍡涙⒑閸撴彃浜為柛鐘虫崌瀹曘垽骞樼紒妯锋嫼缂傚倷鐒﹂敋闁诲骏绠撻弻銊ヮ潩椤戣姤鏂€濡炪倖姊婚幊鎾寸妤ｅ啯鈷掗柛灞剧懅椤︼箓鏌熺喊鍗炰喊妤犵偛锕ㄧ粻娑樷槈濞嗗繋绨甸梻浣芥硶閸犳挻鎱ㄩ幘顔煎強闁靛鏅滈悡銉╂煟閺傛寧鎯堢€涙繄绱撴担鍝勑ｉ柣鈺婂灦瀵寮撮悢铏圭槇闂婎偄娲︾粙鎺楊敁瀹ュ鈷戠紓浣诡焽缁犳牕鈹戦悙璇у伐妞ゎ偄绻樺畷顐﹀礋椤撶喐顔曢梻浣规偠閸庢粓宕橀…鎴犫偓閬嶆⒒閸屾瑧顦﹂柟璇х節瀵濡歌瀹曞弶淇婇娆掝劅闁搞倖娲熼弻锛勪沪鐠囨彃濮庨梺钘夊暟閸犳牠寮婚弴鐔风窞闁割偅绻傛慨銏ゆ⒑閸涘鎴﹀箖閸屾凹娼栭柧蹇氼潐閸忔粓鏌涘☉鍗炲箻闁告梻鍏樺娲川婵犲啰鍙嗙紓浣割槹閹告娊宕洪姀鐙€鍚嬮柛婊€鑳堕崣鍡涙⒑閸撴彃浜為柛鐘虫崌瀹曘垽骞樼紒妯锋嫼缂傚倷鐒﹂敋闁诲骏绠撻弻銊ヮ潩椤戣姤鏂€濡炪倖姊婚幊鎾寸妤ｅ啯鈷掗柛灞剧懅椤︼箓鏌熺喊鍗炰喊妤犵偛锕ㄧ粻娑樷槈濞嗗繋绨甸梻浣芥硶閸犳挻鎱ㄩ幘顔煎強闁靛鏅滈悡銉╂煟閺傛寧鎯堢€涙繄绱撴担鍝勑ｉ柣鈺婂灦瀵寮撮悢铏圭槇闂婎偄娲︾粙鎺楊敁瀹ュ鈷戠紓浣诡焽缁犳牕鈹戦悙璇у伐妞ゎ偄绻樺畷顐﹀礋椤撶喐顔曢梻浣规偠閸庢粓宕橀…鎴犫偓閬嶆⒒閸屾瑧顦﹂柟璇х節瀵濡歌瀹曞弶淇婇娆掝劅闁搞倖娲熼弻锛勪沪鐠囨彃濮庨梺钘夊暟閸犳牠寮婚弴鐔风窞闁割偅绻傛慨銏ゆ⒑閸涘鎴﹀箖閸屾凹娼栭柧蹇氼潐閸忔粓鏌涘☉鍗炲箻闁告梻鍏樺娲川婵犲啰鍙嗙紓浣割槹閹告娊宕洪姀鐙€鍚嬮柛婊€鑳堕崣鍡涙⒑閸撴彃浜為柛鐘虫崌瀹曘垽骞樼紒妯锋嫼缂傚倷鐒﹂敋闁诲骏绠撻弻銊ヮ潩椤戣姤鏂€濡炪倖姊婚幊鎾寸妤ｅ啯鈷掗柛灞剧懅椤︼箓鏌熺喊鍗炰喊妤犵偛锕ㄧ粻娑樷槈濞嗗繋绨甸梻浣芥硶閸犳挻鎱ㄩ幘顔煎強闁靛鏅滈悡銉╂煟閺傛寧鎯堢€涙繄绱撴担鍝勑ｉ柣鈺婂灦瀵寮撮悢铏圭槇闂婎偄娲︾粙鎺楊敁瀹ュ鈷戠紓浣诡焽缁犳牕鈹戦悙璇у伐妞ゎ偄绻樺畷顐﹀礋椤撶喐顔曢梻浣规偠閸庢粓宕橀…鎴犫偓閬嶆⒒閸屾瑧顦﹂柟璇х節瀵濡歌瀹曞弶淇婇娆掝劅闁搞倖娲熼弻锛勪沪鐠囨彃濮庨梺钘夊暟閸犳牠寮婚弴鐔风窞闁割偅绻傛慨銏ゆ⒑閸涘鎴﹀箖閸屾凹娼栭柧蹇氼潐閸忔粓鏌涘☉鍗炲箻闁告梻鍏樺娲川婵犲啰鍙嗙紓浣割槹閹告娊宕洪姀鐙€鍚嬮柛婊€鑳堕崣鍡涙⒑閸撴彃浜為柛鐘虫崌瀹曘垽骞樼紒妯锋嫼缂傚倷鐒﹂敋闁诲骏绠撻弻銊ヮ潩椤戣姤鏂€濡炪倖姊婚幊鎾寸妤ｅ啯鈷掗柛灞剧懅椤︼箓鏌熺喊鍗炰喊妤犵偛锕ㄧ粻娑樷槈濞嗗繋绨甸梻浣芥硶閸犳挻鎱ㄩ幘顔煎強闁靛鏅滈悡銉╂煟閺傛寧鎯堢€涙繄绱撴担鍝勑ｉ柣鈺婂灦瀵寮撮悢铏圭槇闂婎偄娲︾粙鎺楊敁瀹ュ鈷戠紓浣诡焽缁犳牕鈹戦悙璇у伐妞ゎ偄绻樺畷顐﹀礋椤撶喐顔曢梻浣规偠閸庢粓宕橀…鎴犫偓閬嶆⒒閸屾瑧顦﹂柟璇х節瀵濡歌瀹曞弶淇婇娆掝劅闁搞倖娲熼弻锛勪沪鐠囨彃濮庨梺钘夊暟閸犳牠寮婚弴鐔风窞闁割偅绻傛慨銏ゆ⒑閸涘鎴﹀箖閸屾凹娼栭柧蹇氼潐閸忔粓鏌涘☉鍗炲箻闁告梻鍏樺娲川婵犲啰鍙嗙紓浣割槹閹告娊宕洪姀鐙€鍚嬮柛婊€鑳堕崣鍡涙⒑閸撴彃浜為柛鐘虫崌瀹曘垽骞樼紒妯锋嫼缂傚倷鐒﹂敋闁诲骏绠撻弻銊ヮ潩椤戣姤鏂€濡炪倖姊婚幊鎾寸妤ｅ啯鈷掗柛灞剧懅椤︼箓鏌熺喊鍗炰喊妤犵偛锕ㄧ粻娑樷槈濞嗗繋绨甸梻浣芥硶閸犳挻鎱ㄩ幘顔煎強?
-#                               闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗〒姘ｅ亾妤犵偛顦甸弫鎾绘偐閼碱剦妲遍柣鐔哥矌婢ф鏁幒妤€鍨傞柛宀€鍋為悡鐔镐繆閵堝倸浜鹃梺缁橆殔閿曨亜鐣烽敐鍫㈢杸婵炴垶鐟ч崢鎾绘⒑閸涘﹦绠撻悗姘煎弮瀹曟娊宕烽鐘碉紲闂侀€炲苯澧寸€规洘甯￠幃娆戔偓鐢殿焾鐢儳鈹戦悩顔肩伇婵炲鐩幃褔宕卞☉妯碱槷濠殿喗顭堟禍顒傚?# 闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗ù锝呮惈椤ユ碍銇勯幘鍗炵仼缁炬儳娼￠弻鏇㈠醇濠垫劖笑缂備讲鍋撳鑸靛姉閸欐捇鏌涢妷锝呭闁宠棄顦甸弻锝夊Χ婢跺瞼鏆梺鍝勭焿缁辨洘绂掗敂鐐珰闁圭粯甯掗～鎾绘⒒娴ｈ櫣甯涢柟绋款煼閹嫰顢涢悙鑼舵憰闂佺粯鏌ㄩ崥瀣吹鐎ｎ偁浜滈柟鍝勬娴滅偓绻濆鏋€曡缂備胶绮惄顖氱暦閵娾晩鏁婇柛鎾楀懎甯ㄩ梻鍌欑閹碱偊鎳熼婊呯煋鐟滅増甯掔粻鏍ㄧ節婵犲倸鎮╅柣鏃傚帶娴肩娀鏌涢弴鐐典粵缂傚秴鍊垮濠氬磼濞嗘埈妲梺鍦拡閸嬪﹪鐛繝鍛杸婵炴垶鐟ユ禍妤呮⒑鐠恒劌鏋斿┑顔芥尦瀵即濡烽埡鍌滃弳闂佺粯鏌ㄩ幖顐㈢摥缂傚倷鑳舵慨鐢告儎椤栫偛钃熼柡鍥╁枔缁♀偓闂婎偄娲︾粙鎺楊敁瀹ュ鈷戠紓浣诡焽缁犳牕鈹戦悙璇у伐妞ゎ偄绻樺畷顐﹀礋椤撶喐顔曢梻浣规偠閸庢粓宕橀…鎴犫偓閬嶆⒒閸屾瑧顦﹂柟璇х節瀵濡歌瀹曞弶淇婇娆掝劅闁搞倖娲熼弻锛勪沪鐠囨彃濮庨梺钘夊暟閸犳牠寮婚弴鐔风窞闁割偅绻傛慨銏ゆ⒑閸涘鎴﹀箖閸屾凹娼栭柧蹇氼潐閸忔粓鏌涘☉鍗炲箻闁告梻鍏樺娲川婵犲啰鍙嗙紓浣割槹閹告娊宕洪姀鐙€鍚嬮柛婊€鑳堕崣鍡涙⒑閸撴彃浜為柛鐘虫崌瀹曘垽骞樼紒妯锋嫼缂傚倷鐒﹂敋闁诲骏绠撻弻銊ヮ潩椤戣姤鏂€濡炪倖姊婚幊鎾寸妤ｅ啯鈷掗柛灞剧懅椤︼箓鏌熺喊鍗炰喊妤犵偛锕ㄧ粻娑樷槈濞嗗繋绨甸梻浣芥硶閸犳挻鎱ㄩ幘顔煎強闁靛鏅滈悡銉╂煟閺傛寧鎯堢€涙繄绱撴担鍝勑ｉ柣鈺婂灦瀵寮撮悢铏圭槇闂婎偄娲︾粙鎺楊敁瀹ュ鈷戠紓浣诡焽缁犳牕鈹戦悙璇у伐妞ゎ偄绻樺畷顐﹀礋椤撶喐顔曢梻浣规偠閸庢粓宕橀…鎴犫偓閬嶆⒒閸屾瑧顦﹂柟璇х節瀵濡歌瀹曞弶淇婇娆掝劅闁搞倖娲熼弻锛勪沪鐠囨彃濮庨梺钘夊暟閸犳牠寮婚弴鐔风窞闁割偅绻傛慨銏ゆ⒑閸涘鎴﹀箖閸屾凹娼栭柧蹇氼潐閸忔粓鏌涘☉鍗炲箻闁告梻鍏樺娲川婵犲啰鍙嗙紓浣割槹閹告娊宕洪姀鐙€鍚嬮柛婊€鑳堕崣鍡涙⒑閸撴彃浜為柛鐘虫崌瀹曘垽骞樼紒妯锋嫼缂傚倷鐒﹂敋闁诲骏绠撻弻銊ヮ潩椤戣姤鏂€濡炪倖姊婚幊鎾寸妤ｅ啯鈷掗柛灞剧懅椤︼箓鏌熺喊鍗炰喊妤犵偛锕ㄧ粻娑樷槈濞嗗繋绨甸梻浣芥硶閸犳挻鎱ㄩ幘顔煎強闁靛鏅滈悡銉╂煟閺傛寧鎯堢€涙繄绱撴担鍝勑ｉ柣鈺婂灦瀵寮撮悢铏圭槇闂婎偄娲︾粙鎺楊敁瀹ュ鈷戠紓浣诡焽缁犳牕鈹戦悙璇у伐妞ゎ偄绻樺畷顐﹀礋椤撶喐顔曢梻浣规偠閸庢粓宕橀…鎴犫偓閬嶆⒒閸屾瑧顦﹂柟璇х節瀵濡歌瀹曞弶淇婇娆掝劅闁搞倖娲熼弻锛勪沪鐠囨彃濮庨梺钘夊暟閸犳牠寮婚弴鐔风窞闁割偅绻傛慨銏ゆ⒑閸涘鎴﹀箖閸屾凹娼栭柧蹇氼潐閸忔粓鏌涘☉鍗炲箻闁告梻鍏樺娲川婵犲啰鍙嗙紓浣割槹閹告娊宕洪姀鐙€鍚嬮柛婊€鑳堕崣鍡涙⒑閸撴彃浜為柛鐘虫崌瀹曘垽骞樼紒妯锋嫼缂傚倷鐒﹂敋闁诲骏绠撻弻銊ヮ潩椤戣姤鏂€濡炪倖姊婚幊鎾寸妤ｅ啯鈷掗柛灞剧懅椤︼箓鏌熺喊鍗炰喊妤犵偛锕ㄧ粻娑樷槈濞嗗繋绨甸梻浣芥硶閸犳挻鎱ㄩ幘顔煎強闁靛鏅滈悡銉╂煟閺傛寧鎯堢€涙繄绱撴担鍝勑ｉ柣鈺婂灦瀵寮撮悢铏圭槇闂婎偄娲︾粙鎺楊敁瀹ュ鈷戠紓浣诡焽缁犳牕鈹戦悙璇у伐妞ゎ偄绻樺畷顐﹀礋椤撶喐顔曢梻浣规偠閸庢粓宕橀…鎴犫偓閬嶆⒒閸屾瑧顦﹂柟璇х節瀵濡歌瀹曞弶淇婇娆掝劅闁搞倖娲熼弻锛勪沪鐠囨彃濮庨梺钘夊暟閸犳牠寮婚弴鐔风窞闁割偅绻傛慨銏ゆ⒑閸涘鎴﹀箖閸屾凹娼栭柧蹇氼潐閸忔粓鏌涘☉鍗炲箻闁告梻鍏樺娲川婵犲啰鍙嗙紓浣割槹閹告娊宕洪姀鐙€鍚嬮柛婊€鑳堕崣鍡涙⒑閸撴彃浜為柛鐘虫崌瀹曘垽骞樼紒妯锋嫼缂傚倷鐒﹂敋闁诲骏绠撻弻銊ヮ潩椤戣姤鏂€濡炪倖姊婚幊鎾寸妤ｅ啯鈷掗柛灞剧懅椤︼箓鏌熺喊鍗炰喊妤犵偛锕ㄧ粻娑樷槈濞嗗繋绨甸梻浣芥硶閸犳挻鎱ㄩ幘顔煎強闁靛鏅滈悡銉╂煟閺傛寧鎯堢€涙繄绱撴担鍝勑ｉ柣鈺婂灦瀵寮撮悢铏圭槇闂婎偄娲︾粙鎺楊敁瀹ュ鈷戠紓浣诡焽缁犳牕鈹戦悙璇у伐妞ゎ偄绻樺畷顐﹀礋椤撶喐顔曢梻浣规偠閸庢粓宕橀…鎴犫偓閬嶆⒒閸屾瑧顦﹂柟璇х節瀵濡歌瀹曞弶淇婇娆掝劅闁搞倖娲熼弻锛勪沪鐠囨彃濮庨梺钘夊暟閸犳牠寮婚弴鐔风窞闁割偅绻傛慨銏ゆ⒑閸涘鎴﹀箖閸屾凹娼栭柧蹇氼潐閸忔粓鏌涘☉鍗炲箻闁告梻鍏樺娲川婵犲啰鍙嗙紓浣割槹閹告娊宕洪姀鐙€鍚嬮柛婊€鑳堕崣鍡涙⒑閸撴彃浜為柛鐘虫崌瀹曘垽骞樼紒妯锋嫼缂傚倷鐒﹂敋闁诲骏绠撻弻銊ヮ潩椤戣姤鏂€濡炪倖姊婚幊鎾寸妤ｅ啯鈷掗柛灞剧懅椤︼箓鏌熺喊鍗炰喊妤犵偛锕ㄧ粻娑樷槈濞嗗繋绨甸梻浣芥硶閸犳挻鎱ㄩ幘顔煎強闁靛鏅滈悡銉╂煟閺傛寧鎯堢€涙繄绱撴担鍝勑ｉ柣鈺婂灦瀵寮撮悢铏圭槇闂婎偄娲︾粙鎺楊敁瀹ュ鈷戠紓浣诡焽缁犳牕鈹戦悙璇у伐妞ゎ偄绻樺畷顐﹀礋椤撶喐顔曢梻浣规偠閸庢粓宕橀…鎴犫偓閬嶆⒒閸屾瑧顦﹂柟璇х節瀵濡歌瀹曞弶淇婇娆掝劅闁搞倖娲熼弻锛勪沪鐠囨彃濮庨梺钘夊暟閸犳牠寮婚弴鐔风窞闁割偅绻傛慨銏ゆ⒑閸涘鎴﹀箖閸屾凹娼栭柧蹇氼潐閸忔粓鏌涘☉鍗炲箻闁告梻鍏樺娲川婵犲啰鍙嗙紓浣割槹閹告娊宕洪姀鐙€鍚嬮柛婊€鑳堕崣鍡涙⒑閸撴彃浜為柛鐘虫崌瀹曘垽骞樼紒妯锋嫼缂傚倷鐒﹂敋闁诲骏绠撻弻銊ヮ潩椤戣姤鏂€濡炪倖姊婚幊鎾寸妤ｅ啯鈷掗柛灞剧懅椤︼箓鏌熺喊鍗炰喊妤犵偛锕ㄧ粻娑樷槈濞嗗繋绨甸梻浣芥硶閸犳挻鎱ㄩ幘顔煎強闁靛鏅滈悡銉╂煟閺傛寧鎯堢€涙繄绱撴担鍝勑ｉ柣鈺婂灦瀵寮撮悢铏圭槇闂婎偄娲︾粙鎺楊敁瀹ュ鈷戠紓浣诡焽缁犳牕鈹戦悙璇у伐妞ゎ偄绻樺畷顐﹀礋椤撶喐顔曢梻浣规偠閸庢粓宕橀…鎴犫偓閬嶆⒒閸屾瑧顦﹂柟璇х節瀵濡歌瀹曞弶淇婇娆掝劅闁搞倖娲熼弻锛勪沪鐠囨彃濮庨梺钘夊暟閸犳牠寮婚弴鐔风窞闁割偅绻傛慨銏ゆ⒑閸涘鎴﹀箖閸屾凹娼栭柧蹇氼潐閸忔粓鏌涘☉鍗炲箻闁告梻鍏樺娲川婵犲啰鍙嗙紓浣割槹閹告娊宕洪姀鐙€鍚嬮柛婊€鑳堕崣鍡涙⒑閸撴彃浜為柛鐘虫崌瀹曘垽骞樼紒妯锋嫼缂傚倷鐒﹂敋闁诲骏绠撻弻銊ヮ潩椤戣姤鏂€濡炪倖姊婚幊鎾寸妤ｅ啯鈷掗柛灞剧懅椤︼箓鏌熺喊鍗炰喊妤犵偛锕ㄧ粻娑樷槈濞嗗繋绨甸梻浣芥硶閸犳挻鎱ㄩ幘顔煎強闁靛鏅滈悡銉╂煟閺傛寧鎯堢€涙繄绱撴担鍝勑ｉ柣鈺婂灦瀵寮撮悢铏圭槇闂婎偄娲︾粙鎺楊敁瀹ュ鈷戠紓浣诡焽缁犳牕鈹戦悙璇у伐妞ゎ偄绻樺畷顐﹀礋椤撶喐顔曢梻浣规偠閸庢粓宕橀…鎴犫偓閬嶆⒒閸屾瑧顦﹂柟璇х節瀵濡歌瀹曞弶淇婇娆掝劅闁搞倖娲熼弻锛勪沪鐠囨彃濮庨梺钘夊暟閸犳牠寮婚弴鐔风窞闁割偅绻傛慨銏ゆ⒑閸涘鎴﹀箖閸屾凹娼栭柧蹇氼潐閸忔粓鏌涘☉鍗炲箻闁告梻鍏樺娲川婵犲啰鍙嗙紓浣割槹閹告娊宕洪姀鐙€鍚嬮柛婊€鑳堕崣鍡涙⒑閸撴彃浜為柛鐘虫崌瀹曘垽骞樼紒妯锋嫼缂傚倷鐒﹂敋闁诲骏绠撻弻銊ヮ潩椤戣姤鏂€濡炪倖姊婚幊鎾寸妤ｅ啯鈷掗柛灞剧懅椤︼箓鏌熺喊鍗炰喊妤犵偛锕ㄧ粻娑樷槈濞嗗繋绨甸梻浣芥硶閸犳挻鎱ㄩ幘顔煎強闁靛鏅滈悡銉╂煟閺傛寧鎯堢€涙繄绱撴担鍝勑ｉ柣鈺婂灦瀵寮撮悢铏圭槇闂婎偄娲︾粙鎺楊敁瀹ュ鈷戠紓浣诡焽缁犳牕鈹戦悙璇у伐妞ゎ偄绻樺畷顐﹀礋椤撶喐顔曢梻浣规偠閸庢粓宕橀…鎴犫偓閬嶆⒒閸屾瑧顦﹂柟璇х節瀵濡歌瀹曞弶淇婇娆掝劅闁搞倖娲熼弻锛勪沪鐠囨彃濮庨梺钘夊暟閸犳牠寮婚弴鐔风窞闁割偅绻傛慨銏ゆ⒑閸涘鎴﹀箖閸屾凹娼栭柧蹇氼潐閸忔粓鏌涘☉鍗炲箻闁告梻鍏樺娲川婵犲啰鍙嗙紓浣割槹閹告娊宕洪姀鐙€鍚嬮柛婊€鑳堕崣鍡涙⒑閸撴彃浜為柛鐘虫崌瀹曘垽骞樼紒妯锋嫼缂傚倷鐒﹂敋闁诲骏绠撻弻銊ヮ潩椤戣姤鏂€濡炪倖姊婚幊鎾寸妤ｅ啯鈷掗柛灞剧懅椤︼箓鏌熺喊鍗炰喊妤犵偛锕ㄧ粻娑樷槈濞嗗繋绨甸梻浣芥硶閸犳挻鎱ㄩ幘顔煎強?
-
-
 async def run_server_async(host="127.0.0.1", port=5000):
     """Endpoint handler."""
-    logger.info(f"API 闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗〒姘ｅ亾妤犵偞鐗犻、鏇㈡晜閽樺缃曢梻浣虹《閸撴繈鎮疯閹矂骞樼紒妯衡偓鍨箾閹寸儐浼嗛柟杈剧畱閻鐓崶銊р姇闁绘挾鍠栭弻锟犲礃閵娿儮鍋撻崫銉︽殰闁割偅娲橀崑鈩冪箾閸℃鎳囨俊缁㈠櫍閺屾洟宕惰椤忣厾鈧鍠曠划娆愪繆閹间礁惟闁靛鍠楅ˉ銈夋⒑閼姐倕浠︽慨妯稿姂瀹曚即骞囬钘夊簥?http://{host}:{port}")
+    logger.info("API service starting at http://%s:%s", host, port)
     await app.run_task(host=host, port=port)
 
 
@@ -2503,14 +2601,13 @@ def run_server(host="127.0.0.1", port=5000, debug=False):
     """Endpoint handler."""
     import asyncio
 
-    logger.info(f"API 闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗〒姘ｅ亾妤犵偞鐗犻、鏇㈡晜閽樺缃曢梻浣虹《閸撴繈鎮疯閹矂骞樼紒妯衡偓鍨箾閹寸儐浼嗛柟杈剧畱閻鐓崶銊р姇闁绘挾鍠栭弻锟犲礃閵娿儮鍋撻崫銉︽殰闁割偅娲橀崑鈩冪箾閸℃鎳囨俊缁㈠櫍閺屾洟宕惰椤忣厾鈧鍠曠划娆愪繆閹间礁惟闁靛鍠楅ˉ銈夋⒑閼姐倕浠︽慨妯稿姂瀹曚即骞囬钘夊簥?http://{host}:{port} (Debug={debug})")
+    logger.info("API service starting at http://%s:%s (debug=%s)", host, port, bool(debug))
 
     if debug:
-        # Debug 婵?闂傚倸鍊风欢姘跺焵椤掑倸浠滈柤娲诲灡閺呭爼顢欓崜褎锛忕紓鍌欓檷閸ㄥ綊鐛Ο鑽ょ闁瑰濮甸弳顒勬煕閳规儳浜炬俊鐐€栫敮濠囨嚄閸撲胶涓嶅Δ锝呭暞閻撴瑩鎮楅悽娈跨劸濞寸媴绠撻幃?婵犵數濮烽弫鍛婃叏閻戣棄鏋侀柟闂寸绾剧粯绻涢幋鐐╂（婵炲樊浜堕弫鍥煏韫囨洖啸闁?app.run 闂傚倸鍊搁崐鎼佸磹妞嬪海鐭嗗〒姘ｅ亾妤犵偛顦甸弫鎾绘偐閼碱剦妲遍柣鐔哥矌婢ф鏁幒妤€鍨傞柛宀€鍋為悡娆撴煙椤栨粌顣兼い銉ヮ樀閺?reloader
-        # 婵犵數濮烽弫鍛婃叏閻戣棄鏋侀柟闂寸绾剧粯绻涢幋鏃€鍤嶉柛銉墻閺佸洭鏌曡箛鏇炐ユい锔诲櫍閹鐛崹顔煎濡炪倧瀵岄崹宕囧垝閸儱閱囨繝銏＄箓缂嶅﹪骞冮埄鍐╁劅闁挎繂妫欓崰鏍⒒娴ｅ憡鎯堥柟宄邦儔瀹曟粌顫濈捄铏圭杽闂侀潧顭堥崕娆撴偄閸忓吋鍎梺璋庡啯鎲哥紒鈧繝鍕＝闁稿本鐟ㄩ崗灞解攽椤旀儳鍘存鐐诧躬楠炴绱掑Ο鑲╂殺闂傚倸鍊烽懗鍫曗€﹂崼銏″床闁圭儤顨呴崒銊ф喐閺傝法鏆︽い鎰堕檮閸婄粯淇婇姘础缂佺姵鑹鹃—鍐Χ閸℃瑥顫х紒鐐緲缁夌妫㈤梺缁樺姉閺佸摜澹曟總鍛婂仯闁搞儜鍐獓闂佹悶鍊曞ú顓㈠蓟閻旂⒈鏁婇柣锝呯灱閻撳鎮楃憴鍕闁绘牕銈稿畷娲晸閻樿尙顦ㄩ梺缁樺姦閸庣兘濡烽埡鍌楁嫽闂佺鏈悷銊╁礂瀹€鍕厱閹艰揪绲鹃弳顒傗偓娈垮枟瑜板啴鈥﹂妸鈺佺闁告挆鍐ㄐㄥ┑鐘垫暩閸嬫稑螞濞嗘挸绠伴柟闂寸閸欏﹪鏌曟竟顖楀亾闁稿鎹囧畷妤佸緞婵犱礁顥氶梻鍌欑閹测€趁洪敃鍌氱；闁告洦鍨遍崑鐔告叏濡炶浜鹃梺璇″枟椤ㄥ﹪鎮伴鈧畷褰掝敊閻撳寒娼涢梻?闂傚倸鍊搁崐鎼佸磹閻戣姤鍤勯柛顐ｆ磵閳ь剨绠撳畷濂稿Ψ椤旇姤娅堥梻浣虹《閸撴繈鎮烽妷鈺佸瀭婵犻潧鐗冮崑鎾荤嵁閸喖濮庡銈忕細缁瑥顕?
+        # Enable reloader in debug mode for local development convenience.
         app.run(host=host, port=port, debug=True, use_reloader=True)
     else:
-        # 闂傚倸鍊搁崐鎼佸磹閻戣姤鍊块柨鏇炲€归崕鎴犳喐閻楀牆绗掗柛銊ュ€搁埞鎴︽偐鐎圭姴顥濈紓浣瑰姈椤ㄥ牓鍩€椤掆偓缁犲秹宕曢崡鐐嶆盯顢橀悙鈺傜亖婵炲濮撮鍡涙偂閺囥垺鐓忓鑸得弸銈吤归悩宕囩煉闁哄矉缍佸顕€宕掑顑跨帛闂備浇顕х换鎰椤撱垹鐒垫い鎺戝枤濞兼劖绻涢崣澶屽ⅹ閻撱倝鏌曟繛鐐澓闁逞屽厸缁舵艾鐣烽妸鈺婃晩闁告挆灞芥櫗闂備礁鎼ˇ顖炴偋閸℃ɑ娅犻柣锝呯灱閻挻銇勯幒宥堝厡缂佺姵鍎抽…璺ㄦ崉娓氼垰鍓辩紓浣插亾閻庯綆鍏橀崑?asyncio.run
+        # Use asyncio runner in production mode.
         asyncio.run(app.run_task(host=host, port=port))
 
 

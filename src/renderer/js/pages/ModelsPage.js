@@ -658,13 +658,25 @@ function getNormalizedSourceGroup(state = {}, method = {}, index = 0) {
 }
 
 function getCurrentModel(card = {}, provider = {}) {
-    const runtimeModel = String(getSelectedRuntimeState(card)?.metadata?.model || '').trim();
-    return runtimeModel || String(card?.metadata?.default_model || provider?.default_model || '').trim();
+    const selectedState = getSelectedRuntimeState(card);
+    const hasBoundProfile = String(selectedState?.metadata?.profile_id || '').trim().length > 0;
+    const runtimeModel = String(selectedState?.metadata?.model || '').trim();
+    const defaultModel = String(card?.metadata?.default_model || provider?.default_model || '').trim();
+    if (!hasBoundProfile) {
+        return defaultModel || runtimeModel;
+    }
+    return runtimeModel || defaultModel;
 }
 
 function getCurrentBaseUrl(card = {}, provider = {}) {
-    const runtimeBaseUrl = String(getSelectedRuntimeState(card)?.metadata?.base_url || '').trim();
-    return runtimeBaseUrl || String(card?.metadata?.default_base_url || provider?.default_base_url || '').trim();
+    const selectedState = getSelectedRuntimeState(card);
+    const hasBoundProfile = String(selectedState?.metadata?.profile_id || '').trim().length > 0;
+    const runtimeBaseUrl = String(selectedState?.metadata?.base_url || '').trim();
+    const defaultBaseUrl = String(card?.metadata?.default_base_url || provider?.default_base_url || '').trim();
+    if (!hasBoundProfile) {
+        return defaultBaseUrl || runtimeBaseUrl;
+    }
+    return runtimeBaseUrl || defaultBaseUrl;
 }
 
 function normalizeRuntimeBaseUrl(value) {
@@ -810,8 +822,8 @@ function mergeProviderDefinitions(catalogProvider = null, overviewProvider = nul
         return null;
     }
     const merged = {
-        ...(overviewProvider || {}),
         ...(catalogProvider || {}),
+        ...(overviewProvider || {}),
         metadata: {
             ...((catalogProvider && catalogProvider.metadata) || {}),
             ...((overviewProvider && overviewProvider.metadata) || {}),
@@ -1458,7 +1470,6 @@ export class ModelsPage extends PageController {
             || this.getSelectedAuthState(card);
         const methodMap = this.getMethodMap(provider);
         const selectedMethod = methodMap.get(String(selectedState?.method_id || card?.selected_method_id || '')) || {};
-        const viewMode = resolveCardViewMode(card);
         const currentModel = getCurrentModel(card, provider) || '未选择';
         const currentAuth = this.getCurrentProfileDisplay(card, selectedState, selectedMethod) || '未配置';
         const detailBadges = [
@@ -1468,13 +1479,10 @@ export class ModelsPage extends PageController {
                 ? renderBadge('已就绪', 'local')
                 : '',
         ].filter(Boolean).join('');
-        const primaryAction = viewMode !== 'workbench' || card?.metadata?.is_active_provider
-            ? ''
-            : (
-                card?.metadata?.can_set_active_provider
-                    ? `<button type="button" class="btn btn-primary btn-sm" data-model-auth-action="set_active_provider" data-provider-id="${escapeHtml(provider.id || '')}">设为当前回复模型</button>`
-                    : ''
-            );
+        const primaryAction = this.renderSetActiveControl(card, provider.id || '', {
+            small: true,
+            showReason: false,
+        });
         const testButton = this.getTestableAuthState(card, selectedState) || getLegacyPresetTestTarget(card)
             ? `<button type="button" class="btn btn-secondary btn-sm" data-model-auth-action="test_profile" data-provider-id="${escapeHtml(provider.id || '')}" data-method-id="${escapeHtml(selectedState?.method_id || '')}" data-profile-id="${escapeHtml(selectedState?.metadata?.profile_id || '')}">测试连接</button>`
             : '';
@@ -1547,6 +1555,26 @@ export class ModelsPage extends PageController {
         `;
     }
 
+    renderSetActiveControl(card = {}, providerId = '', { small = true, showReason = false } = {}) {
+        if (card?.metadata?.is_active_provider) {
+            return '<div class="model-center-activate-state">当前正在用于回复</div>';
+        }
+        const canSet = !!card?.metadata?.can_set_active_provider;
+        const reason = String(card?.metadata?.active_provider_reason || '').trim();
+        const className = small ? 'btn btn-primary btn-sm' : 'btn btn-primary';
+        const disabledAttr = canSet ? '' : ' disabled';
+        const titleAttr = !canSet && reason ? ` title="${escapeHtml(reason)}"` : '';
+        const reasonBlock = !canSet && showReason && reason
+            ? `<div class="model-center-inline-feedback">${escapeHtml(reason)}</div>`
+            : '';
+        return `
+            <div class="model-center-activate-control">
+                <button type="button" class="${className}" data-model-auth-action="set_active_provider" data-provider-id="${escapeHtml(providerId)}"${disabledAttr}${titleAttr}>设为当前回复模型</button>
+                ${reasonBlock}
+            </div>
+        `;
+    }
+
     renderQuickActionsSection(card, provider, currentModel, currentAuth) {
         const providerId = String(provider?.id || '');
         const options = this.getProviderModelOptions(providerId, currentModel);
@@ -1554,13 +1582,10 @@ export class ModelsPage extends PageController {
         const applyLabel = getModelApplyLabel(card);
         const active = !!card?.metadata?.is_active_provider;
         const ready = !!card?.metadata?.can_set_active_provider;
-        const activationAction = active
-            ? '<div class="model-center-activate-state">当前正在用于回复</div>'
-            : (
-                ready
-                    ? `<button type="button" class="btn btn-primary btn-sm" data-model-auth-action="set_active_provider" data-provider-id="${escapeHtml(providerId)}">设为当前回复模型</button>`
-                    : '<div class="model-center-inline-feedback">认证完成后即可切换为当前回复模型。</div>'
-            );
+        const activationAction = this.renderSetActiveControl(card, providerId, {
+            small: true,
+            showReason: true,
+        });
         const body = `
             <div class="model-center-quick-grid">
                 ${this.renderQuickMetric('当前模型', currentModel, getModelStepDescription(card))}
@@ -1718,7 +1743,6 @@ export class ModelsPage extends PageController {
 
     renderActivateStep(card) {
         const ready = !!card?.metadata?.can_set_active_provider;
-        const active = !!card?.metadata?.is_active_provider;
         return `
             <section class="model-center-step-card model-center-step-card-accent">
                 <div class="model-center-step-head">
@@ -1729,13 +1753,7 @@ export class ModelsPage extends PageController {
                     </div>
                 </div>
                 <div class="model-center-activate-row">
-                    ${active
-                        ? '<div class="model-center-activate-state">当前正在用于回复</div>'
-                        : (
-                            ready
-                                ? `<button type="button" class="btn btn-primary" data-model-auth-action="set_active_provider" data-provider-id="${escapeHtml(card?.provider?.id || '')}">设为当前回复模型</button>`
-                                : '<button type="button" class="btn btn-primary" disabled>先完成认证</button>'
-                        )}
+                    ${this.renderSetActiveControl(card, card?.provider?.id || '', { small: false, showReason: true })}
                 </div>
             </section>
         `;
@@ -2758,6 +2776,7 @@ export class ModelsPage extends PageController {
             await this.runAction('update_provider_defaults', {
                 provider_id: providerId,
                 default_model: model,
+                force_sync_selected_profile: true,
             }, { preserveSelection: true, providerId });
             if (submitAction === 'save_and_activate') {
                 await this.runAction('set_active_provider', {

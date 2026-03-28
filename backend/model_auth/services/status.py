@@ -114,6 +114,21 @@ def _resolve_runtime_readiness(
     return ready, reason
 
 
+def _can_activate_without_profile(entry: Dict[str, Any], definition) -> bool:
+    metadata = dict(entry.get("metadata") or {})
+    if not bool(metadata.get("allow_empty_key") or dict(definition.metadata or {}).get("allow_empty_key")):
+        return False
+    has_runtime_api_key_method = any(
+        method.type is AuthMethodType.API_KEY and bool(method.runtime_supported)
+        for method in definition.auth_methods
+    )
+    if not has_runtime_api_key_method:
+        return False
+    model = str(entry.get("default_model") or definition.default_model or "").strip()
+    base_url = str(entry.get("default_base_url") or definition.default_base_url or "").strip()
+    return bool(model and base_url)
+
+
 def _build_health(payload: Dict[str, Any] | None) -> HealthCheckResult:
     data = dict(payload or {})
     return HealthCheckResult(
@@ -146,7 +161,10 @@ def _build_binding(payload: Dict[str, Any] | None) -> CredentialBinding | None:
 
 def _api_key_status(profile: Dict[str, Any], credential_store: CredentialStore) -> tuple[AuthStatus, str, str]:
     ref = str(profile.get("credential_ref") or "").strip()
+    allow_empty_key = bool(dict(profile.get("metadata") or {}).get("allow_empty_key"))
     if not ref:
+        if allow_empty_key:
+            return AuthStatus.CONNECTED, "免 API Key 模式已就绪", "该服务方支持免密调用，当前已可直接用于回复。"
         return AuthStatus.NOT_CONFIGURED, "API Key 未配置", "请补充或恢复这家服务方的 API Key。"
     lookup = credential_store.lookup(ref)
     if not lookup.exists:
@@ -605,6 +623,8 @@ def build_provider_overview_cards(
         entry = dict(provider_entries.get(provider_id) or {})
         active_profile, _ = _select_runtime_profile(entry)
         can_set_active_provider = active_profile is not None
+        if not can_set_active_provider and _can_activate_without_profile(entry, definition):
+            can_set_active_provider = True
         profiles = [dict(item) for item in entry.get("auth_profiles") or [] if isinstance(item, dict)]
         selected_profile_id = str(entry.get("selected_profile_id") or "").strip()
         pending_flows = dict((entry.get("metadata") or {}).get("pending_flows") or {})

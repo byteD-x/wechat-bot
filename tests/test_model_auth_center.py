@@ -1613,6 +1613,29 @@ def test_update_provider_defaults_keeps_unconfigured_provider_out_of_runtime_pro
     projected = project_provider_auth_center(saved_config["api"])
     assert projected["presets"]
     assert projected["presets"][0]["provider_id"] == "openai"
+    assert projected["presets"][0]["model"] == "gpt-5"
+
+
+def test_update_provider_defaults_syncs_root_runtime_fields_when_presets_are_empty(monkeypatch, tmp_path):
+    store = CredentialStore(str(tmp_path / "creds.json"))
+    config = _base_config()
+    config["api"]["presets"] = []
+    config["api"]["provider_id"] = "openai"
+    config["api"]["active_preset"] = "OpenAI"
+    config["api"]["model"] = "gpt-5.4-mini"
+    config["api"]["base_url"] = "https://api.openai.com/v1"
+
+    normalized = ensure_provider_auth_center_config(config, credential_store=store)
+    service = ModelAuthCenterService()
+    monkeypatch.setattr(service, "_load_config", lambda: deepcopy(normalized))
+    monkeypatch.setattr(service, "_save_and_render", lambda cfg, **kwargs: deepcopy(cfg))
+
+    saved_config = service.update_provider_defaults({"provider_id": "openai", "default_model": "gpt-4.1"})
+
+    assert saved_config["api"]["model"] == "gpt-4.1"
+    rehydrated = ensure_provider_auth_center_config(saved_config, credential_store=store)
+    entry = rehydrated["api"]["provider_auth_center"]["providers"]["openai"]
+    assert entry["default_model"] == "gpt-4.1"
 
 
 def test_update_provider_defaults_syncs_selected_profile_runtime_model(monkeypatch, tmp_path):
@@ -1627,6 +1650,55 @@ def test_update_provider_defaults_syncs_selected_profile_runtime_model(monkeypat
     selected = next(
         item for item in entry["auth_profiles"] if item["id"] == entry["selected_profile_id"]
     )
+    projected = project_provider_auth_center(saved_config["api"])
+    openai_preset = next(item for item in projected["presets"] if item["provider_id"] == "openai")
+
+    assert selected["metadata"]["model"] == "gpt-5.4"
+    assert openai_preset["model"] == "gpt-5.4"
+
+
+def test_update_provider_defaults_force_syncs_selected_profile_runtime_model(monkeypatch, tmp_path):
+    store = CredentialStore(str(tmp_path / "creds.json"))
+    normalized = ensure_provider_auth_center_config(_base_config(), credential_store=store)
+    openai_entry = normalized["api"]["provider_auth_center"]["providers"]["openai"]
+    openai_entry["auth_profiles"].append(
+        {
+            "id": "openai:codex_local:chatgpt",
+            "provider_id": "openai",
+            "method_id": "codex_local",
+            "method_type": "local_import",
+            "label": "ChatGPT OAuth",
+            "credential_ref": "",
+            "credential_source": "local_config_file",
+            "binding": {
+                "source": "codex_auth_json",
+                "source_type": "openai_codex",
+                "credential_source": "local_config_file",
+                "sync_policy": "follow",
+                "follow_local_auth": True,
+            },
+            "metadata": {
+                "base_url": "https://api.openai.com/v1",
+                "model": "gpt-5.4-mini",
+            },
+        }
+    )
+    openai_entry["selected_profile_id"] = "openai:codex_local:chatgpt"
+    openai_entry["default_model"] = "gpt-5.4"
+
+    service = ModelAuthCenterService()
+    monkeypatch.setattr(service, "_load_config", lambda: deepcopy(normalized))
+    monkeypatch.setattr(service, "_save_and_render", lambda cfg, **kwargs: deepcopy(cfg))
+
+    saved_config = service.update_provider_defaults(
+        {
+            "provider_id": "openai",
+            "default_model": "gpt-5.4",
+            "force_sync_selected_profile": True,
+        }
+    )
+    entry = saved_config["api"]["provider_auth_center"]["providers"]["openai"]
+    selected = next(item for item in entry["auth_profiles"] if item["id"] == entry["selected_profile_id"])
     projected = project_provider_auth_center(saved_config["api"])
     openai_preset = next(item for item in projected["presets"] if item["provider_id"] == "openai")
 
@@ -2259,6 +2331,15 @@ def test_import_local_auth_copy_stores_runtime_snapshot_and_marks_profile_import
     assert snapshot.payload["api_key"] == "snapshot-token"
     assert snapshot.payload["adapter_id"] == "openai_codex"
 
+    monkeypatch.setattr(
+        "backend.model_auth.services.status.get_legacy_status_map",
+        lambda: {
+            "openai_codex": {
+                "detected": True,
+                "configured": True,
+            }
+        },
+    )
     cards = build_provider_overview_cards(saved["config"], credential_store=store)
     openai_card = next(card for card in cards if card.provider.id == "openai")
     imported_state = next(item for item in openai_card.auth_states if item.method_id == "codex_local" and item.default_selected)
@@ -2584,7 +2665,20 @@ def test_google_runtime_profile_reuses_detected_project_id_without_manual_metada
             "metadata": {},
         }
     ]
-    monkeypatch.setattr("backend.model_auth.services.status.get_legacy_status_map", lambda: {})
+    monkeypatch.setattr(
+        "backend.model_auth.services.status.get_legacy_status_map",
+        lambda: {
+            "google_gemini_cli": {
+                "detected": True,
+                "configured": True,
+                "runtime_available": True,
+                "project_id": "gemini-project-001",
+                "account_email": "gemini@example.com",
+                "account_label": "gemini@example.com",
+                "local_source_label": "google_gemini_cli",
+            }
+        },
+    )
 
     cards = build_provider_overview_cards(normalized, credential_store=store)
     google_card = next(card for card in cards if card.provider.id == "google")
@@ -2733,6 +2827,85 @@ def test_set_active_provider_rejects_provider_without_runtime_profile(monkeypatc
 
     with pytest.raises(ValueError, match="支持运行时调用的认证"):
         service.set_active_provider({"provider_id": "yuanbao"})
+
+
+def test_migrate_allow_empty_provider_creates_runtime_profile(monkeypatch, tmp_path):
+    store = CredentialStore(str(tmp_path / "creds.json"))
+    config = _base_config()
+    config["api"]["presets"].append(
+        {
+            "name": "Ollama",
+            "provider_id": "ollama",
+            "alias": "local",
+            "base_url": "http://127.0.0.1:11434/v1",
+            "api_key": "",
+            "auth_mode": "api_key",
+            "model": "qwen3",
+            "timeout_sec": 20,
+            "max_retries": 1,
+            "temperature": 0.6,
+            "max_tokens": 512,
+            "allow_empty_key": True,
+        }
+    )
+    normalized = ensure_provider_auth_center_config(config, credential_store=store)
+    ollama_entry = normalized["api"]["provider_auth_center"]["providers"]["ollama"]
+
+    assert ollama_entry["auth_profiles"]
+    assert ollama_entry["selected_profile_id"]
+    profile = next(item for item in ollama_entry["auth_profiles"] if item["id"] == ollama_entry["selected_profile_id"])
+    assert profile["method_id"] == "api_key"
+    assert profile["credential_ref"] == ""
+    assert profile["metadata"]["allow_empty_key"] is True
+
+    monkeypatch.setattr("backend.model_auth.services.status.get_legacy_status_map", lambda: {})
+    cards = build_provider_overview_cards(normalized, credential_store=store)
+    ollama_card = next(card for card in cards if card.provider.id == "ollama")
+    assert ollama_card.metadata["can_set_active_provider"] is True
+
+
+def test_set_active_provider_creates_allow_empty_profile_when_missing(monkeypatch, tmp_path):
+    store = CredentialStore(str(tmp_path / "creds.json"))
+    config = _base_config()
+    config["api"]["presets"].append(
+        {
+            "name": "Ollama",
+            "provider_id": "ollama",
+            "alias": "local",
+            "base_url": "http://127.0.0.1:11434/v1",
+            "api_key": "",
+            "auth_mode": "api_key",
+            "model": "qwen3",
+            "timeout_sec": 20,
+            "max_retries": 1,
+            "temperature": 0.6,
+            "max_tokens": 512,
+            "allow_empty_key": True,
+        }
+    )
+    normalized = ensure_provider_auth_center_config(config, credential_store=store)
+    normalized["api"]["provider_auth_center"]["providers"]["ollama"]["auth_profiles"] = []
+    normalized["api"]["provider_auth_center"]["providers"]["ollama"]["selected_profile_id"] = ""
+    service = ModelAuthCenterService()
+    monkeypatch.setattr(service, "_load_config", lambda: deepcopy(normalized))
+    saved = {}
+
+    def _capture(cfg, **kwargs):
+        snapshot = deepcopy(cfg)
+        saved["config"] = snapshot
+        return {"success": True, "overview": {"cards": []}, "message": kwargs.get("message", "")}
+
+    monkeypatch.setattr(service, "_save_and_render", _capture)
+
+    result = service.set_active_provider({"provider_id": "ollama"})
+    entry = saved["config"]["api"]["provider_auth_center"]["providers"]["ollama"]
+
+    assert result["success"] is True
+    assert saved["config"]["api"]["provider_auth_center"]["active_provider_id"] == "ollama"
+    assert any(
+        item["method_id"] == "api_key" and item.get("metadata", {}).get("allow_empty_key")
+        for item in entry["auth_profiles"]
+    )
 
 
 def test_set_active_provider_skips_profile_marked_runtime_not_ready(monkeypatch, tmp_path):

@@ -1,4 +1,5 @@
-﻿const { decodeBufferText } = require('./text-codec');
+﻿const { StringDecoder } = require('node:string_decoder');
+const { decodeBufferText } = require('./text-codec');
 
 function createBackendManager({
     http,
@@ -32,14 +33,14 @@ function createBackendManager({
             if (await this.checkServer()) {
                 runtimeIdleController.setWindowVisible(getMainWindowVisible());
                 runtimeIdleController.setServiceRunning(true);
-                console.log('[Backend] 鏈嶅姟宸插湪杩愯');
-                updateSplashStatus('鍚庣鏈嶅姟宸插氨缁紝姝ｅ湪鍔犺浇鐣岄潰...', 60);
+                console.log('[Backend] service already running');
+                updateSplashStatus('Backend service is ready. Loading interface...', 60);
                 return;
             }
 
             if (GLOBAL_STATE.pythonProcess) {
-                console.log('[Backend] 鍚庣姝ｅ湪鍚姩');
-                updateSplashStatus('鍚庣鏈嶅姟鍚姩涓?..', 50);
+                console.log('[Backend] backend is starting');
+                updateSplashStatus('Starting backend service...', 50);
                 return;
             }
 
@@ -51,8 +52,8 @@ function createBackendManager({
                 GLOBAL_STATE.flaskPort.toString(),
             ]);
 
-            console.log(`[Backend] 鍚姩: ${cmd} ${args.join(' ')}`);
-            updateSplashStatus('姝ｅ湪鍚姩鍚庣鏈嶅姟...', 35);
+            console.log(`[Backend] start command: ${cmd} ${args.join(' ')}`);
+            updateSplashStatus('Launching backend service...', 35);
 
             GLOBAL_STATE.pythonProcess = spawn(cmd, args, options);
             this._setupProcessListeners(GLOBAL_STATE.pythonProcess);
@@ -69,7 +70,7 @@ function createBackendManager({
                 }
                 await new Promise((resolve) => setTimeout(resolve, 400));
             }
-            throw new Error('Python 鏈嶅姟鍚姩瓒呮椂');
+            throw new Error('Python service startup timed out');
         },
 
         stop(reason = 'manual') {
@@ -82,7 +83,7 @@ function createBackendManager({
                     resolved = true;
                     resolve();
                 };
-                console.log('[Backend] 姝ｅ湪鍋滄...');
+                console.log('[Backend] 正在停止...');
                 proc.__backendStopReason = reason;
                 proc.once('exit', done);
                 try {
@@ -109,8 +110,31 @@ function createBackendManager({
                 runtimeIdleController.setServiceStopped('spawn_error');
             });
 
-            const decodeSafe = (data) => {
-                return decodeBufferText(data);
+            const stdoutDecoder = new StringDecoder('utf8');
+            const stderrDecoder = new StringDecoder('utf8');
+
+            const decodeSafe = (data, decoder) => {
+                const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data || '');
+                if (!buffer.length) {
+                    return '';
+                }
+                const utf8 = decoder.write(buffer);
+                if (utf8 && !utf8.includes('\ufffd')) {
+                    return utf8;
+                }
+                return decodeBufferText(buffer);
+            };
+
+            const flushDecoder = (decoder) => {
+                try {
+                    const trailing = decoder.end();
+                    if (trailing && !trailing.includes('\ufffd')) {
+                        return trailing;
+                    }
+                } catch (_) {
+                    // Ignore decoder flush errors and fallback to empty trailing output.
+                }
+                return '';
             };
 
             if (proc.stdout && typeof proc.stdout.on === 'function') {
@@ -118,9 +142,17 @@ function createBackendManager({
                     console.warn('[Backend Stdout Error]', err?.message || err);
                 });
                 proc.stdout.on('data', (data) => {
-                    const str = decodeSafe(data);
-                    console.log(`[Backend] ${str.trim()}`);
-                    updateSplashStatus('鍚庣鏈嶅姟鍚姩涓?..', 50);
+                    const str = decodeSafe(data, stdoutDecoder);
+                    if (str && str.trim()) {
+                        console.log(`[Backend] ${str.trim()}`);
+                    }
+                    updateSplashStatus('Starting backend service...', 50);
+                });
+                proc.stdout.on('end', () => {
+                    const tail = flushDecoder(stdoutDecoder);
+                    if (tail && tail.trim()) {
+                        console.log(`[Backend] ${tail.trim()}`);
+                    }
                 });
             }
 
@@ -129,13 +161,21 @@ function createBackendManager({
                     console.warn('[Backend Stderr Error]', err?.message || err);
                 });
                 proc.stderr.on('data', (data) => {
-                    const str = decodeSafe(data);
-                    console.error(`[Backend Err] ${str.trim()}`);
+                    const str = decodeSafe(data, stderrDecoder);
+                    if (str && str.trim()) {
+                        console.error(`[Backend Err] ${str.trim()}`);
+                    }
+                });
+                proc.stderr.on('end', () => {
+                    const tail = flushDecoder(stderrDecoder);
+                    if (tail && tail.trim()) {
+                        console.error(`[Backend Err] ${tail.trim()}`);
+                    }
                 });
             }
 
             proc.on('exit', (code) => {
-                console.log(`[Backend] 閫€鍑轰唬鐮? ${code}`);
+                console.log(`[Backend] process exited with code ${code}`);
                 GLOBAL_STATE.pythonProcess = null;
                 runtimeIdleController.setServiceStopped(proc.__backendStopReason || 'process_exit');
             });
@@ -219,3 +259,4 @@ function createBackendManager({
 module.exports = {
     createBackendManager,
 };
+

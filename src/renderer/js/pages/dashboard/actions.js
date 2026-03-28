@@ -35,6 +35,11 @@ function emitStatusRefresh(page, options = {}) {
     });
 }
 
+function isTransientRestartError(error) {
+    const code = String(error?.code || '').toLowerCase();
+    return code === 'timeout' || code === 'network' || code === 'network_error';
+}
+
 function getDashboardActionLocks(page) {
     if (!page || typeof page !== 'object') {
         return new Set();
@@ -394,8 +399,13 @@ export async function restartBot(page, deps = {}) {
                 result?.message || (result?.success ? '机器人正在重启' : '重启机器人失败'),
                 result?.success ? 'success' : 'error'
             );
-            emitStatusRefresh(page, { followups: [2000] });
+            emitStatusRefresh(page, { followups: [1000, 2500, 5000], payload: { force: true, refreshReadiness: true } });
         } catch (error) {
+            if (isTransientRestartError(error)) {
+                currentToast.warning('重启请求可能已提交，正在持续检查运行状态...');
+                emitStatusRefresh(page, { followups: [800, 2200, 4500, 8000], payload: { force: true, refreshReadiness: true } });
+                return;
+            }
             currentToast.error(currentToast.getErrorMessage(error, '重启机器人失败'));
         }
     });

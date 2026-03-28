@@ -1,6 +1,7 @@
 export { renderDashboardPageShell } from './dashboard.js';
 export { renderCostsPageShell } from './costs.js';
 export { renderMessagesPageShell } from './messages.js';
+export { renderExportCenterPageShell } from './export-center.js';
 export { renderModelsPageShell } from './models.js';
 export { renderSettingsPageShell } from './settings.js';
 export { renderLogsPageShell } from './logs.js';

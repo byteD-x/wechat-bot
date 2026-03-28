@@ -5,6 +5,7 @@ import webbrowser
 from copy import deepcopy
 from typing import Any, Dict, Optional
 
+from backend.model_catalog import infer_provider_id
 from backend.core.oauth_support import (
     launch_oauth_login,
     logout_oauth_provider,
@@ -255,6 +256,7 @@ class ModelAuthCenterService:
         previous_default_base_url: str,
         sync_model: bool,
         sync_base_url: bool,
+        force_sync: bool = False,
     ) -> None:
         selected_profile = self._get_profile(entry, entry.get("selected_profile_id"))
         if selected_profile is None:
@@ -264,24 +266,172 @@ class ModelAuthCenterService:
             return
         metadata = dict(selected_profile.get("metadata") or {})
         changed = False
-        if sync_model and self._should_sync_profile_field_from_provider_defaults(
-            selected_profile,
-            method,
-            field_name="model",
-            previous_default=previous_default_model,
+        if sync_model and (
+            force_sync
+            or self._should_sync_profile_field_from_provider_defaults(
+                selected_profile,
+                method,
+                field_name="model",
+                previous_default=previous_default_model,
+            )
         ):
             metadata["model"] = str(entry.get("default_model") or "").strip()
             changed = True
-        if sync_base_url and self._should_sync_profile_field_from_provider_defaults(
-            selected_profile,
-            method,
-            field_name="base_url",
-            previous_default=previous_default_base_url,
+        if sync_base_url and (
+            force_sync
+            or self._should_sync_profile_field_from_provider_defaults(
+                selected_profile,
+                method,
+                field_name="base_url",
+                previous_default=previous_default_base_url,
+            )
         ):
             metadata["base_url"] = str(entry.get("default_base_url") or "").strip()
             changed = True
         if changed:
             selected_profile["metadata"] = metadata
+
+    def _preset_matches_provider(self, preset: Dict[str, Any], provider_id: str, legacy_name: str) -> bool:
+        inferred = _canonicalize_provider_id(
+            infer_provider_id(
+                provider_id=preset.get("provider_id"),
+                preset_name=preset.get("name"),
+                base_url=preset.get("base_url"),
+                model=preset.get("model"),
+            )
+        )
+        if inferred and inferred == provider_id:
+            return True
+        return bool(legacy_name and str(preset.get("name") or "").strip() == legacy_name)
+
+    def _sync_entry_defaults_to_legacy_presets(
+        self,
+        config: Dict[str, Any],
+        *,
+        provider_id: str,
+        entry: Dict[str, Any],
+    ) -> None:
+        api_cfg = dict(config.get("api") or {})
+        presets = api_cfg.get("presets")
+        legacy_name = str(entry.get("legacy_preset_name") or "").strip()
+        alias = str(entry.get("alias") or "").strip()
+        default_model = str(entry.get("default_model") or "").strip()
+        default_base_url = str(entry.get("default_base_url") or "").strip()
+        allow_empty_key = bool(dict(entry.get("metadata") or {}).get("allow_empty_key"))
+
+        def _sync_root_runtime_defaults_if_matching_provider() -> bool:
+            root_provider_id = _canonicalize_provider_id(
+                infer_provider_id(
+                    provider_id=api_cfg.get("provider_id"),
+                    preset_name=api_cfg.get("active_preset"),
+                    base_url=api_cfg.get("base_url"),
+                    model=api_cfg.get("model"),
+                )
+                or api_cfg.get("provider_id")
+                or dict(api_cfg.get("provider_auth_center") or {}).get("active_provider_id")
+            )
+            if root_provider_id and root_provider_id != provider_id:
+                return False
+            if legacy_name:
+                api_cfg["active_preset"] = legacy_name
+            api_cfg["provider_id"] = provider_id
+            api_cfg["alias"] = alias
+            if default_model:
+                api_cfg["model"] = default_model
+            if default_base_url:
+                api_cfg["base_url"] = default_base_url
+            api_cfg["allow_empty_key"] = allow_empty_key
+            config["api"] = api_cfg
+            return True
+
+        if not isinstance(presets, list) or not presets:
+            _sync_root_runtime_defaults_if_matching_provider()
+            return
+
+        updated = False
+        for preset in presets:
+            if not isinstance(preset, dict):
+                continue
+            if not self._preset_matches_provider(preset, provider_id, legacy_name):
+                continue
+            preset["provider_id"] = provider_id
+            if legacy_name:
+                preset["name"] = legacy_name
+            preset["alias"] = alias
+            if default_model:
+                preset["model"] = default_model
+            if default_base_url:
+                preset["base_url"] = default_base_url
+            preset["allow_empty_key"] = allow_empty_key
+            updated = True
+        if not updated and not _sync_root_runtime_defaults_if_matching_provider():
+            return
+        if updated:
+            api_cfg["presets"] = presets
+        config["api"] = api_cfg
+
+    def _ensure_allow_empty_api_key_profile(self, entry: Dict[str, Any], provider_id: str) -> bool:
+        definition = get_provider_definition(provider_id)
+        if definition is None:
+            return False
+        entry_metadata = dict(entry.get("metadata") or {})
+        allow_empty_key = bool(
+            entry_metadata.get("allow_empty_key")
+            or dict(definition.metadata or {}).get("allow_empty_key")
+        )
+        if not allow_empty_key:
+            return False
+        method = next(
+            (
+                item
+                for item in definition.auth_methods
+                if item.type is AuthMethodType.API_KEY and bool(item.runtime_supported)
+            ),
+            None,
+        )
+        if method is None:
+            return False
+        for profile in entry.get("auth_profiles") or []:
+            if not isinstance(profile, dict):
+                continue
+            if str(profile.get("method_id") or "").strip() != method.id:
+                continue
+            profile.setdefault("metadata", {})
+            profile["metadata"]["allow_empty_key"] = True
+            return False
+        runtime_defaults = _resolve_method_runtime_defaults(entry, method)
+        _upsert_profile(
+            entry,
+            {
+                "id": f"{provider_id}:{method.id}:{_slugify(entry.get('legacy_preset_name') or provider_id, fallback='default')}-no-key",
+                "provider_id": provider_id,
+                "method_id": method.id,
+                "method_type": method.type.value,
+                "label": f"{str(entry.get('legacy_preset_name') or definition.label or provider_id).strip()} {method.label}",
+                "credential_ref": "",
+                "credential_source": CredentialSource.MANUAL_INPUT.value,
+                "binding": {
+                    "source": "manual_input",
+                    "source_type": "api_key",
+                    "credential_source": CredentialSource.MANUAL_INPUT.value,
+                    "sync_policy": SyncPolicy.MANUAL.value,
+                },
+                "metadata": {
+                    "base_url": runtime_defaults["base_url"],
+                    "model": runtime_defaults["model"],
+                    "method_label": method.label,
+                    "runtime_ready": True,
+                    "runtime_available": True,
+                    "runtime_unavailable_reason": "",
+                    "allow_empty_key": True,
+                },
+            },
+            select=False,
+            selection_mode="auto",
+        )
+        entry.setdefault("metadata", {})
+        entry["metadata"]["project_to_runtime"] = bool(entry.get("auth_profiles"))
+        return True
 
     def _build_local_binding_metadata(self, local_status: Dict[str, Any]) -> Dict[str, Any]:
         return {
@@ -411,6 +561,12 @@ class ModelAuthCenterService:
         config = self._load_config()
         provider_id = _canonicalize_provider_id(payload.get("provider_id"))
         entry = self._get_provider_entry(config, provider_id)
+        force_sync_selected_profile = str(payload.get("force_sync_selected_profile") or "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
         previous_default_model = str(entry.get("default_model") or "").strip()
         previous_default_base_url = str(entry.get("default_base_url") or "").strip()
         sync_model = False
@@ -438,7 +594,13 @@ class ModelAuthCenterService:
                 previous_default_base_url=previous_default_base_url,
                 sync_model=sync_model,
                 sync_base_url=sync_base_url,
+                force_sync=force_sync_selected_profile,
             )
+        self._sync_entry_defaults_to_legacy_presets(
+            config,
+            provider_id=provider_id,
+            entry=entry,
+        )
         entry["metadata"]["project_to_runtime"] = bool(entry.get("auth_profiles"))
         return self._save_and_render(config, source="model_auth_center_defaults", message="服务方默认设置已更新。")
 
@@ -842,6 +1004,9 @@ class ModelAuthCenterService:
         provider_id = _canonicalize_provider_id(payload.get("provider_id"))
         entry = self._get_provider_entry(config, provider_id)
         profile, _ = _select_runtime_profile(entry)
+        if profile is None:
+            self._ensure_allow_empty_api_key_profile(entry, provider_id)
+            profile, _ = _select_runtime_profile(entry)
         if profile is None:
             raise ValueError("请先配置一组支持运行时调用的认证，再设为当前回复模型。")
         center = dict(((config.get("api") or {}).get("provider_auth_center") or {}))

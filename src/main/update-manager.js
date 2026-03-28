@@ -225,16 +225,16 @@ function requestJson(url, options = {}) {
             response.on('end', () => {
                 const raw = Buffer.concat(chunks).toString('utf8');
                 if (statusCode < 200 || statusCode >= 300) {
-                    let message = `闂傚倷娴囧畷鍨叏閺夋嚚娲敇閵忕姷鍝楅梻渚囧墮缁夌敻宕曢幋锔界厽婵°倐鍋撻柣妤€妫涘▎銏ゆ倷閸濆嫮楠囬梺鍓插亽閸嬪嫭绂嶉婊勫仏?(${statusCode})`;
+                    let message = `Request failed with status ${statusCode}`;
                     try {
                         const payload = JSON.parse(raw);
                         const detail = String(payload?.message || '').trim();
                         if (detail) {
-                            message = `闂傚倷娴囧畷鍨叏閺夋嚚娲敇閵忕姷鍝楅梻渚囧墮缁夌敻宕曢幋锔界厽婵°倐鍋撻柣妤€妫涘▎銏ゆ倷閸濆嫮楠囬梺鍓插亽閸嬪嫭绂嶉婊勫仏?(${statusCode}): ${detail}`;
+                            message = `Request failed with status ${statusCode}: ${detail}`;
                         }
                     } catch (_) {
                         if (raw.trim()) {
-                            message = `闂傚倷娴囧畷鍨叏閺夋嚚娲敇閵忕姷鍝楅梻渚囧墮缁夌敻宕曢幋锔界厽婵°倐鍋撻柣妤€妫涘▎銏ゆ倷閸濆嫮楠囬梺鍓插亽閸嬪嫭绂嶉婊勫仏?(${statusCode}): ${raw.trim()}`;
+                            message = `Request failed with status ${statusCode}: ${raw.trim()}`;
                         }
                     }
                     reject(new Error(message));
@@ -244,7 +244,7 @@ function requestJson(url, options = {}) {
                 try {
                     resolve(JSON.parse(raw));
                 } catch (error) {
-                    reject(new Error('闂傚倸鍊风粈渚€骞栭鈷氭椽濡舵径瀣槐闂侀潧艌閺呮盯鎷戦悢灏佹斀闁绘ê寮堕幖鎰版倵濮橆剦妲洪柍褜鍓欑粻宥夊磿闁秴绠犻幖鎼厜缂嶆牠鏌曢崼婵愭Ц缂佺嫏鍥ㄧ厓闁告繂瀚埀顒€缍婇幃锟犲Ψ閿斿墽顔曢梺鍛婄懃椤﹁鲸鏅堕鍌滅＜闁稿本姘ㄦ晥閻庤娲栧畷顒冪亽婵炴潙鍚嬮悷鈺呮偘濠婂牊鈷?JSON'));
+                    reject(new Error('Received invalid JSON response'));
                 }
             });
         });
@@ -294,7 +294,7 @@ function requestText(url, options = {}) {
             response.on('end', () => {
                 const raw = Buffer.concat(chunks).toString('utf8');
                 if (statusCode < 200 || statusCode >= 300) {
-                    reject(new Error(`濠电姷鏁搁崑鐐哄垂閸洖绠伴柟闂寸贰閺佸嫰鏌涢锝囪穿鐟滅増甯掗悙濠冦亜閹哄棗浜鹃梺鍛婂姀閸嬫捇姊绘担鑺ョ《闁哥姵鎸婚幈銊ョ暋閹殿喗娈鹃梺鎸庣箓椤︿即鎮″☉銏＄厱閻忕偛澧介。鏌ユ煟椤撶噥娈曠紒缁樼洴瀹曢亶骞囬鍌欑棯闁诲骸鐏氬妯尖偓姘煎幖椤洩绠涘☉杈ㄦ櫇闂?(${statusCode})`));
+                    reject(new Error(`Failed to download text asset (${statusCode})`));
                     return;
                 }
                 resolve(raw);
@@ -349,7 +349,7 @@ function downloadToFile(url, destinationPath, options = {}) {
 
             if (statusCode < 200 || statusCode >= 300) {
                 response.resume();
-                reject(new Error(`濠电姷鏁搁崑鐐哄垂閸洖绠伴柟闂寸贰閺佸嫰鏌涢锝囪穿鐟滅増甯掗悙濠囨煃鐟欏嫬鍔ゅù婊堢畺閺岋綁鎮㈤悡搴濆枈濠碘剝褰冮崥瀣Φ閸曨垰唯闁靛鍨甸崥顐︽倵鐟欏嫭绀堝┑鐐╁亾閻庤娲忛崝鎴︺€佸Ο渚叆闁逞屽墴瀵爼顢橀姀锛勫幗?(${statusCode})`));
+                reject(new Error(`Failed to download installer (${statusCode})`));
                 return;
             }
 

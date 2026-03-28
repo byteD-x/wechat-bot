@@ -1,5 +1,6 @@
-﻿/**
- * 闂佽娴烽弫濠氬磻婵犲洤绐楅柡鍥╁枔閳?AI 闂傚倷绀侀幉锟犲蓟閿熺姴鐤炬繝濠傚濞呯姵绻濇繝鍌氭殧闁逞屽墯鐢€崇暦閿濆棗绶為悘鐐舵閼搭垶姊洪崫鍕垫Т闁哄懏绮庣划娆撳箻鐠囪尙鍘烘繝闈涘€婚…鍫㈢矆閸岀偞鐓忓璺虹墕閸旀氨绱撳鍡樺磳闁? */
+/**
+ * WeChat AI Assistant frontend application entry.
+ */
 
 if (typeof window !== 'undefined' && typeof window.dragEvent === 'undefined') {
     window.dragEvent = window.DragEvent;
@@ -7,7 +8,7 @@ if (typeof window !== 'undefined' && typeof window.dragEvent === 'undefined') {
 
 import { stateManager, eventBus, Events } from './core/index.js';
 import { apiService, notificationService } from './services/index.js';
-import { DashboardPage, CostsPage, MessagesPage, ModelsPage, SettingsPage, LogsPage, AboutPage } from './pages/index.js';
+import { DashboardPage, CostsPage, MessagesPage, ExportCenterPage, ModelsPage, SettingsPage, LogsPage, AboutPage } from './pages/index.js';
 import { renderAppFrame } from './app-shell/frame.js';
 import {
     buildDisconnectedStatus,
@@ -27,7 +28,12 @@ import {
 import { setupGlobalButtonFeedback } from './app/button-feedback.js';
 
 const DEFAULT_IDLE_DELAY_MS = 15 * 60 * 1000;
-const AUTO_WAKE_PAGES = new Set(['dashboard', 'costs', 'messages', 'models', 'logs']);
+const AUTO_WAKE_PAGES = new Set(['dashboard', 'costs', 'messages', 'exports', 'models', 'logs']);
+const RUNTIME_READONLY_PAGE_MESSAGES = Object.freeze({
+    costs: '机器人未启动：当前仅可查看成本数据，操作已禁用。',
+    messages: '机器人未启动：当前仅可查看消息数据，操作已禁用。',
+    exports: '机器人未启动：当前仅可查看导出设置，操作已禁用。',
+});
 
 function ensureAppFrame() {
     if (typeof document === 'undefined' || !document.body || document.body.dataset.appFrameReady === 'true') {
@@ -46,6 +52,7 @@ class App {
             dashboard: new DashboardPage(),
             costs: new CostsPage(),
             messages: new MessagesPage(),
+            exports: new ExportCenterPage(),
             models: new ModelsPage(),
             settings: new SettingsPage(),
             logs: new LogsPage(),
@@ -59,6 +66,7 @@ class App {
         this._statusFailureCount = 0;
         this._statusBaseIntervalMs = 5000;
         this._statusMaxIntervalMs = 30000;
+        this._lastStatusSuccessAt = 0;
         this._backendStartAttempted = false;
         this._readinessRefreshing = false;
         this._lastReadinessRefreshAt = 0;
@@ -72,11 +80,22 @@ class App {
         this._eventSource = null;
         this._sseReconnectTimer = null;
         this._sseReconnectAttempt = 0;
+        this._sseFailureCount = 0;
+        this._sseFailureWindowStartedAt = 0;
+        this._sseFailureWindowMs = 30000;
+        this._sseFailureThreshold = 4;
+        this._sseDisableBaseMs = 15000;
+        this._sseDisableMaxMs = 120000;
+        this._sseDisabledUntil = 0;
+        this._sseDegradedNotifiedAt = 0;
         this._pageSwitchInProgress = false;
+        this._restartInFlight = false;
+        this._lastRestartAt = 0;
+        this._restartFollowupTimers = new Set();
     }
 
     async init() {
-        console.log('[App] 濠电姵顔栭崰妤冩崲閹邦喖绶ら柦妯侯檧閼版寧銇勮箛鎾跺缂佲偓閸℃绡€闂傚牊绋掗敍宥嗙箾閸忕⒈娈滈柡?..');
+        console.log('[App] initializing application...');
 
         notificationService.init();
         if (typeof document !== 'undefined') {
@@ -105,6 +124,7 @@ class App {
         await this._runInitStep('_refreshStatus', () => this._refreshStatus());
         const initialPage = stateManager.get('currentPage') || 'dashboard';
         await this._runInitStep('_switchPage', () => this._switchPage(initialPage, { source: 'init' }));
+        this._syncRuntimeReadonlyPages();
         this._startStatusRefresh();
         console.log('[App] initialized');
 
@@ -114,7 +134,7 @@ class App {
         try {
             return await fn();
         } catch (error) {
-            console.error(`[App] 闂傚倷绀侀幉锛勬暜濡ゅ啯宕查柛宀€鍎戠紞鏍煙閻楀牊绶茬紒鈧畝鍕厸鐎广儱娴烽崢娑㈡煕閺傚灝顏╅摶鏍煟濮楀棗鏋涢柍褜鍓氬ú鐔镐繆閻㈢绠ｉ柣妯哄暱椤? ${stepName}`, error);
+            console.error(`[App] initialization step failed: ${stepName}`, error);
             notificationService.error(`Initialization step failed: ${stepName}`);
             return null;
         }
@@ -480,7 +500,7 @@ class App {
 
             if (key === 'f5') {
                 event.preventDefault();
-                notificationService.info('濠电姵顔栭崰妤冩崲閹邦喖绶ら柦妯侯檧閼版寧銇勮箛鎾跺缂佲偓閸℃稒鈷戦柛顭戝櫘閸庢劙鏌ｉ幘顖氫壕闂傚倷鑳剁划顖炩€﹂崼銉ユ槬闁哄稁鍘奸悞?..');
+                notificationService.info('Refreshing runtime status...');
                 this._refreshStatus();
                 return;
             }
@@ -524,6 +544,11 @@ class App {
                 this._switchPage('about');
                 return;
             }
+            if (key === '8') {
+                event.preventDefault();
+                this._switchPage('exports');
+                return;
+            }
             if (key === 'r') {
                 event.preventDefault();
                 void this._restartBotFromShortcut();
@@ -547,15 +572,56 @@ class App {
         return tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT';
     }
 
-    async _restartBotFromShortcut() {
-        try {
-            notificationService.info('濠电姵顔栭崰妤冩崲閹邦喖绶ら柦妯侯檧閼版寧銇勮箛鎾跺闁绘挸鍊婚埀顒€绠嶉崕閬嶅箠韫囨稑纾挎繛鍡樻尰閻撴盯鏌涢锝囩畺闁诡垰鐗婄换娑㈠川椤旇偐鐟茬紓?..');
-            const result = await apiService.restartBot();
-            notificationService.show(result.message, result.success ? 'success' : 'error');
-            await this._refreshStatus();
-        } catch (error) {
-            notificationService.error('Restart failed.');
+    _clearRestartFollowupTimers() {
+        this._restartFollowupTimers.forEach((timer) => clearTimeout(timer));
+        this._restartFollowupTimers.clear();
+    }
 
+    _scheduleRestartHealthChecks(delays = [1200, 3000, 6000]) {
+        this._clearRestartFollowupTimers();
+        delays.forEach((delayMs) => {
+            const timer = setTimeout(() => {
+                this._restartFollowupTimers.delete(timer);
+                void this._refreshStatus({ force: true, refreshReadiness: true });
+            }, Math.max(0, Number(delayMs) || 0));
+            this._restartFollowupTimers.add(timer);
+        });
+    }
+
+    async _restartBotFromShortcut() {
+        if (this._restartInFlight) {
+            notificationService.info('A restart is already in progress...');
+            return;
+        }
+        const now = Date.now();
+        if ((now - this._lastRestartAt) < 2500) {
+            notificationService.warning('Restart was triggered recently. Please wait a moment.');
+            return;
+        }
+
+        this._restartInFlight = true;
+        this._lastRestartAt = now;
+        try {
+            notificationService.info('Restarting bot service...');
+            this._clearSSEReconnectTimer();
+            this._closeSSE();
+            const result = await apiService.restartBot();
+            notificationService.show(
+                result?.message || (result?.success ? 'Bot restart completed' : 'Bot restart failed'),
+                result?.success ? 'success' : 'error'
+            );
+            await this._refreshStatus({ force: true, refreshReadiness: true });
+            this._scheduleRestartHealthChecks();
+        } catch (error) {
+            const code = String(error?.code || '').toLowerCase();
+            if (code === 'timeout' || code === 'network' || code === 'network_error') {
+                notificationService.warning('Restart command timed out. Verifying service health automatically...');
+                this._scheduleRestartHealthChecks([800, 2000, 4500, 8000]);
+                return;
+            }
+            notificationService.error('Restart failed. Please retry.');
+        } finally {
+            this._restartInFlight = false;
         }
     }
 
@@ -748,7 +814,7 @@ class App {
                     notificationService.warning(result?.error || 'Skip update failed.');
                     return;
                 }
-                notificationService.info(`闂佽姘﹂～澶愭偤閺囩姳鐒婃い蹇撶墛閸婂鏌ㄩ弮鍥撳ù?v${latestVersion}`);
+                notificationService.info(`Skipped version v${latestVersion}`);
                 closeModal();
             } catch (error) {
                 notificationService.error('Failed to skip this version.');
@@ -1065,7 +1131,7 @@ class App {
                     if (result?.success) {
                         modal?.classList.remove('active');
                         stateManager.set('readiness.firstRunGuideDismissed', true);
-                        notificationService.success(result?.message || '婵犳鍠楃换鎰緤閽樺鑰挎い蹇撶墕缁犮儵鏌熼幆褏锛嶇痪鎹愬吹閳ь剛鏁婚崑濠囧窗閺囩喓鈹嶅┑鐘插閸嬫捇鐛崹顔句痪闂佺硶鏅滅粙鎾跺垝?..');
+                        notificationService.success(result?.message || 'WeChat client opened');
                     } else {
                         stateManager.set('readiness.firstRunGuideDismissed', false);
                         modal?.classList.add('active');
@@ -1096,7 +1162,7 @@ class App {
             try {
                 const result = await window.electronAPI.restartAppAsAdmin();
                 if (result?.success) {
-                    notificationService.success(result.message || '濠电姵顔栭崰妤冩崲閹邦喖绶ら柦妯侯檧閼版寧銇勮箛鎾村櫧妞も晝鍏橀弻鏇熺珶椤栨俺瀚伴柟顔荤窔濮婃椽鎳￠妶鍛捕濠碘槅鍋呴〃濠囩嵁婢舵劕绠柣锝呰嫰瑜板棗顪冮妶鍡楀闁逞屽墲濞呮洟寮抽崨瀛樷拻濞达絿鎳撶徊鑽ょ磼婢跺本鏆€殿喚绮换婵嬪炊瑜戣婵＄偑鍊栭悧妤呮嚌閹规劦鏉介梻浣告贡閸樠囨偤閵娿儺娼栧┑鐘宠壘閺?..');
+                    notificationService.success(result.message || 'Relaunching app with administrator privileges...');
                     return;
                 }
                 if (result?.canceled) {
@@ -1161,7 +1227,7 @@ class App {
                 if (result?.alreadyDownloaded) {
                     notificationService.info('Update installer already downloaded.');
                 } else {
-                    notificationService.info('闁诲孩顔栭崰鎺楀磻閹炬枼鏀芥い鏃傗拡閸庡海绱掑Δ鈧幊蹇擃焽椤忓牊鍤嶉柕澶涘閸戜粙姊洪崫鍕偓鍛婃償濠婂懏顫曟繝闈涚墛鐎氭艾顪冪€ｎ亞宀告俊顐畵閺?..');
+                    notificationService.info('Downloading installer package...');
                 }
                 this._openUpdateModal();
                 return;
@@ -1192,7 +1258,7 @@ class App {
                 notificationService.warning(result?.error || 'Failed to start update installation.');
                 return;
             }
-            notificationService.info('濠电姵顔栭崰妤冩崲閹邦喖绶ら柦妯侯檧閼版寧銇勮箛鎾跺闁绘帒顭烽弻宥堫檨闁告挾鍠庨悾宄扳枎閹惧厖绱堕梺鍛婃处閸樺ジ鎮鹃妸鈺傗拺婵炶尙绮繛鍥煕閺傝法鐒搁柟宕囧枛閹垽鎮℃惔銇版洖顪冮妶鍡欏闁艰宕橀·鍕⒑鐠囧弶鎹ｉ柟铏崌钘濋柟璺哄婢跺绡€闁告洦鍘鹃悡鎾绘煟鎼搭垳绉靛ù婊呭仧閸?..');
+            notificationService.info('Launching update installer. Application will close shortly.');
         } catch (error) {
             notificationService.error('Failed to launch update installer.');
         }
@@ -1220,7 +1286,7 @@ class App {
             if (String(options?.source || '').trim() === 'init') {
                 nextPageName = 'dashboard';
             } else {
-                notificationService.warning(`闂傚倷鑳堕崕鐢稿疾閳哄懎绐楁俊銈呮噺閸嬪鏌ㄥ┑鍡橆棑濞存粍绮撻弻锝夊閻樺啿鏆堝┑鈩冦仠閸斿矂鍩ユ径鎰鐎规洖娉﹂姀銈嗙厽閹烘娊宕濋幋婵堟殾闁绘垼袙閳ь剨绠撻獮鎺楀籍閸屾粌鐐?{requestedPageName || 'unknown'}`);
+                notificationService.warning(`Page not found: ${requestedPageName || 'unknown'}`);
                 return;
             }
         }
@@ -1274,7 +1340,8 @@ class App {
                 }
             }
 
-            console.log(`[App] 闂傚倷绀侀幉锛勬暜閹烘嚚娲晝閳ь剟鎮鹃悜钘夎摕闁靛鍎抽ˇ顐ｇ箾閺夋垵鎮戦柣锝庝邯閸┾偓妞ゆ巻鍋撴い锕傛涧铻? ${nextPageName}`);
+            this._syncRuntimeReadonlyPages();
+            console.log(`[App] switched to page: ${nextPageName}`);
         } catch (error) {
             console.error(`[App] switch page failed: ${nextPageName}`, error);
             notificationService.error(`Failed to switch page: ${nextPageName}`);
@@ -1332,9 +1399,10 @@ class App {
             this._applyStatus(status, { connected: true });
             void this._reportRuntimeStatus(status);
             this._statusFailureCount = 0;
+            this._lastStatusSuccessAt = Date.now();
         } catch (error) {
             if (!this._isIdleStopped()) {
-                console.error('[App] 闂傚倷绀侀幉锛勬暜閿熺姴缁╅梺顒€绉撮拑鐔封攽閻樺弶澶勯柛瀣姍閺屻倝宕妷顔芥瘜闂佺顑嗛幐濠氬箯閸涙潙绠归柣鎰濠⑩偓闂?', error);
+                console.error('[App] status refresh failed', error);
             }
             const previousStatus = stateManager.get('bot.status');
             this._closeSSE();
@@ -1359,6 +1427,7 @@ class App {
             'bot.paused': false,
             'bot.status': this._buildDisconnectedStatus(previousStatus, options),
         });
+        this._syncRuntimeReadonlyPages();
         this._updateConnectionStatus();
     }
 
@@ -1372,6 +1441,7 @@ class App {
             'bot.connected': options.connected !== false,
             'bot.status': status
         });
+        this._syncRuntimeReadonlyPages();
 
         if (this.pages.dashboard && this.pages.dashboard.isActive()) {
             this.pages.dashboard.updateStats(status);
@@ -1387,6 +1457,10 @@ class App {
         if (this._eventSource || !stateManager.get('bot.connected') || this._isIdleStopped()) {
             return;
         }
+        if (this._isSSECircuitOpen()) {
+            this._scheduleSSEReconnect();
+            return;
+        }
         this._eventSource = apiService.connectSSE(
             (payload) => this._handleRealtimeEvent(payload),
             (err) => this._handleSSEError(err),
@@ -1397,13 +1471,14 @@ class App {
     _handleSSEOpen() {
         this._clearSSEReconnectTimer();
         this._sseReconnectAttempt = 0;
+        this._resetSSEFailureState();
         stateManager.set('bot.connected', true);
         this._updateConnectionStatus();
     }
 
     _handleSSEError(err) {
         if (!this._isIdleStopped()) {
-            console.warn('[App] SSE 闂備礁鎼ˇ顐﹀疾濠靛纾婚柣鎰仛閺嗘粓鏌℃径瀣劸闁搞倖娲熼弻娑氫沪閻愵剛娈ら梺绯曟櫆椤ㄥ﹪寮婚妸銉㈡婵☆垰鐏濋顓㈡⒑闂堚晝绉甸柛銊ュ船椤曘儵宕熼姘卞€炲銈嗗坊閸嬫挻绻涢崨顐㈢伈鐎?', err);
+            console.warn('[App] SSE connection error', err);
         }
         const status = stateManager.get('bot.status') || {};
         const shouldReconnect = !!(
@@ -1411,10 +1486,24 @@ class App {
             status.growth_running ||
             status?.startup?.active
         );
+        const now = Date.now();
+        const circuitOpened = this._registerSSEFailure(now);
+        const recentStatusHealthy = (now - this._lastStatusSuccessAt) <= 15000;
 
         this._closeSSE();
-        this._applyDisconnectedRuntimeState(status, { idleState: this._getRuntimeIdleState() });
+        void apiService.refreshSseTicket({ force: true });
+        if (!recentStatusHealthy) {
+            this._applyDisconnectedRuntimeState(status, { idleState: this._getRuntimeIdleState() });
+        }
         if (shouldReconnect && !this._isIdleStopped()) {
+            if (circuitOpened) {
+                const cooldownMs = Math.max(0, this._sseDisabledUntil - now);
+                this._scheduleNextStatusRefresh(Math.min(3000, Math.max(1200, cooldownMs)));
+                if ((now - this._sseDegradedNotifiedAt) > 30000) {
+                    notificationService.warning('Realtime channel is unstable. Switched to polling temporarily.');
+                    this._sseDegradedNotifiedAt = now;
+                }
+            }
             this._scheduleSSEReconnect();
         }
     }
@@ -1444,6 +1533,17 @@ class App {
             return;
         }
 
+        const now = Date.now();
+        if (this._isSSECircuitOpen(now)) {
+            const wait = Math.max(500, this._sseDisabledUntil - now);
+            const jitter = Math.floor(Math.random() * 500);
+            this._sseReconnectTimer = setTimeout(() => {
+                this._sseReconnectTimer = null;
+                this._connectSSE();
+            }, wait + jitter);
+            return;
+        }
+
         const attempt = Math.min(this._sseReconnectAttempt, 6);
         const baseDelay = Math.min(15000, 1000 * Math.pow(2, attempt));
         const jitter = Math.floor(Math.random() * 300);
@@ -1454,6 +1554,37 @@ class App {
             this._sseReconnectTimer = null;
             this._connectSSE();
         }, delay);
+    }
+
+    _isSSECircuitOpen(now = Date.now()) {
+        return this._sseDisabledUntil > now;
+    }
+
+    _resetSSEFailureState() {
+        this._sseFailureCount = 0;
+        this._sseFailureWindowStartedAt = 0;
+        this._sseDisabledUntil = 0;
+    }
+
+    _registerSSEFailure(now = Date.now()) {
+        if (!this._sseFailureWindowStartedAt || (now - this._sseFailureWindowStartedAt) > this._sseFailureWindowMs) {
+            this._sseFailureWindowStartedAt = now;
+            this._sseFailureCount = 1;
+        } else {
+            this._sseFailureCount += 1;
+        }
+
+        if (this._sseFailureCount < this._sseFailureThreshold) {
+            return false;
+        }
+
+        const overflow = Math.max(0, this._sseFailureCount - this._sseFailureThreshold);
+        const cooldown = Math.min(
+            this._sseDisableMaxMs,
+            this._sseDisableBaseMs * Math.pow(2, Math.min(3, overflow))
+        );
+        this._sseDisabledUntil = Math.max(this._sseDisabledUntil, now + cooldown);
+        return true;
     }
 
     _handleRealtimeEvent(payload) {
@@ -1516,6 +1647,63 @@ class App {
             dot.className = nextView.dotClass;
         }
         badge.title = nextView.titleText;
+    }
+
+    _syncRuntimeReadonlyPages() {
+        if (typeof document === 'undefined') {
+            return;
+        }
+        const isRunning = !!stateManager.get('bot.running');
+        const shouldLock = !isRunning;
+        const navRoot = (document && document.body && typeof document.body.querySelectorAll === 'function')
+            ? document.body
+            : document;
+        const navItems = Array.from(
+            typeof navRoot?.querySelectorAll === 'function' ? navRoot.querySelectorAll('.nav-item') : []
+        );
+        const navItemByPage = new Map(
+            navItems.map((item) => [String(item?.dataset?.page || '').trim(), item])
+        );
+
+        Object.entries(RUNTIME_READONLY_PAGE_MESSAGES).forEach(([pageName, message]) => {
+            const container = document.getElementById(`page-${pageName}`);
+            if (!container) {
+                return;
+            }
+            const markerSelector = '.runtime-readonly-note';
+            const marker = container.querySelector(markerSelector);
+            const navItem = navItemByPage.get(pageName);
+            container.classList.toggle('runtime-readonly', shouldLock);
+            container.setAttribute('data-runtime-readonly', shouldLock ? 'true' : 'false');
+            container.setAttribute('aria-disabled', shouldLock ? 'true' : 'false');
+            if (navItem) {
+                navItem.classList.toggle('is-readonly-route', shouldLock);
+                navItem.setAttribute('data-runtime-readonly', shouldLock ? 'true' : 'false');
+                if (shouldLock) {
+                    navItem.setAttribute('data-runtime-badge', 'READ-ONLY');
+                    navItem.setAttribute('title', String(message || '当前页面为只读模式。'));
+                } else {
+                    navItem.removeAttribute('data-runtime-badge');
+                    navItem.removeAttribute('title');
+                }
+            }
+
+            if (!shouldLock) {
+                marker?.remove();
+                return;
+            }
+
+            const note = marker || document.createElement('div');
+            note.className = 'runtime-readonly-note';
+            note.textContent = String(message || '机器人未启动：当前页面处于只读模式。');
+            if (!marker) {
+                if (typeof container.insertBefore === 'function') {
+                    container.insertBefore(note, container.firstChild || null);
+                } else {
+                    container.appendChild(note);
+                }
+            }
+        });
     }
     _startStatusRefresh() {
         this._scheduleNextStatusRefresh(0);

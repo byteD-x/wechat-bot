@@ -509,9 +509,10 @@ def _ingest_legacy_candidate(
             entry["metadata"][field_name] = deepcopy(normalized.get(field_name))
     label_basis = str(normalized.get("name") or provider_id).strip()
     raw_key = str(normalized.get("api_key") or "").strip()
+    method_id = _resolve_api_key_method_id(provider_id, normalized)
+    method = get_provider_method(provider_id, method_id)
+    allow_empty_key = bool(normalized.get("allow_empty_key") or entry["metadata"].get("allow_empty_key"))
     if raw_key and not is_placeholder_key(raw_key):
-        method_id = _resolve_api_key_method_id(provider_id, normalized)
-        method = get_provider_method(provider_id, method_id)
         ref = _store_api_key_secret(provider_id, method_id, label_basis, raw_key, credential_store)
         _upsert_profile(
             entry,
@@ -543,6 +544,44 @@ def _ingest_legacy_candidate(
                         or entry.get("default_model")
                         or ""
                     ).strip(),
+                    "allow_empty_key": allow_empty_key,
+                },
+            },
+            select=is_active or str(normalized.get("auth_mode") or "").strip().lower() != "oauth",
+            selection_mode="auto",
+        )
+    elif allow_empty_key and method is not None and method.type is AuthMethodType.API_KEY:
+        _upsert_profile(
+            entry,
+            {
+                "id": f"{provider_id}:{method_id}:{_slugify(label_basis, fallback='default')}-no-key",
+                "provider_id": provider_id,
+                "method_id": method_id,
+                "method_type": AuthMethodType.API_KEY.value,
+                "label": f"{entry['legacy_preset_name']} {method.label}",
+                "credential_ref": "",
+                "credential_source": CredentialSource.MANUAL_INPUT.value,
+                "binding": {
+                    "source": "manual_input",
+                    "source_type": "api_key",
+                    "credential_source": CredentialSource.MANUAL_INPUT.value,
+                    "sync_policy": SyncPolicy.MANUAL.value,
+                },
+                "metadata": {
+                    **dict(entry["metadata"]),
+                    "base_url": _normalize_runtime_base_url(
+                        normalized.get("base_url")
+                        or str(method.metadata.get("recommended_base_url") or "").strip()
+                        or entry.get("default_base_url")
+                        or ""
+                    ),
+                    "model": str(
+                        normalized.get("model")
+                        or str(method.metadata.get("recommended_model") or "").strip()
+                        or entry.get("default_model")
+                        or ""
+                    ).strip(),
+                    "allow_empty_key": True,
                 },
             },
             select=is_active or str(normalized.get("auth_mode") or "").strip().lower() != "oauth",
