@@ -570,6 +570,10 @@ class WcferryTransport(BaseTransport):
                 try:
                     rsp_local.ParseFromString(self._wcf.msg_socket.recv_msg().bytes)
                     self._wcf.msgQ.put(WxMsg(rsp_local.wxmsg))
+                except pynng.Timeout:
+                    # Idle periods are expected. Keep the receive loop alive instead of
+                    # redialing the message socket every recv timeout window.
+                    continue
                 except Exception as exc:
                     # On disconnects/transient errors, try reconnecting the message socket.
                     self._recv_last_error = str(exc)

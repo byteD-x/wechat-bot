@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional
 
 from .types import MessageEvent
 from .utils.common import as_float
+from .core.reply_policy import build_chat_id
 
 
 def mark_deadline_missed(
@@ -324,7 +325,7 @@ async def process_and_reply(
 ) -> None:
     del message_log
     bot._ensure_event_defaults(event)
-    chat_id = f"group:{event.chat_name}" if event.is_group else f"friend:{event.chat_name}"
+    chat_id = await bot._reconcile_event_chat_identity(event)
     if not bot.ai_client:
         bot._log_flow(
             logging.WARNING,

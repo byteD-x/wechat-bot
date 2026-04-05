@@ -346,6 +346,67 @@ async def test_reload_runtime_config_honors_reload_ai_client_module():
     mock_reload_module.assert_awaited_once()
     assert bot.ai_client is new_client
     assert bot.runtime_preset_name == "DeepSeek"
+    bot.bot_manager.clear_issue.assert_called_once()
+    bot.bot_manager.notify_status_change.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_check_config_reload_clears_issue_after_successful_ai_reload():
+    current_config = {
+        "bot": {
+            "reload_ai_client_module": False,
+        },
+        "api": {
+            "active_preset": "root_config",
+            "base_url": "http://localhost",
+            "api_key": "placeholder",
+            "model": "gpt-4o-mini",
+        },
+        "agent": {"enabled": True},
+        "logging": {"level": "INFO", "file": TEST_LOG_PATH, "max_bytes": 1024, "backup_count": 1, "format": "text"},
+    }
+    next_config = {
+        "bot": {
+            "reload_ai_client_module": False,
+        },
+        "api": {
+            "active_preset": "Ollama",
+            "base_url": "http://127.0.0.1:11434/v1",
+            "api_key": "",
+            "model": "deepseek-v3.2:cloud",
+        },
+        "agent": {"enabled": True},
+        "logging": {"level": "INFO", "file": TEST_LOG_PATH, "max_bytes": 1024, "backup_count": 1, "format": "text"},
+    }
+    mock_service = _build_config_service(current_config)
+    mock_service.reload.return_value = _build_snapshot(next_config)
+
+    with patch("backend.bot.get_config_service", return_value=mock_service):
+        bot = WeChatBot("config.yaml")
+
+    bot.bot_manager = _build_mock_bot_manager()
+    bot.config = current_config
+    bot._apply_config()
+    bot.config_mtime = 100.0
+    bot.api_signature = "old-signature"
+    bot.runtime_preset_name = "root_config"
+    bot._ensure_config_reload_watcher = MagicMock()
+    bot._ensure_vector_memory = MagicMock()
+    bot._schedule_export_rag_sync = AsyncMock()
+    old_client = SimpleNamespace(close=AsyncMock())
+    new_client = AsyncMock()
+    bot.ai_client = old_client
+
+    with patch("backend.bot.get_file_mtime", return_value=200.0), \
+         patch("backend.bot.compute_api_signature", return_value="new-signature"), \
+         patch("backend.bot.select_ai_client", new=AsyncMock(return_value=(new_client, "Ollama"))):
+        await bot._check_config_reload(now=0.0)
+
+    assert bot.ai_client is new_client
+    assert bot.runtime_preset_name == "Ollama"
+    old_client.close.assert_awaited_once()
+    bot.bot_manager.clear_issue.assert_called_once()
+    bot._schedule_export_rag_sync.assert_awaited_once_with(force=False)
     bot.bot_manager.notify_status_change.assert_awaited_once()
 
 
@@ -476,6 +537,43 @@ async def test_reload_runtime_config_without_new_config_uses_config_service_relo
     bot._ensure_config_reload_watcher.assert_called_once()
     bot.bot_manager.notify_status_change.assert_awaited_once()
     assert bot.bot_cfg["config_reload_mode"] == "watchdog"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_outgoing_reply_policy_uses_stable_chat_id_history():
+    bot = WeChatBot("config.yaml")
+    bot.bot_cfg = {
+        "reply_policy": {
+            "default_mode": "auto",
+            "new_contact_mode": "manual",
+            "group_mode": "whitelist_only",
+        }
+    }
+    bot.memory = MagicMock()
+
+    async def _has_messages(chat_id):
+        return chat_id == "friend:wxid_alice"
+
+    bot.memory.has_messages = AsyncMock(side_effect=_has_messages)
+    event = SimpleNamespace(
+        chat_name="Alice",
+        sender="Alice",
+        content="hello",
+        is_group=False,
+        raw_item=SimpleNamespace(chat_id="wxid_alice", sender_id="wxid_alice"),
+    )
+
+    result = await bot.evaluate_outgoing_reply_policy(
+        event=event,
+        user_text="hello",
+        reply_text="hi",
+    )
+
+    assert result["chat_id"] == "friend:wxid_alice"
+    assert result["should_queue"] is False
+    assert result["applied_rule"] == "default_mode"
+    observed = [call.args[0] for call in bot.memory.has_messages.await_args_list]
+    assert observed == ["friend:wxid_alice"]
 
 
 @pytest.mark.asyncio
@@ -822,6 +920,58 @@ async def test_process_and_reply_uses_direct_reply_when_invoke_has_content():
     bot._send_smart_reply.assert_awaited_once()
     bot.ai_client.finalize_request.assert_awaited_once()
     assert prepared.response_metadata.get("deadline_missed") is not True
+
+
+@pytest.mark.asyncio
+async def test_process_and_reply_reconciles_legacy_chat_aliases_before_prepare():
+    bot = WeChatBot("config.yaml")
+    bot.bot_cfg = {"reply_deadline_sec": 0}
+    bot.agent_cfg = {"enabled": True}
+    bot.sem = asyncio.Semaphore(1)
+    bot.wx_lock = asyncio.Lock()
+    bot.memory = MagicMock()
+    bot.memory.reconcile_chat_aliases = AsyncMock(return_value="friend:wxid_alice")
+    bot.vector_memory = None
+    bot.export_rag = None
+    bot.runtime_preset_name = "Ollama"
+    bot._record_reply_stats = MagicMock()
+    bot._set_ai_health = MagicMock()
+
+    prepared = SimpleNamespace(
+        timings={},
+        trace={},
+        response_metadata={},
+    )
+    bot.ai_client = SimpleNamespace(
+        prepare_request=AsyncMock(return_value=prepared),
+        invoke=AsyncMock(return_value="direct reply"),
+        finalize_request=AsyncMock(),
+        get_status=MagicMock(return_value={"engine": "langgraph"}),
+        model="test-model",
+    )
+    bot._send_smart_reply = AsyncMock(return_value="direct reply")
+    bot.ipc = MagicMock()
+    bot.bot_manager = _build_mock_bot_manager()
+    bot.evaluate_outgoing_reply_policy = AsyncMock(return_value={"should_queue": False})
+
+    event = SimpleNamespace(
+        chat_name="Alice",
+        sender="Alice",
+        content="hello",
+        is_group=False,
+        msg_type="text",
+        raw_item=SimpleNamespace(chat_id="wxid_alice", sender_id="wxid_alice"),
+        timestamp=None,
+    )
+
+    await bot._process_and_reply(MagicMock(), event, "hello", "hello")
+
+    bot.memory.reconcile_chat_aliases.assert_awaited_once_with(
+        "friend:wxid_alice",
+        ["friend:Alice"],
+        nickname="Alice",
+    )
+    bot.ai_client.prepare_request.assert_awaited_once()
 
 
 @pytest.mark.asyncio

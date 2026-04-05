@@ -138,3 +138,34 @@ async def test_export_rag_search_skips_group_chat():
 
     results = await rag.search(ai_client, "group:测试群", "你好")
     assert results == []
+
+
+@pytest.mark.asyncio
+async def test_export_rag_search_supports_legacy_display_name_alias():
+    vector_memory = DummyVectorMemory()
+    vector_memory.search_results = [
+        {
+            "text": "legacy style snippet",
+            "metadata": {"timestamp": 200},
+            "distance": 0.2,
+        }
+    ]
+    ai_client = SimpleNamespace(
+        embedding_model="text-embedding-3-small",
+        get_embedding=AsyncMock(return_value=[0.2, 0.1]),
+    )
+    rag = ExportChatRAG(vector_memory)
+    rag.update_config({
+        "export_rag_enabled": True,
+        "export_rag_top_k": 2,
+        "export_rag_min_score": 0.8,
+    })
+
+    results = await rag.search(
+        ai_client,
+        "friend:wxid_zhangsan",
+        "legacy question",
+        chat_id_aliases=["friend:张三"],
+    )
+
+    assert [item["text"] for item in results] == ["legacy style snippet"]

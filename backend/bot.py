@@ -30,6 +30,7 @@ from .core.pricing_catalog import get_pricing_catalog
 from .core.reply_quality_tracker import get_reply_quality_tracker
 from .core.reply_policy import (
     build_chat_id as build_reply_policy_chat_id,
+    build_chat_id_candidates as build_reply_policy_chat_id_candidates,
     evaluate_reply_policy,
     normalize_reply_policy,
 )
@@ -771,6 +772,7 @@ class WeChatBot:
                             f"AI preset {self.runtime_preset_name or 'unknown'} reloaded successfully",
                             success=True,
                         )
+                        self.bot_manager.clear_issue()
                         logging.info("配置更新，已重新加载 AI 客户端: %s", new_preset)
             if self.wx is not None and self._transport_reconnect_required(changed_paths):
                 reconnect_result = await self._reconnect_transport("配置热更新")
@@ -876,6 +878,7 @@ class WeChatBot:
                 f"AI preset {self.runtime_preset_name or 'unknown'} hot-switched successfully",
                 success=True,
             )
+            self.bot_manager.clear_issue()
             logging.info("已立即切换运行中 AI 客户端: %s", self.runtime_preset_name)
             messages.append(f"运行中的 AI 已立即切换到 {self.runtime_preset_name}")
         elif not messages:
@@ -1052,7 +1055,7 @@ class WeChatBot:
             )
             return
 
-        chat_id = f"group:{event.chat_name}" if event.is_group else f"friend:{event.chat_name}"
+        chat_id = build_reply_policy_chat_id(event)
         now = time.time()
         
         async with self.pending_merge_lock:
@@ -1430,6 +1433,24 @@ class WeChatBot:
             lock = asyncio.Lock()
             self.chat_locks[chat_id] = lock
         return lock
+
+    async def _reconcile_event_chat_identity(self, event: MessageEvent) -> str:
+        chat_id = build_reply_policy_chat_id(event)
+        if self.memory is None:
+            return chat_id
+        chat_id_candidates = build_reply_policy_chat_id_candidates(event)
+        aliases = [candidate for candidate in chat_id_candidates if candidate != chat_id]
+        if not aliases:
+            return chat_id
+        try:
+            return await self.memory.reconcile_chat_aliases(
+                chat_id,
+                aliases,
+                nickname=str(getattr(event, "chat_name", "") or "").strip(),
+            )
+        except Exception as exc:
+            logging.warning("会话标识迁移失败 [%s]: %s", chat_id, exc)
+            return chat_id
 
     def _get_pending_reply_lock(self, pending_id: int) -> asyncio.Lock:
         pending_key = int(pending_id)
@@ -1822,9 +1843,13 @@ class WeChatBot:
         reply_text: str,
     ) -> Dict[str, Any]:
         chat_id = build_reply_policy_chat_id(event)
+        chat_id_candidates = build_reply_policy_chat_id_candidates(event)
         has_existing_history = False
         if self.memory is not None:
-            has_existing_history = await self.memory.has_messages(chat_id)
+            for candidate in chat_id_candidates:
+                if await self.memory.has_messages(candidate):
+                    has_existing_history = True
+                    break
         return evaluate_reply_policy(
             event,
             bot_cfg=self.bot_cfg,

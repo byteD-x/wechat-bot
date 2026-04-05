@@ -1260,6 +1260,157 @@ class MemoryManager:
             "contact_prompt_last_message_count": int(profile.contact_prompt_last_message_count or 0),
         }
 
+    @staticmethod
+    def _normalize_chat_id_candidates(
+        primary_wx_id: str,
+        aliases: Optional[Iterable[str]] = None,
+    ) -> tuple[str, List[str]]:
+        primary = str(primary_wx_id or "").strip()
+        normalized_aliases: List[str] = []
+        for raw in list(aliases or []):
+            alias = str(raw or "").strip()
+            if not alias or alias == primary or alias in normalized_aliases:
+                continue
+            normalized_aliases.append(alias)
+        return primary, normalized_aliases
+
+    async def _get_user_profile_row(self, wx_id: str) -> Optional[Dict[str, Any]]:
+        wx_id = str(wx_id).strip()
+        if not wx_id:
+            return None
+        db = await self._get_db()
+        async with db.execute(
+            "SELECT * FROM user_profiles WHERE wx_id = ?",
+            (wx_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def reconcile_chat_aliases(
+        self,
+        primary_wx_id: str,
+        aliases: Optional[Iterable[str]] = None,
+        *,
+        nickname: str = "",
+    ) -> str:
+        primary, normalized_aliases = self._normalize_chat_id_candidates(
+            primary_wx_id,
+            aliases,
+        )
+        if not primary:
+            return normalized_aliases[0] if normalized_aliases else ""
+        if not normalized_aliases:
+            return primary
+
+        db = await self._get_db()
+        for alias in normalized_aliases:
+            await db.execute(
+                "UPDATE chat_history SET wx_id = ? WHERE wx_id = ?",
+                (primary, alias),
+            )
+            await db.execute(
+                "UPDATE pending_replies SET chat_id = ? WHERE chat_id = ?",
+                (primary, alias),
+            )
+            async with db.execute(
+                "SELECT task_type, payload, updated_at FROM background_backlog WHERE chat_id = ?",
+                (alias,),
+            ) as cursor:
+                backlog_rows = await cursor.fetchall()
+            for row in backlog_rows:
+                await db.execute(
+                    """
+                    INSERT INTO background_backlog (chat_id, task_type, payload, updated_at)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(chat_id, task_type) DO UPDATE SET
+                        payload = CASE
+                            WHEN excluded.updated_at >= background_backlog.updated_at
+                            THEN excluded.payload
+                            ELSE background_backlog.payload
+                        END,
+                        updated_at = CASE
+                            WHEN excluded.updated_at >= background_backlog.updated_at
+                            THEN excluded.updated_at
+                            ELSE background_backlog.updated_at
+                        END
+                    """,
+                    (
+                        primary,
+                        str(row["task_type"] or "").strip(),
+                        str(row["payload"] or "{}"),
+                        int(row["updated_at"] or 0),
+                    ),
+                )
+            await db.execute(
+                "DELETE FROM background_backlog WHERE chat_id = ?",
+                (alias,),
+            )
+        await db.commit()
+
+        preferred_nickname = str(nickname or "").strip()
+        primary_row = await self._get_user_profile_row(primary)
+        for alias in normalized_aliases:
+            alias_row = await self._get_user_profile_row(alias)
+            if not alias_row:
+                continue
+            if not primary_row:
+                await db.execute(
+                    "UPDATE user_profiles SET wx_id = ? WHERE wx_id = ?",
+                    (primary, alias),
+                )
+                await db.commit()
+                primary_row = await self._get_user_profile_row(primary)
+                continue
+
+            primary_profile = await self.get_user_profile(primary)
+            alias_profile = await self.get_user_profile(alias)
+            primary_prompt_at = int(primary_profile.contact_prompt_updated_at or 0)
+            alias_prompt_at = int(alias_profile.contact_prompt_updated_at or 0)
+            newer_prompt_profile = alias_profile if alias_prompt_at > primary_prompt_at else primary_profile
+            merged_facts = list(
+                dict.fromkeys(
+                    list(alias_profile.context_facts or [])
+                    + list(primary_profile.context_facts or [])
+                )
+            )
+            merged_history = list(alias_profile.emotion_history or []) + list(primary_profile.emotion_history or [])
+            merged_fields = {
+                "nickname": preferred_nickname or str(primary_profile.nickname or alias_profile.nickname or "").strip(),
+                "relationship": (
+                    str(primary_profile.relationship or "").strip()
+                    if str(primary_profile.relationship or "").strip() not in {"", "unknown"}
+                    else str(alias_profile.relationship or primary_profile.relationship or "unknown").strip()
+                ),
+                "personality": str(primary_profile.personality or alias_profile.personality or "").strip(),
+                "preferences": dict(primary_profile.preferences or alias_profile.preferences or {}),
+                "context_facts": merged_facts,
+                "last_emotion": (
+                    str(primary_profile.last_emotion or "").strip()
+                    if str(primary_profile.last_emotion or "").strip() not in {"", "neutral"}
+                    else str(alias_profile.last_emotion or primary_profile.last_emotion or "neutral").strip()
+                ),
+                "emotion_history": merged_history[-10:],
+                "profile_summary": str(primary_profile.profile_summary or alias_profile.profile_summary or "").strip(),
+                "contact_prompt": str(newer_prompt_profile.contact_prompt or "").strip(),
+                "contact_prompt_updated_at": int(newer_prompt_profile.contact_prompt_updated_at or 0),
+                "contact_prompt_source": str(newer_prompt_profile.contact_prompt_source or "").strip(),
+                "contact_prompt_last_message_count": max(
+                    int(primary_profile.contact_prompt_last_message_count or 0),
+                    int(alias_profile.contact_prompt_last_message_count or 0),
+                ),
+                "message_count": int(primary_profile.message_count or 0) + int(alias_profile.message_count or 0),
+            }
+            await self.update_user_profile(primary, **merged_fields)
+            await db.execute("DELETE FROM user_profiles WHERE wx_id = ?", (alias,))
+            await db.commit()
+            primary_row = await self._get_user_profile_row(primary)
+
+        if preferred_nickname:
+            primary_row = await self._get_user_profile_row(primary)
+            if primary_row and str(primary_row.get("nickname") or "").strip() != preferred_nickname:
+                await self.update_user_profile(primary, nickname=preferred_nickname)
+        return primary
+
     async def get_contact_profile(self, wx_id: str) -> Dict[str, Any]:
         profile = await self.get_user_profile(wx_id)
         return {

@@ -13,8 +13,39 @@ WHITELIST_ONLY_MODE = "whitelist_only"
 
 
 def build_chat_id(event: Any) -> str:
+    candidates = build_chat_id_candidates(event)
+    return candidates[0] if candidates else ""
+
+
+def build_chat_id_candidates(event: Any) -> list[str]:
+    is_group = bool(getattr(event, "is_group", False))
     chat_name = str(getattr(event, "chat_name", "") or "").strip()
-    return f"group:{chat_name}" if bool(getattr(event, "is_group", False)) else f"friend:{chat_name}"
+    raw_item = getattr(event, "raw_item", None)
+
+    stable_id = ""
+    if raw_item is not None:
+        stable_id = str(
+            getattr(raw_item, "chat_id", None)
+            or getattr(raw_item, "roomid", None)
+            or ""
+        ).strip()
+        if not stable_id and not is_group:
+            stable_id = str(
+                getattr(raw_item, "sender_id", None)
+                or getattr(raw_item, "sender", None)
+                or ""
+            ).strip()
+
+    prefix = "group" if is_group else "friend"
+    candidates: list[str] = []
+    for value in (stable_id, chat_name):
+        normalized = str(value or "").strip()
+        if not normalized:
+            continue
+        chat_id = f"{prefix}:{normalized}"
+        if chat_id not in candidates:
+            candidates.append(chat_id)
+    return candidates
 
 
 def normalize_reply_policy(policy: Any = None) -> Dict[str, Any]:
@@ -72,7 +103,8 @@ def evaluate_reply_policy(
 ) -> Dict[str, Any]:
     config = dict(bot_cfg or {})
     policy = normalize_reply_policy(config.get("reply_policy"))
-    chat_id = build_chat_id(event)
+    chat_ids = build_chat_id_candidates(event)
+    chat_id = chat_ids[0] if chat_ids else ""
     is_group = bool(getattr(event, "is_group", False))
 
     result: Dict[str, Any] = {
@@ -85,7 +117,14 @@ def evaluate_reply_policy(
         "policy": policy,
     }
 
-    override = _find_chat_override(policy, chat_id)
+    override = next(
+        (
+            matched
+            for candidate in chat_ids
+            if (matched := _find_chat_override(policy, candidate)) is not None
+        ),
+        None,
+    )
     override_mode = str((override or {}).get("mode") or "").strip().lower()
     if override_mode in {AUTO_MODE, MANUAL_MODE}:
         result["mode"] = override_mode
@@ -151,4 +190,3 @@ def evaluate_reply_policy(
         result["should_queue"] = True
         result["trigger_reason"] = "default_manual"
     return result
-

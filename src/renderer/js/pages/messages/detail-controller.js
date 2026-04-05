@@ -22,6 +22,17 @@ function getDocument(deps = {}) {
     return deps.documentObj || globalThis.document;
 }
 
+function getMessageChatName(message = {}) {
+    return String(
+        message.chat_display_name
+        || message.display_name
+        || message.chat_name
+        || message.sender_display_name
+        || message.sender
+        || ''
+    ).trim();
+}
+
 function buildRetrySection(documentObj, titleText, messageText, retryLabel, onRetry) {
     const root = documentObj.createElement('div');
     root.className = 'detail-group';
@@ -123,10 +134,12 @@ export async function openDetailModal(page, message, deps = {}) {
     };
 
     try {
+        const chatName = getMessageChatName(message);
         const [profileResult, pendingResult, replyPolicyResult] = await Promise.allSettled([
-            currentApi.getContactProfile(message.wx_id || ''),
+            currentApi.getContactProfile(message.wx_id || '', chatName),
             currentApi.listPendingReplies({
                 chatId: message.wx_id || '',
+                chatName,
                 status: 'pending',
                 limit: 20,
             }),
@@ -152,7 +165,11 @@ export async function openDetailModal(page, message, deps = {}) {
                 },
                 onSavePrompt: async (nextMessage, nextPrompt, previousProfile) => {
                     try {
-                        const saveResult = await currentApi.saveContactPrompt(nextMessage.wx_id || '', nextPrompt);
+                        const saveResult = await currentApi.saveContactPrompt(
+                            nextMessage.wx_id || '',
+                            nextPrompt,
+                            getMessageChatName(nextMessage),
+                        );
                         if (!saveResult?.success) {
                             throw new Error(saveResult?.message || MESSAGE_TEXT.contactPromptSaveFailed);
                         }

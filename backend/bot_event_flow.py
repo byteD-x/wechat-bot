@@ -5,6 +5,7 @@ import os
 import time
 from typing import Any, Dict, Optional
 
+from .core.reply_policy import build_chat_id
 from .core.bot_control import is_command_message, parse_control_command
 from .handlers.sender import send_message
 from .types import MessageEvent
@@ -61,7 +62,7 @@ def build_incoming_broadcast_payload(
 ) -> Dict[str, Any]:
     return {
         "direction": "incoming",
-        "chat_id": f"group:{event.chat_name}" if event.is_group else f"friend:{event.chat_name}",
+        "chat_id": build_chat_id(event),
         "chat_name": event.chat_name,
         "sender": event.sender,
         "content": event.content,

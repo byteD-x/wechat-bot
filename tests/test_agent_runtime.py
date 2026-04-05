@@ -200,7 +200,15 @@ class _DummyMemory:
 
 
 class _DummyExportRag:
-    async def search(self, ai_client, chat_id, query_text, *, priority="foreground"):
+    async def search(
+        self,
+        ai_client,
+        chat_id,
+        query_text,
+        *,
+        chat_id_aliases=None,
+        priority="foreground",
+    ):
         return [{"text": "style snippet"}]
 
     def build_memory_message(self, results):
@@ -221,9 +229,23 @@ class _SlowProfileMemory(_DummyMemory):
 
 
 class _SlowExportRag(_DummyExportRag):
-    async def search(self, ai_client, chat_id, query_text, *, priority="foreground"):
+    async def search(
+        self,
+        ai_client,
+        chat_id,
+        query_text,
+        *,
+        chat_id_aliases=None,
+        priority="foreground",
+    ):
         await asyncio.sleep(0.2)
-        return await super().search(ai_client, chat_id, query_text, priority=priority)
+        return await super().search(
+            ai_client,
+            chat_id,
+            query_text,
+            chat_id_aliases=chat_id_aliases,
+            priority=priority,
+        )
 
 
 class _DummyVectorMemory:

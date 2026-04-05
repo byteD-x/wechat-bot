@@ -514,16 +514,19 @@ class ApiService {
         })}`);
     }
 
-    async getContactProfile(chatId) {
-        const encoded = encodeURIComponent(String(chatId || '').trim());
-        return this.request(`/api/contact_profile?chat_id=${encoded}`);
+    async getContactProfile(chatId, chatName = '') {
+        return this.request(`/api/contact_profile${this._buildQueryString({
+            chat_id: chatId,
+            chat_name: chatName,
+        })}`);
     }
 
-    async saveContactPrompt(chatId, contactPrompt) {
+    async saveContactPrompt(chatId, contactPrompt, chatName = '') {
         return this.request('/api/contact_prompt', {
             method: 'POST',
             body: {
                 chat_id: chatId,
+                chat_name: chatName,
                 contact_prompt: contactPrompt
             }
         });
@@ -560,6 +563,7 @@ class ApiService {
     async listPendingReplies(params = {}) {
         return this.request(`/api/pending_replies${this._buildQueryString({
             chat_id: params.chatId,
+            chat_name: params.chatName,
             status: params.status,
             limit: params.limit,
         })}`);

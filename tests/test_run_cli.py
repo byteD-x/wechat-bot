@@ -244,7 +244,7 @@ def test_cmd_backup_restore_apply_blocks_when_runtime_service_running(monkeypatc
     payload = json.loads(capsys.readouterr().out)
     assert result == 1
     assert payload["success"] is False
-    assert "--apply is blocked" in payload["message"]
+    assert "检测到本地运行中的服务实例" in payload["message"]
     assert called["plan_called"] is False
 
 
@@ -349,3 +349,49 @@ def test_cmd_web_initializes_sse_ticket_when_missing(monkeypatch):
     assert result == 0
     assert called["run_server"] is True
     assert os.environ.get("WECHAT_BOT_SSE_TICKET")
+
+
+def test_print_backup_entry_uses_readable_chinese_labels(capsys):
+    run._print_backup_entry({
+        "mode": "quick",
+        "id": "quick-20260405",
+        "created_at": 1712299200,
+        "size_bytes": 2048,
+        "included_files": ["a", "b"],
+        "label": "pre-fix",
+        "path": "E:/Project/wechat-chat/data/backups/quick-20260405",
+    })
+
+    output = capsys.readouterr().out
+
+    assert "创建时间:" in output
+    assert "大小:" in output
+    assert "文件数:" in output
+    assert "标签:" in output
+    assert "路径:" in output
+
+
+def test_print_backup_validation_summary_uses_readable_chinese_labels(capsys):
+    run._print_backup_validation_summary(
+        "恢复预检",
+        {
+            "backup": {"id": "quick-20260405"},
+            "valid": False,
+            "included_files": ["a", "b"],
+            "missing_files": ["chat_memory.db"],
+            "invalid_files": ["backup_manifest.json"],
+            "checksum_missing_files": ["SHA256SUMS.txt"],
+            "checksum_mismatches": [{"path": "chat_exports/room-a.txt"}],
+        },
+        "quick-20260405",
+    )
+
+    output = capsys.readouterr().out
+
+    assert "恢复预检: quick-20260405" in output
+    assert "校验结果: 失败" in output
+    assert "包含文件: 2" in output
+    assert "缺失文件: chat_memory.db" in output
+    assert "无效文件: backup_manifest.json" in output
+    assert "缺少校验和: SHA256SUMS.txt" in output
+    assert "校验和不匹配: chat_exports/room-a.txt" in output

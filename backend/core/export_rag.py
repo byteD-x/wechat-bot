@@ -209,6 +209,7 @@ class ExportChatRAG:
         chat_id: str,
         query_text: str,
         *,
+        chat_id_aliases: Optional[Sequence[str]] = None,
         priority: str = "foreground",
     ) -> List[Dict[str, Any]]:
         if not self.enabled or not self.vector_memory or not ai_client:
@@ -223,12 +224,23 @@ class ExportChatRAG:
         if not embedding:
             return []
 
-        results = await asyncio.to_thread(
-            self.vector_memory.search,
-            n_results=max(self.top_k * 2, self.top_k),
-            filter_meta={"chat_id": chat_id, "source": "export_chat"},
-            query_embedding=embedding,
-        )
+        candidate_chat_ids: List[str] = []
+        for candidate in [chat_id, *(list(chat_id_aliases or []))]:
+            normalized = str(candidate or "").strip()
+            if not normalized or not normalized.startswith("friend:") or normalized in candidate_chat_ids:
+                continue
+            candidate_chat_ids.append(normalized)
+
+        results: List[Dict[str, Any]] = []
+        for candidate_chat_id in candidate_chat_ids:
+            matched = await asyncio.to_thread(
+                self.vector_memory.search,
+                n_results=max(self.top_k * 2, self.top_k),
+                filter_meta={"chat_id": candidate_chat_id, "source": "export_chat"},
+                query_embedding=embedding,
+            )
+            if matched:
+                results.extend(list(matched))
         if not results:
             return []
 

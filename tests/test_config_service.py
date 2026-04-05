@@ -70,6 +70,63 @@ def test_config_service_save_effective_config_writes_shared_json(tmp_path, monke
     assert persisted["schema_version"] == 1
 
 
+def test_config_service_save_effective_config_rebases_on_latest_file(tmp_path, monkeypatch):
+    config_path, _, data_root = _write_shared_config(
+        tmp_path,
+        monkeypatch,
+        payload={
+            **build_default_config(data_root=tmp_path / "seed-data"),
+            "api": {
+                **build_default_config(data_root=tmp_path / "seed-data")["api"],
+                "active_preset": "OpenAI",
+                "presets": [_make_preset()],
+            },
+        },
+    )
+    service = ConfigService()
+    service.get_snapshot(config_path=str(config_path))
+
+    latest_config = validate_shared_config(
+        {
+            **build_default_config(data_root=data_root),
+            "api": {
+                **build_default_config(data_root=data_root)["api"],
+                "active_preset": "Ollama",
+                "presets": [
+                    {
+                        "name": "Ollama",
+                        "provider_id": "ollama",
+                        "alias": "",
+                        "base_url": "http://127.0.0.1:11434/v1",
+                        "api_key": "",
+                        "model": "deepseek-v3.2:cloud",
+                        "embedding_model": "",
+                        "timeout_sec": 20.0,
+                        "max_retries": 1,
+                        "temperature": 0.6,
+                        "max_tokens": 512,
+                        "allow_empty_key": True,
+                    }
+                ],
+            },
+        },
+        data_root=data_root,
+    )
+    config_path.write_text(json.dumps(latest_config, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    snapshot = service.save_effective_config(
+        {"services": {"growth_tasks_enabled": True}},
+        config_path=str(config_path),
+    )
+
+    persisted = json.loads(config_path.read_text(encoding="utf-8"))
+    assert snapshot.api["active_preset"] == "Ollama"
+    assert snapshot.api["presets"][0]["name"] == "Ollama"
+    assert persisted["api"]["active_preset"] == "Ollama"
+    assert persisted["api"]["presets"][0]["name"] == "Ollama"
+    assert persisted["services"]["growth_tasks_enabled"] is True
+
+
 def test_config_service_prunes_removed_legacy_paths(tmp_path, monkeypatch):
     config_path, _, _ = _write_shared_config(tmp_path, monkeypatch)
     service = ConfigService()
@@ -235,10 +292,11 @@ def test_config_cli_probe_success_without_web_service(tmp_path, monkeypatch, cap
 
     exit_code = cmd_probe(Namespace(base_path=str(config_path), stdin=False, preset_name=""))
     payload = json.loads(capsys.readouterr().out)
+    persisted = json.loads(config_path.read_text(encoding="utf-8"))
 
     assert exit_code == 0
     assert payload["success"] is True
-    assert payload["preset_name"] == "OpenAI"
+    assert payload["preset_name"] == persisted["api"]["active_preset"]
     assert "已验证服务可访问" in payload["message"]
 
 

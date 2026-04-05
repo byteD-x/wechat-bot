@@ -964,6 +964,32 @@ async def _expire_pending_replies(mem_mgr: Any, reply_policy: dict) -> None:
         await manager.bot.refresh_pending_reply_stats(notify=False)
 
 
+async def _reconcile_requested_chat_identity(
+    mem_mgr: Any,
+    *,
+    chat_id: str,
+    chat_name: str = "",
+) -> str:
+    normalized_chat_id = str(chat_id or "").strip()
+    normalized_chat_name = str(chat_name or "").strip()
+    if not normalized_chat_id or not normalized_chat_name or ":" not in normalized_chat_id:
+        return normalized_chat_id
+    prefix = str(normalized_chat_id.split(":", 1)[0] or "").strip()
+    if not prefix:
+        return normalized_chat_id
+    alias_chat_id = f"{prefix}:{normalized_chat_name}"
+    if alias_chat_id == normalized_chat_id:
+        return normalized_chat_id
+    reconcile = getattr(mem_mgr, "reconcile_chat_aliases", None)
+    if not callable(reconcile):
+        return normalized_chat_id
+    return await reconcile(
+        normalized_chat_id,
+        [alias_chat_id],
+        nickname=normalized_chat_name,
+    )
+
+
 def _parse_bool(value: Any, *, default: bool = False) -> bool:
     if value is None:
         return default
@@ -1409,10 +1435,16 @@ async def get_contact_profile():
     """Endpoint handler."""
     try:
         chat_id = str(request.args.get("chat_id", "", type=str) or "").strip()
+        chat_name = str(request.args.get("chat_name", "", type=str) or "").strip()
         if not chat_id:
             return jsonify({"success": False, "message": "chat_id is required"}), 400
 
         mem_mgr = manager.get_memory_manager()
+        chat_id = await _reconcile_requested_chat_identity(
+            mem_mgr,
+            chat_id=chat_id,
+            chat_name=chat_name,
+        )
         profile = await mem_mgr.get_contact_profile(chat_id)
         return jsonify({"success": True, "profile": profile})
     except Exception as e:
@@ -1426,6 +1458,7 @@ async def save_contact_prompt():
     try:
         data = await request.get_json(silent=True) or {}
         chat_id = str(data.get("chat_id") or "").strip()
+        chat_name = str(data.get("chat_name") or "").strip()
         contact_prompt = extract_editable_system_prompt(
             str(data.get("contact_prompt") or "").strip()
         )
@@ -1435,6 +1468,11 @@ async def save_contact_prompt():
             return jsonify({"success": False, "message": "contact_prompt is required"}), 400
 
         mem_mgr = manager.get_memory_manager()
+        chat_id = await _reconcile_requested_chat_identity(
+            mem_mgr,
+            chat_id=chat_id,
+            chat_name=chat_name,
+        )
         profile = await mem_mgr.save_contact_prompt(
             chat_id,
             contact_prompt,
@@ -1589,12 +1627,18 @@ async def list_pending_replies():
     """Return queued replies awaiting manual review."""
     try:
         chat_id = str(request.args.get("chat_id", "", type=str) or "").strip()
+        chat_name = str(request.args.get("chat_name", "", type=str) or "").strip()
         status = str(request.args.get("status", "pending", type=str) or "pending").strip().lower()
         limit = max(1, min(int(request.args.get("limit", 50, type=int) or 50), 200))
 
         snapshot = config_service.get_snapshot()
         reply_policy = normalize_reply_policy(snapshot.bot.get("reply_policy"))
         mem_mgr = manager.get_memory_manager()
+        chat_id = await _reconcile_requested_chat_identity(
+            mem_mgr,
+            chat_id=chat_id,
+            chat_name=chat_name,
+        )
         await _expire_pending_replies(mem_mgr, reply_policy)
         items = await mem_mgr.list_pending_replies(
             chat_id=chat_id,

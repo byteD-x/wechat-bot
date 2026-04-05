@@ -148,6 +148,8 @@ def mock_manager():
             "created_at": 1,
             "resolved_at": 2,
         }
+    async def async_reconcile_chat_aliases(chat_id, aliases, *, nickname=""):
+        return chat_id
     mem_mgr.get_message_page = MagicMock(side_effect=async_get_message_page)
     mem_mgr.list_chat_summaries = MagicMock(side_effect=async_list_chat_summaries)
     mem_mgr.get_contact_profile = MagicMock(side_effect=async_get_contact_profile)
@@ -159,6 +161,7 @@ def mock_manager():
     mem_mgr.list_pending_replies = AsyncMock(side_effect=async_list_pending_replies)
     mem_mgr.get_pending_reply = AsyncMock(side_effect=async_get_pending_reply)
     mem_mgr.resolve_pending_reply = AsyncMock(side_effect=async_resolve_pending_reply)
+    mem_mgr.reconcile_chat_aliases = AsyncMock(side_effect=async_reconcile_chat_aliases)
     manager.get_memory_manager.return_value = mem_mgr
     manager.bot.approve_pending_reply = AsyncMock(return_value={"success": True, "pending_reply": {"id": 7, "status": "approved"}})
     manager.bot.reject_pending_reply = AsyncMock(return_value={"success": True, "pending_reply": {"id": 7, "status": "rejected"}})
@@ -681,13 +684,18 @@ async def test_api_messages_preserves_display_name_fields(client, mock_manager):
 
 @pytest.mark.asyncio
 async def test_api_contact_profile(client, mock_manager):
-    response = await client.get('/api/contact_profile?chat_id=friend:alice')
+    response = await client.get('/api/contact_profile?chat_id=friend:wxid_alice&chat_name=Alice')
 
     assert response.status_code == 200
     data = await response.get_json()
     assert data["success"] is True
-    assert data["profile"]["chat_id"] == "friend:alice"
-    mock_manager.get_memory_manager().get_contact_profile.assert_called_once_with("friend:alice")
+    assert data["profile"]["chat_id"] == "friend:wxid_alice"
+    mock_manager.get_memory_manager().reconcile_chat_aliases.assert_awaited_once_with(
+        "friend:wxid_alice",
+        ["friend:Alice"],
+        nickname="Alice",
+    )
+    mock_manager.get_memory_manager().get_contact_profile.assert_called_once_with("friend:wxid_alice")
 
 
 @pytest.mark.asyncio
@@ -695,15 +703,20 @@ async def test_api_contact_prompt_save(client, mock_manager):
     raw_prompt = compose_system_prompt_template("新的联系人 Prompt")
     response = await client.post(
         '/api/contact_prompt',
-        json={"chat_id": "friend:alice", "contact_prompt": raw_prompt},
+        json={"chat_id": "friend:wxid_alice", "chat_name": "Alice", "contact_prompt": raw_prompt},
     )
 
     assert response.status_code == 200
     data = await response.get_json()
     assert data["success"] is True
+    mock_manager.get_memory_manager().reconcile_chat_aliases.assert_awaited_once_with(
+        "friend:wxid_alice",
+        ["friend:Alice"],
+        nickname="Alice",
+    )
     assert data["profile"]["contact_prompt"] == "新的联系人 Prompt"
     mock_manager.get_memory_manager().save_contact_prompt.assert_called_once_with(
-        "friend:alice",
+        "friend:wxid_alice",
         "新的联系人 Prompt",
         source="user_edit",
     )
@@ -1835,7 +1848,7 @@ async def test_api_pending_replies_list_and_approve(client, mock_manager):
     )
 
     with patch.object(api_module.config_service, "get_snapshot", return_value=snapshot):
-        list_response = await client.get("/api/pending_replies?chat_id=friend:alice&status=pending&limit=20")
+        list_response = await client.get("/api/pending_replies?chat_id=friend:wxid_alice&chat_name=Alice&status=pending&limit=20")
         approve_response = await client.post(
             "/api/pending_replies/7/approve",
             json={"edited_reply": "修改后回复"},
@@ -1844,7 +1857,12 @@ async def test_api_pending_replies_list_and_approve(client, mock_manager):
     assert list_response.status_code == 200
     list_data = await list_response.get_json()
     assert list_data["success"] is True
-    assert list_data["items"][0]["chat_id"] == "friend:alice"
+    assert list_data["items"][0]["chat_id"] == "friend:wxid_alice"
+    mock_manager.get_memory_manager().reconcile_chat_aliases.assert_awaited_once_with(
+        "friend:wxid_alice",
+        ["friend:Alice"],
+        nickname="Alice",
+    )
 
     assert approve_response.status_code == 200
     approve_data = await approve_response.get_json()

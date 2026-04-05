@@ -14,6 +14,7 @@ from ..schemas import EmotionResult
 from ..utils.common import as_float, as_int
 from ..utils.config import is_placeholder_key
 from ..utils.logging import build_stage_log_message
+from .reply_policy import build_chat_id_candidates
 from .provider_compat import (
     build_anthropic_headers,
     build_anthropic_messages_payload,
@@ -1807,10 +1808,17 @@ class AgentRuntime:
         recent_context = await memory.get_recent_context(chat_id, limit=12)
         export_results: List[Dict[str, Any]] = []
         if export_rag is not None and self.bot_cfg.get("export_rag_enabled", False):
+            export_aliases: List[str] = []
+            nickname = str(getattr(user_profile, "nickname", "") or "").strip()
+            if nickname:
+                alias_chat_id = f"friend:{nickname}"
+                if alias_chat_id != chat_id:
+                    export_aliases.append(alias_chat_id)
             export_results = await export_rag.search(
                 self,
                 chat_id,
                 user_text or reply_text,
+                chat_id_aliases=export_aliases,
                 priority="background",
             )
         existing_prompt = str(getattr(user_profile, "contact_prompt", "") or "").strip()
@@ -2341,10 +2349,16 @@ class AgentRuntime:
         recent_context = await memory.get_recent_context(chat_id, limit=12)
         export_results: List[Dict[str, Any]] = []
         if export_rag is not None and self.bot_cfg.get("export_rag_enabled", False):
+            export_aliases = [
+                candidate
+                for candidate in build_chat_id_candidates(prepared.event)
+                if str(candidate or "").strip() != chat_id
+            ]
             export_results = await export_rag.search(
                 self,
                 chat_id,
                 prepared.user_text or reply_text,
+                chat_id_aliases=export_aliases,
             )
 
         base_prompt = self._resolve_contact_prompt_base(prepared.event, user_profile)

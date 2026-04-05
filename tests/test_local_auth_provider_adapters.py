@@ -30,11 +30,11 @@ def test_normalize_text_decodes_gb18030_chinese_bytes():
 
 def test_safe_read_json_supports_utf16_chinese_payload(tmp_path):
     payload_path = tmp_path / "utf16-auth.json"
-    payload_path.write_bytes(json.dumps({"name": "涓枃鐢ㄦ埛"}, ensure_ascii=False).encode("utf-16"))
+    payload_path.write_bytes(json.dumps({"name": "中文用户"}, ensure_ascii=False).encode("utf-16"))
 
     loaded = safe_read_json(payload_path)
 
-    assert loaded["name"] == "涓枃鐢ㄦ埛"
+    assert loaded["name"] == "中文用户"
 
 
 def test_openai_codex_cli_command_decodes_chinese_stdout(monkeypatch):
@@ -684,4 +684,3 @@ def test_yuanbao_session_provider_skips_binary_noise_without_warning(monkeypatch
         if "Failed to read auth state file" in record.message
         or "Failed to read auth state text file" in record.message
     ]
-

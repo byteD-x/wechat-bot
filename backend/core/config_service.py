@@ -137,9 +137,9 @@ class ConfigService:
 
         resolved = os.path.abspath(config_path or _default_config_path())
         with self._lock:
-            current_snapshot = self._snapshots.get(resolved)
-            if current_snapshot is None:
-                current_snapshot = self._reload_locked(resolved)
+            # Rebase persisted writes on the latest on-disk config so small patches
+            # do not resurrect stale cached presets or other outdated fields.
+            current_snapshot = self._reload_locked(resolved)
             current_config = current_snapshot.to_dict()
             merged = self._merge_patch(current_config, deepcopy(patch))
             self._prune_removed_paths(merged)

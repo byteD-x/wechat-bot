@@ -248,6 +248,59 @@ def _is_local_runtime_service_running(*, host: str = "127.0.0.1", port: int = 50
                 pass
 
 
+def _format_backup_mode(mode: str) -> str:
+    normalized = str(mode or "").strip().lower()
+    if normalized == "quick":
+        return "quick"
+    if normalized == "full":
+        return "full"
+    return normalized or "unknown"
+
+
+def _join_backup_paths(values) -> str:
+    items = [str(value or "").strip() for value in list(values or []) if str(value or "").strip()]
+    return ", ".join(items)
+
+
+def _print_backup_entry(item: dict) -> None:
+    print(f"[{_format_backup_mode(item.get('mode')).upper()}] {str(item.get('id') or '-')}")
+    print(
+        f"  创建时间: {_format_timestamp(item.get('created_at'))} | "
+        f"大小: {_format_size(item.get('size_bytes'))} | "
+        f"文件数: {len(list(item.get('included_files') or []))}"
+    )
+    if item.get("label"):
+        print(f"  标签: {item.get('label')}")
+    print(f"  路径: {item.get('path')}")
+
+
+def _print_backup_validation_summary(title: str, payload: dict, backup_ref: str) -> None:
+    backup = dict(payload.get("backup") or {})
+    print(f"{title}: {backup.get('id', backup_ref)}")
+    print(f"校验结果: {'通过' if payload.get('valid') else '失败'}")
+    print(f"包含文件: {len(list(payload.get('included_files') or []))}")
+
+    missing_files = _join_backup_paths(payload.get("missing_files"))
+    if missing_files:
+        print(f"缺失文件: {missing_files}")
+
+    invalid_files = _join_backup_paths(payload.get("invalid_files"))
+    if invalid_files:
+        print(f"无效文件: {invalid_files}")
+
+    checksum_missing_files = _join_backup_paths(payload.get("checksum_missing_files"))
+    if checksum_missing_files:
+        print(f"缺少校验和: {checksum_missing_files}")
+
+    mismatch_paths = _join_backup_paths(
+        item.get("path")
+        for item in list(payload.get("checksum_mismatches") or [])
+        if isinstance(item, dict) and item.get("path")
+    )
+    if mismatch_paths:
+        print(f"校验和不匹配: {mismatch_paths}")
+
+
 def cmd_backup_list(args: argparse.Namespace) -> int:
     service = _build_backup_service()
     payload = service.list_backups(limit=max(1, int(getattr(args, "limit", 20) or 20)))
@@ -263,25 +316,14 @@ def cmd_backup_list(args: argparse.Namespace) -> int:
         print("No backups found.")
     else:
         for item in backups:
-            print(
-                f"[{str(item.get('mode') or '').upper() or 'UNKNOWN'}] "
-                f"{str(item.get('id') or '-')}"
-            )
-            print(
-                f"  闂傚倸鍊风粈渚€骞夐敍鍕殰婵°倕鍟伴惌娆撴煙鐎电啸缁惧彞绮欓弻鐔煎箲閹伴潧娈紓渚囧亜缁夊綊寮诲☉銏╂晝闁挎繂妫涢ˇ銊╂⒑? {_format_timestamp(item.get('created_at'))} | "
-                f"濠电姷鏁告慨浼村垂瑜版帗鍋夐柕蹇嬪€曠粈鍐┿亜韫囨挻鍣芥俊? {_format_size(item.get('size_bytes'))} | "
-                f"闂傚倸鍊风粈渚€骞栭锕€纾圭紒瀣紩濞差亝鏅查柛娑变簼閻庡姊洪棃娑氱疄闁稿﹥娲熷? {len(list(item.get('included_files') or []))}"
-            )
-            if item.get("label"):
-                print(f"  闂傚倸鍊风粈渚€骞栭銈囩煋闁哄鍤氬ú顏勎╅柍鍝勶攻閺? {item.get('label')}")
-            print(f"  闂傚倷娴囧畷鍨叏瀹曞洦濯伴柨鏇炲€搁崹鍌炴煙濞堝灝鏋熸い? {item.get('path')}")
+            _print_backup_entry(item)
 
     print()
     print("Summary")
     print(
-        f"- 闂傚倸鍊风粈渚€骞栭锔藉亱闁告劦鍠栫壕濠氭煙閹规劦鍤欑紒?quick: {_format_timestamp(summary.get('latest_quick_backup_at'))}\n"
-        f"- 闂傚倸鍊风粈渚€骞栭锔藉亱闁告劦鍠栫壕濠氭煙閹规劦鍤欑紒?full: {_format_timestamp(summary.get('latest_full_backup_at'))}\n"
-        f"- 闂傚倸鍊风粈渚€骞栭锔藉亱闁告劦鍠栫壕濠氭煙閸撗呭笡闁绘挻鐩弻娑氫沪閸撗€濮囩紓浣芥硾瀵爼濡甸崟顖涙櫆閻犲洦褰冮～顏嗙磽娴ｇ鈧湱鏁敓鐘茬濠电姴鍟欢鐐烘煕椤愶絿鐭嬮柟鐧哥秮濮? {_format_size(summary.get('latest_backup_size_bytes'))}"
+        f"- 最近 quick 备份: {_format_timestamp(summary.get('latest_quick_backup_at'))}\n"
+        f"- 最近 full 备份: {_format_timestamp(summary.get('latest_full_backup_at'))}\n"
+        f"- 最新备份大小: {_format_size(summary.get('latest_backup_size_bytes'))}"
     )
     return 0
 
@@ -299,10 +341,10 @@ def cmd_backup_create(args: argparse.Namespace) -> int:
     if bool(getattr(args, "json", False)):
         return _print_json(payload)
 
-    print(f"闂備浇顕уù鐑藉箠閹捐绠熼梽鍥Φ閹版澘绀冩い鏃傚帶閻庮參姊洪崨濠庢畼闁稿孩鍔欏畷?{backup.get('mode')} 濠电姷鏁告慨浼村垂閻撳簶鏋栨繛鎴炩棨濞差亝鏅插璺猴龚閸? {backup.get('id')}")
-    print(f"闂傚倷娴囧畷鍨叏瀹曞洦濯伴柨鏇炲€搁崹鍌炴煙濞堝灝鏋熸い? {backup.get('path')}")
-    print(f"濠电姷鏁告慨浼村垂瑜版帗鍋夐柕蹇嬪€曠粈鍐┿亜韫囨挻鍣芥俊? {_format_size(backup.get('size_bytes'))}")
-    print(f"闂傚倸鍊风粈渚€骞栭锕€纾圭紒瀣紩濞差亝鏅查柛娑变簼閻庡姊洪棃娑氱疄闁稿﹥娲熷? {len(list(backup.get('included_files') or []))}")
+    print(f"已创建 {_format_backup_mode(backup.get('mode'))} 备份: {backup.get('id')}")
+    print(f"路径: {backup.get('path')}")
+    print(f"大小: {_format_size(backup.get('size_bytes'))}")
+    print(f"文件数: {len(list(backup.get('included_files') or []))}")
     return 0
 
 
@@ -343,7 +385,7 @@ def cmd_backup_verify(args: argparse.Namespace) -> int:
         }
         if bool(getattr(args, "json", False)):
             return _print_json_result(payload, success=False)
-        print(f"濠电姷鏁告慨浼村垂閻撳簶鏋栨繛鎴炩棨濞差亝鏅插璺猴龚閸╃偤姊洪棃娑氬妞わ富鍨跺畷姗€鍩€椤掑嫭鈷戦悹鎭掑妼閺嬫柨鈹戦鐓庢Щ闁伙絿鍏橀弫鎰板椽娴ｅ搫鏁搁梻浣筋嚃閸ㄨ鲸绔熼崱娆掑С闁秆勵殕閸? {exc}")
+        print(f"备份校验失败: {exc}")
         return 1
 
     payload = {
@@ -354,22 +396,12 @@ def cmd_backup_verify(args: argparse.Namespace) -> int:
         "invalid_files": list(verification.get("invalid_files") or []),
         "checksum_missing_files": list(verification.get("checksum_missing_files") or []),
         "checksum_mismatches": list(verification.get("checksum_mismatches") or []),
+        "valid": bool(verification.get("valid")),
     }
     if bool(getattr(args, "json", False)):
         return _print_json_result(payload, success=bool(verification.get("valid")))
 
-    print(f"濠电姷鏁告慨浼村垂閻撳簶鏋栨繛鎴炩棨濞差亝鏅插璺猴龚閸╃偤姊洪棃娑氬妞わ富鍨跺畷姗€鍩€椤掑嫭鈷戦悹鎭掑妼閺嬫柨鈹戦鐓庢Щ闁伙絿鍏橀弫鎰緞鐎ｎ亖鍋撻悽鍛婄厽闁绘柨鎼。鍏肩節閳ь剚瀵肩€涙鍘? {verification.get('backup', {}).get('id', backup_ref)}")
-    print(f"Valid: {'yes' if verification.get('valid') else 'no'}")
-    print(f"闂傚倸鍊风粈渚€骞栭锕€纾圭紒瀣紩濞差亝鏅查柛娑变簼閻庡姊洪棃娑氱疄闁稿﹥娲熷? {len(list(verification.get('included_files') or []))}")
-    if verification.get("missing_files"):
-        print(f"缂傚倸鍊搁崐鎼佸磹閹间礁纾归柟闂寸缁犺銇勯幇鍓佺暠濡楀懘姊虹涵鍛涧缂佺姵鍨佃灋婵せ鍋撻柡灞剧洴婵＄兘顢涢悙鎼偓宥咁渻? {', '.join(verification.get('missing_files') or [])}")
-    if verification.get("invalid_files"):
-        print(f"闂傚倸鍊搁崐鎼佸磹閹间焦鍋嬮煫鍥ㄧ☉绾惧鏌ｉ幇顒備粵闁稿繑绮撻弻娑㈠箻閼碱剙濡介悗瑙勬礀椤︿即濡甸崟顖氬唨闁靛濡囧▓銈囩磽? {', '.join(verification.get('invalid_files') or [])}")
-    if verification.get("checksum_missing_files"):
-        print(f"缂傚倸鍊搁崐鎼佸磹閹间礁纾归柟闂寸缁犺銇勯幇鍫曟闁稿骸绉甸妵鍕冀椤愵澀绮堕梺鍛婂姀閸嬫捇姊绘担鑺ョ《闁哥姵鎸婚幈銊ョ暋閹殿喗娈鹃梺鎸庣箓椤︿即鎮? {', '.join(verification.get('checksum_missing_files') or [])}")
-    if verification.get("checksum_mismatches"):
-        mismatch_paths = [item.get("path") for item in verification.get("checksum_mismatches") or [] if item.get("path")]
-        print(f"闂傚倸鍊风粈渚€骞栭銈囩煓闁告洦鍘藉畷鍙夌節闂堟侗鍎愰柛瀣戠换娑㈠幢濡纰嶅┑锛勫仒缁瑩骞冨鈧幃娆戞崉鏉炵増鐫忛梻浣藉吹閸犳劗鎹㈤崼銉ヨ摕婵炴垯鍨归崘鈧悷婊冪箳缁柨煤椤忓懐鍘? {', '.join(mismatch_paths)}")
+    _print_backup_validation_summary("备份校验", payload, backup_ref)
     return 0 if verification.get("valid") else 1
 
 
@@ -381,11 +413,11 @@ def cmd_backup_restore(args: argparse.Namespace) -> int:
 
     apply_restore = bool(getattr(args, "apply", False))
     allow_running_service = bool(getattr(args, "allow_running_service", False))
-    warning = "CLI restore is intended for local maintenance. Use --apply only when runtime is stopped."
+    warning = "CLI 默认仅预览恢复计划，不会写入工作区；如需执行恢复，请显式传入 --apply。"
     if apply_restore and not allow_running_service and _is_local_runtime_service_running():
         block_message = (
-            "Runtime services are still running; --apply is blocked by default. "
-            "Stop services first or explicitly pass --allow-running-service."
+            "检测到本地运行中的服务实例。为避免运行时热恢复，请先停止服务；"
+            "如确认风险可控，再追加 --allow-running-service。"
         )
         payload = {
             "success": False,
@@ -422,26 +454,16 @@ def cmd_backup_restore(args: argparse.Namespace) -> int:
         }
         if bool(getattr(args, "json", False)):
             return _print_json_result(payload, success=False)
-        print(f"闂傚倸鍊峰ù鍥敋閺嶎厼鍌ㄧ憸鐗堝笒閸ㄥ倻鎲搁悧鍫濆惞闁搞儺鍓欓惌妤€顭块懜鐢点€掗柣顓燁殜濮婃椽宕ㄦ繝鍐槱闂佸憡鎼粻鎴︼綖韫囨稑绠氱憸婊堟偄閸℃稒鐓欐い鏍ㄧ☉椤ュ绱掗妸銉﹀仴闁? {exc}")
+        print(f"恢复预检失败: {exc}")
         print(warning)
         return 1
 
     if not apply_restore:
         payload = _build_restore_payload(plan, dry_run=True, warning=warning)
+        payload["valid"] = bool(plan.get("valid"))
         if bool(getattr(args, "json", False)):
             return _print_json_result(payload, success=bool(plan.get("valid")))
-        print(f"闂傚倸鍊峰ù鍥敋閺嶎厼鍌ㄧ憸鐗堝笒閸ㄥ倻鎲搁悧鍫濆惞闁搞儺鍓欓惌妤€顭块懜鐢点€掗柣顓燁殜濮婃椽宕ㄦ繝鍐槱闂佸憡鎼粻鎴︼綖韫囨柣鍋呴柛鎰ㄦ櫅閳ь剛鏁婚弻锝夋偄閸濆嫷鏆┑鐘亾濞寸厧鐡ㄩ悡? {plan.get('backup', {}).get('id', backup_ref)}")
-        print(f"Valid: {'yes' if plan.get('valid') else 'no'}")
-        print(f"闂傚倸鍊风粈渚€骞栭锕€纾圭紒瀣紩濞差亝鏅查柛娑变簼閻庡姊洪棃娑氱疄闁稿﹥娲熷? {len(list(plan.get('included_files') or []))}")
-        if plan.get("missing_files"):
-            print(f"缂傚倸鍊搁崐鎼佸磹閹间礁纾归柟闂寸缁犺銇勯幇鍓佺暠濡楀懘姊虹涵鍛涧缂佺姵鍨佃灋婵せ鍋撻柡灞剧洴婵＄兘顢涢悙鎼偓宥咁渻? {', '.join(plan.get('missing_files') or [])}")
-        if plan.get("invalid_files"):
-            print(f"闂傚倸鍊搁崐鎼佸磹閹间焦鍋嬮煫鍥ㄧ☉绾惧鏌ｉ幇顒備粵闁稿繑绮撻弻娑㈠箻閼碱剙濡介悗瑙勬礀椤︿即濡甸崟顖氬唨闁靛濡囧▓銈囩磽? {', '.join(plan.get('invalid_files') or [])}")
-        if plan.get("checksum_missing_files"):
-            print(f"缂傚倸鍊搁崐鎼佸磹閹间礁纾归柟闂寸缁犺銇勯幇鍫曟闁稿骸绉甸妵鍕冀椤愵澀绮堕梺鍛婂姀閸嬫捇姊绘担鑺ョ《闁哥姵鎸婚幈銊ョ暋閹殿喗娈鹃梺鎸庣箓椤︿即鎮? {', '.join(plan.get('checksum_missing_files') or [])}")
-        if plan.get("checksum_mismatches"):
-            mismatch_paths = [item.get("path") for item in plan.get("checksum_mismatches") or [] if item.get("path")]
-            print(f"闂傚倸鍊风粈渚€骞栭銈囩煓闁告洦鍘藉畷鍙夌節闂堟侗鍎愰柛瀣戠换娑㈠幢濡纰嶅┑锛勫仒缁瑩骞冨鈧幃娆戞崉鏉炵増鐫忛梻浣藉吹閸犳劗鎹㈤崼銉ヨ摕婵炴垯鍨归崘鈧悷婊冪箳缁柨煤椤忓懐鍘? {', '.join(mismatch_paths)}")
+        _print_backup_validation_summary("恢复预检", payload, backup_ref)
         print(warning)
         return 0 if plan.get("valid") else 1
 
@@ -449,19 +471,12 @@ def cmd_backup_restore(args: argparse.Namespace) -> int:
     try:
         if not plan.get("valid"):
             payload = _build_restore_payload(plan, dry_run=False, warning=warning)
+            payload["valid"] = False
             if bool(getattr(args, "json", False)):
                 _print_json(payload)
             else:
-                print("Restore aborted because plan validation did not pass.")
-                if plan.get("missing_files"):
-                    print(f"缂傚倸鍊搁崐鎼佸磹閹间礁纾归柟闂寸缁犺銇勯幇鍓佺暠濡楀懘姊虹涵鍛涧缂佺姵鍨佃灋婵せ鍋撻柡灞剧洴婵＄兘顢涢悙鎼偓宥咁渻? {', '.join(plan.get('missing_files') or [])}")
-                if plan.get("invalid_files"):
-                    print(f"闂傚倸鍊搁崐鎼佸磹閹间焦鍋嬮煫鍥ㄧ☉绾惧鏌ｉ幇顒備粵闁稿繑绮撻弻娑㈠箻閼碱剙濡介悗瑙勬礀椤︿即濡甸崟顖氬唨闁靛濡囧▓銈囩磽? {', '.join(plan.get('invalid_files') or [])}")
-                if plan.get("checksum_missing_files"):
-                    print(f"缂傚倸鍊搁崐鎼佸磹閹间礁纾归柟闂寸缁犺銇勯幇鍫曟闁稿骸绉甸妵鍕冀椤愵澀绮堕梺鍛婂姀閸嬫捇姊绘担鑺ョ《闁哥姵鎸婚幈銊ョ暋閹殿喗娈鹃梺鎸庣箓椤︿即鎮? {', '.join(plan.get('checksum_missing_files') or [])}")
-                if plan.get("checksum_mismatches"):
-                    mismatch_paths = [item.get("path") for item in plan.get("checksum_mismatches") or [] if item.get("path")]
-                    print(f"闂傚倸鍊风粈渚€骞栭銈囩煓闁告洦鍘藉畷鍙夌節闂堟侗鍎愰柛瀣戠换娑㈠幢濡纰嶅┑锛勫仒缁瑩骞冨鈧幃娆戞崉鏉炵増鐫忛梻浣藉吹閸犳劗鎹㈤崼銉ヨ摕婵炴垯鍨归崘鈧悷婊冪箳缁柨煤椤忓懐鍘? {', '.join(mismatch_paths)}")
+                print("恢复计划未通过校验，已拒绝执行。")
+                _print_backup_validation_summary("恢复预检", payload, backup_ref)
             return 1
 
         pre_restore_backup = service.create_backup("quick", label="pre-restore-cli")
@@ -470,6 +485,7 @@ def cmd_backup_restore(args: argparse.Namespace) -> int:
         payload.update(
             {
                 "success": True,
+                "valid": True,
                 "pre_restore_backup": pre_restore_backup,
                 "restore": restore_result,
             }
@@ -478,9 +494,9 @@ def cmd_backup_restore(args: argparse.Namespace) -> int:
         if bool(getattr(args, "json", False)):
             return _print_json(payload)
 
-        print(f"闂傚倸鍊峰ù鍥敋閺嶎厼鍌ㄧ憸鐗堝笒閸ㄥ倻鎲搁悧鍫濆惞闁搞儺鍓氶崵鎴炪亜閹达絾顥夊ù婊堢畺閺岋綁鎮㈤崫鍕垫毉濠电姭鍋撳ù鐓庣摠閻? {plan.get('backup', {}).get('id', backup_ref)}")
-        print(f"闂傚倸鍊峰ù鍥敋閺嶎厼鍌ㄧ憸鐗堝笒閸ㄥ倻鎲搁悧鍫濆惞闁搞儺鍓欓拑鐔兼煏婢跺牆鍔滄い銉︾箞濮婃椽骞栭悙鎻掑Х闂傚倸瀚€氫即銆侀弴鐔侯浄閻庯綆鍋嗛崢? {restore_result.get('restored_count', 0)}")
-        print(f"闂傚倸鍊峰ù鍥敋閺嶎厼鍌ㄧ憸鐗堝笒閸ㄥ倻鎲搁悧鍫濆惞闁搞儺鍓欓拑鐔兼煏婢跺牆鍔ゆい锔诲弮閹鐛崹顔煎闂佺懓鍟跨换妤呭Φ閹版澘唯闁冲搫鍊婚崢? {pre_restore_backup.get('id')}")
+        print(f"恢复来源: {plan.get('backup', {}).get('id', backup_ref)}")
+        print(f"已恢复文件: {restore_result.get('restored_count', 0)}")
+        print(f"回滚快照: {pre_restore_backup.get('id')}")
         print(warning)
         return 0
     except Exception as exc:
@@ -498,6 +514,7 @@ def cmd_backup_restore(args: argparse.Namespace) -> int:
         payload.update(
             {
                 "success": False,
+                "valid": bool(plan.get("valid")),
                 "message": str(exc),
                 "pre_restore_backup": pre_restore_backup,
                 "rollback": rollback_result,
@@ -508,13 +525,13 @@ def cmd_backup_restore(args: argparse.Namespace) -> int:
         if bool(getattr(args, "json", False)):
             _print_json(payload)
         else:
-            print(f"闂傚倸鍊峰ù鍥敋閺嶎厼鍌ㄧ憸鐗堝笒閸ㄥ倻鎲搁悧鍫濆惞闁搞儺鍓欓惌妤€顭跨捄鐚村姛缂佹劗鍋ら弻鈩冨緞婵犲嫬鈷堥梺绋款儏椤︽娊路? {exc}")
+            print(f"恢复失败: {exc}")
             if pre_restore_backup:
-                print(f"闂備浇顕у锕傦綖婢舵劖鍋ら柡鍥╁剱閸ゆ洟鏌熼幑鎰厫鐎规洖寮堕幈銊ノ熼崹顔惧帿闂佺顑傞弲婊呮崲濞戙垹骞㈡俊顖氭惈椤牓姊洪崨濠傜瑲閻㈩垱甯￠垾锔炬崉閵婏箑纾梺鎯х箰婢э綁濮€閻欌偓閻斿棛鎲歌箛鏃€鍙忛柛鎾楀懍绗夊┑鐐村灟閸╁嫰寮崘顔界厪闁割偅绻冮崳褰掓倵? {pre_restore_backup.get('id')}")
+                print(f"已保留预恢复快照: {pre_restore_backup.get('id')}")
                 if rollback_result and rollback_result.get("success"):
-                    print(f"闂備浇顕у锕傦綖婢舵劖鍋ら柡鍥╁С閻掑﹥銇勮箛鎾跺闁告俺顫夌换婵囩節閸屾粌顣虹紓浣插亾濠㈣埖鍔栭悡蹇撯攽閻愯尙浠㈤柛鏃€绮庣槐鎺楀焵椤掑嫬鐒垫い鎺嗗亾闁宠鍨块幃鈺冩嫚瑜庨弫鐐箾閿濆懏澶勬俊鐐舵閻ｇ兘鎮介崨濠冩珖闂佺鏈銊╂偩閹惰姤鈷戦梻鍫熺〒缁犲啿鈹戦锝呭箹閸楀崬鈹戦悩宕囶暡闁绘挻娲熼弻鐔煎箚瑜忛敍宥団偓娑欑箞濮婃椽宕烽鐐插Е闂佸搫鎳愭繛鈧? {rollback_backup_id}")
+                    print(f"已使用预恢复快照回滚: {rollback_backup_id}")
                 elif rollback_backup_id and rollback_error:
-                    print(f"闂傚倸鍊烽懗鍫曞储瑜旈妴鍐╂償閵忋埄娲稿┑鐘诧工鐎氼參宕ｈ箛娑欑厓闁告繂瀚崳褰掓煟閹邦剨韬柡宀嬬秮楠炲洭顢楁径濠冾啀婵犵數鍋涢ˇ顖炴晝閵堝鈧箓宕稿Δ鈧粻姘舵煙濞堝灝鏋ょ紓鍫ヤ憾閺? {rollback_error}")
+                    print(f"回滚失败: {rollback_error}")
             print(warning)
         return 1
 
@@ -545,7 +562,7 @@ def cmd_backup_cleanup(args: argparse.Namespace) -> int:
         }
         if bool(getattr(args, "json", False)):
             return _print_json_result(payload, success=False)
-        print(f"濠电姷鏁告慨浼村垂閻撳簶鏋栨繛鎴炩棨濞差亝鏅插璺猴龚閸╃偤姊洪棃娑氬闁瑰啿鐭傞崺鈧い鎺嶇濞搭喚鈧娲忛崝鎴︺€佸☉妯锋婵☆垰鍢叉禍楣冩煟閹邦剚鈻曢柣鏂挎閺岀喖顢涘☉姗嗘缂備降鍔屽锟犲箖? {exc}")
+        print(f"备份清理失败: {exc}")
         return 1
 
     if bool(getattr(args, "json", False)):
@@ -566,7 +583,7 @@ def cmd_backup_cleanup(args: argparse.Namespace) -> int:
         f"full {keep_policy.get('keep_full', keep_full)}"
     )
     if protected_ids:
-        print(f"濠电姷鏁搁崕鎴犲緤閽樺娲晜閻愵剙搴婇梺鍛婂姀閺呮粓宕ｈ箛娑欑厪闊洤艌閸嬫挸鐣烽崶鈺冨祦闂傚倷鐒﹂幃鍫曞磿閼姐倗涓嶉柟杈剧畱閺? {', '.join(protected_ids)}")
+        print(f"受保护备份: {', '.join(protected_ids)}")
 
     if apply_cleanup:
         print(
@@ -586,7 +603,7 @@ def cmd_backup_cleanup(args: argparse.Namespace) -> int:
     print()
     for entry in selected_entries:
         print(
-            f"[{str(entry.get('mode') or '').upper() or 'UNKNOWN'}] "
+            f"[{_format_backup_mode(entry.get('mode')).upper()}] "
             f"{entry.get('id')} / {_format_timestamp(entry.get('created_at'))} / "
             f"{_format_size(entry.get('size_bytes'))}"
         )

@@ -1,7 +1,11 @@
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from backend.core.reply_policy import evaluate_reply_policy, update_per_chat_override
+from backend.core.reply_policy import (
+    build_chat_id,
+    evaluate_reply_policy,
+    update_per_chat_override,
+)
 
 
 def _event(*, chat_name="Alice", is_group=False):
@@ -119,3 +123,33 @@ def test_reply_policy_respects_group_whitelist_mode():
     assert result["applied_rule"] == "group_mode"
     assert result["trigger_reason"] == "group_not_in_whitelist"
     assert result["should_queue"] is True
+
+
+def test_reply_policy_prefers_stable_raw_chat_id_but_keeps_legacy_override_match():
+    raw_item = SimpleNamespace(chat_id="wxid_alice", sender_id="wxid_alice")
+    event = _event(chat_name="Alice")
+    event.raw_item = raw_item
+
+    policy = update_per_chat_override(
+        {
+            "default_mode": "manual",
+            "new_contact_mode": "manual",
+            "group_mode": "whitelist_only",
+        },
+        chat_id="friend:Alice",
+        mode="auto",
+    )
+
+    result = evaluate_reply_policy(
+        event,
+        bot_cfg={"reply_policy": policy},
+        user_text="hello",
+        draft_reply="hi there",
+        has_existing_history=False,
+    )
+
+    assert build_chat_id(event) == "friend:wxid_alice"
+    assert result["chat_id"] == "friend:wxid_alice"
+    assert result["applied_rule"] == "per_chat_override"
+    assert result["mode"] == "auto"
+    assert result["should_queue"] is False
