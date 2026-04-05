@@ -8,7 +8,6 @@ from typing import Any, Dict, Optional
 
 from .types import MessageEvent
 from .utils.common import as_float
-from .core.reply_policy import build_chat_id
 
 
 def mark_deadline_missed(

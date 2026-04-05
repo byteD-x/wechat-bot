@@ -1842,7 +1842,6 @@ class WeChatBot:
         user_text: str,
         reply_text: str,
     ) -> Dict[str, Any]:
-        chat_id = build_reply_policy_chat_id(event)
         chat_id_candidates = build_reply_policy_chat_id_candidates(event)
         has_existing_history = False
         if self.memory is not None:
