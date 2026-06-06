@@ -24,7 +24,6 @@ from copy import deepcopy
 
 
 from backend.core.oauth_support import get_preset_auth_summary
-from backend.wechat_versions import OFFICIAL_SUPPORTED_WECHAT_VERSION
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -396,6 +395,7 @@ CONFIG = {'api': {'base_url': 'https://api.openai.com/v1',
            'emotion_fast_path_enabled': True,
            'max_parallel_retrievers': 3,
            'llm_foreground_max_concurrency': 1,
+           'model_routing': {},
            'background_ai_batch_time': '04:00',
            'background_ai_missed_window_policy': 'wait_until_next_day',
            'background_ai_defer_mode': 'defer_all'}}

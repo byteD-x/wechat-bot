@@ -236,6 +236,7 @@ python run.py web
     "retriever_cross_encoder_model": "",     # 本地模型目录
     "retriever_cross_encoder_device": "",    # cpu / cuda
     "llm_foreground_max_concurrency": 1,
+    "model_routing": {},                     # 记录可解释模型路由决策，不自动切换 provider
     "background_ai_batch_time": "04:00",
     "background_ai_missed_window_policy": "wait_until_next_day",
     "background_ai_defer_mode": "defer_all",

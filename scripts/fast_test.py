@@ -40,6 +40,14 @@ SUITES: dict[str, FastSuite] = {
         ),
         plugins=("pytest_asyncio.plugin",),
     ),
+    "model-routing": FastSuite(
+        description="Explainable model routing decisions and runtime metadata checks.",
+        targets=(
+            "tests/test_model_router.py",
+            "tests/test_agent_runtime.py::test_agent_runtime_prepare_request_aggregates_context",
+        ),
+        plugins=("pytest_asyncio.plugin",),
+    ),
     "eval": FastSuite(
         description="Deterministic offline eval metrics and threshold checks.",
         targets=("tests/test_eval_runner.py",),

@@ -283,6 +283,7 @@ Invoke-RestMethod -Headers @{ "Authorization" = "Bearer your_token" } http://127
     "background_fact_extraction_enabled": True,
     "emotion_fast_path_enabled": True,
     "llm_foreground_max_concurrency": 1,
+    "model_routing": {},
     "background_ai_batch_time": "04:00",
     "background_ai_missed_window_policy": "wait_until_next_day",
     "background_ai_defer_mode": "defer_all",
@@ -294,6 +295,7 @@ Invoke-RestMethod -Headers @{ "Authorization" = "Bearer your_token" } http://127
 新增的后台 AI 调度字段说明：
 
 - `llm_foreground_max_concurrency`: 主回复共享的全局 LLM 并发上限，默认 `1`
+- `model_routing`: 可解释模型路由决策配置。当前只记录 `model_route`/`model_route_stats`，不会自动切换用户选择的 provider 或认证方式。
 - `background_ai_batch_time`: 后台 AI 任务统一批处理时间，默认每天 `04:00`
 - `background_ai_missed_window_policy`: 错过当天批处理窗口后的策略，当前默认 `wait_until_next_day`
 - `background_ai_defer_mode`: 白天后台 AI 的处理模式，当前默认 `defer_all`
@@ -489,6 +491,7 @@ python -m tools.prompt_gen.generator
 - `background_backlog_by_task`
 - `next_background_batch_at`
 - `last_background_batch`
+- `model_route_stats`
 
 消息页里的“消息详情”面板现在会展示当前联系人的画像摘要和专属 Prompt，并允许直接编辑；人工编辑后的版本会继续作为后台渐进式更新的基础。
 设置页支持“保存本模块”；日志页默认启用自动换行，并会把成长任务、发送链和 API 请求整理成更容易扫描的摘要行；侧边栏底部新增“关于”页面入口，可直接查看作者主页、开源仓库、Issue 反馈入口与赞助说明文档。

@@ -87,7 +87,8 @@
 
 2. `/api/status`
    - 功能：返回结构化运行状态。
-   - 实现：委托 `BotManager.get_status()` 组装启动状态、健康检查、诊断和系统指标。
+   - 实现：委托 `BotManager.get_status()` 组装启动状态、健康检查、诊断、系统指标和 `model_route_stats`。
+   - 约束：`model_route_stats` 只记录当前请求的可解释模型路由决策，不自动切换用户选择的 provider、model 或认证方式。
 
 3. `/api/config`
    - 功能：读取/保存有效配置。

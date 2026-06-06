@@ -7,7 +7,7 @@ import os
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any, AsyncIterator, Callable, Dict, Iterable, List, Optional
+from typing import Any, AsyncIterator, Dict, Iterable, List, Optional
 import httpx
 
 from ..schemas import EmotionResult
@@ -50,6 +50,7 @@ from .agent_runtime_prepare import (
     search_runtime_memory as prepare_search_runtime_memory,
     tokenize_rerank_text as prepare_tokenize_rerank_text,
 )
+from .model_router import ModelRouter
 from .safety import SafetyGuard
 
 logger = logging.getLogger(__name__)
@@ -279,6 +280,7 @@ class AgentRuntime:
         self.background_ai_defer_mode = str(
             self.agent_cfg.get("background_ai_defer_mode") or "defer_all"
         ).strip() or "defer_all"
+        self.model_router = ModelRouter(self.agent_cfg.get("model_routing"))
 
         self._chat_locks: Dict[str, asyncio.Lock] = {}
         self._embedding_cache: Dict[str, tuple[float, List[float]]] = {}
@@ -312,6 +314,9 @@ class AgentRuntime:
             "background_backlog_by_task": {},
             "next_background_batch_at": None,
             "last_background_batch": {},
+            "model_route_counts": {},
+            "model_route_latency_priority": 0,
+            "last_model_route": {},
         }
 
         self._imports = self._load_integrations()
@@ -1443,6 +1448,17 @@ class AgentRuntime:
         prepared.response_metadata["effective_timeout_sec"] = self.effective_timeout_sec
         if self.effective_timeout_sec != self.timeout_sec:
             prepared.response_metadata["timeout_fallback_applied"] = True
+        model_route = self.model_router.route(
+            provider_id=self.provider_id,
+            model=self.model,
+            user_text=user_text,
+            rag_augmented=bool(retrieval_trace.get("augmented")),
+            timeout_sec=self.effective_timeout_sec,
+            deadline_sec=self.reply_deadline_sec,
+        ).to_dict()
+        prepared.response_metadata["model_route"] = model_route
+        prepared.trace["model_route"] = model_route
+        self._record_model_route(model_route)
         self._stats["last_timings"] = dict(timings)
         return prepared
 
@@ -2112,8 +2128,24 @@ class AgentRuntime:
                 "embedding_cache_hits": self._stats["embedding_cache_hits"],
                 "embedding_cache_misses": self._stats["embedding_cache_misses"],
             },
+            "model_route_stats": {
+                "complexity_counts": dict(self._stats["model_route_counts"]),
+                "latency_priority_count": self._stats["model_route_latency_priority"],
+                "last_route": dict(self._stats["last_model_route"]),
+            },
             "runtime_timings": dict(self._stats["last_timings"]),
         }
+
+    def _record_model_route(self, route: Dict[str, Any]) -> None:
+        complexity = str(route.get("task_complexity") or "unknown").strip() or "unknown"
+        counts = dict(self._stats.get("model_route_counts") or {})
+        counts[complexity] = int(counts.get(complexity, 0)) + 1
+        self._stats["model_route_counts"] = counts
+        if route.get("latency_priority"):
+            self._stats["model_route_latency_priority"] = int(
+                self._stats.get("model_route_latency_priority", 0)
+            ) + 1
+        self._stats["last_model_route"] = dict(route)
 
     def _remaining_prepare_budget(self, started: float) -> float:
         return prepare_remaining_prepare_budget(self, started)

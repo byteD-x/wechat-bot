@@ -327,6 +327,7 @@ async def test_agent_runtime_prepare_request_aggregates_context(monkeypatch):
         settings={
             "base_url": "https://example.com/v1",
             "api_key": "sk-test",
+            "provider_id": "openai",
             "model": "test-model",
             "embedding_model": "embed-model",
         },
@@ -363,6 +364,15 @@ async def test_agent_runtime_prepare_request_aggregates_context(monkeypatch):
     assert retrieval["runtime_hit_count"] == 1
     assert retrieval["citation_count"] == 1
     assert retrieval["citations"][0]["source"] == "runtime_chat"
+    model_route = prepared.response_metadata["model_route"]
+    assert model_route["selected_provider"] == "openai"
+    assert model_route["selected_model"] == "test-model"
+    assert model_route["rag_augmented"] is True
+    assert model_route["task_complexity"] == "standard"
+    assert prepared.trace["model_route"] == model_route
+    route_status = runtime.get_status()["model_route_stats"]
+    assert route_status["complexity_counts"]["standard"] == 1
+    assert route_status["last_route"]["selected_model"] == "test-model"
     assert prepared.trace["context_summary"]["growth_mode"] == "deferred_until_batch"
     assert prepared.trace["context_summary"]["retrieval_augmented"] is True
     assert len(prepared.prompt_messages) >= 2
