@@ -237,6 +237,8 @@ backend/model_auth/
 3. Windows 下优先使用 DPAPI；非 Windows 环境回退到 base64 文件封装，仅用于开发兼容。
 4. 运行时通过 `credential_ref` 从后端安全存储中水合凭据。
 5. `local_import` 优先保存绑定关系与来源信息，而不是复制长期凭据正文。
+6. 诊断支持包和模型中心 API 输出会默认脱敏本机路径、token、OAuth/session 和原始凭据正文；排障时应优先提供状态码、Provider 名称、auth method 和脱敏摘要。
+7. 与治理接口相关的请求、响应和敏感字段边界见 [API 契约与治理接口](api.md)。
 
 ## 8. 如何新增 Provider
 
@@ -278,6 +280,7 @@ backend/model_auth/
 - Claude helper / 本地 Claude API credential cache 进入运行时后，如果首次请求返回 `401`，当前会先强制刷新一次本地认证，再自动重试同一请求一次。
 - Kimi 现在已经具备真实的本地凭据发现能力，并开始进入真实运行时链路：优先跟随 `~/.kimi/config.toml` 中的本地 provider 配置，必要时再回退到 `~/.kimi/credentials/*.json` 的 OAuth 凭据缓存。
 - 本地认证同步目前已经具备“路径级 watcher + polling fallback”，并开始覆盖浏览器 Cookie 数据库、`IndexedDB`、`Local Storage` 与桌面私有存储路径；系统钥匙串已进入发现与状态链路，但仍没有覆盖真正的钥匙串事件监听与稳定运行时消费。
+- Prompt 回滚与受控 Agent Tool Workflow 属于单独的治理接口，不属于模型认证中心本身；模型中心只负责 Provider/Auth 的状态、动作和运行时投影。
 
 ## 11. 关键文件
 

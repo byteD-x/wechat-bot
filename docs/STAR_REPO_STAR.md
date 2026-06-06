@@ -6,7 +6,7 @@
 ## 项目概览
 
 **项目名称**：WeChat AI Assistant  
-**项目定位**：面向 Windows 微信生态的本地化 AI 助手运行时，围绕微信自动化接入、LangGraph 编排、分层记忆、运行期 RAG、桌面/Web 控制台和运行观测构建。  
+**项目定位**：面向 Windows 微信生态的本地化 AI 助手运行时，围绕微信自动化接入、LangGraph 编排、分层记忆、运行期 RAG、Prompt 治理、受控工具工作流、桌面/Web 控制台和运行观测构建。
 **技术栈**：Python 3.9+、Quart、Electron、SQLite / aiosqlite、ChromaDB、LangChain、LangGraph、httpx、pytest、Node 原生测试。
 
 ## 差异化亮点
@@ -39,6 +39,12 @@
 - 导出中心通过 `/api/wechat_export/*` 完成账号探测、数据库解密、联系人读取、CSV 导出和导出语料 RAG 应用。
 - 成本管理页通过 `/api/usage`、`/api/pricing`、`/api/costs/*` 展示 token、金额、会话明细和低质量回复复盘。
 - `/api/costs/review_queue_export` 可以导出当前筛选条件下的复盘 JSON，便于离线排查提示词、检索和上下文来源问题。
+
+### 6. Prompt 治理和受控工具流强调可审计边界
+- Prompt 回滚通过 `POST /api/v1/admin/prompts/{revision}/rollback` 追加新的 active revision，并保留 `rollback_from / reason / operator / created_at`。
+- 受控 Agent Tool Workflow 只允许 `config_audit`、`readiness_check`、`prompt_preview` 三类白名单工具。
+- 工作流返回逐步 trace，并限制步骤数量与 payload 大小，避免把本机 Agent 能力扩成任意命令或动态插件执行。
+- 离线 smoke 数据集扩展到 24 条，覆盖 Prompt 回滚、工具审计、Windows 首次运行和 RAG 风格参考场景。
 
 ## STAR 案例
 
@@ -81,6 +87,16 @@
   - 为非关键增强链路增加失败隔离与降级。
 - **Result**：系统更贴近真实聊天场景下的体验要求，主回复更快，增强能力也不会轻易拖垮整条链路。
 
+### 案例 5：把高风险 Agent 操作收口成可审计治理接口
+- **Situation**：Prompt 修改、配置审计和就绪检查都属于高影响操作，如果直接开放为脚本或任意工具执行，容易带来不可追踪的副作用。
+- **Task**：在保留自动化能力的同时，建立本机白名单、审计账本、执行 trace 和失败可解释边界。
+- **Action**：
+  - 新增 `PromptGovernanceService`，回滚 Prompt 时追加新 revision，而不是覆盖历史。
+  - 新增 `ControlledToolWorkflowService`，只允许 `config_audit`、`readiness_check`、`prompt_preview`。
+  - 在 Electron IPC 层限制可转发路径，Prompt 回滚必须匹配数字 revision。
+  - 为成功回滚、未知 revision、白名单工具和未知工具拒绝补充 API 测试。
+- **Result**：高风险操作从“靠人工记得怎么做”变成“可调用、可审计、可拒绝、可测试”的治理能力，同时保持当前版本不承诺任意工具执行。
+
 ## 证据索引
 
 | 模块 | 关键文件 | 说明 |
@@ -89,17 +105,21 @@
 | AI Client | `backend/core/ai_client.py` | 共享连接池、引用计数释放 |
 | Memory | `backend/core/memory.py` | SQLite 记忆管理、批量上下文、WAL/mmap 优化 |
 | Config | `backend/core/config_service.py` | 中心化配置快照与运行时发布 |
+| Prompt Governance | `backend/core/prompt_governance.py` | Prompt revision 审计账本与回滚 |
+| Tool Workflow | `backend/core/tool_workflow.py` | 白名单工具流、payload 限制与逐步 trace |
 | Transport | `backend/transports/base.py` / `backend/transports/wcferry_adapter.py` | 传输层抽象、微信版本门禁与状态暴露 |
 | Model Auth | `backend/model_auth/` / `src/renderer/js/pages/ModelsPage.js` | Provider/Auth 建模、模型目录、认证状态与动作生成 |
 | Export Center | `backend/core/wechat_export_service.py` / `src/renderer/js/pages/ExportCenterPage.js` | 微信探测、解密、联系人读取、CSV 导出与 RAG 应用 |
-| API | `backend/api.py` | `/api/status`、`/api/metrics`、`/api/wechat_export/*`、`/api/model_auth/*`、`/api/costs/*` |
-| Tests | `tests/test_agent_runtime.py` / `tests/test_optimization_tasks.py` / `tests/test_runtime_observability.py` / `tests/test_api.py` | 运行时、工程优化、API 和观测能力回归验证 |
+| API | `backend/api.py` | `/api/status`、`/api/metrics`、`/api/wechat_export/*`、`/api/model_auth/*`、`/api/costs/*`、Prompt 回滚、Tool Workflow |
+| Diagnostics | `src/main/diagnostics-snapshot.js` / `src/main/ipc.js` | 诊断支持包导出、敏感字段脱敏和 IPC allowlist |
+| Tests | `tests/test_agent_runtime.py` / `tests/test_optimization_tasks.py` / `tests/test_runtime_observability.py` / `tests/test_api.py` / `tests/test_eval_runner.py` | 运行时、工程优化、API、观测和 24 条 smoke 门禁验证 |
 
 ## 可直接复用的表述
 
 - 负责一个面向 Windows 微信生态的本地化 AI 助手运行时，使用 `Quart + Electron + LangGraph` 打通消息接入、上下文编排、记忆检索和可视化控制面。
 - 设计并落地分层记忆与可降级 RAG 链路，支持轻量重排和可选本地 `Cross-Encoder` 精排，在不强制联网下载模型的前提下提升召回质量。
 - 补齐中心化配置快照、热重载审计、状态诊断与 Prometheus 风格指标导出，使项目从“能跑 demo”提升到“可长期运行和可排障的工程系统”。
+- 设计 Prompt revision 审计账本和受控工具工作流，把回滚、配置审计、就绪检查和 Prompt 预览收口成白名单 API，避免任意工具执行带来的不可控副作用。
 - 建设模型与认证中心，将 Provider 目录、认证方式、本机凭据跟随和运行时投影统一建模，降低多模型供应商接入和排障成本。
 - 打通微信聊天记录导出、导出语料 RAG、成本统计和低质量回复复盘，让“历史风格增强”和“回复质量改进”形成可观察闭环。
 
@@ -107,4 +127,4 @@
 
 - 本文作为技术难题与解决方案入口，可与 `docs/HIGHLIGHTS.md` 配套使用。
 - 已验证内容优先来自 `backend/core`、`backend/transports`、`backend/api.py` 和 `tests` 目录，适合面试时追溯到具体实现。
-- 待补充内容包括真实回复成功率、平均响应时延、长期运行稳定性数据和公开仓库增长数据。
+- 待补充内容包括真实回复成功率、平均响应时延、长期运行稳定性数据、真实 Windows/微信手测记录和公开仓库增长数据。

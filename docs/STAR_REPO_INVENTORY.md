@@ -45,11 +45,15 @@ Generated: 2026-06-06
 
 - `run.py`：统一 CLI，支持 `start`、`setup`、`check`、`web`、`eval`、`backup`、`config`。
 - `backend/main.py`：后端主入口。
-- `backend/api.py`：Quart Web API，承载状态、生命周期、消息、微信导出、成本、模型认证、配置与日志接口。
+- `backend/api.py`：Quart Web API，承载状态、生命周期、消息、微信导出、成本、模型认证、配置、日志、Prompt 回滚与受控 Tool Workflow 接口。
 - `backend/bot.py` / `backend/bot_manager.py`：机器人生命周期、消息主循环和运行态管理。
 - `backend/core/agent_runtime.py`：LangChain / LangGraph 对话快路径与后台成长能力。
+- `backend/core/prompt_governance.py`：Prompt revision 审计账本与回滚服务。
+- `backend/core/tool_workflow.py`：受控 Agent Tool Workflow、白名单工具和逐步 trace。
 - `backend/core/wechat_export_service.py`：微信导出中心后端服务。
 - `src/main/index.js`：Electron 主进程入口。
+- `src/main/diagnostics-snapshot.js`：本机诊断支持包导出与敏感字段脱敏。
+- `src/main/ipc.js`：桌面端受控 IPC、后端请求 allowlist 与治理接口转发边界。
 - `src/preload/index.js`：受控 preload API。
 - `src/renderer/js/app.module.js`：渲染层应用装配。
 - `src/renderer/js/pages/ModelsPage.js`：模型与认证中心页面。
@@ -61,7 +65,8 @@ Generated: 2026-06-06
 - `README.md`：仓库首页、快速启动、功能与开发命令。
 - `docs/USER_GUIDE.md`：详细使用、配置、运行、排障与 API 摘要。
 - `docs/SYSTEM_CHAINS.md`：启动、API、消息、配置、状态、更新等系统链路。
-- `docs/HIGHLIGHTS.md`：当前能力与架构亮点。
+- `docs/HIGHLIGHTS.md`：当前能力、架构亮点、Prompt 治理、诊断支持包与产品化闭环。
+- `docs/api.md`：Prompt 回滚与受控 Tool Workflow 的请求、响应、错误码和安全边界。
 - `docs/MODEL_AUTH_CENTER.md`：Provider/Auth 领域模型、认证矩阵、扩展方式与安全边界。
 - `docs/wechat-export-guide.md`：微信聊天记录探测、解密、导出与导出语料 RAG 流程。
 - `docs/RELEASE_UPDATES.md` 与 `docs/release_notes/`：发布策略与各版本 Release notes。
@@ -71,10 +76,10 @@ Generated: 2026-06-06
 当前 CI 在 Windows 上执行：
 
 - Python 3.10 与 Node.js 20 环境安装。
-- `python -m py_compile backend\core\agent_runtime.py backend\bot.py backend\bot_manager.py backend\api.py`
+- `python -m py_compile backend\core\agent_runtime.py backend\core\prompt_governance.py backend\core\tool_workflow.py backend\bot.py backend\bot_manager.py backend\api.py`
 - `python -m ruff check` 指定后端、CLI 和测试文件集。
 - 重点 Python 回归测试：`tests\test_smoke.py`、`tests\test_api.py`、`tests\test_runtime_observability.py`、`tests\test_agent_runtime.py`、`tests\test_optimization_tasks.py`、`tests\test_reply_policy.py`、`tests\test_backup_service.py`、`tests\test_eval_runner.py`
-- 离线评测烟雾门禁：`python run.py eval --dataset tests\fixtures\evals\smoke_cases.json --preset ci-smoke --report data\evals\ci-smoke-report.json`
+- 离线评测烟雾门禁：`python run.py eval --dataset tests\fixtures\evals\smoke_cases.json --preset ci-smoke --report data\evals\ci-smoke-report.json`，当前固定数据集为 24 条。
 - Node 测试：`npm test`
 
 `package.json` 当前还提供：
@@ -88,4 +93,4 @@ Generated: 2026-06-06
 
 - 代码主体已经从早期机器人脚本演进为“Python 后端 + Electron 前端 + 离线工具 + CI 门禁”的桌面产品结构。
 - 当前系统事实源应优先读取 `backend/`、`src/`、`tests/`、`.github/workflows/` 和 `docs/`，不要从 `release/`、`backend-dist/` 或运行时 `data/` 推断源码规模。
-- 与文档同步相关的高频事实包括：共享配置真源 `data/app_config.json`、默认传输后端 `wcferry`、官方支持微信 `3.9.12.51`、配置 CLI `python run.py config ...`、微信导出 API、成本复盘导出 API 与模型中心 API。
+- 与文档同步相关的高频事实包括：共享配置真源 `data/app_config.json`、默认传输后端 `wcferry`、官方支持微信 `3.9.12.51`、配置 CLI `python run.py config ...`、微信导出 API、成本复盘导出 API、模型中心 API、Prompt 回滚 API、受控 Tool Workflow API 与本机诊断支持包。

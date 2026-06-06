@@ -121,6 +121,7 @@ RAG 不是"只要检索命中就塞进 Prompt"，而是实现了**两层精排**
 - `/api/metrics`：Prometheus 风格导出（CPU、内存、队列、health check）
 - Electron 仪表盘：CPU、内存、任务积压、AI 延迟、RAG 状态、组件健康
 - `/api/config/audit`：排查未知配置、未消费字段和预计生效策略
+- 诊断支持包：由 Electron 主进程本地导出 `/api/status`、`/api/readiness`、`/api/config/audit`、更新器状态和最近日志摘要，并默认脱敏 API Key、token、OAuth/session、聊天正文、联系人真实标识和完整路径
 
 **诊断字段：**
 - `startup`：启动阶段追踪
@@ -132,6 +133,7 @@ RAG 不是"只要检索命中就塞进 Prompt"，而是实现了**两层精排**
 - [`backend/api.py`](backend/api.py) - 状态和指标接口
 - [`backend/bot_manager.py`](backend/bot_manager.py) - 状态组装
 - [`backend/core/config_audit.py`](backend/core/config_audit.py) - 配置审计
+- [`src/main/diagnostics-snapshot.js`](src/main/diagnostics-snapshot.js) - 诊断支持包聚合与脱敏
 
 ---
 
@@ -175,6 +177,36 @@ RAG 不是"只要检索命中就塞进 Prompt"，而是实现了**两层精排**
 - [`backend/core/config_service.py`](backend/core/config_service.py) - 配置快照
 - [`backend/api.py`](backend/api.py#L150-L200) - 配置保存接口
 - [`backend/core/config_audit.py`](backend/core/config_audit.py) - 配置审计
+
+---
+
+### 2.8 Prompt 治理与受控工具工作流
+
+**亮点描述：**
+项目没有把 Agent 能力开放成任意工具执行器，而是先把高风险操作产品化为**白名单、可追踪、可审计**的本机治理接口。
+
+**核心能力：**
+- Prompt 回滚 API：`POST /api/v1/admin/prompts/{revision}/rollback`
+- 回滚时追加新的 active revision，历史 revision 不被覆盖
+- 审计账本默认写入 `data/prompt_revisions.json`
+- 受控 Tool Workflow API：`POST /api/v1/agents/tool-workflow`
+- 当前白名单工具仅包含 `config_audit`、`readiness_check`、`prompt_preview`
+- 工作流最多 `8` 步，单步 payload 字符串化后最多 `12000` 字符
+- 每一步返回 `index / tool / status / duration_ms` trace，便于定位失败步骤
+
+**边界约束：**
+- 不支持任意 shell
+- 不支持任意文件写入
+- 不支持任意网络请求
+- 不支持动态插件执行
+- Electron 主进程只允许转发固定治理路径，Prompt 回滚必须匹配数字 revision
+
+**证据文件：**
+- [`backend/core/prompt_governance.py`](backend/core/prompt_governance.py) - Prompt revision 审计账本与回滚
+- [`backend/core/tool_workflow.py`](backend/core/tool_workflow.py) - 受控工具白名单与 trace
+- [`backend/api.py`](backend/api.py) - Prompt 回滚与 Tool Workflow 路由
+- [`src/main/ipc.js`](src/main/ipc.js) - 桌面端后端请求 allowlist
+- [`tests/test_api.py`](tests/test_api.py) - 回滚、白名单工具和未知工具拒绝测试
 
 ---
 
@@ -276,6 +308,7 @@ def _enable_receiving_msg_robust(self):
 3. **组件级健康检查**：`health_checks` 分别检查 AI / WeChat / Database
 4. **系统指标**：`system_metrics` 输出 CPU、内存、延迟等
 5. **外部采集**：`/api/metrics` 提供 Prometheus 风格导出
+6. **本地诊断支持包**：通过 Electron 主进程导出脱敏 JSON，便于维护者排障但不上传敏感数据
 
 **核心价值：**
 > 这部分通常最容易被忽视，但恰恰决定了项目是不是"**可维护系统**"。
@@ -294,7 +327,7 @@ def _enable_receiving_msg_robust(self):
 > 不是只有召回，还做了**轻量精排**和可选本地 `Cross-Encoder` 精排，并且支持失败自动回退。
 
 ### 4.4 工程化水平
-> 不是只追求功能可用，而是补齐了**配置热重载、状态诊断、指标导出**和工程级降级策略。
+> 不是只追求功能可用，而是补齐了**配置热重载、状态诊断、指标导出、Prompt 治理、白名单工具流**和工程级降级策略。
 
 ---
 
@@ -305,17 +338,21 @@ def _enable_receiving_msg_robust(self):
 - [`backend/core/ai_client.py`](backend/core/ai_client.py) - 共享 `httpx.AsyncClient` 连接池、引用计数释放
 - [`backend/core/memory.py`](backend/core/memory.py) - SQLite 记忆层、批量上下文读取、WAL 和 mmap 优化
 - [`backend/core/config_service.py`](backend/core/config_service.py) - 中心化配置快照与运行时发布
+- [`backend/core/prompt_governance.py`](backend/core/prompt_governance.py) - Prompt revision 审计账本与回滚
+- [`backend/core/tool_workflow.py`](backend/core/tool_workflow.py) - 受控工具工作流
 - [`backend/transports/base.py`](backend/transports/base.py) - 传输层抽象边界
 - [`backend/transports/wcferry_adapter.py`](backend/transports/wcferry_adapter.py) - 版本门禁、权限校验、消息通道初始化
 
 ### 5.2 API 接口
-- [`backend/api.py`](backend/api.py) - `/api/status`、`/api/metrics`、配置接口
+- [`backend/api.py`](backend/api.py) - `/api/status`、`/api/metrics`、配置接口、Prompt 回滚、Tool Workflow
 - [`backend/bot_manager.py`](backend/bot_manager.py) - 生命周期管理、状态组装
 
 ### 5.3 测试文件
 - [`tests/test_agent_runtime.py`](tests/test_agent_runtime.py) - 运行时上下文聚合、缓存命中、Cross-Encoder 精排测试
 - [`tests/test_optimization_tasks.py`](tests/test_optimization_tasks.py) - 连接池复用、批量上下文、传输层抽象测试
 - [`tests/test_runtime_observability.py`](tests/test_runtime_observability.py) - 配置监听、防抖、健康检查与指标导出测试
+- [`tests/test_api.py`](tests/test_api.py) - Prompt 回滚、Tool Workflow、回复策略和备份恢复接口测试
+- [`tests/fixtures/evals/smoke_cases.json`](tests/fixtures/evals/smoke_cases.json) - 24 条离线 smoke 用例
 
 ### 5.4 文档
 - [`docs/HIGHLIGHTS.md`](docs/HIGHLIGHTS.md) - 项目亮点详细说明

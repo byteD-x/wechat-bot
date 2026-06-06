@@ -4,12 +4,12 @@
 
 ## 已完成
 
-- Windows 成熟化第一轮：桌面端壳、消息中心、设置中心、模型中心、诊断快照和相关 Node 测试已有改动。
+- Windows 成熟化第一轮：桌面端壳、消息中心、设置中心、模型中心、诊断支持包和相关 Node 测试已有改动。
 - Prompt 回滚 API：`POST /api/v1/admin/prompts/{revision}/rollback` 已落地，回滚追加新 active revision，并写入 `data/prompt_revisions.json` 审计账本。
 - 受控 Agent Tool Workflow API：`POST /api/v1/agents/tool-workflow` 已落地，当前白名单包含 `config_audit`、`readiness_check`、`prompt_preview`。
 - API 测试：已覆盖 Prompt 回滚成功、revision 不存在、白名单工具执行和未知工具拒绝。
 - RAG/eval smoke 扩样：`tests/fixtures/evals/smoke_cases.json` 已从 20 条扩到 24 条，新增 Prompt 回滚、工具审计、Windows 首次运行和 RAG 风格参考场景。
-- 文档入口：`docs/api.md` 和 `docs/interview-playbook.md` 已补充。
+- 文档入口：`README.md`、`docs/USER_GUIDE.md`、`docs/SYSTEM_CHAINS.md`、`docs/HIGHLIGHTS.md`、`docs/api.md` 和 `docs/interview-playbook.md` 已补充。
 
 ## 下一阶段 P0
 

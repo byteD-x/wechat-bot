@@ -7,7 +7,7 @@
 - 默认只允许本机访问；绑定非回环地址运行 `python run.py web` 时必须显式设置 `WECHAT_BOT_API_TOKEN`。
 - 设置 `WECHAT_BOT_API_TOKEN` 后，`/api/*` 请求需要携带 `X-Api-Token` 或 `Authorization: Bearer <token>`。
 - Electron 主进程只允许转发白名单路径；Prompt 回滚与 Agent Tool Workflow 已加入 `src/main/ipc.js` 的 allowlist。
-- 不要把 API token、模型密钥、OAuth/session、聊天原文或诊断快照中的敏感内容写入日志、截图或文档。
+- 不要把 API token、模型密钥、OAuth/session、聊天原文或诊断支持包中的敏感内容写入日志、截图或文档。
 
 ## POST `/api/v1/admin/prompts/{revision}/rollback`
 

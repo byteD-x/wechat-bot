@@ -119,6 +119,21 @@
    - 功能：预览系统提示词。
    - 实现：构造一个示例事件对象，调用 `resolve_system_prompt()` 生成预览。
 
+9. `/api/v1/admin/prompts/<revision>/rollback`
+   - 功能：把系统 Prompt 回滚到指定历史 revision。
+   - 实现：
+     - `backend/api.py::rollback_prompt_revision` 调用 `PromptGovernanceService.rollback()`。
+     - 回滚会复制目标 Prompt 并追加新的 active revision，默认写入 `data/prompt_revisions.json` 审计账本。
+     - Electron 主进程只允许转发匹配 `^/api/v1/admin/prompts/\d+/rollback$` 的路径，避免非数字 revision 或任意管理路径穿透。
+
+10. `/api/v1/agents/tool-workflow`
+    - 功能：按顺序执行受控本机工具，并返回每一步 trace。
+    - 实现：
+      - `backend/api.py::run_agent_tool_workflow` 调用 `ControlledToolWorkflowService`。
+      - 当前最多 `8` 步，单步 payload 字符串化后最多 `12000` 字符。
+      - 当前白名单只包含 `config_audit`、`readiness_check`、`prompt_preview`。
+      - 未知工具返回 `bad_workflow` 和失败 trace，不会执行任意 shell、任意文件写入、任意网络请求或动态插件。
+
 ### 当前接口分组
 
 `backend/api.py` 当前按职责提供这些主要接口：
@@ -133,6 +148,7 @@
 - 成本：`/api/usage`、`/api/pricing`、`/api/pricing/refresh`、`/api/costs/summary`、`/api/costs/sessions`、`/api/costs/session_details`、`/api/costs/review_queue_export`
 - 模型与认证：`/api/model_catalog`、`/api/model_auth/overview`、`/api/model_auth/action`、兼容壳层 `/api/auth/providers*`、本地模型探测 `/api/ollama/models`
 - 配置与诊断：`/api/config`、`/api/config/audit`、`/api/test_connection`、`/api/preview_prompt`、`/api/logs`、`/api/logs/clear`
+- Prompt 与工具治理：`/api/v1/admin/prompts/<revision>/rollback`、`/api/v1/agents/tool-workflow`
 
 ## 4. 启动与生命周期链路
 
@@ -543,6 +559,20 @@
 5. `event_generator` / `broadcast_event`
    - 功能：把状态和消息广播到前端。
    - 实现：SSE 推送 `status_change`、`message` 等事件。
+
+6. `src/main/diagnostics-snapshot.js`
+   - 功能：导出本机诊断支持包。
+   - 实现：
+     - 由 Electron 主进程聚合 `/api/status`、`/api/readiness`、`/api/config/audit`、更新器状态和最近日志摘要。
+     - 生成本地 JSON 文件，不自动上传。
+     - 导出前会脱敏 API Key、token、authorization、OAuth/session、聊天正文、联系人真实标识和完整本机路径。
+
+7. `src/main/ipc.js`
+   - 功能：收口桌面端可调用的后端请求和诊断导出入口。
+   - 实现：
+     - 只允许主渲染入口页调用受控 IPC。
+     - 后端请求通过 allowlist 转发，Prompt 回滚和 Tool Workflow 只开放明确路径。
+     - 诊断导出仍由主进程完成本地文件保存和敏感字段脱敏。
 
 ## 15. 更新链
 

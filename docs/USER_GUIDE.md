@@ -504,7 +504,7 @@ python -m tools.prompt_gen.generator
 
 ### 8.7 稳定性产品化能力
 
-这一阶段新增的能力，不是单纯增加功能点，而是把“能不能安全长期用”补成闭环。
+这一阶段新增的能力，不是单纯增加功能点，而是把“能不能安全长期用、能不能回退、能不能审计”补成闭环。
 
 #### 8.7.1 回复策略与待审批回复
 
@@ -566,11 +566,26 @@ python run.py eval --dataset tests/fixtures/evals/smoke_cases.json --preset smok
 - 评测报告 JSON 固定包含 `summary`、`cases`、`regressions`、`generated_at`、`preset`、`app_version`。
 - 当前确定性指标为 `empty_reply_rate`、`short_reply_rate`、`retrieval_hit_rate`、`manual_feedback_hit_rate`、`runtime_exception_count`。
 - 当前失败阈值为 `runtime_exception_count > 0` 直接失败、`empty_reply_rate > 0` 直接失败、`short_reply_rate` 不得高于基线 `+15%`、`retrieval_hit_rate` 不得低于基线 `-10%`。
-- 固定烟雾集位于 `tests/fixtures/evals/smoke_cases.json`
+- 固定烟雾集位于 `tests/fixtures/evals/smoke_cases.json`，当前共 `24` 条，覆盖基础回复、Prompt 回滚、受控工具工作流、Windows 首次运行提示和导出语料 RAG 风格参考。
 - CI 现在会继续执行现有 pytest 和 Node 测试，并额外执行 `ruff check` 和 `python run.py eval` 烟雾门禁。
 
-#### 8.7.4 新增接口总览
+#### 8.7.4 Prompt 治理与受控工具工作流
 
+- Prompt 回滚 API：`POST /api/v1/admin/prompts/{revision}/rollback`
+  - 回滚目标是历史 revision，但执行结果会追加一条新的 active revision。
+  - 审计账本默认写入 `data/prompt_revisions.json`，记录 `rollback_from`、`reason`、`operator`、`created_at`。
+  - 回滚不会覆盖或删除历史记录；版本列表、差异对比和 UI 审批仍属于后续路线。
+- 受控 Agent Tool Workflow API：`POST /api/v1/agents/tool-workflow`
+  - 当前最多 `8` 步，单步 payload 字符串化后最多 `12000` 字符。
+  - 当前白名单只包含 `config_audit`、`readiness_check`、`prompt_preview`。
+  - 未知工具会返回失败 trace 和 `bad_workflow`，不会降级为任意命令、任意文件写入、任意网络请求或动态插件执行。
+- Electron 主进程只允许转发受控路径：Prompt 回滚必须匹配数字 revision，Tool Workflow 只走固定 endpoint。
+- 完整请求体、响应字段和错误码见 [API 契约与治理接口](api.md)。
+
+#### 8.7.5 新增接口总览
+
+- `POST /api/v1/admin/prompts/{revision}/rollback`
+- `POST /api/v1/agents/tool-workflow`
 - `GET/POST /api/reply_policies`
 - `GET /api/pending_replies`
 - `POST /api/pending_replies/<id>/approve`
@@ -588,7 +603,7 @@ python run.py eval --dataset tests/fixtures/evals/smoke_cases.json --preset smok
 - `GET /api/model_catalog`
 - `POST /api/test_connection`
 
-#### 8.7.5 微信导出接口总览
+#### 8.7.6 微信导出接口总览
 
 - `POST /api/wechat_export/probe`
 - `POST /api/wechat_export/decrypt/start`
@@ -725,7 +740,10 @@ python -m pytest tests\test_runtime_observability.py -q
 python -m pytest tests\test_smoke.py tests\test_api.py tests\test_runtime_observability.py -q
 
 # 语法检查
-python -m py_compile backend\core\agent_runtime.py backend\bot.py backend\bot_manager.py backend\api.py
+python -m py_compile backend\core\agent_runtime.py backend\core\prompt_governance.py backend\core\tool_workflow.py backend\bot.py backend\bot_manager.py backend\api.py
+
+# 离线评测
+python run.py eval --dataset tests\fixtures\evals\smoke_cases.json --preset smoke --report data\evals\smoke-report.json
 ```
 
 说明：
@@ -837,7 +855,7 @@ Release Notes 规则：
   - `POST /api/growth/tasks/<task_type>/clear`
 - Windows Release 产物现在默认嵌入管理员权限清单，启动 `setup.exe` 或 `portable.exe` 时会请求 UAC 提权。
 
-## 附：首次运行与诊断快照
+## 附：首次运行与诊断支持包
 
 桌面端首次打开时会自动显示“首次运行引导”，优先提示 4 类最常见阻塞项：
 
@@ -855,7 +873,7 @@ Release Notes 规则：
 `/api/readiness` 会返回 `ready`、`blocking_count`、`checks[]`、`suggested_actions[]`，并带短 TTL 缓存，适合桌面端轮询而不重复做高成本进程探测。
 命令行侧可以通过 `python run.py check --json` 直接拿到同一份机读报告，适合自动化巡检、脚本集成和问题回传。
 
-仪表盘里的“运行准备度”卡片会常驻显示当前阻塞项；“运行诊断”区域提供“导出诊断快照”按钮。该按钮会在本机保存一个 JSON 格式的诊断支持包，不会自动上传到任何服务器；发送给维护者前，请先用文本编辑器预览。
+仪表盘里的“运行准备度”卡片会常驻显示当前阻塞项；“运行诊断”区域提供导出入口。该入口会在本机保存一个 JSON 格式的诊断支持包，不会自动上传到任何服务器；发送给维护者前，请先用文本编辑器预览。
 
 诊断支持包会包含：
 
@@ -874,7 +892,7 @@ Release Notes 规则：
 - 只保留 `api_key_configured`、`api_key_masked` 这类安全字段
 - 不会写入原始 API Key、token、authorization、OAuth/session、原始聊天正文、联系人真实标识或完整本机路径
 - 默认不包含完整日志；完整日志必须由用户单独明确授权后，才通过日志页“导出纯文本日志”等独立入口提供
-- 与日志页的“导出纯文本日志”是两条不同能力：诊断支持包偏排障快照，纯文本日志偏原始日志分析
+- 与日志页的“导出纯文本日志”是两条不同能力：诊断支持包偏本地排障摘要，纯文本日志偏原始日志分析
 
 ## 附：自动提权重启与智能恢复
 

@@ -13,7 +13,7 @@
 ![WeChat](https://img.shields.io/badge/WeChat-PC%203.9.12.51-brightgreen.svg)
 
 ⚡️ `WCFerry + Quart + Electron + LangChain/LangGraph` ⚡️ AI 助手
-支持多 OpenAI-compatible 提供方、短期记忆、运行期 RAG、导出语料 RAG、情绪分析、Prompt 个性化和桌面/Web 控制台。
+支持多 OpenAI-compatible 提供方、短期记忆、运行期 RAG、导出语料 RAG、情绪分析、Prompt 个性化、Prompt 治理、受控工具工作流和桌面/Web 控制台。
 </div>
 
 ## Quick Manual
@@ -53,14 +53,16 @@
 - `LangGraph Runtime`: 用 LangChain/LangGraph 编排对话快路径；同步链只保留短期上下文和轻量画像注入，RAG、情绪、事实等高级能力统一后移到后台成长流水线。
 - `Memory`: SQLite 持久化短期记忆、用户画像、上下文事实和情绪历史。
 - `Contact Prompt Growth`: 每个联系人都可逐步沉淀一份专属 Prompt，支持后台生成、导出聊天增强和 UI 直接编辑。
+- `Prompt Governance`: 系统 Prompt 回滚通过 `POST /api/v1/admin/prompts/{revision}/rollback` 追加新的 active revision，并写入 `data/prompt_revisions.json` 审计账本，不覆盖历史记录。
 - `RAG`: 支持运行期对话向量记忆、导出聊天记录风格召回，以及可选本地 `Cross-Encoder` 精排；未配置本地模型或缺依赖时自动回退轻量重排。
 - `Transport Abstraction`: 传输层统一抽象为 `BaseTransport`，默认走 `wcferry`，并保证“接收消息 → 发送消息 → 完成落盘”的主闭环可独立演进。
 - `Provider Compatibility`: 后端统一标准化请求字段、响应正文、工具调用、错误结构与落盘元数据，避免为单一提供方写定向分支。
 - `Desktop + Web`: Electron 桌面客户端与 Quart Web API 并存。
 - `Observability`: `/api/status` 提供启动进度、诊断、健康检查、系统指标、回复质量、人工反馈与成长链状态，`/api/metrics` 提供 Prometheus 风格导出。
-- `Readiness & Recovery`: `run.py check`、`GET /api/readiness` 与桌面端首次运行引导共用同一套环境检查逻辑；仪表盘会常驻显示“运行准备度”，并支持导出自动脱敏的诊断快照。
+- `Readiness & Recovery`: `run.py check`、`GET /api/readiness` 与桌面端首次运行引导共用同一套环境检查逻辑；仪表盘会常驻显示“运行准备度”，并支持导出自动脱敏的诊断支持包。
 - `Hot Reload`: 配置热重载优先使用 `watchdog` 事件监听，缺失依赖时自动回退轮询，并带防抖。
 - `Config Snapshot`: 后端已引入中心化配置快照服务，`/api/config/audit` 可返回当前生效配置、已知未消费字段和配置变更影响摘要。
+- `Controlled Agent Tools`: `POST /api/v1/agents/tool-workflow` 只执行白名单工具 `config_audit`、`readiness_check`、`prompt_preview`，每步返回 trace，明确不支持任意命令或动态插件执行。
 
 ## Architecture
 
@@ -133,7 +135,7 @@ npm run dev
 
 首次打开桌面端时，应用会自动弹出“首次运行引导”，集中提示管理员权限、微信是否已启动、版本兼容和模型与认证是否就绪。
 
-如果仍然无法启动，可以直接在仪表盘诊断区导出“诊断快照”；导出的 JSON 会自动脱敏，不会包含原始 API Key、token 或未脱敏配置。
+如果仍然无法启动，可以直接在仪表盘诊断区导出“诊断支持包”；导出的 JSON 会自动脱敏，不会包含原始 API Key、token、OAuth/session、聊天正文或完整本机路径。
 
 然后在桌面端中按这个顺序完成：
 
@@ -272,8 +274,11 @@ This phase turns the project from a demo-style assistant into a safer personal p
   - Settings now include a dedicated "数据与恢复" card with recent backups, restore feedback, latest offline eval summary, and data-control cleanup (dry-run/apply with explicit scope and stopped runtime).
 - `Offline Eval + CI Gates`
   - `python run.py eval --dataset <path> --preset <name> --report <path>` generates a deterministic JSON report with `summary`, `cases`, `regressions`, `generated_at`, `preset`, and `app_version`.
-  - The smoke dataset lives at `tests/fixtures/evals/smoke_cases.json`.
+  - The smoke dataset lives at `tests/fixtures/evals/smoke_cases.json` and currently contains 24 curated cases, including Prompt rollback, controlled tool workflow, Windows first-run readiness, and export-RAG style reference scenarios.
   - CI now runs scoped `ruff`, targeted Python regressions, Node tests, and the offline eval smoke gate.
+- `Prompt Governance + Controlled Tools`
+  - Prompt rollback appends a new audited active revision instead of overwriting history.
+  - Agent Tool Workflow is deliberately limited to whitelisted local tools and bounded payloads; see [API 契约与治理接口](docs/api.md) for request/response details.
 
 Key APIs introduced in this phase:
 
@@ -327,13 +332,13 @@ python run.py backup restore --backup-id <backup-id> --apply
 python run.py backup restore --backup-id <backup-id> --apply --allow-running-service
 
 # 语法检查
-python -m py_compile backend\\core\\agent_runtime.py backend\\bot.py backend\\bot_manager.py backend\\api.py
+python -m py_compile backend\\core\\agent_runtime.py backend\\core\\prompt_governance.py backend\\core\\tool_workflow.py backend\\bot.py backend\\bot_manager.py backend\\api.py
 
 # 重点测试
 python -m pytest tests\\test_runtime_observability.py -q
 
 # Scoped lint for the productization surface
-python -m ruff check backend\\api.py backend\\bot.py backend\\bot_reply_flow.py backend\\config_schemas.py backend\\core\\memory.py backend\\core\\reply_policy.py backend\\core\\workspace_backup.py backend\\core\\eval_runner.py run.py tests\\test_api.py tests\\test_reply_policy.py tests\\test_backup_service.py tests\\test_eval_runner.py
+python -m ruff check backend\\api.py backend\\bot.py backend\\bot_reply_flow.py backend\\config_schemas.py backend\\core\\memory.py backend\\core\\reply_policy.py backend\\core\\workspace_backup.py backend\\core\\eval_runner.py backend\\core\\prompt_governance.py backend\\core\\tool_workflow.py run.py tests\\test_api.py tests\\test_reply_policy.py tests\\test_backup_service.py tests\\test_eval_runner.py
 
 # Offline eval smoke gate
 python run.py eval --dataset tests\\fixtures\\evals\\smoke_cases.json --preset smoke --report data\\evals\\smoke-report.json

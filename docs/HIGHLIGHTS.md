@@ -254,6 +254,7 @@ Provider 分层策略也更清晰：
 - 不是单模型绑定，而是兼容 OpenAI-compatible 生态，模型供应商可以替换，运行时链路不需要重写
 - 不是只有召回，还做了轻量精排和可选本地 `Cross-Encoder` 精排，并且支持失败自动回退
 - 不是只追求功能可用，而是补齐了配置热重载、状态诊断、指标导出和工程级降级策略
+- 不是把 Agent 能力无边界开放，而是先把 Prompt 回滚、配置审计、就绪检查和 Prompt 预览做成可审计、可追踪、可拒绝的受控工作流
 
 ## 5. 证据索引
 
@@ -263,12 +264,18 @@ Provider 分层策略也更清晰：
 - `backend/core/ai_client.py`：共享 `httpx.AsyncClient` 连接池、引用计数释放
 - `backend/core/memory.py`：SQLite 记忆层、批量上下文读取、WAL 和 mmap 优化
 - `backend/core/config_service.py`：中心化配置快照与运行时发布
-- `backend/api.py`：`/api/status`、`/api/metrics`、本机访问限制与配置接口
+- `backend/core/prompt_governance.py`：Prompt revision 审计账本与回滚逻辑
+- `backend/core/tool_workflow.py`：受控 Agent Tool Workflow、工具白名单和 trace 输出
+- `backend/api.py`：`/api/status`、`/api/metrics`、本机访问限制、配置接口、Prompt 回滚和 Tool Workflow 接口
 - `backend/transports/base.py`：传输层抽象边界
 - `backend/transports/wcferry_adapter.py`：版本门禁、管理员权限校验、消息接收通道初始化与状态暴露
+- `src/main/diagnostics-snapshot.js`：自动脱敏的本机诊断支持包导出
+- `src/main/ipc.js`：桌面端后端请求 allowlist、Prompt 回滚 revision 路径约束和 Tool Workflow 转发边界
 - `tests/test_agent_runtime.py`：运行时上下文聚合、缓存命中、Cross-Encoder 精排测试
 - `tests/test_optimization_tasks.py`：连接池复用、批量上下文、传输层抽象与重排测试
 - `tests/test_runtime_observability.py`：配置监听、防抖、健康检查与指标导出测试
+- `tests/test_api.py`：Prompt 回滚、Tool Workflow、备份恢复、回复策略等 API 回归
+- `tests/fixtures/evals/smoke_cases.json`：24 条固定离线评测 smoke 用例
 
 ## 补充亮点：运行准备度与自愈排障
 
@@ -280,9 +287,21 @@ Provider 分层策略也更清晰：
 - Dashboard 常驻“运行准备度”卡片，持续展示当前还差什么才能启动
 - 首次运行引导只聚焦非技术用户最容易理解的阻塞项：管理员权限、微信是否已启动、版本兼容、可用模型与认证
 - 每个阻塞项都直接绑定动作：`打开微信`、`前往设置`、`重新检查`
-- Electron 主进程支持导出自动脱敏的诊断快照，统一打包 `/api/status`、`/api/readiness`、`/api/config/audit`、更新器状态和最近日志摘要
+- Electron 主进程支持导出自动脱敏的诊断支持包，统一打包 `/api/status`、`/api/readiness`、`/api/config/audit`、更新器状态和最近日志摘要，并避免写入原始 API Key、token、OAuth/session、聊天正文、联系人真实标识或完整本机路径
 
 这让项目从“功能能跑”进一步变成“知道为什么跑不起来，并能指导用户自救”。
+
+## 补充亮点：Prompt 治理与受控工具工作流
+
+这一轮把原先容易散落在配置和调试脚本里的高风险操作，收口成可审计的本机治理接口：
+
+- Prompt 回滚通过 `POST /api/v1/admin/prompts/{revision}/rollback` 落地，回滚时追加新的 active revision，并在 `data/prompt_revisions.json` 保留 `rollback_from / reason / operator / created_at`。
+- 受控 Agent Tool Workflow 通过 `POST /api/v1/agents/tool-workflow` 落地，当前只允许 `config_audit`、`readiness_check`、`prompt_preview` 三类白名单工具。
+- 工具工作流限制最多 `8` 步、单步 payload 最多 `12000` 字符，并为每步返回 `index / tool / status / duration_ms` trace。
+- Electron 主进程只转发固定治理路径；Prompt 回滚必须匹配数字 revision，Tool Workflow 不支持任意 shell、文件写入、网络请求或动态插件执行。
+- API 测试已覆盖回滚成功、revision 不存在、白名单工具执行和未知工具拒绝，离线 smoke 数据集也扩展到 24 条，纳入 Prompt 回滚、工具审计、Windows 首次运行和 RAG 风格参考场景。
+
+这组能力的重点不是“让 Agent 做更多事”，而是先把可恢复、可审计和可解释的边界立起来。
 
 ## 补充亮点：自动提权与智能恢复
 
@@ -298,7 +317,7 @@ Provider 分层策略也更清晰：
 - 工作区备份与恢复形成闭环：支持 `quick/full` 两种备份、`backup_manifest.json` 清单、恢复前 `dry-run` 校验（默认 dry-run）、`checksum_summary` 完整性校验、`provider_credentials.json` 凭据快照、SQLite sidecar（`chat_memory.db-wal/-shm`）与 `vector_db` 全量快照，以及 `pre-restore` 自动快照；对缺失 `checksum_summary` 的旧备份，需显式 `allow_legacy_unverified=true` 才允许 apply，强调可恢复且可控。
 - 设置页新增数据治理清理：`memory / usage / export_rag` 支持 dry-run / apply，`apply` 仅在显式 scope 且 bot/growth 已停止时可执行，避免长期运行后历史产物无上限膨胀。
 - `run.py backup list/create/verify/cleanup/restore` 让这套恢复能力从“只有界面里能点”升级成“可以脚本化演练和 headless 运维”，同时控制长期运行下的备份膨胀。
-- 离线评测从“主观感觉质量还行”升级成确定性门禁：固定 smoke 数据集、固定指标、固定回归阈值，并直接接入 CI。
+- 离线评测从“主观感觉质量还行”升级成确定性门禁：固定 smoke 数据集已扩展到 24 条，覆盖 Prompt 回滚、工具流审计、Windows 首次运行和导出语料 RAG 风格参考，并直接接入 CI。
 - Electron renderer 目录单独声明 ESM 边界，消除了 `MODULE_TYPELESS_PACKAGE_JSON` 警告，同时保持主进程 CommonJS，不把模块制式切换扩散成全仓重构。
 
 这组能力说明项目已经不只是“把微信接上大模型”，而是在往“可长期运行、可恢复、可验证”的个人产品演进。
@@ -308,14 +327,17 @@ Provider 分层策略也更清晰：
 - `backend/core/reply_policy.py`
 - `backend/core/workspace_backup.py`
 - `backend/core/eval_runner.py`
+- `backend/core/prompt_governance.py`
+- `backend/core/tool_workflow.py`
 - `backend/core/memory.py` 中的 `pending_replies` 表与相关方法
-- `backend/api.py` 中的回复策略、待审批回复、备份恢复与评测接口
+- `backend/api.py` 中的回复策略、待审批回复、备份恢复、评测、Prompt 回滚与 Tool Workflow 接口
 - `run.py eval`
 - `run.py check --json`
 - `run.py backup`
 - `tests/test_reply_policy.py`
 - `tests/test_backup_service.py`
 - `tests/test_eval_runner.py`
+- `tests/test_api.py`
 - `tests/node/renderer_esm_boundary.test.mjs`
 
 ## 补充亮点：Provider + Auth Framework
