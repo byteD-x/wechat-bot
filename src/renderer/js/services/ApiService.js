@@ -168,7 +168,12 @@ class ApiService {
     }
 
     _requiresIdempotencyKey(endpoint, method) {
-        return String(method || '').toUpperCase() === 'POST' && this.idempotentPostEndpoints.has(String(endpoint || ''));
+        if (String(method || '').toUpperCase() !== 'POST') {
+            return false;
+        }
+        const normalizedEndpoint = String(endpoint || '');
+        return this.idempotentPostEndpoints.has(normalizedEndpoint)
+            || /^\/api\/v1\/admin\/prompts\/\d+\/rollback$/.test(normalizedEndpoint);
     }
 
     _generateIdempotencyKey(endpoint) {
@@ -646,6 +651,35 @@ class ApiService {
             body: payload,
             timeoutMs: 12000
         });
+    }
+
+    _normalizePromptRevision(revision) {
+        const parsed = Number.parseInt(String(revision || ''), 10);
+        if (!Number.isFinite(parsed) || parsed <= 0) {
+            throw new Error('Prompt revision must be a positive integer');
+        }
+        return parsed;
+    }
+
+    async getPromptRevisions() {
+        return this.request('/api/v1/admin/prompts/revisions', {}, 0);
+    }
+
+    async getPromptRevisionDiff(revision) {
+        const revisionId = this._normalizePromptRevision(revision);
+        return this.request(`/api/v1/admin/prompts/${revisionId}/diff`, {}, 0);
+    }
+
+    async rollbackPromptRevision(revision, payload = {}) {
+        const revisionId = this._normalizePromptRevision(revision);
+        return this.request(`/api/v1/admin/prompts/${revisionId}/rollback`, {
+            method: 'POST',
+            body: {
+                reason: String(payload?.reason || '').trim(),
+                operator: String(payload?.operator || 'settings-ui').trim() || 'settings-ui',
+            },
+            timeoutMs: 20000,
+        }, 0);
     }
 
     async getBackups(limit = 20) {

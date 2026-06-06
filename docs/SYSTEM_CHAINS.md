@@ -127,6 +127,7 @@
      - `backend/api.py::diff_prompt_revision` 调用 `PromptGovernanceService.diff_revision()`，返回 active revision 到目标 revision 的 unified diff，供回滚确认前预览。
      - `backend/api.py::rollback_prompt_revision` 调用 `PromptGovernanceService.rollback()`。
      - 回滚会复制目标 Prompt 并追加新的 active revision，默认写入 `data/prompt_revisions.json` 审计账本。
+     - 设置页系统提示区的“Prompt 版本治理”折叠面板通过 `SettingsPage`、`prompt-governance.js` 和 `ApiService` 调用这些接口；回滚按钮必须在当前 revision 生成 fresh diff 后才会启用，成功后刷新设置快照和版本历史。
      - Electron 主进程只允许转发固定列表路径 `/api/v1/admin/prompts/revisions`，以及匹配 `^/api/v1/admin/prompts/\d+/(diff|rollback)$` 的数字 revision 路径，避免任意管理路径穿透。
 
 10. `/api/v1/agents/tool-workflow`

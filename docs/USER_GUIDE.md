@@ -591,7 +591,12 @@ python run.py eval --dataset tests/fixtures/evals/smoke_cases.json --preset smok
 - Prompt 回滚 API：`POST /api/v1/admin/prompts/{revision}/rollback`
   - 回滚目标是历史 revision，但执行结果会追加一条新的 active revision。
   - 审计账本默认写入 `data/prompt_revisions.json`，记录 `rollback_from`、`reason`、`operator`、`created_at`。
-  - 回滚不会覆盖或删除历史记录；UI 审批仍属于后续路线。
+  - 回滚不会覆盖或删除历史记录。
+- 设置页“系统提示”卡片中的“Prompt 版本治理”折叠面板已经接入以上接口：
+  - 先刷新版本历史，选择一个历史 revision。
+  - 必须先预览 diff，确认影响范围后才会启用回滚按钮。
+  - 回滚前会弹出确认提示；成功后会刷新只读注入块、运行时状态和版本历史。
+  - 失败信息会显示在治理面板内；diff 仅用于本机受控预览，不会写入公开文档或诊断包。
 - 受控 Agent Tool Workflow API：`POST /api/v1/agents/tool-workflow`
   - 当前最多 `8` 步，单步 payload 字符串化后最多 `12000` 字符。
   - 当前白名单只包含 `config_audit`、`readiness_check`、`prompt_preview`。

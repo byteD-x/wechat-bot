@@ -168,6 +168,55 @@ test('api service maintenance endpoints use long timeout budget', async () => {
     );
 });
 
+test('api service prompt governance helpers use trusted endpoints and idempotent rollback', async () => {
+    const previousRequest = apiService.request;
+    const calls = [];
+    apiService.request = async (endpoint, options = {}, retries = undefined) => {
+        calls.push({ endpoint, options, retries });
+        return { success: true };
+    };
+
+    try {
+        await apiService.getPromptRevisions();
+        await apiService.getPromptRevisionDiff('12');
+        await apiService.rollbackPromptRevision('12', { reason: 'restore stable prompt' });
+    } finally {
+        apiService.request = previousRequest;
+    }
+
+    assert.deepEqual(calls, [
+        {
+            endpoint: '/api/v1/admin/prompts/revisions',
+            options: {},
+            retries: 0,
+        },
+        {
+            endpoint: '/api/v1/admin/prompts/12/diff',
+            options: {},
+            retries: 0,
+        },
+        {
+            endpoint: '/api/v1/admin/prompts/12/rollback',
+            options: {
+                method: 'POST',
+                body: {
+                    reason: 'restore stable prompt',
+                    operator: 'settings-ui',
+                },
+                timeoutMs: 20000,
+            },
+            retries: 0,
+        },
+    ]);
+
+    assert.equal(apiService._requiresIdempotencyKey('/api/v1/admin/prompts/12/rollback', 'POST'), true);
+    assert.equal(apiService._requiresIdempotencyKey('/api/v1/admin/prompts/abc/rollback', 'POST'), false);
+    await assert.rejects(
+        apiService.getPromptRevisionDiff('abc'),
+        /positive integer/,
+    );
+});
+
 test('api service SSE connection does not leak token in URL', async () => {
     const previousEventSource = globalThis.EventSource;
     const previousInitialized = apiService.initialized;

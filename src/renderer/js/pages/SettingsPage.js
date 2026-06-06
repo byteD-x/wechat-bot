@@ -16,6 +16,13 @@ import {
     saveSettings,
 } from './settings/action-controller.js';
 import {
+    handlePromptRevisionSelection,
+    loadPromptRevisions,
+    previewPromptRevisionDiff,
+    renderPromptGovernancePanel,
+    rollbackPromptRevision,
+} from './settings/prompt-governance.js';
+import {
     handleMainScroll,
     hideSaveFeedback,
     initModuleSaveButtons,
@@ -59,6 +66,9 @@ const TEXT = {
     presetModelMissing: '请选择或填写模型名称',
     presetSaveSuccess: '预设已保存，相关配置会在下次保存设置后生效',
     noAudit: '当前没有可用的配置审计信息',
+    promptGovernanceLoadFailed: '加载 Prompt 版本历史失败',
+    promptGovernanceDiffFailed: '生成 Prompt 差异失败',
+    promptRollbackFailed: 'Prompt 回滚失败',
 };
 
 function serializeSettingsPayload(payload) {
@@ -152,6 +162,7 @@ export class SettingsPage extends PageController {
             dataControlDryRunScope: '',
         };
         this._backupPromise = null;
+        this._promptGovernanceState = null;
         this._activeSettingsSection = 'connection';
         this._hasPendingChanges = false;
         this._baselineSettingsPayload = serializeSettingsPayload({});
@@ -169,6 +180,7 @@ export class SettingsPage extends PageController {
         bindSettingsAutoSave(this);
         this._initModuleSaveButtons();
         this._renderWorkbenchState();
+        this._renderPromptGovernancePanel();
         this._setSettingsSection(this._activeSettingsSection);
         this._initScrollControls();
         this._watchUpdaterState();
@@ -191,6 +203,7 @@ export class SettingsPage extends PageController {
         }
         this._renderUpdatePanel();
         await this._loadWorkspaceBackups({ silent: true });
+        await this._loadPromptRevisions({ silent: true });
     }
 
     async onLeave() {
@@ -277,6 +290,26 @@ export class SettingsPage extends PageController {
 
     async _previewPrompt() {
         await previewPrompt(this, TEXT);
+    }
+
+    async _loadPromptRevisions(options = {}) {
+        return loadPromptRevisions(this, options, TEXT);
+    }
+
+    async _previewPromptRevisionDiff() {
+        return previewPromptRevisionDiff(this, TEXT);
+    }
+
+    async _rollbackPromptRevision() {
+        return rollbackPromptRevision(this, TEXT);
+    }
+
+    _handlePromptRevisionSelection() {
+        handlePromptRevisionSelection(this);
+    }
+
+    _renderPromptGovernancePanel() {
+        renderPromptGovernancePanel(this);
     }
 
     async _resetCloseBehavior() {
@@ -799,6 +832,8 @@ export class SettingsPage extends PageController {
             previewButton.disabled = !connected;
             previewButton.title = connected ? '生成当前设置下的最终 Prompt 预览' : '请先连接 Python 服务后再预览';
         }
+
+        this._renderPromptGovernancePanel();
 
         if (saveButton && !this._isSaving) {
             saveButton.disabled = !this._hasPendingChanges;

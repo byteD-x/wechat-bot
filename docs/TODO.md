@@ -7,17 +7,14 @@
 - Windows 成熟化第一轮：桌面端壳、消息中心、设置中心、模型中心、诊断支持包和相关 Node 测试已有改动。
 - Prompt 回滚 API：`POST /api/v1/admin/prompts/{revision}/rollback` 已落地，回滚追加新 active revision，并写入 `data/prompt_revisions.json` 审计账本。
 - Prompt 版本列表与差异 API：`GET /api/v1/admin/prompts/revisions` 与 `GET /api/v1/admin/prompts/{revision}/diff` 已落地；列表只返回 revision 元数据，不泄露完整 Prompt，diff 供回滚确认前预览。
+- Prompt 回滚 UI：设置页系统提示区已提供“Prompt 版本治理”折叠面板，可查看版本历史、先预览 diff、再确认回滚，并在成功后刷新只读注入块与运行时状态。
 - 受控 Agent Tool Workflow API：`POST /api/v1/agents/tool-workflow` 已落地，当前白名单包含 `config_audit`、`readiness_check`、`prompt_preview`。
 - API 测试：已覆盖 Prompt 版本列表、diff 预览、空/损坏账本诊断、active revision 唯一性、Prompt 回滚成功、revision 不存在、白名单工具执行和未知工具拒绝。
+- Renderer 测试：已覆盖 Prompt 版本治理入口、ApiService 幂等回滚策略、必须先预览差异再执行回滚，以及成功回滚后的设置刷新与反馈。
 - RAG/eval smoke 扩样：`tests/fixtures/evals/smoke_cases.json` 已从 20 条扩到 24 条，新增 Prompt 回滚、工具审计、Windows 首次运行和 RAG 风格参考场景。
 - 文档入口：`README.md`、`docs/USER_GUIDE.md`、`docs/SYSTEM_CHAINS.md`、`docs/HIGHLIGHTS.md`、`docs/api.md` 和 `docs/interview-playbook.md` 已补充。
 
 ## 下一阶段 P0
-
-- Prompt 回滚 UI
-  - 在设置页 Prompt 区增加版本历史入口、回滚确认弹窗和结果反馈。
-  - 交互要求：默认先预览差异，再确认回滚；失败信息贴近按钮展示；成功后刷新只读注入块和运行时状态。
-  - 验证：补充 renderer helper 测试，必要时用 Playwright 做桌面尺寸截图检查。
 
 - Tool Workflow UI
   - 在诊断或 Agent 管理区展示可选工具、dry-run、执行 trace 和失败恢复建议。

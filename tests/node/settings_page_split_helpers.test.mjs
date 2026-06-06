@@ -14,6 +14,13 @@ import {
     bindSettingsEvents,
     shouldSaveSettingsChangeImmediately,
 } from '../../src/renderer/js/pages/settings/page-shell.js';
+import {
+    handlePromptRevisionSelection,
+    loadPromptRevisions,
+    previewPromptRevisionDiff,
+    renderPromptGovernancePanel,
+    rollbackPromptRevision,
+} from '../../src/renderer/js/pages/settings/prompt-governance.js';
 import { renderBackupPanel } from '../../src/renderer/js/pages/settings/backup-panel.js';
 import { renderSettingsHero } from '../../src/renderer/js/pages/settings/hero-renderer.js';
 import {
@@ -376,6 +383,7 @@ test('settings page onEnter reloads when a background config change is pending',
     page._renderHero = () => {
         calls.push('hero');
     };
+    page._loadPromptRevisions = async () => {};
     page.getState = () => 0;
 
     await page.onEnter();
@@ -403,6 +411,7 @@ test('settings page onEnter reloads when local auth sync is still refreshing', a
     page._renderHero = () => {
         calls.push('hero');
     };
+    page._loadPromptRevisions = async () => {};
     page.getState = () => 0;
 
     await page.onEnter();
@@ -1164,12 +1173,145 @@ test('settings action helpers handle preview and updater flows', async () => wit
     ]);
 }));
 
+test('settings prompt governance requires preview before rollback and refreshes after success', async () => withDom(async ({ document, registerElement }) => {
+    const selectors = {};
+    const register = (id, tagName = 'div') => {
+        const node = registerElement(id, document.createElement(tagName));
+        selectors[`#${id}`] = node;
+        return node;
+    };
+    const registerButton = (id) => {
+        const button = register(id, 'button');
+        button.appendChild(document.createElement('span'));
+        return button;
+    };
+
+    const select = register('settings-prompt-revision-select', 'select');
+    const feedback = register('settings-prompt-governance-feedback');
+    const meta = register('settings-prompt-governance-meta');
+    const issues = register('settings-prompt-governance-issues');
+    const diff = register('settings-prompt-revision-diff', 'pre');
+    const reason = register('settings-prompt-rollback-reason', 'input');
+    registerButton('btn-refresh-prompt-revisions');
+    registerButton('btn-preview-prompt-revision-diff');
+    const rollbackButton = registerButton('btn-rollback-prompt-revision');
+
+    const calls = [];
+    const toastRecorder = createToastRecorder();
+    let revisionLoadCalls = 0;
+    let rollbackPayload = null;
+    const api = {
+        async getPromptRevisions() {
+            revisionLoadCalls += 1;
+            const activeRevision = revisionLoadCalls > 1 ? 3 : 2;
+            return {
+                success: true,
+                active_revision: activeRevision,
+                revisions: [
+                    { revision: 1, status: 'superseded', source: 'settings-ui', created_at: 1_700_000_000 },
+                    { revision: 2, status: 'active', source: 'settings-ui', created_at: 1_700_000_100 },
+                    ...(activeRevision === 3
+                        ? [{ revision: 3, status: 'active', source: 'rollback', created_at: 1_700_000_200 }]
+                        : []),
+                ],
+                issues: [],
+            };
+        },
+        async getPromptRevisionDiff(revision) {
+            calls.push(`diff:${revision}`);
+            return {
+                success: true,
+                active_revision: 2,
+                revision,
+                diff: ['--- active:2', '+++ revision:1', '- 当前 prompt', '+ 历史 prompt'],
+                summary: { changed: true },
+                issues: ['ledger ok'],
+            };
+        },
+        async rollbackPromptRevision(revision, payload) {
+            calls.push(`rollback:${revision}`);
+            rollbackPayload = payload;
+            return {
+                success: true,
+                active_revision: 3,
+                runtime_apply: { message: 'Prompt 已重新注入运行时' },
+            };
+        },
+    };
+    const page = {
+        _promptGovernanceState: null,
+        getState(path) {
+            return path === 'bot.connected';
+        },
+        $(selector) {
+            return selectors[selector] || null;
+        },
+        async loadSettings(options) {
+            calls.push(`load:${options.silent}:${options.preserveFeedback}`);
+        },
+        _renderWorkbenchState() {
+            calls.push('workbench');
+        },
+    };
+    const deps = {
+        apiService: api,
+        toast: toastRecorder,
+        confirm: () => {
+            calls.push('confirm');
+            return true;
+        },
+    };
+
+    renderPromptGovernancePanel(page);
+    assert.equal(rollbackButton.disabled, true);
+
+    await loadPromptRevisions(page, { silent: true }, {}, deps);
+    assert.equal(select.value, '1');
+    assert.equal(select.children.length, 2);
+    assert.match(meta.textContent, /active revision 为 #2/);
+    assert.equal(rollbackButton.disabled, true);
+
+    await rollbackPromptRevision(page, {}, deps);
+    assert.equal(rollbackPayload, null);
+    assert.match(feedback.textContent, /请先预览所选版本的差异/);
+
+    await previewPromptRevisionDiff(page, {}, deps);
+    assert.match(diff.textContent, /--- active:2/);
+    assert.match(issues.textContent, /ledger ok/);
+    assert.equal(rollbackButton.disabled, false);
+
+    reason.value = '上一版回复更稳定';
+    await rollbackPromptRevision(page, {}, deps);
+
+    assert.deepEqual(rollbackPayload, {
+        reason: '上一版回复更稳定',
+        operator: 'settings-ui',
+    });
+    assert.equal(reason.value, '');
+    assert.match(feedback.textContent, /新 active revision 为 #3/);
+    assert.equal(rollbackButton.disabled, true);
+    assert.deepEqual(toastRecorder.calls, [
+        { type: 'success', message: 'Prompt 已重新注入运行时' },
+    ]);
+    assert.deepEqual(calls, [
+        'diff:1',
+        'confirm',
+        'rollback:1',
+        'load:true:true',
+        'workbench',
+    ]);
+}));
+
 test('settings page shell binds events and auto save routing stably', async () => withDom(async ({ document, registerElement }) => {
     const controls = new Map();
     [
         'btn-refresh-config',
         'btn-save-settings',
         'btn-preview-prompt',
+        'btn-refresh-prompt-revisions',
+        'settings-prompt-revision-select',
+        'btn-preview-prompt-revision-diff',
+        'btn-rollback-prompt-revision',
         'btn-reset-close-behavior',
         'btn-settings-scroll-top',
         'btn-create-quick-backup',
@@ -1205,6 +1347,18 @@ test('settings page shell binds events and auto save routing stably', async () =
         },
         _previewPrompt() {
             this.calls.push('preview');
+        },
+        _loadPromptRevisions(options) {
+            this.calls.push(`prompt-revisions:${options?.silent}`);
+        },
+        _handlePromptRevisionSelection() {
+            this.calls.push('prompt-select');
+        },
+        _previewPromptRevisionDiff() {
+            this.calls.push('prompt-diff');
+        },
+        _rollbackPromptRevision() {
+            this.calls.push('prompt-rollback');
         },
         _resetCloseBehavior() {
             this.calls.push('reset');
@@ -1246,7 +1400,7 @@ test('settings page shell binds events and auto save routing stably', async () =
         rootElement: root,
     });
 
-    assert.equal(page.bindings.length, 13);
+    assert.equal(page.bindings.length, 17);
     assert.equal(page._eventCleanups.length, 1);
 
     page.bindings.forEach(({ handler }) => handler());
@@ -1260,6 +1414,10 @@ test('settings page shell binds events and auto save routing stably', async () =
         'load',
         'save',
         'preview',
+        'prompt-revisions:false',
+        'prompt-select',
+        'prompt-diff',
+        'prompt-rollback',
         'reset',
         'top',
         'backup-create:quick',

@@ -199,6 +199,45 @@ export function renderSettingsPageShell() {
                             <textarea id="setting-system-prompt-overrides" rows="4"></textarea>
                             <div class="detail-help">这里只填写每个会话额外的自定义规则；系统必需的历史对话、画像、情绪/时间/风格注入块仍会在运行时自动补齐。</div>
                         </div>
+                        <details class="prompt-governance-panel settings-disclosure settings-disclosure-danger">
+                            <summary class="settings-disclosure-summary">
+                                <span class="backup-action-kicker">Prompt 版本治理</span>
+                                <strong>先预览差异，再回滚</strong>
+                            </summary>
+                            <div class="prompt-governance-grid">
+                                <div class="form-group">
+                                    <label class="form-label" for="settings-prompt-revision-select">历史版本</label>
+                                    <select class="form-input" id="settings-prompt-revision-select">
+                                        <option value="">连接 Python 服务后加载</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label" for="settings-prompt-rollback-reason">回滚原因</label>
+                                    <input class="form-input" id="settings-prompt-rollback-reason" type="text" maxlength="500" placeholder="例如：上一版回复更稳定">
+                                </div>
+                                <div class="prompt-governance-actions">
+                                    <button class="btn btn-secondary btn-sm" id="btn-refresh-prompt-revisions" type="button">
+                                        <svg class="icon icon-sm">
+                                            <use href="#icon-refresh" />
+                                        </svg>
+                                        <span>刷新版本</span>
+                                    </button>
+                                    <button class="btn btn-secondary btn-sm" id="btn-preview-prompt-revision-diff" type="button">
+                                        <svg class="icon icon-sm">
+                                            <use href="#icon-zap" />
+                                        </svg>
+                                        <span>预览差异</span>
+                                    </button>
+                                    <button class="btn btn-primary btn-sm" id="btn-rollback-prompt-revision" type="button">
+                                        <span>回滚到所选版本</span>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="prompt-governance-meta" id="settings-prompt-governance-meta">版本历史会在 Python 服务连接后显示。</div>
+                            <div class="prompt-governance-feedback" id="settings-prompt-governance-feedback" data-state="idle">尚未加载 Prompt 版本历史</div>
+                            <div class="prompt-governance-issues" id="settings-prompt-governance-issues" hidden></div>
+                            <pre class="prompt-preview-output prompt-governance-diff" id="settings-prompt-revision-diff">先选择一个历史版本，再生成差异预览。</pre>
+                        </details>
                     </div>
 
                     <div class="settings-card">

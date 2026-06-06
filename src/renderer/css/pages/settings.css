@@ -301,6 +301,74 @@
     gap: 14px;
 }
 
+.prompt-governance-panel {
+    margin-top: 12px;
+    padding: 14px;
+    border-radius: 12px;
+}
+
+.prompt-governance-grid {
+    display: grid;
+    grid-template-columns: minmax(220px, 1fr) minmax(180px, 0.8fr);
+    gap: 12px;
+    align-items: end;
+}
+
+.prompt-governance-actions {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.prompt-governance-meta,
+.prompt-governance-feedback,
+.prompt-governance-issues {
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.prompt-governance-meta {
+    color: var(--text-secondary);
+}
+
+.prompt-governance-feedback {
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    background: rgba(255, 255, 255, 0.74);
+    color: var(--text-secondary);
+}
+
+.prompt-governance-feedback[data-state="success"] {
+    border-color: rgba(22, 163, 74, 0.2);
+    background: rgba(240, 253, 244, 0.78);
+    color: var(--color-success);
+}
+
+.prompt-governance-feedback[data-state="warning"],
+.prompt-governance-feedback[data-state="loading"] {
+    border-color: rgba(217, 119, 6, 0.22);
+    background: rgba(255, 251, 235, 0.78);
+    color: var(--color-warning);
+}
+
+.prompt-governance-feedback[data-state="error"] {
+    border-color: rgba(220, 38, 38, 0.22);
+    background: rgba(254, 242, 242, 0.78);
+    color: var(--color-error);
+}
+
+.prompt-governance-issues {
+    color: var(--color-warning);
+}
+
+.prompt-governance-diff {
+    max-height: 280px;
+    overflow: auto;
+    white-space: pre-wrap;
+}
+
 .backup-action-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -358,7 +426,8 @@
 @media (max-width: 900px) {
     .settings-hero-audit-grid,
     .settings-workbench-summary,
-    .backup-action-grid {
+    .backup-action-grid,
+    .prompt-governance-grid {
         grid-template-columns: 1fr;
     }
 

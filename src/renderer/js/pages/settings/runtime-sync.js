@@ -222,6 +222,7 @@ export function watchUpdaterState(page) {
             page._configAudit = null;
             page._auditStatus = 'offline';
             page._auditMessage = '';
+            void page._loadPromptRevisions?.({ silent: true });
             if (page.isActive()) {
                 page._renderHero();
             }
@@ -229,6 +230,7 @@ export function watchUpdaterState(page) {
         }
         if (page.isActive()) {
             page._renderHero();
+            void page._loadPromptRevisions?.({ silent: true });
         }
         if (page._shouldRefreshAudit()) {
             void page._loadConfigAudit({ silent: true });
