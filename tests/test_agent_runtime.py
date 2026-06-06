@@ -253,7 +253,18 @@ class _DummyVectorMemory:
         self.inserted = []
 
     def search(self, query=None, n_results=5, filter_meta=None, query_embedding=None):
-        return [{"text": "runtime memory", "distance": 0.2}]
+        if (filter_meta or {}).get("source") not in (None, "runtime_chat"):
+            return []
+        return [
+            {
+                "text": "runtime memory",
+                "distance": 0.2,
+                "metadata": {
+                    "chat_id": (filter_meta or {}).get("chat_id", ""),
+                    "source": "runtime_chat",
+                },
+            }
+        ]
 
     def add_text(self, text, metadata, id, embedding=None):
         self.inserted.append(
@@ -268,6 +279,8 @@ class _DummyVectorMemory:
 
 class _CrossEncoderVectorMemory:
     def search(self, query=None, n_results=5, filter_meta=None, query_embedding=None):
+        if (filter_meta or {}).get("source") not in (None, "runtime_chat"):
+            return []
         return [
             {"text": "irrelevant chatter", "distance": 0.05},
             {"text": "tonight release plan and rollback steps", "distance": 0.35},

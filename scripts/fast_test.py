@@ -32,9 +32,22 @@ SUITES: dict[str, FastSuite] = {
         targets=("tests/test_rag_citations.py",),
         plugins=("pytest_asyncio.plugin",),
     ),
+    "agent-runtime": FastSuite(
+        description="Agent runtime context assembly and retriever integration checks.",
+        targets=(
+            "tests/test_agent_runtime.py::test_agent_runtime_prepare_request_aggregates_context",
+            "tests/test_agent_runtime.py::test_agent_runtime_uses_cross_encoder_reranker_when_available",
+        ),
+        plugins=("pytest_asyncio.plugin",),
+    ),
     "eval": FastSuite(
         description="Deterministic offline eval metrics and threshold checks.",
         targets=("tests/test_eval_runner.py",),
+    ),
+    "knowledge-base": FastSuite(
+        description="Knowledge base ingestion, chunk metadata, and rebuild checks.",
+        targets=("tests/test_knowledge_base.py",),
+        plugins=("pytest_asyncio.plugin",),
     ),
 }
 

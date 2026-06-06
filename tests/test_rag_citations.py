@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 from backend.core.rag import CitationService, RetrievalService
+from backend.core.knowledge_base import KNOWLEDGE_SOURCE
 from backend.core.safety import SafetyGuard
 
 
@@ -31,6 +32,7 @@ class _FakeVectorMemory:
         self.calls = []
 
     def search(self, query=None, n_results=5, filter_meta=None, query_embedding=None):
+        source = (filter_meta or {}).get("source")
         self.calls.append(
             {
                 "query": query,
@@ -39,6 +41,24 @@ class _FakeVectorMemory:
                 "query_embedding": list(query_embedding or []),
             }
         )
+        if source == KNOWLEDGE_SOURCE:
+            return [
+                {
+                    "text": "knowledge base says release requires QA signoff and rollback drills",
+                    "distance": 0.18,
+                    "metadata": {
+                        "source": KNOWLEDGE_SOURCE,
+                        "doc_id": "release-playbook",
+                        "chunk_id": "kb-release-1",
+                        "chunk_index": 2,
+                        "source_file": "docs/release-playbook.md",
+                        "url": "https://example.test/release-playbook",
+                        "page": 3,
+                    },
+                }
+            ]
+        if source != "runtime_chat":
+            return []
         return [
             {
                 "text": "runtime memory about rollback plan",
@@ -134,13 +154,26 @@ async def test_retrieval_service_returns_messages_and_citations():
 
     assert bundle.metadata["augmented"] is True
     assert bundle.metadata["runtime_hit_count"] == 1
+    assert bundle.metadata["knowledge_hit_count"] == 1
+    assert bundle.metadata["knowledge_base_used"] is True
     assert bundle.metadata["export_hit_count"] == 1
     assert bundle.metadata["export_rag_used"] is True
-    assert bundle.metadata["citation_count"] == 2
-    assert {item["source"] for item in bundle.metadata["citations"]} == {"runtime_chat", "export_chat"}
+    assert bundle.metadata["citation_count"] == 3
+    assert {item["source"] for item in bundle.metadata["citations"]} == {
+        "runtime_chat",
+        KNOWLEDGE_SOURCE,
+        "export_chat",
+    }
+    knowledge_citation = next(item for item in bundle.metadata["citations"] if item["source"] == KNOWLEDGE_SOURCE)
+    assert knowledge_citation["doc_id"] == "release-playbook"
+    assert knowledge_citation["chunk_id"] == "kb-release-1"
+    assert knowledge_citation["source_file"] == "docs/release-playbook.md"
+    assert knowledge_citation["url"] == "https://example.test/release-playbook"
+    assert knowledge_citation["page"] == 3
     assert any(message["content"].startswith("Citation map") for message in bundle.messages)
-    assert runtime._stats["retriever_hits"] == 1
+    assert runtime._stats["retriever_hits"] == 2
     assert vector_memory.calls[0]["filter_meta"] == {"chat_id": "friend:alice", "source": "runtime_chat"}
+    assert vector_memory.calls[1]["filter_meta"] == {"source": KNOWLEDGE_SOURCE}
     assert export_rag.search_calls[0]["chat_id_aliases"] == ["friend:Alice"]
 
 

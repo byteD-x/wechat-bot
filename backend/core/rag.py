@@ -6,6 +6,8 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence
 
+from backend.core.knowledge_base import KNOWLEDGE_SOURCE
+
 
 def _clean_text(value: Any, *, limit: int = 600) -> str:
     text = str(value or "").strip()
@@ -96,12 +98,31 @@ class RetrievalService:
         export_rag = dependencies.get("export_rag")
 
         if vector_memory is not None and self.runtime.bot_cfg.get("rag_enabled", False):
-            runtime_results = await self._retrieve_runtime_memory(chat_id, query_text, vector_memory)
+            query_embedding = await self._build_query_embedding(query_text)
+            runtime_results = await self._retrieve_runtime_memory(
+                chat_id,
+                query_text,
+                vector_memory,
+                query_embedding=query_embedding,
+            )
             if runtime_results:
                 runtime_hits = len(runtime_results)
                 messages.append(self._build_runtime_memory_message(runtime_results))
                 for index, item in enumerate(runtime_results, start=1):
                     citations.append(self.citation_service.build(item, source="runtime_chat", index=index))
+                    snippet = _clean_text(item.get("text"), limit=160)
+                    if snippet:
+                        trace_snippets.append(snippet)
+
+            knowledge_results = await self._retrieve_knowledge_base(
+                query_text,
+                vector_memory,
+                query_embedding=query_embedding,
+            )
+            if knowledge_results:
+                messages.append(self._build_knowledge_base_message(knowledge_results))
+                for index, item in enumerate(knowledge_results, start=1):
+                    citations.append(self.citation_service.build(item, source=KNOWLEDGE_SOURCE, index=index))
                     snippet = _clean_text(item.get("text"), limit=160)
                     if snippet:
                         trace_snippets.append(snippet)
@@ -135,8 +156,10 @@ class RetrievalService:
         metadata = {
             "augmented": bool(messages),
             "runtime_hit_count": runtime_hits,
+            "knowledge_hit_count": len([item for item in citations if item.get("source") == KNOWLEDGE_SOURCE]),
             "export_hit_count": export_hits,
             "export_rag_used": export_hits > 0,
+            "knowledge_base_used": any(item.get("source") == KNOWLEDGE_SOURCE for item in citations),
             "citation_count": len(citations),
             "citations": citations,
             "trace_snippets": trace_snippets[:8],
@@ -144,26 +167,64 @@ class RetrievalService:
         }
         return RetrievalBundle(messages=messages, metadata=metadata)
 
+    async def _build_query_embedding(self, query_text: str) -> Optional[List[float]]:
+        query = str(query_text or "").strip()
+        if not query:
+            return None
+        return await self.runtime.get_embedding(query)
+
     async def _retrieve_runtime_memory(
         self,
         chat_id: str,
         query_text: str,
         vector_memory: Any,
+        *,
+        query_embedding: Optional[List[float]],
     ) -> List[Dict[str, Any]]:
         query = str(query_text or "").strip()
         if not query:
             return []
-        embedding = await self.runtime.get_embedding(query)
         results = await asyncio.to_thread(
             vector_memory.search,
-            query=query if not embedding else None,
+            query=query if not query_embedding else None,
             n_results=self.runtime.retriever_fetch_k,
             filter_meta={"chat_id": chat_id, "source": "runtime_chat"},
-            query_embedding=embedding,
+            query_embedding=query_embedding,
         )
         if not results:
             return []
         ranked_results = await self.runtime._rerank_runtime_results(query, list(results))
+        selected = self._select_ranked_results(ranked_results)
+        if selected:
+            self.runtime._stats["retriever_hits"] += len(selected)
+        return selected
+
+    async def _retrieve_knowledge_base(
+        self,
+        query_text: str,
+        vector_memory: Any,
+        *,
+        query_embedding: Optional[List[float]],
+    ) -> List[Dict[str, Any]]:
+        query = str(query_text or "").strip()
+        if not query:
+            return []
+        results = await asyncio.to_thread(
+            vector_memory.search,
+            query=query if not query_embedding else None,
+            n_results=self.runtime.retriever_fetch_k,
+            filter_meta={"source": KNOWLEDGE_SOURCE},
+            query_embedding=query_embedding,
+        )
+        if not results:
+            return []
+        ranked_results = await self.runtime._rerank_runtime_results(query, list(results))
+        selected = self._select_ranked_results(ranked_results)
+        if selected:
+            self.runtime._stats["retriever_hits"] += len(selected)
+        return selected
+
+    def _select_ranked_results(self, ranked_results: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
         selected: List[Dict[str, Any]] = []
         for item in ranked_results:
             distance = _safe_float(item.get("distance"))
@@ -175,8 +236,6 @@ class RetrievalService:
             selected.append(item)
             if len(selected) >= self.runtime.retriever_top_k:
                 break
-        if selected:
-            self.runtime._stats["retriever_hits"] += len(selected)
         return selected
 
     async def _retrieve_export_rag(
@@ -208,6 +267,21 @@ class RetrievalService:
         return {
             "role": "system",
             "content": "Relevant past memories with citation ids:\n" + "\n".join(lines),
+            "hit_count": len(lines),
+        }
+
+    @staticmethod
+    def _build_knowledge_base_message(results: Sequence[Dict[str, Any]]) -> Dict[str, str]:
+        lines = []
+        for index, item in enumerate(results, start=1):
+            text = _clean_text(item.get("text"), limit=500)
+            metadata = dict(item.get("metadata") or {})
+            doc_id = str(metadata.get("doc_id") or metadata.get("source_file") or "knowledge").strip()
+            if text:
+                lines.append(f"[KB{index} {doc_id}] {text}")
+        return {
+            "role": "system",
+            "content": "Relevant knowledge base entries with citation ids:\n" + "\n".join(lines),
             "hit_count": len(lines),
         }
 
