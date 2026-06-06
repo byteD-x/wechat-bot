@@ -27,6 +27,25 @@ KNOWLEDGE_QUERY_PATTERN = re.compile(
 )
 
 
+def _collect_citation_markers(citations: List[Dict[str, Any]]) -> List[str]:
+    markers: List[str] = []
+    for citation in citations:
+        if not isinstance(citation, dict):
+            continue
+        for key in ("citation_id", "doc_id", "chunk_id", "source_file", "url"):
+            value = str(citation.get(key) or "").strip()
+            if value and value not in markers:
+                markers.append(value)
+    return markers
+
+
+def _answer_references_any_citation(answer_text: str, citations: List[Dict[str, Any]]) -> bool:
+    answer = str(answer_text or "")
+    if not answer.strip():
+        return False
+    return any(marker in answer for marker in _collect_citation_markers(citations))
+
+
 class SafetyGuard:
     def __init__(self, bot_cfg: Dict[str, Any] | None = None, agent_cfg: Dict[str, Any] | None = None) -> None:
         self.bot_cfg = dict(bot_cfg or {})
@@ -50,6 +69,7 @@ class SafetyGuard:
         knowledge_query = bool(KNOWLEDGE_QUERY_PATTERN.search(str(user_text or "")))
         rag_augmented = bool(retrieval_payload.get("augmented"))
         grounded = bool(citations)
+        answer_citation_bound = _answer_references_any_citation(answer_text, citations)
 
         if prompt_injection_detected:
             reasons.append("prompt_injection_detected")
@@ -57,13 +77,17 @@ class SafetyGuard:
             reasons.append("pii_detected")
         if citation_required and rag_augmented and knowledge_query and not grounded:
             reasons.append("missing_required_citation")
+        if citation_required and rag_augmented and knowledge_query and grounded and not answer_citation_bound:
+            reasons.append("answer_missing_citation_reference")
 
         action = "allow"
         refusal = ""
         if block_prompt_injection and prompt_injection_detected:
             action = "refuse"
             refusal = "\u8fd9\u4e2a\u8bf7\u6c42\u6d89\u53ca\u4fee\u6539\u6216\u6cc4\u9732\u7cfb\u7edf\u89c4\u5219\uff0c\u6211\u4e0d\u80fd\u6309\u8fd9\u4e2a\u65b9\u5411\u5904\u7406\u3002"
-        elif citation_required and "missing_required_citation" in reasons:
+        elif citation_required and (
+            "missing_required_citation" in reasons or "answer_missing_citation_reference" in reasons
+        ):
             action = "refuse"
             refusal = "\u6211\u6ca1\u6709\u627e\u5230\u8db3\u591f\u53ef\u9760\u7684\u6765\u6e90\u4f9d\u636e\uff0c\u5148\u4e0d\u76f4\u63a5\u4e0b\u7ed3\u8bba\u3002"
 
@@ -74,6 +98,7 @@ class SafetyGuard:
             "pii_detected": pii_detected,
             "citation_required": citation_required,
             "grounded": grounded,
+            "answer_citation_bound": answer_citation_bound,
             "citation_count": len(citations),
             "refusal": refusal,
         }

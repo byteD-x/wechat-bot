@@ -127,6 +127,9 @@ class RetrievalService:
 
         citation_message = self._build_citation_message(citations)
         if citation_message:
+            citation_policy_message = self._build_citation_policy_message(citations)
+            if citation_policy_message:
+                messages.append(citation_policy_message)
             messages.append(citation_message)
 
         metadata = {
@@ -223,6 +226,24 @@ class RetrievalService:
         return {
             "role": "system",
             "content": "Citation map for retrieved context:\n" + "\n".join(lines),
+        }
+
+    def _build_citation_policy_message(self, citations: Sequence[Dict[str, Any]]) -> Optional[Dict[str, str]]:
+        if not citations:
+            return None
+        citation_required = bool(
+            self.runtime.bot_cfg.get("safety_require_citations_for_rag", False)
+            or getattr(self.runtime, "agent_cfg", {}).get("safety_require_citations_for_rag", False)
+        )
+        if not citation_required:
+            return None
+        return {
+            "role": "system",
+            "content": (
+                "When using retrieved context to answer factual or knowledge-style questions, "
+                "include at least one exact citation id from the citation map in the answer. "
+                "If no citation supports the answer, say you do not have enough reliable evidence."
+            ),
         }
 
     @staticmethod

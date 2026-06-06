@@ -7,11 +7,13 @@ from backend.core.safety import SafetyGuard
 
 
 class _FakeRuntime:
-    def __init__(self):
+    def __init__(self, *, require_citations=False):
         self.bot_cfg = {
             "rag_enabled": True,
             "export_rag_enabled": True,
+            "safety_require_citations_for_rag": require_citations,
         }
+        self.agent_cfg = {}
         self.retriever_fetch_k = 3
         self.retriever_top_k = 2
         self.retriever_score_threshold = 1.0
@@ -142,6 +144,24 @@ async def test_retrieval_service_returns_messages_and_citations():
     assert export_rag.search_calls[0]["chat_id_aliases"] == ["friend:Alice"]
 
 
+@pytest.mark.asyncio
+async def test_retrieval_service_adds_citation_policy_when_required():
+    runtime = _FakeRuntime(require_citations=True)
+
+    bundle = await RetrievalService(runtime).retrieve(
+        chat_id="friend:alice",
+        query_text="what is the release plan?",
+        dependencies={
+            "vector_memory": _FakeVectorMemory(),
+            "export_rag": _FakeExportRag(),
+        },
+        event=SimpleNamespace(chat_name="Alice"),
+    )
+
+    assert any("include at least one exact citation id" in message["content"] for message in bundle.messages)
+    assert any(message["content"].startswith("Citation map") for message in bundle.messages)
+
+
 def test_safety_guard_records_pii_without_blocking_by_default():
     result = SafetyGuard().assess(
         user_text="my phone is 13800138000",
@@ -176,4 +196,37 @@ def test_safety_guard_can_require_citations_for_rag_answers():
     assert result["action"] == "refuse"
     assert result["citation_required"] is True
     assert result["grounded"] is False
+    assert result["answer_citation_bound"] is False
     assert "missing_required_citation" in result["reasons"]
+
+
+def test_safety_guard_requires_answer_to_reference_returned_citation():
+    retrieval = {
+        "augmented": True,
+        "citations": [
+            {
+                "citation_id": "cite-release-1",
+                "doc_id": "release-plan",
+                "chunk_id": "chunk-1",
+            }
+        ],
+    }
+
+    missing = SafetyGuard({"safety_require_citations_for_rag": True}).assess(
+        user_text="what is the project release plan?",
+        answer_text="the release happens after QA signoff",
+        retrieval=retrieval,
+    )
+    assert missing["action"] == "refuse"
+    assert missing["grounded"] is True
+    assert missing["answer_citation_bound"] is False
+    assert "answer_missing_citation_reference" in missing["reasons"]
+
+    bound = SafetyGuard({"safety_require_citations_for_rag": True}).assess(
+        user_text="what is the project release plan?",
+        answer_text="the release happens after QA signoff [cite-release-1]",
+        retrieval=retrieval,
+    )
+    assert bound["action"] == "allow"
+    assert bound["answer_citation_bound"] is True
+    assert "answer_missing_citation_reference" not in bound["reasons"]
