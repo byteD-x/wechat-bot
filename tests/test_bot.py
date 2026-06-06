@@ -658,7 +658,22 @@ def test_build_reply_metadata_includes_retrieval_summary():
     )
 
     prepared = SimpleNamespace(
-        response_metadata={},
+        response_metadata={
+            "retrieval": {
+                "augmented": True,
+                "runtime_hit_count": 2,
+                "export_rag_used": True,
+                "citation_count": 1,
+                "citations": [
+                    {
+                        "citation_id": "c-runtime-1",
+                        "source": "runtime_chat",
+                        "chunk_id": "chunk-1",
+                        "snippet": "hello",
+                    }
+                ],
+            }
+        },
         timings={},
         trace={},
         memory_context=[
@@ -686,6 +701,8 @@ def test_build_reply_metadata_includes_retrieval_summary():
     assert metadata["retrieval"]["augmented"] is True
     assert metadata["retrieval"]["runtime_hit_count"] == 2
     assert metadata["retrieval"]["export_rag_used"] is True
+    assert metadata["retrieval"]["citation_count"] == 1
+    assert metadata["retrieval"]["citations"][0]["citation_id"] == "c-runtime-1"
 
 
 def test_reply_quality_status_summarizes_session_counters():

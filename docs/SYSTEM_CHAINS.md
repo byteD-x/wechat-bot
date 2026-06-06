@@ -131,8 +131,9 @@
     - 实现：
       - `backend/api.py::run_agent_tool_workflow` 调用 `ControlledToolWorkflowService`。
       - 当前最多 `8` 步，单步 payload 字符串化后最多 `12000` 字符。
-      - 当前白名单只包含 `config_audit`、`readiness_check`、`prompt_preview`。
-      - 未知工具返回 `bad_workflow` 和失败 trace，不会执行任意 shell、任意文件写入、任意网络请求或动态插件。
+      - 当前注册工具只包含 `config_audit`、`readiness_check`、`prompt_preview`。
+      - 每个注册工具声明 payload schema、permission 和 timeout，执行前完成输入校验与权限检查。
+      - 未知工具、schema 不通过、权限不匹配或超时都会返回 `bad_workflow` 和失败 trace，不会执行任意 shell、任意文件写入、任意网络请求或动态插件。
 
 ### 当前接口分组
 

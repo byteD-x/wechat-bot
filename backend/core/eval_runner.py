@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Set
 
 from backend.core.workspace_backup import get_app_version
 
@@ -19,6 +19,12 @@ def _safe_rate(numerator: int, denominator: int) -> float:
     if denominator <= 0:
         return 0.0
     return round(float(numerator) / float(denominator), 4)
+
+
+def _safe_average(total: float, denominator: int) -> float:
+    if denominator <= 0:
+        return 0.0
+    return round(float(total) / float(denominator), 4)
 
 
 def _normalize_case_identifier(index: int, item: Dict[str, Any]) -> str:
@@ -66,6 +72,15 @@ def _extract_retrieval(item: Dict[str, Any], metadata: Dict[str, Any]) -> Dict[s
     return {}
 
 
+def _extract_safety(item: Dict[str, Any], metadata: Dict[str, Any]) -> Dict[str, Any]:
+    safety = item.get("safety")
+    if isinstance(safety, dict):
+        return dict(safety)
+    if isinstance(metadata.get("safety"), dict):
+        return dict(metadata.get("safety") or {})
+    return {}
+
+
 def _extract_runtime_exception(item: Dict[str, Any], metadata: Dict[str, Any]) -> str:
     for value in (
         item.get("runtime_exception"),
@@ -76,6 +91,140 @@ def _extract_runtime_exception(item: Dict[str, Any], metadata: Dict[str, Any]) -
         if text:
             return text
     return ""
+
+
+def _as_list(value: Any) -> List[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return list(value)
+    if isinstance(value, tuple):
+        return list(value)
+    return [value]
+
+
+def _extract_citations(retrieval: Dict[str, Any]) -> List[Dict[str, Any]]:
+    citations = retrieval.get("citations")
+    if not isinstance(citations, list):
+        return []
+    return [dict(item) for item in citations if isinstance(item, dict)]
+
+
+def _add_expected_values(target: Set[str], prefix: str, values: Any) -> None:
+    for value in _as_list(values):
+        text = str(value or "").strip()
+        if text:
+            target.add(f"{prefix}:{text}")
+
+
+def _collect_expected_evidence(item: Dict[str, Any], metadata: Dict[str, Any]) -> Set[str]:
+    expected: Set[str] = set()
+    for source in (item, metadata):
+        _add_expected_values(expected, "citation_id", source.get("expected_citation_ids"))
+        _add_expected_values(expected, "doc_id", source.get("expected_doc_ids"))
+        _add_expected_values(expected, "chunk_id", source.get("expected_chunk_ids"))
+        _add_expected_values(expected, "source_file", source.get("expected_source_files"))
+        _add_expected_values(expected, "chunk_index", source.get("expected_chunk_indexes"))
+        for citation in _as_list(source.get("expected_citations")):
+            if not isinstance(citation, dict):
+                continue
+            for key in ("citation_id", "doc_id", "chunk_id", "source_file", "chunk_index"):
+                text = str(citation.get(key) or "").strip()
+                if text:
+                    expected.add(f"{key}:{text}")
+    return expected
+
+
+def _citation_evidence_keys(citation: Dict[str, Any]) -> Set[str]:
+    keys: Set[str] = set()
+    for key in ("citation_id", "doc_id", "chunk_id", "source_file", "chunk_index"):
+        text = str(citation.get(key) or "").strip()
+        if text:
+            keys.add(f"{key}:{text}")
+    return keys
+
+
+def _collect_returned_evidence(citations: List[Dict[str, Any]]) -> Set[str]:
+    returned: Set[str] = set()
+    for citation in citations:
+        returned.update(_citation_evidence_keys(citation))
+    return returned
+
+
+def _extract_expected_action(item: Dict[str, Any], metadata: Dict[str, Any]) -> str:
+    for source in (item, metadata):
+        action = str(
+            source.get("expected_action")
+            or source.get("expected_safety_action")
+            or ""
+        ).strip().lower()
+        if action:
+            return action
+        if source.get("unsupported_answer") is True:
+            return "refuse"
+    return ""
+
+
+def _extract_actual_action(item: Dict[str, Any], metadata: Dict[str, Any], safety: Dict[str, Any], reply_text: str) -> str:
+    for value in (
+        item.get("actual_action"),
+        metadata.get("actual_action"),
+        safety.get("action"),
+    ):
+        text = str(value or "").strip().lower()
+        if text:
+            return text
+    return "allow" if str(reply_text or "").strip() else "refuse"
+
+
+def _build_rag_case_metrics(
+    item: Dict[str, Any],
+    metadata: Dict[str, Any],
+    retrieval: Dict[str, Any],
+    safety: Dict[str, Any],
+    reply_text: str,
+) -> Dict[str, Any]:
+    citations = _extract_citations(retrieval)
+    expected_evidence = _collect_expected_evidence(item, metadata)
+    returned_evidence = _collect_returned_evidence(citations)
+    matched_evidence = expected_evidence & returned_evidence
+    expected_action = _extract_expected_action(item, metadata)
+    actual_action = _extract_actual_action(item, metadata, safety, reply_text)
+
+    citation_accuracy: Optional[float] = None
+    context_recall: Optional[float] = None
+    faithfulness: Optional[bool] = None
+    refusal_match: Optional[bool] = None
+
+    if expected_evidence:
+        valid_citations = 0
+        for citation in citations:
+            if _citation_evidence_keys(citation) & expected_evidence:
+                valid_citations += 1
+        citation_accuracy = _safe_rate(valid_citations, len(citations))
+        context_recall = _safe_rate(len(matched_evidence), len(expected_evidence))
+        faithfulness = bool(reply_text.strip()) and context_recall > 0 and citation_accuracy > 0
+
+    if expected_action:
+        if expected_action == "manual":
+            refusal_match = actual_action in {"manual", "refuse"}
+        else:
+            refusal_match = actual_action == expected_action
+        if expected_action == "refuse":
+            faithfulness = bool(refusal_match)
+
+    return {
+        "citations": citations,
+        "expected_evidence": sorted(expected_evidence),
+        "returned_evidence": sorted(returned_evidence),
+        "matched_evidence": sorted(matched_evidence),
+        "citation_accuracy": citation_accuracy,
+        "context_recall": context_recall,
+        "faithfulness": faithfulness,
+        "expected_action": expected_action,
+        "actual_action": actual_action,
+        "refusal_match": refusal_match,
+    }
 
 
 def _load_dataset(dataset_path: str | Path) -> Dict[str, Any]:
@@ -94,6 +243,7 @@ def evaluate_dataset(
     dataset = _load_dataset(dataset_path)
     cases = list(dataset.get("cases") or [])
     baseline = dict(dataset.get("baseline") or {})
+    thresholds = dict(dataset.get("thresholds") or {})
 
     evaluated_cases: List[Dict[str, Any]] = []
     empty_count = 0
@@ -101,6 +251,14 @@ def evaluate_dataset(
     retrieval_hit_count = 0
     helpful_feedback_count = 0
     runtime_exception_count = 0
+    citation_accuracy_total = 0.0
+    citation_accuracy_cases = 0
+    context_recall_total = 0.0
+    context_recall_cases = 0
+    faithfulness_count = 0
+    faithfulness_cases = 0
+    refusal_correct_count = 0
+    refusal_cases = 0
 
     for index, raw_case in enumerate(cases):
         item = dict(raw_case or {})
@@ -108,7 +266,9 @@ def evaluate_dataset(
         reply_text = _extract_reply_text(item, metadata)
         feedback = _extract_feedback(item, metadata)
         retrieval = _extract_retrieval(item, metadata)
+        safety = _extract_safety(item, metadata)
         runtime_exception = _extract_runtime_exception(item, metadata)
+        rag_eval = _build_rag_case_metrics(item, metadata, retrieval, safety, reply_text)
 
         is_empty = not bool(reply_text.strip())
         is_short = bool(reply_text) and len(reply_text.strip()) < SHORT_REPLY_MIN_CHARS
@@ -120,6 +280,18 @@ def evaluate_dataset(
         retrieval_hit_count += 1 if retrieval_hit else 0
         helpful_feedback_count += 1 if helpful_feedback else 0
         runtime_exception_count += 1 if runtime_exception else 0
+        if rag_eval["citation_accuracy"] is not None:
+            citation_accuracy_total += float(rag_eval["citation_accuracy"])
+            citation_accuracy_cases += 1
+        if rag_eval["context_recall"] is not None:
+            context_recall_total += float(rag_eval["context_recall"])
+            context_recall_cases += 1
+        if rag_eval["faithfulness"] is not None:
+            faithfulness_count += 1 if rag_eval["faithfulness"] else 0
+            faithfulness_cases += 1
+        if rag_eval["refusal_match"] is not None:
+            refusal_correct_count += 1 if rag_eval["refusal_match"] else 0
+            refusal_cases += 1
 
         evaluated_cases.append({
             "id": _normalize_case_identifier(index, item),
@@ -134,6 +306,12 @@ def evaluate_dataset(
                 "runtime_exception": bool(runtime_exception),
             },
             "retrieval": retrieval,
+            "safety": safety,
+            "rag_eval": {
+                key: value
+                for key, value in rag_eval.items()
+                if key != "citations"
+            },
             "reply_quality": {
                 "user_feedback": feedback,
             },
@@ -148,6 +326,14 @@ def evaluate_dataset(
         "retrieval_hit_rate": _safe_rate(retrieval_hit_count, total_cases),
         "manual_feedback_hit_rate": _safe_rate(helpful_feedback_count, total_cases),
         "runtime_exception_count": runtime_exception_count,
+        "citation_accuracy": _safe_average(citation_accuracy_total, citation_accuracy_cases),
+        "citation_eval_cases": citation_accuracy_cases,
+        "context_recall": _safe_average(context_recall_total, context_recall_cases),
+        "context_recall_eval_cases": context_recall_cases,
+        "faithfulness": _safe_rate(faithfulness_count, faithfulness_cases),
+        "faithfulness_eval_cases": faithfulness_cases,
+        "refusal_accuracy": _safe_rate(refusal_correct_count, refusal_cases),
+        "refusal_eval_cases": refusal_cases,
         "passed": True,
     }
 
@@ -184,6 +370,27 @@ def evaluate_dataset(
             "actual": summary["retrieval_hit_rate"],
             "threshold": round(max(0.0, baseline_retrieval_hit_rate - 0.10), 4),
         })
+
+    gated_metrics = {
+        "citation_accuracy": citation_accuracy_cases,
+        "context_recall": context_recall_cases,
+        "faithfulness": faithfulness_cases,
+        "refusal_accuracy": refusal_cases,
+    }
+    for metric, eligible_cases in gated_metrics.items():
+        if eligible_cases <= 0:
+            continue
+        raw_threshold = thresholds.get(metric, baseline.get(metric))
+        if raw_threshold is None:
+            continue
+        threshold = float(raw_threshold)
+        if float(summary[metric]) < threshold:
+            regressions.append({
+                "metric": metric,
+                "reason": f"{metric} below configured threshold",
+                "actual": summary[metric],
+                "threshold": threshold,
+            })
 
     summary["passed"] = len(regressions) == 0
     return {

@@ -50,6 +50,7 @@ from .agent_runtime_prepare import (
     search_runtime_memory as prepare_search_runtime_memory,
     tokenize_rerank_text as prepare_tokenize_rerank_text,
 )
+from .safety import SafetyGuard
 
 logger = logging.getLogger(__name__)
 _ALLOW_EMPTY_KEY_PLACEHOLDER = "wechat-chat-allow-empty-key"
@@ -221,6 +222,15 @@ class AgentRuntime:
         self.prepare_optional_timeout_sec = max(
             0.05,
             min(0.25, round(self.prepare_soft_budget_sec * 0.5, 4)),
+        )
+        configured_retrieval_timeout_sec = as_float(
+            self.agent_cfg.get("prepare_retrieval_timeout_sec", 0.25),
+            0.25,
+            min_value=0.0,
+        )
+        self.prepare_retrieval_timeout_sec = min(
+            self.prepare_soft_budget_sec,
+            configured_retrieval_timeout_sec,
         )
 
         self.graph_mode = str(self.agent_cfg.get("graph_mode") or "state_graph").strip() or "state_graph"
@@ -1423,6 +1433,9 @@ class AgentRuntime:
         skipped_context_steps = list(final_state.get("skipped_context_steps") or [])
         if skipped_context_steps:
             prepared.response_metadata["skipped_context_steps"] = skipped_context_steps
+        retrieval_trace = dict(prepared.trace.get("retrieval") or {})
+        if retrieval_trace:
+            prepared.response_metadata["retrieval"] = retrieval_trace
         prepared.response_metadata["prepare_budget_sec"] = timings.get(
             "load_context_budget_sec",
             round(self.prepare_soft_budget_sec, 4),
@@ -1552,6 +1565,14 @@ class AgentRuntime:
                     return ""
                 raise RuntimeError("LangChain returned empty content.")
             prepared.timings["invoke_sec"] = round(time.perf_counter() - started, 4)
+            safety_result = SafetyGuard(self.bot_cfg, self.agent_cfg).assess(
+                user_text=str(getattr(prepared, "user_text", "") or ""),
+                answer_text=reply_text,
+                retrieval=prepared.response_metadata.get("retrieval"),
+            )
+            prepared.response_metadata["safety"] = safety_result
+            if safety_result.get("action") == "refuse" and safety_result.get("refusal"):
+                reply_text = str(safety_result.get("refusal") or "")
             self._stats["successes"] += 1
             self._stats["last_timings"] = dict(prepared.timings)
             return reply_text

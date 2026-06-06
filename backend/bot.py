@@ -2155,6 +2155,12 @@ class WeChatBot:
 
         metadata = dict(getattr(prepared, "response_metadata", {}) or {})
         retrieval_summary = self._summarize_prepared_retrieval(prepared)
+        existing_retrieval = dict(metadata.get("retrieval") or {})
+        if existing_retrieval:
+            retrieval_summary = {
+                **retrieval_summary,
+                **existing_retrieval,
+            }
         provider_id = str(getattr(self.ai_client, "provider_id", "") or "").strip().lower()
         if not provider_id:
             provider_id = infer_provider_id(

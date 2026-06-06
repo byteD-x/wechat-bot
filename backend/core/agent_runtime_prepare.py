@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 from ..utils.common import as_int
 from ..utils.config import resolve_system_prompt
 from ..utils.image_processing import process_image_for_api
+from .rag import RetrievalService
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +71,7 @@ async def load_context_node(runtime: Any, state: Dict[str, Any]) -> Dict[str, An
     skipped_context_steps: List[str] = []
     context_task: Optional[asyncio.Task] = None
     profile_task: Optional[asyncio.Task] = None
+    retrieval_task: Optional[asyncio.Task] = None
 
     limit = as_int(runtime.bot_cfg.get("memory_context_limit", 5), 5, min_value=0)
     if memory and limit > 0:
@@ -80,6 +82,19 @@ async def load_context_node(runtime: Any, state: Dict[str, Any]) -> Dict[str, An
             profile_task = asyncio.create_task(get_snapshot(chat_id))
         else:
             profile_task = asyncio.create_task(memory.get_user_profile(chat_id))
+    if (
+        (dependencies.get("vector_memory") is not None and runtime.bot_cfg.get("rag_enabled", False))
+        or (dependencies.get("export_rag") is not None and runtime.bot_cfg.get("export_rag_enabled", False))
+    ):
+        retrieval_task = asyncio.create_task(
+            RetrievalService(runtime).retrieve(
+                chat_id=chat_id,
+                query_text=user_text,
+                dependencies=dependencies,
+                event=event,
+                priority="foreground",
+            )
+        )
 
     context_result = await resolve_context_task(
         runtime,
@@ -106,6 +121,21 @@ async def load_context_node(runtime: Any, state: Dict[str, Any]) -> Dict[str, An
         warning_message=f"用户画像加载失败 [{chat_id}]",
         timeout_sec=runtime.prepare_optional_timeout_sec,
     )
+    retrieval_bundle = await resolve_context_task(
+        runtime,
+        retrieval_task,
+        step_name="retrieval",
+        started=started,
+        skipped_context_steps=skipped_context_steps,
+        warning_message=f"RAG context loading failed [{chat_id}]",
+        timeout_sec=getattr(runtime, "prepare_retrieval_timeout_sec", runtime.prepare_optional_timeout_sec),
+    )
+    retrieval_metadata: Dict[str, Any] = {}
+    if retrieval_bundle is not None:
+        retrieval_messages = list(getattr(retrieval_bundle, "messages", []) or [])
+        if retrieval_messages:
+            memory_context.extend(retrieval_messages)
+        retrieval_metadata = dict(getattr(retrieval_bundle, "metadata", {}) or {})
 
     timings = dict(state.get("timings") or {})
     timings["load_context_budget_sec"] = round(runtime.prepare_soft_budget_sec, 4)
@@ -116,8 +146,13 @@ async def load_context_node(runtime: Any, state: Dict[str, Any]) -> Dict[str, An
             "short_term_preview": short_term_preview,
             "skipped_context_steps": list(skipped_context_steps),
             "growth_mode": "deferred_until_batch",
+            "retrieval_augmented": bool(retrieval_metadata.get("augmented")),
+            "runtime_hit_count": as_int(retrieval_metadata.get("runtime_hit_count", 0), 0, min_value=0),
+            "export_hit_count": as_int(retrieval_metadata.get("export_hit_count", 0), 0, min_value=0),
+            "citation_count": as_int(retrieval_metadata.get("citation_count", 0), 0, min_value=0),
         },
         "profile": runtime._serialize_profile(user_profile),
+        "retrieval": retrieval_metadata,
     }
     return {
         "memory_context": memory_context,

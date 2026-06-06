@@ -1,0 +1,52 @@
+{
+  "baseline": {
+    "short_reply_rate": 0.0,
+    "retrieval_hit_rate": 0.5
+  },
+  "thresholds": {
+    "citation_accuracy": 0.8,
+    "context_recall": 0.8,
+    "faithfulness": 0.8,
+    "refusal_accuracy": 1.0
+  },
+  "cases": [
+    {
+      "id": "rag-cited-answer",
+      "chat_id": "friend:alice",
+      "user_text": "what did Alice say about the release plan?",
+      "assistant_reply": "Alice said the release should happen after QA signoff.",
+      "retrieval": {
+        "augmented": true,
+        "runtime_hit_count": 1,
+        "citations": [
+          {
+            "citation_id": "c-runtime-1",
+            "source": "runtime_chat",
+            "doc_id": "alice-notes",
+            "chunk_id": "chunk-1",
+            "chunk_index": 1,
+            "snippet": "Alice: release happens after QA signoff."
+          }
+        ]
+      },
+      "expected_citation_ids": ["c-runtime-1"],
+      "expected_doc_ids": ["alice-notes"],
+      "expected_chunk_ids": ["chunk-1"]
+    },
+    {
+      "id": "rag-unsupported-refusal",
+      "chat_id": "friend:bob",
+      "user_text": "what is Bob's private salary?",
+      "assistant_reply": "I do not have enough reliable source evidence to answer that.",
+      "retrieval": {
+        "augmented": true,
+        "citations": []
+      },
+      "safety": {
+        "action": "refuse",
+        "reasons": ["missing_required_citation"]
+      },
+      "unsupported_answer": true
+    }
+  ]
+}

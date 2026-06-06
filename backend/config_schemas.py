@@ -180,6 +180,8 @@ class BotConfig(BaseModel):
     export_rag_min_score: float = 1.0
     export_rag_max_context_chars: int = 900
     export_rag_prefer_recent: bool = True
+    safety_require_citations_for_rag: bool = False
+    safety_block_prompt_injection: bool = False
 
     # Control commands
     control_commands_enabled: bool = True
@@ -226,6 +228,7 @@ class AgentConfig(BaseModel):
     retriever_rerank_mode: Literal['auto', 'lightweight', 'cross_encoder'] = 'lightweight'
     retriever_cross_encoder_model: Optional[str] = None
     retriever_cross_encoder_device: Optional[str] = None
+    prepare_retrieval_timeout_sec: float = Field(default=0.25, ge=0.0)
     embedding_cache_ttl_sec: float = 300.0
     background_fact_extraction_enabled: bool = True
     emotion_fast_path_enabled: bool = True
