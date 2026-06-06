@@ -49,6 +49,11 @@ SUITES: dict[str, FastSuite] = {
         targets=("tests/test_knowledge_base.py",),
         plugins=("pytest_asyncio.plugin",),
     ),
+    "tool-workflow": FastSuite(
+        description="Controlled tool workflow retries, trace, and guardrail checks.",
+        targets=("tests/test_tool_workflow.py",),
+        plugins=("pytest_asyncio.plugin",),
+    ),
 }
 
 

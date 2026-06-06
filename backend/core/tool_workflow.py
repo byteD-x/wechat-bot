@@ -28,6 +28,14 @@ class ToolSchemaValidationError(ToolWorkflowError):
     pass
 
 
+class ToolPermissionError(ToolWorkflowError):
+    pass
+
+
+class ToolResultValidationError(ToolWorkflowError):
+    pass
+
+
 @dataclass(slots=True)
 class ToolDefinition:
     name: str
@@ -35,6 +43,7 @@ class ToolDefinition:
     permission: str
     timeout_sec: float
     handler: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
+    retry_count: int = 0
 
 
 class ToolRegistry:
@@ -159,6 +168,7 @@ class ControlledToolWorkflowService:
                 permission="admin_read",
                 timeout_sec=10.0,
                 handler=self._tool_readiness_check,
+                retry_count=1,
             )
         )
         registry.register(
@@ -214,11 +224,19 @@ class ControlledToolWorkflowService:
                 raise ToolWorkflowError("step payload is too large")
 
             started = time.perf_counter()
-            item = {"index": index, "tool": tool, "status": "ok", "duration_ms": 0.0}
+            item = {
+                "index": index,
+                "tool": tool,
+                "status": "ok",
+                "duration_ms": 0.0,
+                "attempts": 0,
+                "retry_count": 0,
+            }
             try:
                 definition = self._registry.get(tool)
                 item["permission"] = definition.permission
                 item["timeout_ms"] = round(definition.timeout_sec * 1000.0, 3)
+                item["retry_count"] = self._normalize_retry_count(definition.retry_count)
                 self._ensure_permission(definition)
                 schema_errors = validate_payload(definition.payload_schema, payload)
                 item["schema_valid"] = not schema_errors
@@ -228,18 +246,17 @@ class ControlledToolWorkflowService:
                     item["status"] = "skipped"
                     item["output"] = {"dry_run": True}
                 else:
-                    item["output"] = await asyncio.wait_for(
-                        definition.handler(payload),
-                        timeout=definition.timeout_sec,
-                    )
+                    item["output"] = await self._execute_tool_with_retries(definition, payload, item)
                     self._validate_tool_result(item["output"])
             except asyncio.TimeoutError:
                 success = False
                 item["status"] = "error"
+                item["error_type"] = "timeout"
                 item["error"] = f"tool timed out after {item.get('timeout_ms', 0)} ms"
             except Exception as exc:
                 success = False
                 item["status"] = "error"
+                item["error_type"] = self._classify_error(exc)
                 item["error"] = str(exc)
                 if isinstance(exc, ToolSchemaValidationError):
                     item["schema_valid"] = False
@@ -253,14 +270,59 @@ class ControlledToolWorkflowService:
 
         return {"success": success, "trace": trace}
 
+    @staticmethod
+    def _normalize_retry_count(value: Any) -> int:
+        try:
+            return max(0, min(3, int(value or 0)))
+        except (TypeError, ValueError):
+            return 0
+
+    async def _execute_tool_with_retries(
+        self,
+        definition: ToolDefinition,
+        payload: dict[str, Any],
+        trace_item: dict[str, Any],
+    ) -> dict[str, Any]:
+        retry_count = self._normalize_retry_count(definition.retry_count)
+        last_exc: BaseException | None = None
+        for attempt in range(1, retry_count + 2):
+            trace_item["attempts"] = attempt
+            try:
+                result = await asyncio.wait_for(
+                    definition.handler(payload),
+                    timeout=definition.timeout_sec,
+                )
+                return result
+            except Exception as exc:
+                last_exc = exc
+                if attempt > retry_count:
+                    raise
+        if last_exc is not None:
+            raise last_exc
+        raise ToolWorkflowError(f"tool did not run: {definition.name}")
+
+    @staticmethod
+    def _classify_error(exc: Exception) -> str:
+        if isinstance(exc, asyncio.TimeoutError):
+            return "timeout"
+        if isinstance(exc, ToolSchemaValidationError):
+            return "schema_validation"
+        if isinstance(exc, ToolPermissionError):
+            return "permission_denied"
+        if isinstance(exc, ToolResultValidationError):
+            return "invalid_tool_result"
+        if isinstance(exc, ToolWorkflowError) and str(exc).startswith("unsupported tool:"):
+            return "unsupported_tool"
+        return "tool_error"
+
     def _ensure_permission(self, definition: ToolDefinition) -> None:
         if definition.permission not in self._allowed_permissions:
-            raise ToolWorkflowError(f"permission denied for tool: {definition.name}")
+            raise ToolPermissionError(f"permission denied for tool: {definition.name}")
 
     @staticmethod
     def _validate_tool_result(result: Any) -> None:
         if not isinstance(result, dict):
-            raise ToolWorkflowError("tool result must be a JSON object")
+            raise ToolResultValidationError("tool result must be a JSON object")
 
     async def _tool_config_audit(self, payload: dict[str, Any]) -> dict[str, Any]:
         snapshot = self._config_loader()

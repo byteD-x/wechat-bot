@@ -99,10 +99,11 @@
 
 执行边界：
 
-- 每个工具必须先注册到 `ToolRegistry`，并声明 `payload_schema`、`permission`、`timeout_sec` 和 handler。
+- 每个工具必须先注册到 `ToolRegistry`，并声明 `payload_schema`、`permission`、`timeout_sec`、`retry_count` 和 handler。
 - `payload_schema` 使用项目内最小 JSON Schema 子集校验 `type`、`object/properties`、`required`、`additionalProperties`。
 - 当前允许权限集合为 `admin_read`；注册工具权限不匹配时会拒绝执行。
-- 每个工具按注册的 `timeout_sec` 独立限时，超时会返回失败 trace。
+- 每个工具按注册的 `timeout_sec` 独立限时，超时会返回失败 trace；只有显式声明 `retry_count` 的注册工具会对 handler 超时或临时异常做有限重试。
+- 未知工具、payload schema 不通过、权限不匹配等请求侧错误不会重试。
 
 当前白名单工具：
 
@@ -124,6 +125,8 @@
       "permission": "admin_read",
       "schema_valid": true,
       "timeout_ms": 5000.0,
+      "retry_count": 0,
+      "attempts": 1,
       "output": {}
     }
   ]
@@ -133,13 +136,13 @@
 错误响应：
 
 - `400 bad_workflow`: steps 缺失、超长、tool 缺失、payload 过大或工作流执行失败。
-- `400` 且 `success=false`: 工作流执行中某一步失败，响应仍包含已执行 trace；失败原因可能是未知工具、payload schema 不通过、权限不匹配、工具超时或 handler 返回非 JSON 对象。
+- `400` 且 `success=false`: 工作流执行中某一步失败，响应仍包含已执行 trace；失败原因可能是未知工具、payload schema 不通过、权限不匹配、工具超时、handler 异常或 handler 返回非 JSON 对象。
 - `500 tool_workflow_failed`: 未预期的服务端错误。
 
 产品约束：
 
 - 不支持任意 shell、文件写入、网络请求或动态插件执行。
-- 所有步骤都返回 `index/tool/status/duration_ms`，注册工具还会返回 `permission/schema_valid/timeout_ms`，方便桌面端展示进度、失败位置、输入校验结果和恢复建议。
+- 所有步骤都返回 `index/tool/status/duration_ms/attempts/retry_count`，注册工具还会返回 `permission/schema_valid/timeout_ms`；失败步骤会返回 `error_type`，例如 `unsupported_tool`、`schema_validation`、`permission_denied`、`timeout`、`invalid_tool_result` 或 `tool_error`，方便桌面端展示进度、失败位置、输入校验结果和恢复建议。
 - 后续新增工具必须先进入白名单，并补充 API 测试与文档。
 
 ## 成熟产品化参考
