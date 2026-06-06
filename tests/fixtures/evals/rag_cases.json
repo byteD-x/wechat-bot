@@ -7,6 +7,7 @@
     "citation_accuracy": 0.8,
     "context_recall": 0.8,
     "faithfulness": 0.8,
+    "answer_citation_binding": 1.0,
     "refusal_accuracy": 1.0
   },
   "cases": [
@@ -14,7 +15,7 @@
       "id": "rag-cited-answer",
       "chat_id": "friend:alice",
       "user_text": "what did Alice say about the release plan?",
-      "assistant_reply": "Alice said the release should happen after QA signoff.",
+      "assistant_reply": "Alice said the release should happen after QA signoff. [c-runtime-1]",
       "retrieval": {
         "augmented": true,
         "runtime_hit_count": 1,

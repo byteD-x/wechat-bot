@@ -63,10 +63,13 @@ def test_eval_runner_reports_rag_quality_metrics():
     assert report["summary"]["citation_eval_cases"] == 1
     assert report["summary"]["context_recall"] == 1.0
     assert report["summary"]["faithfulness"] == 1.0
+    assert report["summary"]["answer_citation_binding"] == 1.0
+    assert report["summary"]["answer_citation_binding_eval_cases"] == 1
     assert report["summary"]["refusal_accuracy"] == 1.0
     assert report["summary"]["refusal_eval_cases"] == 1
     assert report["regressions"] == []
     assert report["cases"][0]["rag_eval"]["matched_evidence"]
+    assert report["cases"][0]["rag_eval"]["answer_citation_bound"] is True
 
 
 def test_eval_runner_fails_rag_metric_thresholds(tmp_path: Path):
@@ -75,6 +78,7 @@ def test_eval_runner_fails_rag_metric_thresholds(tmp_path: Path):
             "citation_accuracy": 0.8,
             "context_recall": 0.8,
             "faithfulness": 0.8,
+            "answer_citation_binding": 1.0,
             "refusal_accuracy": 1.0,
         },
         "cases": [
@@ -97,6 +101,25 @@ def test_eval_runner_fails_rag_metric_thresholds(tmp_path: Path):
                 "expected_doc_ids": ["expected-doc"],
             },
             {
+                "id": "missing-answer-citation-binding",
+                "chat_id": "friend:test",
+                "user_text": "when is the release?",
+                "assistant_reply": "The release happens after QA signoff.",
+                "retrieval": {
+                    "augmented": True,
+                    "citations": [
+                        {
+                            "citation_id": "expected-citation",
+                            "doc_id": "expected-doc",
+                            "chunk_id": "expected-chunk",
+                        }
+                    ],
+                },
+                "expected_citation_ids": ["expected-citation"],
+                "expected_doc_ids": ["expected-doc"],
+                "expected_chunk_ids": ["expected-chunk"],
+            },
+            {
                 "id": "bad-refusal",
                 "chat_id": "friend:test",
                 "user_text": "unsupported question",
@@ -117,4 +140,5 @@ def test_eval_runner_fails_rag_metric_thresholds(tmp_path: Path):
     assert "citation_accuracy" in metrics
     assert "context_recall" in metrics
     assert "faithfulness" in metrics
+    assert "answer_citation_binding" in metrics
     assert "refusal_accuracy" in metrics

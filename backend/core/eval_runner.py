@@ -151,6 +151,28 @@ def _collect_returned_evidence(citations: List[Dict[str, Any]]) -> Set[str]:
     return returned
 
 
+def _collect_answer_citation_markers(citations: List[Dict[str, Any]]) -> Set[str]:
+    markers: Set[str] = set()
+    for citation in citations:
+        for key in ("citation_id", "doc_id", "chunk_id", "source_file", "url"):
+            text = str(citation.get(key) or "").strip()
+            if text:
+                markers.add(text)
+    return markers
+
+
+def _answer_references_returned_citation(reply_text: str, citations: List[Dict[str, Any]]) -> Optional[bool]:
+    if not citations:
+        return None
+    reply = str(reply_text or "")
+    if not reply.strip():
+        return False
+    markers = _collect_answer_citation_markers(citations)
+    if not markers:
+        return None
+    return any(marker in reply for marker in markers)
+
+
 def _extract_expected_action(item: Dict[str, Any], metadata: Dict[str, Any]) -> str:
     for source in (item, metadata):
         action = str(
@@ -195,6 +217,7 @@ def _build_rag_case_metrics(
     context_recall: Optional[float] = None
     faithfulness: Optional[bool] = None
     refusal_match: Optional[bool] = None
+    answer_citation_bound = _answer_references_returned_citation(reply_text, citations)
 
     if expected_evidence:
         valid_citations = 0
@@ -203,7 +226,12 @@ def _build_rag_case_metrics(
                 valid_citations += 1
         citation_accuracy = _safe_rate(valid_citations, len(citations))
         context_recall = _safe_rate(len(matched_evidence), len(expected_evidence))
-        faithfulness = bool(reply_text.strip()) and context_recall > 0 and citation_accuracy > 0
+        faithfulness = (
+            bool(reply_text.strip())
+            and context_recall > 0
+            and citation_accuracy > 0
+            and answer_citation_bound is not False
+        )
 
     if expected_action:
         if expected_action == "manual":
@@ -221,6 +249,7 @@ def _build_rag_case_metrics(
         "citation_accuracy": citation_accuracy,
         "context_recall": context_recall,
         "faithfulness": faithfulness,
+        "answer_citation_bound": answer_citation_bound,
         "expected_action": expected_action,
         "actual_action": actual_action,
         "refusal_match": refusal_match,
@@ -257,6 +286,8 @@ def evaluate_dataset(
     context_recall_cases = 0
     faithfulness_count = 0
     faithfulness_cases = 0
+    answer_citation_bound_count = 0
+    answer_citation_binding_cases = 0
     refusal_correct_count = 0
     refusal_cases = 0
 
@@ -289,6 +320,9 @@ def evaluate_dataset(
         if rag_eval["faithfulness"] is not None:
             faithfulness_count += 1 if rag_eval["faithfulness"] else 0
             faithfulness_cases += 1
+        if rag_eval["answer_citation_bound"] is not None:
+            answer_citation_bound_count += 1 if rag_eval["answer_citation_bound"] else 0
+            answer_citation_binding_cases += 1
         if rag_eval["refusal_match"] is not None:
             refusal_correct_count += 1 if rag_eval["refusal_match"] else 0
             refusal_cases += 1
@@ -332,6 +366,8 @@ def evaluate_dataset(
         "context_recall_eval_cases": context_recall_cases,
         "faithfulness": _safe_rate(faithfulness_count, faithfulness_cases),
         "faithfulness_eval_cases": faithfulness_cases,
+        "answer_citation_binding": _safe_rate(answer_citation_bound_count, answer_citation_binding_cases),
+        "answer_citation_binding_eval_cases": answer_citation_binding_cases,
         "refusal_accuracy": _safe_rate(refusal_correct_count, refusal_cases),
         "refusal_eval_cases": refusal_cases,
         "passed": True,
@@ -375,6 +411,7 @@ def evaluate_dataset(
         "citation_accuracy": citation_accuracy_cases,
         "context_recall": context_recall_cases,
         "faithfulness": faithfulness_cases,
+        "answer_citation_binding": answer_citation_binding_cases,
         "refusal_accuracy": refusal_cases,
     }
     for metric, eligible_cases in gated_metrics.items():
