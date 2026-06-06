@@ -237,6 +237,7 @@ python run.py web
     "retriever_cross_encoder_device": "",    # cpu / cuda
     "llm_foreground_max_concurrency": 1,
     "model_routing": {},                     # 记录可解释模型路由决策，不自动切换 provider
+    "response_cache": {},                    # 默认关闭；只缓存最终回复与安全 hash key，不保存原始 prompt/聊天正文
     "background_ai_batch_time": "04:00",
     "background_ai_missed_window_policy": "wait_until_next_day",
     "background_ai_defer_mode": "defer_all",

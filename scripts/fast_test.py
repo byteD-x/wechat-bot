@@ -48,6 +48,15 @@ SUITES: dict[str, FastSuite] = {
         ),
         plugins=("pytest_asyncio.plugin",),
     ),
+    "semantic-cache": FastSuite(
+        description="Response cache key isolation, TTL, and runtime hit checks.",
+        targets=(
+            "tests/test_response_cache.py",
+            "tests/test_agent_runtime.py::test_agent_runtime_response_cache_disabled_does_not_write_metadata",
+            "tests/test_agent_runtime.py::test_agent_runtime_response_cache_hit_reuses_answer_and_rechecks_safety",
+        ),
+        plugins=("pytest_asyncio.plugin",),
+    ),
     "eval": FastSuite(
         description="Deterministic offline eval metrics and threshold checks.",
         targets=("tests/test_eval_runner.py",),

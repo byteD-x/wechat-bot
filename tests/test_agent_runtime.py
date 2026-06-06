@@ -604,6 +604,106 @@ async def test_agent_runtime_invoke_can_refuse_prompt_injection(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_agent_runtime_response_cache_disabled_does_not_write_metadata(monkeypatch):
+    monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
+
+    runtime = AgentRuntime(
+        settings={
+            "base_url": "https://example.com/v1",
+            "api_key": "sk-test",
+            "model": "test-model",
+            "provider_id": "openai",
+        },
+        bot_cfg={},
+        agent_cfg={"enabled": True},
+    )
+    prepared = SimpleNamespace(
+        prompt_messages=[_FakeMessage("hello")],
+        chat_id="friend:alice",
+        user_text="hello",
+        system_prompt="base prompt",
+        response_metadata={},
+        timings={},
+    )
+    calls = 0
+
+    async def _ainvoke(messages, config=None):
+        nonlocal calls
+        calls += 1
+        return _FakeMessage("plain answer")
+
+    runtime._chat_model.ainvoke = _ainvoke
+
+    reply = await runtime.invoke(prepared)
+
+    assert reply == "plain answer"
+    assert calls == 1
+    assert "response_cache" not in prepared.response_metadata
+    assert prepared.response_metadata["safety"]["action"] == "allow"
+    assert runtime.get_status()["response_cache_stats"]["enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_response_cache_hit_reuses_answer_and_rechecks_safety(monkeypatch):
+    monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
+
+    runtime = AgentRuntime(
+        settings={
+            "base_url": "https://example.com/v1",
+            "api_key": "sk-test",
+            "model": "test-model",
+            "provider_id": "openai",
+        },
+        bot_cfg={"safety_require_citations_for_rag": True},
+        agent_cfg={
+            "enabled": True,
+            "response_cache": {"enabled": True, "ttl_sec": 300, "max_entries": 8},
+        },
+    )
+    retrieval = {
+        "augmented": True,
+        "citations": [{"citation_id": "c-1", "doc_id": "doc-1"}],
+    }
+
+    def _prepared():
+        return SimpleNamespace(
+            prompt_messages=[_FakeMessage("what is the release plan?")],
+            chat_id="friend:alice",
+            user_text="what is the release plan?",
+            system_prompt="base prompt",
+            response_metadata={"retrieval": dict(retrieval)},
+            timings={},
+        )
+
+    calls = 0
+
+    async def _ainvoke(messages, config=None):
+        nonlocal calls
+        calls += 1
+        return _FakeMessage("Release plan is backed by c-1.")
+
+    runtime._chat_model.ainvoke = _ainvoke
+
+    first = _prepared()
+    first_reply = await runtime.invoke(first)
+    second = _prepared()
+    second_reply = await runtime.invoke(second)
+
+    assert first_reply == "Release plan is backed by c-1."
+    assert second_reply == first_reply
+    assert calls == 1
+    assert first.response_metadata["response_cache"]["hit"] is False
+    assert first.response_metadata["response_cache"]["stored"] is True
+    assert second.response_metadata["response_cache"]["hit"] is True
+    assert second.response_metadata["safety"]["action"] == "allow"
+    assert second.response_metadata["safety"]["answer_citation_bound"] is True
+    status = runtime.get_status()["response_cache_stats"]
+    assert status["hits"] == 1
+    assert status["misses"] == 1
+    assert status["stores"] == 1
+
+
+@pytest.mark.asyncio
 async def test_agent_runtime_applies_qwen_timeout_floor(monkeypatch):
     monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
 

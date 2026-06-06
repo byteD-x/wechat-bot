@@ -51,6 +51,7 @@ from .agent_runtime_prepare import (
     tokenize_rerank_text as prepare_tokenize_rerank_text,
 )
 from .model_router import ModelRouter
+from .response_cache import ResponseCache, ResponseCacheKey
 from .safety import SafetyGuard
 
 logger = logging.getLogger(__name__)
@@ -281,6 +282,7 @@ class AgentRuntime:
             self.agent_cfg.get("background_ai_defer_mode") or "defer_all"
         ).strip() or "defer_all"
         self.model_router = ModelRouter(self.agent_cfg.get("model_routing"))
+        self.response_cache = ResponseCache(self.agent_cfg.get("response_cache"))
 
         self._chat_locks: Dict[str, asyncio.Lock] = {}
         self._embedding_cache: Dict[str, tuple[float, List[float]]] = {}
@@ -1471,9 +1473,30 @@ class AgentRuntime:
         *,
         priority: str,
     ) -> str:
-        self._refresh_runtime_auth_clients()
         self._stats["requests"] += 1
         started = time.perf_counter()
+        response_cache_key = None
+        if self.response_cache.enabled:
+            response_cache_key = self._build_response_cache_key(prepared)
+            cached_response = self.response_cache.get(response_cache_key)
+            if cached_response is not None:
+                prepared.response_metadata["response_cache"] = {
+                    "hit": True,
+                    **cached_response.key.to_dict(),
+                    "created_at": round(cached_response.created_at, 4),
+                }
+                reply_text = self._apply_safety_guard(prepared, cached_response.answer_text)
+                prepared.timings["invoke_sec"] = round(time.perf_counter() - started, 4)
+                self._stats["successes"] += 1
+                self._stats["last_timings"] = dict(prepared.timings)
+                return reply_text
+            prepared.response_metadata["response_cache"] = {
+                "hit": False,
+                **response_cache_key.to_dict(),
+            }
+
+        self._refresh_runtime_auth_clients()
+        model_call_started = time.perf_counter()
         await self._acquire_llm_slot(priority)
         try:
             final_normalized = None
@@ -1581,14 +1604,25 @@ class AgentRuntime:
                     return ""
                 raise RuntimeError("LangChain returned empty content.")
             prepared.timings["invoke_sec"] = round(time.perf_counter() - started, 4)
-            safety_result = SafetyGuard(self.bot_cfg, self.agent_cfg).assess(
-                user_text=str(getattr(prepared, "user_text", "") or ""),
-                answer_text=reply_text,
-                retrieval=prepared.response_metadata.get("retrieval"),
-            )
-            prepared.response_metadata["safety"] = safety_result
-            if safety_result.get("action") == "refuse" and safety_result.get("refusal"):
-                reply_text = str(safety_result.get("refusal") or "")
+            prepared.timings["model_call_sec"] = round(time.perf_counter() - model_call_started, 4)
+            reply_text = self._apply_safety_guard(prepared, reply_text)
+            if self.response_cache.enabled and not prepared.response_metadata.get("tool_call_only_response"):
+                if response_cache_key is None:
+                    response_cache_key = self._build_response_cache_key(prepared)
+                stored = self.response_cache.set(
+                    response_cache_key,
+                    answer_text=reply_text,
+                    metadata={
+                        "finish_reason": prepared.response_metadata.get("finish_reason", ""),
+                        "safety_action": (prepared.response_metadata.get("safety") or {}).get(
+                            "action",
+                            "",
+                        ),
+                    },
+                )
+                cache_metadata = dict(prepared.response_metadata.get("response_cache") or {})
+                cache_metadata["stored"] = stored
+                prepared.response_metadata["response_cache"] = cache_metadata
             self._stats["successes"] += 1
             self._stats["last_timings"] = dict(prepared.timings)
             return reply_text
@@ -1597,6 +1631,42 @@ class AgentRuntime:
             raise
         finally:
             await self._release_llm_slot(priority)
+
+    def _build_response_cache_key(self, prepared: AgentPreparedRequest) -> ResponseCacheKey:
+        response_metadata = getattr(prepared, "response_metadata", {}) or {}
+        return self.response_cache.build_key(
+            provider_id=self.provider_id,
+            model=self.model,
+            chat_id=str(getattr(prepared, "chat_id", "") or ""),
+            user_text=str(getattr(prepared, "user_text", "") or ""),
+            system_prompt=str(getattr(prepared, "system_prompt", "") or ""),
+            prompt_messages=list(getattr(prepared, "prompt_messages", []) or []),
+            retrieval=dict(response_metadata.get("retrieval") or {}),
+            policy_context=self._response_cache_policy_context(),
+        )
+
+    def _response_cache_policy_context(self) -> Dict[str, Any]:
+        return {
+            "safety_block_prompt_injection": bool(
+                self.bot_cfg.get("safety_block_prompt_injection", False)
+                or self.agent_cfg.get("safety_block_prompt_injection", False)
+            ),
+            "safety_require_citations_for_rag": bool(
+                self.bot_cfg.get("safety_require_citations_for_rag", False)
+                or self.agent_cfg.get("safety_require_citations_for_rag", False)
+            ),
+        }
+
+    def _apply_safety_guard(self, prepared: AgentPreparedRequest, reply_text: str) -> str:
+        safety_result = SafetyGuard(self.bot_cfg, self.agent_cfg).assess(
+            user_text=str(getattr(prepared, "user_text", "") or ""),
+            answer_text=reply_text,
+            retrieval=(getattr(prepared, "response_metadata", {}) or {}).get("retrieval"),
+        )
+        prepared.response_metadata["safety"] = safety_result
+        if safety_result.get("action") == "refuse" and safety_result.get("refusal"):
+            return str(safety_result.get("refusal") or "")
+        return reply_text
 
     async def stream_reply(self, prepared: AgentPreparedRequest) -> AsyncIterator[str]:
         reply_text = await self.invoke(prepared)
@@ -2128,6 +2198,7 @@ class AgentRuntime:
                 "embedding_cache_hits": self._stats["embedding_cache_hits"],
                 "embedding_cache_misses": self._stats["embedding_cache_misses"],
             },
+            "response_cache_stats": self.response_cache.get_status(),
             "model_route_stats": {
                 "complexity_counts": dict(self._stats["model_route_counts"]),
                 "latency_priority_count": self._stats["model_route_latency_priority"],

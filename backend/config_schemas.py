@@ -235,6 +235,7 @@ class AgentConfig(BaseModel):
     max_parallel_retrievers: int = 3
     llm_foreground_max_concurrency: int = 1
     model_routing: Dict[str, Any] = Field(default_factory=dict)
+    response_cache: Dict[str, Any] = Field(default_factory=dict)
     background_ai_batch_time: str = "04:00"
     background_ai_missed_window_policy: str = "wait_until_next_day"
     background_ai_defer_mode: str = "defer_all"
