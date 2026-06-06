@@ -3,12 +3,27 @@ const assert = require('node:assert/strict');
 const path = require('path');
 const { pathToFileURL } = require('url');
 
-const { registerIpcHandlers } = require('../src/main/ipc');
+const {
+    buildSafeDesktopNotificationOptions,
+    registerIpcHandlers,
+} = require('../src/main/ipc');
+const { stopBackendAndQuit } = require('../src/main/app-lifecycle');
 
 function createHarness(options = {}) {
     const handlers = new Map();
     const openedExternal = [];
     const backendCalls = [];
+    const storeWrites = [];
+    const systemMenuCalls = [];
+    const hideToTrayCalls = [];
+    const quitCalls = [];
+    const windowState = options.windowState || {
+        exists: true,
+        isVisible: true,
+        isMinimized: false,
+        isMaximized: false,
+        title: '微信 AI 助手',
+    };
     const ipcMain = {
         handle(channel, handler) {
             handlers.set(channel, handler);
@@ -85,13 +100,29 @@ function createHarness(options = {}) {
         execFile: () => {},
         fs: options.fsImpl || require('fs'),
         path,
-        getMainWindowSafe: () => null,
+        getMainWindowSafe: options.getMainWindowSafe || (() => null),
+        getMainWindowState: options.getMainWindowState || (() => windowState),
+        broadcastWindowState: options.broadcastWindowState || (() => windowState),
+        showWindowSystemMenu: options.showWindowSystemMenu || ((point) => {
+            systemMenuCalls.push(point);
+            return { success: true, state: windowState };
+        }),
+        hideMainWindowToTray: options.hideMainWindowToTray || (() => {
+            hideToTrayCalls.push('minimize');
+            return { success: true, action: 'minimize', state: windowState };
+        }),
+        quitAppGracefully: options.quitAppGracefully || (async (reason) => {
+            quitCalls.push(reason);
+            return { success: true, action: 'quit' };
+        }),
         requestAppClose: () => {},
         installDownloadedUpdateAndQuit: () => ({ success: true }),
         showMainWindowSafe: () => {},
         store: {
             get: () => null,
-            set: () => {},
+            set: (key, value) => {
+                storeWrites.push({ key, value });
+            },
         },
         dialog: {
             showSaveDialog: async () => ({ canceled: true }),
@@ -102,8 +133,17 @@ function createHarness(options = {}) {
         openExternalHandler: handlers.get('open-external'),
         openWechatHandler: handlers.get('open-wechat'),
         backendRequestHandler: handlers.get('backend:request'),
+        confirmCloseActionHandler: handlers.get('confirm-close-action'),
+        minimizeToTrayHandler: handlers.get('minimize-to-tray'),
+        windowGetStateHandler: handlers.get('window:get-state'),
+        windowMaximizeHandler: handlers.get('window-maximize'),
+        windowShowSystemMenuHandler: handlers.get('window:show-system-menu'),
         backendCalls,
+        hideToTrayCalls,
         openedExternal,
+        quitCalls,
+        storeWrites,
+        systemMenuCalls,
     };
 }
 
@@ -290,6 +330,39 @@ test('backend:request allows wechat export endpoints and pattern-based job query
     ]);
 });
 
+test('backend:request only allows numeric prompt rollback revisions', async () => {
+    const harness = createHarness();
+    const event = createTrustedEvent();
+
+    const allowed = await harness.backendRequestHandler(event, {
+        method: 'POST',
+        endpoint: '/api/v1/admin/prompts/12/rollback',
+        payload: { reason: 'restore stable prompt' },
+    });
+    const blocked = await harness.backendRequestHandler(event, {
+        method: 'POST',
+        endpoint: '/api/v1/admin/prompts/abc/rollback',
+        payload: { reason: 'bad path' },
+    });
+    const blockedList = await harness.backendRequestHandler(event, {
+        method: 'GET',
+        endpoint: '/api/v1/admin/prompts',
+    });
+
+    assert.equal(allowed.ok, true);
+    assert.equal(blocked.ok, false);
+    assert.equal(blocked.error?.message, 'endpoint_not_allowed');
+    assert.equal(blockedList.ok, false);
+    assert.equal(blockedList.error?.message, 'endpoint_not_allowed');
+    assert.deepEqual(harness.backendCalls, [
+        {
+            method: 'POST',
+            endpoint: '/api/v1/admin/prompts/12/rollback',
+            payload: { reason: 'restore stable prompt' },
+        },
+    ]);
+});
+
 test('backend:request enforces payload policy for GET and oversized POST payloads', async () => {
     const harness = createHarness();
     const event = createTrustedEvent();
@@ -310,4 +383,100 @@ test('backend:request enforces payload policy for GET and oversized POST payload
     assert.equal(hugePayload.ok, false);
     assert.equal(hugePayload.error?.message, 'payload_too_large');
     assert.deepEqual(harness.backendCalls, []);
+});
+
+test('window ipc reports state and delegates titlebar system menu requests', async () => {
+    const harness = createHarness();
+    const event = createTrustedEvent();
+
+    const state = await harness.windowGetStateHandler(event);
+    const menuResult = await harness.windowShowSystemMenuHandler(event, { x: 24.6, y: 8.2 });
+
+    assert.equal(state.title, '微信 AI 助手');
+    assert.equal(state.isMaximized, false);
+    assert.equal(menuResult.success, true);
+    assert.deepEqual(harness.systemMenuCalls, [{ x: 24.6, y: 8.2 }]);
+});
+
+test('window control ipc returns state and close actions stay explicit', async () => {
+    const harness = createHarness();
+    const event = createTrustedEvent();
+
+    const minimizeResult = await harness.minimizeToTrayHandler(event);
+    const invalidResult = await harness.confirmCloseActionHandler(event, { action: 'hide-chat', remember: true });
+    const rememberedMinimize = await harness.confirmCloseActionHandler(event, { action: 'minimize', remember: true });
+    const quitResult = await harness.confirmCloseActionHandler(event, { action: 'quit', remember: false });
+
+    assert.deepEqual(minimizeResult, {
+        success: true,
+        action: 'minimize',
+        state: {
+            exists: true,
+            isVisible: true,
+            isMinimized: false,
+            isMaximized: false,
+            title: '微信 AI 助手',
+        },
+    });
+    assert.deepEqual(invalidResult, { success: false, message: 'invalid action' });
+    assert.equal(rememberedMinimize.action, 'minimize');
+    assert.equal(quitResult.action, 'quit');
+    assert.deepEqual(harness.hideToTrayCalls, ['minimize', 'minimize']);
+    assert.deepEqual(harness.quitCalls, ['quit']);
+    assert.deepEqual(harness.storeWrites, [{ key: 'closeBehavior', value: 'minimize' }]);
+});
+
+test('stopBackendAndQuit always quits even when backend stop fails', async () => {
+    const calls = [];
+    const GLOBAL_STATE = {
+        isQuitting: false,
+        tray: {
+            destroy: () => calls.push('tray.destroy'),
+        },
+    };
+
+    const result = await stopBackendAndQuit({
+        GLOBAL_STATE,
+        BackendManager: {
+            stop: async (reason) => {
+                calls.push(['stop', reason]);
+                throw new Error('stop failed');
+            },
+        },
+        app: {
+            quit: () => calls.push('app.quit'),
+        },
+        reason: 'install-update',
+        logger: {
+            warn: (...args) => calls.push(['warn', args[0]]),
+        },
+    });
+
+    assert.equal(GLOBAL_STATE.isQuitting, true);
+    assert.equal(GLOBAL_STATE.tray, null);
+    assert.deepEqual(result, {
+        success: true,
+        action: 'quit',
+        warning: 'backend_stop_failed',
+    });
+    assert.deepEqual(calls, [
+        'tray.destroy',
+        ['stop', 'install-update'],
+        ['warn', '[Lifecycle] backend stop before quit failed:'],
+        'app.quit',
+    ]);
+});
+
+test('safe desktop notification options never echo arbitrary message content', () => {
+    const sensitiveText = 'wxid_alice: 明天转账 123456，credential marker demo-value';
+    const options = buildSafeDesktopNotificationOptions('background-running', {
+        body: sensitiveText,
+    });
+
+    assert.equal(options.title, '微信 AI 助手');
+    assert.match(options.body, /后台运行|托盘/);
+    assert.equal(options.body.includes('wxid_alice'), false);
+    assert.equal(options.body.includes('123456'), false);
+    assert.equal(options.body.includes('demo-value'), false);
+    assert.equal(buildSafeDesktopNotificationOptions('chat-message'), null);
 });

@@ -149,11 +149,20 @@ export async function openDetailModal(page, message, deps = {}) {
             return;
         }
 
+        const pendingReplies = (
+            pendingResult.status === 'fulfilled'
+            && pendingResult.value?.success !== false
+            && Array.isArray(pendingResult.value?.items)
+        )
+            ? pendingResult.value.items
+            : [];
+
         body.textContent = '';
         body.appendChild(buildMessageDetail(message, {
             documentObj,
             onFeedback: saveFeedback,
             onCopy: copyText,
+            pendingReplies,
         }));
 
         if (profileResult.status === 'fulfilled' && profileResult.value?.success) {
@@ -202,7 +211,7 @@ export async function openDetailModal(page, message, deps = {}) {
         ) {
             body.appendChild(buildReplyApprovalDetail(message, {
                 replyPolicy: replyPolicyResult.value?.reply_policy || {},
-                pendingReplies: pendingResult.value?.items || [],
+                pendingReplies,
             }, {
                 documentObj,
                 onSaveOverride: async (nextMessage, mode) => {

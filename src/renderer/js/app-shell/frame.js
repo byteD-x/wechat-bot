@@ -65,29 +65,34 @@ function renderPageMounts() {
 export function renderAppFrame() {
     return `
         ${renderIconSprite()}
-        <header class="titlebar">
-            <div class="titlebar-left">
-                <svg class="icon titlebar-logo">
-                    <use href="#icon-bot" />
-                </svg>
-                <div class="titlebar-copy">
-                    <span class="titlebar-title">微信 AI 助手</span>
-                    <span class="titlebar-subtitle">桌面控制台</span>
+        <header class="titlebar" id="app-titlebar" data-window-state="normal">
+            <div class="titlebar-drag-region" id="titlebar-drag-region" title="微信 AI 助手">
+                <div class="titlebar-left">
+                    <svg class="icon titlebar-logo">
+                        <use href="#icon-bot" />
+                    </svg>
+                    <div class="titlebar-copy">
+                        <span class="titlebar-title" id="window-title" title="微信 AI 助手">微信 AI 助手</span>
+                        <span class="titlebar-subtitle" title="桌面控制台">桌面控制台</span>
+                    </div>
                 </div>
             </div>
             <div class="titlebar-controls">
                 <button class="titlebar-btn" id="btn-minimize" type="button" title="最小化" aria-label="最小化窗口">
-                    <svg class="icon">
+                    <svg class="icon" aria-hidden="true">
                         <use href="#icon-minus" />
                     </svg>
                 </button>
-                <button class="titlebar-btn" id="btn-maximize" type="button" title="最大化" aria-label="最大化窗口">
-                    <svg class="icon">
+                <button class="titlebar-btn" id="btn-maximize" type="button" title="最大化" aria-label="最大化窗口" aria-pressed="false">
+                    <svg class="icon icon-window-maximize" aria-hidden="true">
                         <use href="#icon-maximize" />
+                    </svg>
+                    <svg class="icon icon-window-restore" aria-hidden="true">
+                        <use href="#icon-square" />
                     </svg>
                 </button>
                 <button class="titlebar-btn btn-close" id="btn-close" type="button" title="关闭" aria-label="关闭窗口">
-                    <svg class="icon">
+                    <svg class="icon" aria-hidden="true">
                         <use href="#icon-x" />
                     </svg>
                 </button>

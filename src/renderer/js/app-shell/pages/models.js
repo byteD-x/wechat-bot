@@ -3,6 +3,7 @@ export function renderModelsPageShell() {
                 <div class="page-header">
                     <div class="page-heading">
                         <h1 class="page-title">模型中心</h1>
+                        <p class="page-subtitle">按推荐路径接通认证、测试连接，再切换当前回复模型。</p>
                     </div>
                     <div class="page-actions">
                         <button class="btn btn-secondary btn-sm" id="btn-model-auth-refresh" type="button">

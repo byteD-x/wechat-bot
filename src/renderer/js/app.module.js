@@ -20,7 +20,7 @@ import {
 } from './app/ui-helpers.js';
 import {
     buildUnavailableReadinessReport,
-    getReadinessBlockingChecks,
+    buildReadinessTaskFlow,
     normalizeReadinessReport,
     shouldCompleteFirstRun,
     shouldShowFirstRunGuide,
@@ -71,12 +71,15 @@ class App {
         this._readinessRefreshing = false;
         this._lastReadinessRefreshAt = 0;
         this._readinessMinIntervalMs = 8000;
+        this._firstRunSkippedStepKeys = new Set();
+        this._firstRunActiveStepKey = '';
         this._statusPausedByVisibility = false;
         this._lastUpdateToastVersion = '';
         this._lastUpdateModalVersion = '';
         this._confirmModalResolver = null;
         this._removeUpdateListener = null;
         this._removeRuntimeIdleListener = null;
+        this._removeWindowStateListener = null;
         this._eventSource = null;
         this._sseReconnectTimer = null;
         this._sseReconnectAttempt = 0;
@@ -428,17 +431,7 @@ class App {
             });
         });
 
-        document.getElementById('btn-minimize')?.addEventListener('click', () => {
-            window.electronAPI?.minimizeWindow();
-        });
-
-        document.getElementById('btn-maximize')?.addEventListener('click', () => {
-            window.electronAPI?.maximizeWindow();
-        });
-
-        document.getElementById('btn-close')?.addEventListener('click', () => {
-            window.electronAPI?.closeWindow();
-        });
+        this._setupWindowChrome();
 
         document.getElementById('status-badge')?.addEventListener('click', () => {
             if (
@@ -487,6 +480,92 @@ class App {
                 }
             }
         });
+    }
+
+    _setupWindowChrome() {
+        const api = window.electronAPI || {};
+        const titlebar = document.getElementById('app-titlebar');
+        const dragRegion = document.getElementById('titlebar-drag-region');
+        const title = document.getElementById('window-title');
+        const btnMinimize = document.getElementById('btn-minimize');
+        const btnMaximize = document.getElementById('btn-maximize');
+        const btnClose = document.getElementById('btn-close');
+
+        btnMinimize?.addEventListener('click', () => {
+            void Promise.resolve(api.minimizeWindow?.()).then((state) => {
+                this._applyWindowState(state);
+            });
+        });
+
+        btnMaximize?.addEventListener('click', () => {
+            void Promise.resolve(api.maximizeWindow?.()).then((state) => {
+                this._applyWindowState(state);
+            });
+        });
+
+        btnClose?.addEventListener('click', () => {
+            void api.closeWindow?.();
+        });
+
+        dragRegion?.addEventListener('dblclick', (event) => {
+            event.preventDefault();
+            void Promise.resolve(api.maximizeWindow?.()).then((state) => {
+                this._applyWindowState(state);
+            });
+        });
+
+        dragRegion?.addEventListener('contextmenu', (event) => {
+            event.preventDefault();
+            const point = {
+                x: Number.isFinite(event.clientX) ? event.clientX : 12,
+                y: Number.isFinite(event.clientY) ? event.clientY : 12,
+            };
+            void Promise.resolve(api.showWindowSystemMenu?.(point)).then((result) => {
+                this._applyWindowState(result?.state || result);
+            });
+        });
+
+        if (api.onWindowStateChanged) {
+            this._removeWindowStateListener = api.onWindowStateChanged((state) => {
+                this._applyWindowState(state);
+            });
+        }
+
+        if (api.getWindowState) {
+            void Promise.resolve(api.getWindowState()).then((state) => {
+                this._applyWindowState(state);
+            });
+        } else {
+            this._applyWindowState({
+                title: title?.textContent || '微信 AI 助手',
+                isMaximized: titlebar?.dataset?.windowState === 'maximized',
+            });
+        }
+    }
+
+    _applyWindowState(state = {}) {
+        if (!state || typeof state !== 'object') {
+            return;
+        }
+        const titlebar = document.getElementById('app-titlebar');
+        const title = document.getElementById('window-title');
+        const btnMaximize = document.getElementById('btn-maximize');
+        const maximized = !!state.isMaximized;
+        const nextTitle = String(state.title || title?.textContent || '微信 AI 助手').trim() || '微信 AI 助手';
+
+        if (titlebar) {
+            titlebar.dataset.windowState = maximized ? 'maximized' : 'normal';
+        }
+        if (title) {
+            title.textContent = nextTitle;
+            title.setAttribute('title', nextTitle);
+        }
+        if (btnMaximize) {
+            const label = maximized ? '还原窗口' : '最大化窗口';
+            btnMaximize.setAttribute('aria-label', label);
+            btnMaximize.setAttribute('title', maximized ? '还原' : '最大化');
+            btnMaximize.setAttribute('aria-pressed', maximized ? 'true' : 'false');
+        }
     }
 
     _bindKeyboardShortcuts() {
@@ -938,7 +1017,30 @@ class App {
                 closeModal();
                 return;
             }
-            const button = event.target?.closest?.('[data-readiness-action]');
+            const stepButton = event.target?.closest?.('[data-first-run-step]')
+                || (event.target?.dataset?.firstRunStep ? event.target : null);
+            if (stepButton) {
+                event.preventDefault?.();
+                event.stopPropagation?.();
+                this._firstRunActiveStepKey = stepButton.dataset.firstRunStep;
+                this._renderFirstRunGuide();
+                return;
+            }
+
+            const skipButton = event.target?.closest?.('[data-first-run-skip]')
+                || (event.target?.dataset?.firstRunSkip ? event.target : null);
+            if (skipButton) {
+                event.preventDefault?.();
+                event.stopPropagation?.();
+                this._ensureFirstRunTaskState();
+                this._firstRunSkippedStepKeys.add(skipButton.dataset.firstRunSkip);
+                this._firstRunActiveStepKey = '';
+                this._renderFirstRunGuide();
+                return;
+            }
+
+            const button = event.target?.closest?.('[data-readiness-action]')
+                || (event.target?.dataset?.readinessAction ? event.target : null);
             if (!button) {
                 return;
             }
@@ -961,6 +1063,15 @@ class App {
                 closeModal();
             }
         });
+    }
+
+    _ensureFirstRunTaskState() {
+        if (!(this._firstRunSkippedStepKeys instanceof Set)) {
+            this._firstRunSkippedStepKeys = new Set();
+        }
+        if (typeof this._firstRunActiveStepKey !== 'string') {
+            this._firstRunActiveStepKey = '';
+        }
     }
 
     _renderFirstRunGuide(report = stateManager.get('readiness.report')) {
@@ -986,54 +1097,88 @@ class App {
             return;
         }
 
-        const blockingChecks = getReadinessBlockingChecks(normalized, {
-            onlyFirstRun: true,
-            limit: 6,
+        this._ensureFirstRunTaskState();
+        const flow = buildReadinessTaskFlow(normalized, {
+            skippedStepKeys: this._firstRunSkippedStepKeys,
+            activeStepKey: this._firstRunActiveStepKey,
         });
+        const activeStep = flow.activeStep || flow.steps[0] || null;
+        this._firstRunActiveStepKey = activeStep?.key || '';
 
-        title.textContent = normalized.summary.title;
+        title.textContent = '首启运行准备';
         subtitle.textContent = normalized.summary.detail;
-        summary.textContent = blockingChecks.length > 0
-            ? `开箱即用检查还有 ${blockingChecks.length} 项待处理。`
-            : 'All required checks are complete. You can continue.';
-        settingsButton.hidden = !blockingChecks.some((check) => check.action === 'open_settings');
+        summary.textContent = activeStep
+            ? `${activeStep.index + 1}/4 · ${activeStep.title}：${activeStep.message}`
+            : normalized.summary.title;
+        settingsButton.hidden = !flow.steps.some((step) => (
+            step.primaryAction?.action === 'open_settings'
+            || step.blockingChecks.some((check) => check.action === 'open_settings')
+        ));
 
         list.textContent = '';
-        blockingChecks.forEach((check) => {
+        flow.steps.forEach((step) => {
             const item = document.createElement('li');
             item.className = 'first-run-check-item';
-            item.dataset.status = check.status;
+            item.dataset.status = step.status === 'ready' ? 'passed' : step.status;
+            item.dataset.step = step.key;
+            item.dataset.active = step.active ? 'true' : 'false';
 
             const copy = document.createElement('div');
             copy.className = 'first-run-check-copy';
 
             const label = document.createElement('strong');
             label.className = 'first-run-check-label';
-            label.textContent = check.label;
+            label.textContent = `${step.index + 1}. ${step.title} · ${step.statusLabel}`;
 
             const message = document.createElement('div');
             message.className = 'first-run-check-message';
-            message.textContent = check.message;
+            message.textContent = step.active ? step.detail : step.message;
 
             copy.appendChild(label);
             copy.appendChild(message);
 
-            if (check.hint) {
+            const focusedCheck = step.blockingChecks[0];
+            if (step.active && focusedCheck?.hint) {
                 const hint = document.createElement('div');
                 hint.className = 'first-run-check-hint';
-                hint.textContent = check.hint;
+                hint.textContent = focusedCheck.hint;
                 copy.appendChild(hint);
             }
 
             item.appendChild(copy);
 
-            if (check.action) {
-                const action = document.createElement('button');
-                action.type = 'button';
-                action.className = 'btn btn-secondary btn-sm';
-                action.dataset.readinessAction = check.action;
-                action.textContent = check.actionLabel;
-                item.appendChild(action);
+            if (!step.active) {
+                const view = document.createElement('button');
+                view.type = 'button';
+                view.className = 'btn btn-secondary btn-sm';
+                view.dataset.firstRunStep = step.key;
+                view.textContent = step.skipped ? '回看' : '查看';
+                item.appendChild(view);
+            } else {
+                const actions = document.createElement('div');
+                actions.className = 'first-run-step-actions';
+
+                if (step.primaryAction?.action) {
+                    const action = document.createElement('button');
+                    action.type = 'button';
+                    action.className = 'btn btn-secondary btn-sm';
+                    action.dataset.readinessAction = step.primaryAction.action;
+                    action.textContent = step.primaryAction.label;
+                    actions.appendChild(action);
+                }
+
+                if (step.canSkip) {
+                    const skip = document.createElement('button');
+                    skip.type = 'button';
+                    skip.className = 'btn btn-secondary btn-sm';
+                    skip.dataset.firstRunSkip = step.key;
+                    skip.textContent = '暂时跳过';
+                    actions.appendChild(skip);
+                }
+
+                if (actions.children.length > 0) {
+                    item.appendChild(actions);
+                }
             }
 
             list.appendChild(item);
@@ -1061,6 +1206,8 @@ class App {
             'readiness.firstRunPending': false,
             'readiness.firstRunGuideDismissed': false,
         });
+        this._firstRunSkippedStepKeys?.clear?.();
+        this._firstRunActiveStepKey = '';
         document.getElementById('first-run-modal')?.classList.remove('active');
     }
 
@@ -1179,6 +1326,8 @@ class App {
         if (normalizedAction === 'retry') {
             modal?.classList.remove('active');
             stateManager.set('readiness.firstRunGuideDismissed', false);
+            this._firstRunSkippedStepKeys?.clear?.();
+            this._firstRunActiveStepKey = '';
             await this._refreshStatus({ force: true, refreshReadiness: true });
             return;
         }

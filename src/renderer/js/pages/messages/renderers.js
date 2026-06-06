@@ -25,6 +25,220 @@ function buildInlineAction(documentObj, label, handler, tone = 'secondary') {
     return button;
 }
 
+const QUALITY_REVIEW_TEXT = Object.freeze({
+    title: '质量复盘入口',
+    statusLabel: '反馈状态',
+    listPrefix: '质量线索',
+    none: '未反馈',
+    helpful: '有帮助',
+    unhelpful: '需要复盘',
+    pending: '待审',
+    rejected: '已拒绝',
+    failed: '失败',
+    empty: '空回复',
+    unhelpfulHint: '这条回复已被标记为没帮助。复盘时只查看本条原文、前后上下文、联系人 Prompt 和待审草稿，不生成额外敏感摘要。',
+    unhelpfulAction: '下一步：检查 Prompt 是否过窄、检索上下文是否缺失，再决定改写或拒绝草稿。',
+    pendingHint: '当前会话还有待审批回复。先审草稿，再决定是否调整会话策略。',
+    pendingAction: '下一步：打开下方待审批回复，确认草稿是否能发送、改写或拒绝。',
+    failedHint: '这条回复带有失败线索。详情页只提示状态，不展开错误原文。',
+    failedAction: '下一步：回看本条原文和前后上下文，再到日志或运行状态中定位失败原因。',
+    rejectedHint: '这条回复已被拒绝或带有拒绝线索，可作为同类回复的反例。',
+    rejectedAction: '下一步：对照联系人 Prompt 和审批策略，确认是否需要收紧回复规则。',
+    helpfulHint: '这条回复已被标记为有帮助，可作为同类会话的参考样本。',
+    helpfulAction: '下一步：通常无需处理；如要复盘，可对照 Prompt 保留有效表达。',
+    noneHint: '还没有人工反馈。需要复盘时先标记有帮助或没帮助。',
+    noneAction: '下一步：阅读本条原文和上下文后，补充反馈状态。',
+});
+
+const FAILURE_METADATA_KEYS = [
+    'approval_error',
+    'approval_failed_at',
+    'approval_finalize_error',
+    'invoke_error',
+    'langchain_invoke_error',
+    'compat_fallback_error',
+    'compat_fallback_failed',
+    'tool_call_only_response',
+];
+
+function isAssistantMessage(message = {}) {
+    return message.is_self || String(message.role || '').trim().toLowerCase() === 'assistant';
+}
+
+function normalizeQualityValue(value) {
+    return String(value || '').trim().toLowerCase();
+}
+
+function getReplyQualityMetadata(message = {}) {
+    const metadata = message?.metadata && typeof message.metadata === 'object'
+        ? message.metadata
+        : {};
+    const replyQuality = metadata.reply_quality && typeof metadata.reply_quality === 'object'
+        ? metadata.reply_quality
+        : {};
+    const directReplyQuality = message.reply_quality && typeof message.reply_quality === 'object'
+        ? message.reply_quality
+        : {};
+    return {
+        metadata,
+        replyQuality: {
+            ...directReplyQuality,
+            ...replyQuality,
+        },
+    };
+}
+
+function hasAnyMetadataKey(source = {}, keys = []) {
+    return keys.some((key) => {
+        const value = source?.[key];
+        return value !== undefined && value !== null && value !== '' && value !== false;
+    });
+}
+
+function getPendingRepliesForMessage(message = {}, context = {}) {
+    const chatId = String(message.wx_id || message.chat_id || '').trim();
+    const items = Array.isArray(context.pendingReplies) ? context.pendingReplies : [];
+    return items.filter((item) => {
+        if (!item || typeof item !== 'object') {
+            return false;
+        }
+        const itemChatId = String(item.chat_id || item.wx_id || '').trim();
+        if (chatId && itemChatId && itemChatId !== chatId) {
+            return false;
+        }
+        const status = normalizeQualityValue(item.status || 'pending');
+        return status === 'pending' || !status;
+    });
+}
+
+function buildReplyQualityState(message = {}, context = {}) {
+    const { metadata, replyQuality } = getReplyQualityMetadata(message);
+    const feedback = normalizeQualityValue(replyQuality.user_feedback || replyQuality.feedback);
+    const status = normalizeQualityValue(
+        replyQuality.status
+        || replyQuality.outcome
+        || metadata.reply_status
+        || metadata.approval_status
+        || metadata.pending_reply_status
+        || metadata.outcome
+    );
+    const pendingCount = getPendingRepliesForMessage(message, context).length;
+    const cues = [];
+
+    if (feedback === 'unhelpful') {
+        cues.push({
+            key: 'unhelpful',
+            label: QUALITY_REVIEW_TEXT.unhelpful,
+            hint: QUALITY_REVIEW_TEXT.unhelpfulHint,
+            action: QUALITY_REVIEW_TEXT.unhelpfulAction,
+        });
+    } else if (feedback === 'helpful') {
+        cues.push({
+            key: 'helpful',
+            label: QUALITY_REVIEW_TEXT.helpful,
+            hint: QUALITY_REVIEW_TEXT.helpfulHint,
+            action: QUALITY_REVIEW_TEXT.helpfulAction,
+        });
+    }
+
+    if (pendingCount > 0 || ['pending', 'manual_review', 'pending_approval'].includes(status)) {
+        cues.push({
+            key: 'pending',
+            label: pendingCount > 0 ? `${QUALITY_REVIEW_TEXT.pending} ${pendingCount} 条` : QUALITY_REVIEW_TEXT.pending,
+            hint: QUALITY_REVIEW_TEXT.pendingHint,
+            action: QUALITY_REVIEW_TEXT.pendingAction,
+        });
+    }
+
+    if (status === 'rejected' || status === 'reject') {
+        cues.push({
+            key: 'rejected',
+            label: QUALITY_REVIEW_TEXT.rejected,
+            hint: QUALITY_REVIEW_TEXT.rejectedHint,
+            action: QUALITY_REVIEW_TEXT.rejectedAction,
+        });
+    }
+
+    if (
+        status === 'failed'
+        || status === 'error'
+        || hasAnyMetadataKey(metadata, FAILURE_METADATA_KEYS)
+        || hasAnyMetadataKey(replyQuality, FAILURE_METADATA_KEYS)
+    ) {
+        cues.push({
+            key: 'failed',
+            label: QUALITY_REVIEW_TEXT.failed,
+            hint: QUALITY_REVIEW_TEXT.failedHint,
+            action: QUALITY_REVIEW_TEXT.failedAction,
+        });
+    }
+
+    if (status === 'empty' || replyQuality.empty_reply === true) {
+        cues.push({
+            key: 'empty',
+            label: QUALITY_REVIEW_TEXT.empty,
+            hint: QUALITY_REVIEW_TEXT.failedHint,
+            action: QUALITY_REVIEW_TEXT.failedAction,
+        });
+    }
+
+    if (cues.length === 0) {
+        cues.push({
+            key: 'none',
+            label: QUALITY_REVIEW_TEXT.none,
+            hint: QUALITY_REVIEW_TEXT.noneHint,
+            action: QUALITY_REVIEW_TEXT.noneAction,
+            showInList: false,
+        });
+    }
+
+    return {
+        feedback,
+        cues,
+        label: cues.map((cue) => cue.label).join(' / '),
+    };
+}
+
+function buildQualityCueLine(documentObj, qualityState) {
+    const visibleCues = (qualityState?.cues || []).filter((cue) => cue.showInList !== false);
+    if (visibleCues.length === 0) {
+        return null;
+    }
+    const line = documentObj.createElement('div');
+    line.className = 'message-time';
+    line.textContent = `${QUALITY_REVIEW_TEXT.listPrefix}: ${visibleCues.map((cue) => cue.label).join(' / ')}`;
+    return line;
+}
+
+function buildReplyQualityReview(documentObj, qualityState) {
+    const reviewWrap = documentObj.createElement('div');
+    reviewWrap.className = 'form-group full-width';
+
+    const reviewLabel = documentObj.createElement('label');
+    reviewLabel.className = 'form-label';
+    reviewLabel.textContent = QUALITY_REVIEW_TEXT.title;
+    reviewWrap.appendChild(reviewLabel);
+
+    const status = documentObj.createElement('div');
+    status.className = 'detail-help';
+    status.textContent = `${QUALITY_REVIEW_TEXT.statusLabel}: ${qualityState.label}`;
+    reviewWrap.appendChild(status);
+
+    (qualityState.cues || []).forEach((cue) => {
+        const hint = documentObj.createElement('div');
+        hint.className = 'detail-help';
+        hint.textContent = `${cue.label}: ${cue.hint}`;
+        reviewWrap.appendChild(hint);
+
+        const action = documentObj.createElement('div');
+        action.className = 'detail-help';
+        action.textContent = cue.action;
+        reviewWrap.appendChild(action);
+    });
+
+    return reviewWrap;
+}
+
 export function renderMessageChatFilter(page, chats, selectedChatId) {
     const select = page.$('#message-chat-filter');
     if (!select) {
@@ -137,6 +351,16 @@ export function renderMessageList(page, messages, onOpenDetail) {
         body.appendChild(meta);
         body.appendChild(text);
         body.appendChild(chat);
+        if (isAssistantMessage(message)) {
+            const qualityLine = buildQualityCueLine(
+                document,
+                buildReplyQualityState(message),
+            );
+            if (qualityLine) {
+                body.appendChild(qualityLine);
+            }
+        }
+
         item.appendChild(avatar);
         item.appendChild(body);
         item.addEventListener('click', () => {
@@ -165,6 +389,8 @@ export function buildMessageDetail(message, handlers = {}) {
     const documentObj = getRenderDocument(handlers.documentObj);
     const root = documentObj.createElement('div');
     root.className = 'detail-group';
+    const assistantReply = isAssistantMessage(message);
+    const qualityState = buildReplyQualityState(message, handlers);
 
     const title = documentObj.createElement('div');
     title.className = 'detail-group-title';
@@ -181,6 +407,9 @@ export function buildMessageDetail(message, handlers = {}) {
         [MESSAGE_TEXT.fieldDirection, message.is_self ? MESSAGE_TEXT.outgoing : MESSAGE_TEXT.incoming],
         [MESSAGE_TEXT.fieldType, String(message.msg_type || message.type || '--')],
     ];
+    if (assistantReply) {
+        fields.push([MESSAGE_TEXT.fieldFeedback, qualityState.label]);
+    }
 
     for (const [label, value] of fields) {
         const wrap = documentObj.createElement('div');
@@ -218,11 +447,8 @@ export function buildMessageDetail(message, handlers = {}) {
     }
     root.appendChild(contentWrap);
 
-    const currentFeedback = String(
-        message?.metadata?.reply_quality?.user_feedback || ''
-    ).trim().toLowerCase();
-    const isAssistantReply = message.is_self || String(message.role || '').trim().toLowerCase() === 'assistant';
-    if (isAssistantReply && typeof handlers.onFeedback === 'function') {
+    const currentFeedback = qualityState.feedback;
+    if (assistantReply && typeof handlers.onFeedback === 'function') {
         const feedbackWrap = documentObj.createElement('div');
         feedbackWrap.className = 'form-group full-width';
 
@@ -277,6 +503,9 @@ export function buildMessageDetail(message, handlers = {}) {
         feedbackWrap.appendChild(actions);
         feedbackWrap.appendChild(hint);
         root.appendChild(feedbackWrap);
+    }
+    if (assistantReply) {
+        root.appendChild(buildReplyQualityReview(documentObj, qualityState));
     }
 
     return root;

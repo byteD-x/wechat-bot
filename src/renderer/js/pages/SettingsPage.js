@@ -9,6 +9,8 @@ import {
     renderBackupPanel,
 } from './settings/backup-panel.js';
 import {
+    checkUpdates,
+    openUpdateDownload,
     previewPrompt,
     resetCloseBehavior,
     saveSettings,
@@ -22,6 +24,7 @@ import {
     renderLoadError,
     renderPageExportRagStatus,
     renderPageSaveFeedback,
+    renderPageUpdatePanel,
     scrollToTop,
     setSavingState,
 } from './settings/page-chrome.js';
@@ -37,6 +40,7 @@ import {
     loadConfigAudit,
     loadSettings,
     maybeRefreshForRuntimeConfigChange,
+    scheduleAutoSave,
     shouldRefreshAudit,
     watchConfigChanges,
     watchUpdaterState,
@@ -62,34 +66,35 @@ function serializeSettingsPayload(payload) {
 }
 
 const SETTINGS_CARD_META = new Map([
-    ['模型与认证', { groups: ['workspace', 'common'], order: 10 }],
-    ['机器人设置', { groups: ['bot', 'common'], order: 20 }],
-    ['系统提示', { groups: ['prompt', 'common'], order: 30 }],
-    ['提示词预览', { groups: ['prompt'], order: 40 }],
-    ['记忆与上下文', { groups: ['memory', 'common'], order: 50 }],
-    ['群聊与发送', { groups: ['delivery', 'common'], order: 60 }],
-    ['白名单管理', { groups: ['guard', 'common'], order: 70 }],
-    ['表情与语音', { groups: ['bot'], order: 80 }],
-    ['微信连接与传输', { groups: ['bot'], order: 90 }],
-    ['备份与恢复', { groups: ['workspace'], order: 100 }],
-    ['轮询与延迟', { groups: ['delivery'], order: 110 }],
-    ['合并与发送', { groups: ['delivery'], order: 120 }],
-    ['智能分段', { groups: ['delivery'], order: 130 }],
-    ['向量记忆与 RAG', { groups: ['memory'], order: 140 }],
-    ['热更新与重连', { groups: ['workspace'], order: 150 }],
-    ['控制命令', { groups: ['delivery'], order: 160 }],
-    ['静默时段与限额', { groups: ['guard'], order: 170 }],
-    ['过滤与白名单', { groups: ['guard'], order: 175 }],
-    ['过滤规则', { groups: ['guard'], order: 180 }],
-    ['定时静默', { groups: ['guard'], order: 190 }],
-    ['成长与画像', { groups: ['quality'], order: 200 }],
-    ['用量监控', { groups: ['guard'], order: 210 }],
-    ['个性化', { groups: ['quality'], order: 220 }],
-    ['情感识别', { groups: ['quality'], order: 230 }],
-    ['LangChain Runtime', { groups: ['quality'], order: 240 }],
-    ['日志与调试', { groups: ['quality'], order: 250 }],
-    ['日志设置', { groups: ['quality'], order: 250 }],
-    ['关闭行为', { groups: ['workspace'], order: 260 }],
+    ['微信连接与传输', { groups: ['connection'], order: 10 }],
+    ['热更新与重连', { groups: ['connection', 'advanced'], order: 20 }],
+    ['模型与认证', { groups: ['model'], order: 30 }],
+    ['LangChain Runtime', { groups: ['model', 'advanced'], order: 40 }],
+    ['机器人设置', { groups: ['reply'], order: 50 }],
+    ['系统提示', { groups: ['reply'], order: 60 }],
+    ['提示词预览', { groups: ['reply'], order: 70 }],
+    ['群聊与发送', { groups: ['reply'], order: 80 }],
+    ['轮询与延迟', { groups: ['reply', 'advanced'], order: 90 }],
+    ['合并与发送', { groups: ['reply', 'advanced'], order: 100 }],
+    ['智能分段', { groups: ['reply', 'advanced'], order: 110 }],
+    ['表情与语音', { groups: ['reply'], order: 120 }],
+    ['控制命令', { groups: ['notification', 'advanced'], order: 130 }],
+    ['定时静默', { groups: ['notification'], order: 140 }],
+    ['关闭行为', { groups: ['notification', 'about'], order: 150 }],
+    ['记忆与上下文', { groups: ['privacy'], order: 160 }],
+    ['备份与恢复', { groups: ['privacy'], order: 170 }],
+    ['过滤规则', { groups: ['privacy', 'reply'], order: 180 }],
+    ['白名单管理', { groups: ['privacy', 'reply'], order: 190 }],
+    ['用量监控', { groups: ['privacy', 'advanced'], order: 200 }],
+    ['个性化', { groups: ['privacy'], order: 210 }],
+    ['情感识别', { groups: ['privacy', 'advanced'], order: 220 }],
+    ['向量记忆与 RAG', { groups: ['privacy', 'advanced'], order: 230 }],
+    ['日志设置', { groups: ['privacy', 'advanced'], order: 240 }],
+    ['日志与调试', { groups: ['privacy', 'advanced'], order: 240 }],
+    ['静默时段与限额', { groups: ['notification', 'advanced'], order: 250 }],
+    ['过滤与白名单', { groups: ['privacy', 'reply'], order: 260 }],
+    ['成长与画像', { groups: ['privacy'], order: 270 }],
+    ['关于与更新', { groups: ['about'], order: 280 }],
 ]);
 
 function resolveSettingsCardMeta(title = '') {
@@ -101,7 +106,7 @@ function resolveSettingsCardMeta(title = '') {
         };
     }
     return {
-        groups: ['quality'],
+        groups: ['advanced'],
         order: 999,
     };
 }
@@ -147,7 +152,7 @@ export class SettingsPage extends PageController {
             dataControlDryRunScope: '',
         };
         this._backupPromise = null;
-        this._activeSettingsSection = 'common';
+        this._activeSettingsSection = 'connection';
         this._hasPendingChanges = false;
         this._baselineSettingsPayload = serializeSettingsPayload({});
         this._baselineCardPayloads = new Map();
@@ -184,6 +189,7 @@ export class SettingsPage extends PageController {
         } else {
             this._renderHero();
         }
+        this._renderUpdatePanel();
         await this._loadWorkspaceBackups({ silent: true });
     }
 
@@ -203,6 +209,9 @@ export class SettingsPage extends PageController {
 
     _scheduleAutoSave(options = {}) {
         this._trackPendingChanges(options);
+        if (options?.immediate) {
+            scheduleAutoSave(this, { immediate: true });
+        }
     }
 
     _watchUpdaterState() {
@@ -274,6 +283,14 @@ export class SettingsPage extends PageController {
         await resetCloseBehavior(TEXT);
     }
 
+    async _checkUpdates() {
+        await checkUpdates(this, TEXT, { updateSource: 'settings-page' });
+    }
+
+    async _openUpdateDownload() {
+        await openUpdateDownload(this);
+    }
+
     _renderHero(highlight = false) {
         renderHero(this, highlight);
         this._renderWorkbenchState();
@@ -291,6 +308,13 @@ export class SettingsPage extends PageController {
 
     _renderExportRagStatus() {
         renderPageExportRagStatus(this);
+    }
+
+    _renderUpdatePanel() {
+        if (typeof document === 'undefined' && !this.container) {
+            return;
+        }
+        renderPageUpdatePanel(this);
     }
 
     _renderBackupPanel() {

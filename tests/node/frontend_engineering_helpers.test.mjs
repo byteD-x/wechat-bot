@@ -25,6 +25,7 @@ import {
 import {
     buildDisconnectedStatus,
     buildUpdateBadgeState,
+    buildUpdateExperience,
     buildVersionText,
     getConnectionStatusView,
     normalizeRuntimeIdleState,
@@ -32,6 +33,7 @@ import {
 } from '../../src/renderer/js/app/ui-helpers.js';
 import {
     buildUnavailableReadinessReport,
+    buildReadinessTaskFlow,
     getReadinessBlockingChecks,
     normalizeReadinessReport,
     shouldCompleteFirstRun,
@@ -87,10 +89,107 @@ function resetReadinessState() {
 
 test('app frame titlebar controls expose explicit aria labels', () => {
     const markup = renderAppFrame();
+    assert.match(markup, /id="app-titlebar"/);
+    assert.match(markup, /data-window-state="normal"/);
+    assert.match(markup, /id="titlebar-drag-region"/);
+    assert.match(markup, /id="window-title"[^>]*title="微信 AI 助手"/);
     assert.match(markup, /id="btn-minimize"[^>]*type="button"[^>]*aria-label=/);
-    assert.match(markup, /id="btn-maximize"[^>]*type="button"[^>]*aria-label=/);
+    assert.match(markup, /id="btn-maximize"[^>]*type="button"[^>]*aria-label=[^>]*aria-pressed="false"/);
     assert.match(markup, /id="btn-close"[^>]*type="button"[^>]*aria-label=/);
+    assert.match(markup, /class="icon icon-window-restore"[^>]*aria-hidden="true"/);
 });
+
+test('app window chrome syncs titlebar state and delegates titlebar gestures', async () => withDomAsync(async ({ document, registerElement }) => {
+    const previousWindow = globalThis.window;
+    try {
+        const calls = [];
+        let windowStateListener = null;
+        globalThis.window = {
+            electronAPI: {
+                getWindowState: async () => ({
+                    title: '微信 AI 助手',
+                    isMaximized: false,
+                }),
+                onWindowStateChanged(callback) {
+                    windowStateListener = callback;
+                    return () => {};
+                },
+                minimizeWindow: async () => {
+                    calls.push(['minimize']);
+                    return { title: '微信 AI 助手', isMaximized: false };
+                },
+                maximizeWindow: async () => {
+                    calls.push(['maximize']);
+                    return { title: '微信 AI 助手', isMaximized: true };
+                },
+                closeWindow: () => {
+                    calls.push(['close']);
+                },
+                showWindowSystemMenu: async (point) => {
+                    calls.push(['system-menu', point]);
+                    return { success: true, state: { title: '微信 AI 助手', isMaximized: true } };
+                },
+            },
+        };
+
+        const titlebar = registerElement('app-titlebar', document.createElement('header'));
+        titlebar.dataset.windowState = 'normal';
+        const dragRegion = registerElement('titlebar-drag-region', document.createElement('div'));
+        const title = registerElement('window-title', document.createElement('span'));
+        title.textContent = '微信 AI 助手';
+        const btnMinimize = registerElement('btn-minimize', document.createElement('button'));
+        const btnMaximize = registerElement('btn-maximize', document.createElement('button'));
+        const btnClose = registerElement('btn-close', document.createElement('button'));
+        document.body.appendChild(titlebar);
+        document.body.appendChild(dragRegion);
+        document.body.appendChild(title);
+        document.body.appendChild(btnMinimize);
+        document.body.appendChild(btnMaximize);
+        document.body.appendChild(btnClose);
+
+        const app = Object.create(App.prototype);
+        app._setupWindowChrome();
+        await Promise.resolve();
+        await Promise.resolve();
+
+        assert.equal(titlebar.dataset.windowState, 'normal');
+        assert.equal(btnMaximize.getAttribute('aria-label'), '最大化窗口');
+        assert.equal(btnMaximize.getAttribute('aria-pressed'), 'false');
+
+        windowStateListener?.({ title: '非常长的窗口标题 - 需要截断但保留完整 title', isMaximized: true });
+        assert.equal(titlebar.dataset.windowState, 'maximized');
+        assert.equal(title.textContent, '非常长的窗口标题 - 需要截断但保留完整 title');
+        assert.equal(title.getAttribute('title'), '非常长的窗口标题 - 需要截断但保留完整 title');
+        assert.equal(btnMaximize.getAttribute('aria-label'), '还原窗口');
+        assert.equal(btnMaximize.getAttribute('aria-pressed'), 'true');
+
+        btnMinimize.click();
+        btnMaximize.click();
+        btnClose.click();
+        dragRegion._listeners.get('dblclick')[0]({ preventDefault() {} });
+        dragRegion._listeners.get('contextmenu')[0]({
+            preventDefault() {},
+            clientX: 36,
+            clientY: 12,
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+
+        assert.deepEqual(calls, [
+            ['minimize'],
+            ['maximize'],
+            ['close'],
+            ['maximize'],
+            ['system-menu', { x: 36, y: 12 }],
+        ]);
+    } finally {
+        if (previousWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = previousWindow;
+        }
+    }
+}));
 
 test('app runtime readonly lock toggles target pages with bot running state', () => withDom(({ document, registerElement }) => {
     const costsPage = registerElement('page-costs', document.createElement('section'));
@@ -353,6 +452,18 @@ test('app ui helpers keep updater and connection states deterministic', () => wi
     assert.equal(view.labelText, '后端已休眠');
     assert.equal(view.dotClass, 'status-dot sleeping');
 
+    const checksumBlocked = buildUpdateExperience({
+        enabled: true,
+        currentVersion: '1.0.0',
+        latestVersion: '1.1.0',
+        available: true,
+        error: 'Release is missing SHA256SUMS.txt, in-app install is blocked',
+    });
+    assert.match(checksumBlocked.statusText, /安全校验阻断/);
+    assert.equal(checksumBlocked.actionText, '打开发布页');
+    assert.equal(checksumBlocked.actionDisabled, false);
+    assert.equal(checksumBlocked.skipVisible, true);
+
     const statusText = document.createElement('div');
     const meta = document.createElement('div');
     const notes = document.createElement('ul');
@@ -565,6 +676,58 @@ test('readiness helpers normalize reports and gate first-run guide visibility', 
     assert.equal(unavailable.checks[0].action, 'retry');
 });
 
+test('readiness task flow groups first-run steps and keeps skipped steps reviewable', () => {
+    const flow = buildReadinessTaskFlow({
+        success: true,
+        ready: false,
+        blocking_count: 2,
+        checks: [
+            {
+                key: 'admin_permission',
+                label: '管理员权限',
+                status: 'failed',
+                blocking: true,
+                message: '未以管理员身份运行',
+                action: 'restart_as_admin',
+                action_label: '以管理员身份重启',
+            },
+            {
+                key: 'api_config',
+                label: 'API 配置',
+                status: 'failed',
+                blocking: true,
+                message: '暂无可用预设',
+                action: 'open_settings',
+                action_label: '前往设置',
+            },
+            {
+                key: 'wechat_process',
+                label: '微信进程',
+                status: 'passed',
+                blocking: false,
+                message: '检测到微信进程',
+            },
+        ],
+    }, {
+        skippedStepKeys: ['environment'],
+        activeStepKey: 'environment',
+    });
+
+    assert.equal(flow.steps.length, 4);
+    assert.deepEqual(flow.steps.map((step) => step.key), [
+        'environment',
+        'model_auth',
+        'wechat_connection',
+        'test_run',
+    ]);
+    assert.equal(flow.activeStep.key, 'environment');
+    assert.equal(flow.steps[0].status, 'skipped');
+    assert.equal(flow.steps[0].primaryAction.action, 'restart_as_admin');
+    assert.equal(flow.steps[1].status, 'failed');
+    assert.equal(flow.steps[1].primaryAction.action, 'open_settings');
+    assert.equal(flow.nextStep.key, 'model_auth');
+});
+
 test('app readiness flow auto-shows first-run guide and completes only after pass', async () => {
     const previousWindow = globalThis.window;
     const originalGetReadiness = apiService.getReadiness;
@@ -610,6 +773,7 @@ test('app readiness flow auto-shows first-run guide and completes only after pas
             switchPageCalls.push({ pageName, options });
         };
         app._refreshStatus = async () => {};
+        app._setupFirstRunGuide();
 
         const blockedReport = {
             success: true,
@@ -677,11 +841,33 @@ test('app readiness flow auto-shows first-run guide and completes only after pas
         assert.equal(stateManager.get('readiness.firstRunPending'), true);
         assert.equal(setFirstRunCompleteCalls, 0);
         assert.equal(modal.classList.contains('active'), true);
-        assert.equal(list.children.length, 1);
+        assert.equal(list.children.length, 4);
         assert.equal(settingsButton.hidden, false);
-        assert.match(title.textContent, /还差 1 项准备/);
+        assert.match(title.textContent, /首启运行准备/);
         assert.match(subtitle.textContent, /请先补齐阻塞项/);
-        assert.match(summary.textContent, /开箱即用/);
+        assert.match(summary.textContent, /模型认证/);
+        assert.equal(list.children[1].dataset.active, 'true');
+        assert.equal(
+            list.children[1].children[1].children[0].dataset.readinessAction,
+            'open_settings'
+        );
+        const skipButton = list.children[1].children[1].children[1];
+        modal._listeners.get('click')[0]({
+            target: skipButton,
+            preventDefault() {},
+            stopPropagation() {},
+        });
+        assert.equal(list.children[1].dataset.status, 'skipped');
+        assert.equal(list.children[3].dataset.active, 'true');
+
+        const reviewButton = list.children[1].children[1];
+        modal._listeners.get('click')[0]({
+            target: reviewButton,
+            preventDefault() {},
+            stopPropagation() {},
+        });
+        assert.equal(list.children[1].dataset.active, 'true');
+        assert.match(summary.textContent, /模型认证/);
 
         await app._handleReadinessAction('open_settings');
 
@@ -955,7 +1141,7 @@ test('about page wires updater state and renders update panel on enter', async (
     await page.onEnter();
 
     assert.equal(bindings.length, 3);
-    assert.equal(watchPaths.length, 13);
+    assert.equal(watchPaths.length, 14);
     assert.deepEqual(watchPaths.map((item) => item.path), [
         'updater.enabled',
         'updater.checking',
@@ -964,6 +1150,7 @@ test('about page wires updater state and renders update panel on enter', async (
         'updater.latestVersion',
         'updater.lastCheckedAt',
         'updater.releaseDate',
+        'updater.notes',
         'updater.error',
         'updater.skippedVersion',
         'updater.downloading',

@@ -32,9 +32,14 @@
 
 ## Documentation
 
+- [API 契约与治理接口](docs/api.md)
+- [面试讲解手册](docs/interview-playbook.md)
+- [TODO 与成熟化路线](docs/TODO.md)
 - [系统链路说明](docs/SYSTEM_CHAINS.md)
 - [项目亮点与主链路](docs/HIGHLIGHTS.md)
 - [详细使用手册](docs/USER_GUIDE.md)
+- [模型与认证中心](docs/MODEL_AUTH_CENTER.md)
+- [微信聊天记录导出指南](docs/wechat-export-guide.md)
 - [配置说明](docs/USER_GUIDE.md#8-配置说明)
 - [常见问题排查](docs/USER_GUIDE.md#9-常见问题)
 - [开发与测试](docs/USER_GUIDE.md#10-开发与测试)
@@ -150,8 +155,8 @@ npm run dev
 - `Google / Gemini / Gemini CLI` 现在会在模型中心工作流里直接收集 `项目 ID`；如果本机 `Gemini CLI` 已经检测到可复用的 `project_id`，运行时会自动复用，不需要再手动补填一次。
 - 对 `OpenAI / Codex / ChatGPT` 与 `Google / Gemini / Gemini CLI` 这类“浏览器打开后最终由本机凭据落盘完成”的方法，模型中心会在“继续完成授权”时优先走本机重扫，不会误要求用户补标准 OAuth callback。
 - `Claude / Claude Code` 现在也有显式 `Claude Code OAuth` 方法；它和本机跟随共享同一组本地凭据探测与本机重扫收口，但实际进入 Anthropic 对话运行时仍要求 `apiKeyHelper` 或可复用的本机 API 凭据缓存。
-- 向量记忆 / RAG 现在有独立总开关；首次开启时会提示本地存储、资源占用和潜在调用成本。
-- 如需给向量记忆单独指定 embedding，可在“设置”页填写单独模型，或在预设里填写默认 embedding 模型；`Ollama` 可使用如 `nomic-embed-text` 之类的本地 embedding 模型。
+- 运行期向量记忆由 `bot.rag_enabled` 控制；导出语料 RAG 由 `bot.export_rag_enabled`、`bot.export_rag_auto_ingest` 和 `bot.export_rag_*` 参数控制。
+- 向量检索的 embedding 解析优先级为兼容覆盖项 `bot.vector_memory_embedding_model` > 当前预设的 `embedding_model` > 全局 `api.embedding_model`；`Ollama` 可使用如 `nomic-embed-text` 之类的本地 embedding 模型。
 - “系统提示”现在拆成“自定义系统提示词”与“固定注入块（只读）”；历史对话、用户画像、情绪/时间/风格等系统注入内容不会再暴露给设置页直接改写。
 - 联系人专属 Prompt 与会话提示覆盖只需要填写自定义部分；即使用户没有手动带上历史/画像/情境占位块，运行时也会自动补齐这些系统必需注入项。
 
@@ -209,13 +214,17 @@ python run.py web
 
 当前与本轮功能直接相关的关键配置：
 
-```json
+```python
 "bot": {
     "config_reload_mode": "auto",          # auto / polling / watchdog
     "config_reload_debounce_ms": 500,
     "allow_filehelper_self_message": True, # 允许文件传输助手中的自发消息参与回复
     "reply_deadline_sec": 2.0,             # 回复 deadline，优先争取 2 秒内给出真实回复
                                           # 设为 0 可关闭该 deadline，主链路将等待到 provider 自己的超时/重试结束
+    "rag_enabled": false,
+    "export_rag_enabled": false,
+    "export_rag_auto_ingest": true,
+    "export_rag_dir": "data/chat_exports/聊天记录",
 }
 
 "agent": {
@@ -268,6 +277,8 @@ This phase turns the project from a demo-style assistant into a safer personal p
 
 Key APIs introduced in this phase:
 
+- `POST /api/v1/admin/prompts/{revision}/rollback`
+- `POST /api/v1/agents/tool-workflow`
 - `GET/POST /api/reply_policies`
 - `GET /api/pending_replies`
 - `POST /api/pending_replies/<id>/approve`
@@ -299,6 +310,11 @@ python run.py web
 # 环境检查
 python run.py check
 python run.py check --json
+
+# 共享配置辅助命令
+python run.py config migrate
+python run.py config validate
+python run.py config probe
 
 # 工作区备份
 python run.py backup list --json
@@ -378,15 +394,19 @@ npm run build:release
 
 新增接口如下：
 
+- `GET /api/usage`
 - `GET /api/pricing`
 - `POST /api/pricing/refresh`
 - `GET /api/costs/summary`
 - `GET /api/costs/sessions`
 - `GET /api/costs/session_details`
+- `GET /api/costs/review_queue_export`
 
 说明：
 
+- `/api/usage` 返回最近用量摘要，兼容历史用量页面。
 - 金额按官方“每 1M tokens 单价”换算，不做汇率换算；混合币种会分币种展示
+- `/api/costs/review_queue_export` 导出当前筛选条件下的低质量回复复盘 JSON。
 - `Ollama` 本地模型默认按 `0` 成本处理
 - 自动刷新当前只覆盖较稳定来源：`DeepSeek`、`Groq`、`OpenRouter`
 - `OpenAI`、`Qwen`、`Doubao` 首版以内置官方快照和手动覆盖为主

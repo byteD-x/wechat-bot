@@ -70,7 +70,7 @@
    - 功能：统一访问本地 Quart API。
    - 实现：
      - 维护 API base URL 和 token。
-     - 封装 `status/config/start/stop/send/preview_prompt/check-update` 等请求。
+     - 封装 `status/config/start/stop/send/preview_prompt/check-update`、模型中心、微信导出、成本、日志等请求。
 
 ## 3. Web API 链路
 
@@ -118,6 +118,21 @@
 8. `/api/preview_prompt`
    - 功能：预览系统提示词。
    - 实现：构造一个示例事件对象，调用 `resolve_system_prompt()` 生成预览。
+
+### 当前接口分组
+
+`backend/api.py` 当前按职责提供这些主要接口：
+
+- 基础状态与事件：`/api/status`、`/api/ping`、`/api/readiness`、`/api/metrics`、`/api/events`、`/api/events_ticket`
+- 生命周期：`/api/start`、`/api/stop`、`/api/pause`、`/api/resume`、`/api/restart`、`/api/recover`
+- 成长任务：`/api/growth/start`、`/api/growth/stop`、`/api/growth/tasks`、`/api/growth/tasks/<task_type>/clear|run|pause|resume`
+- 微信导出：`/api/wechat_export/probe`、`/api/wechat_export/decrypt/start`、`/api/wechat_export/decrypt/jobs/<job_id>`、`/api/wechat_export/contacts`、`/api/wechat_export/export`、`/api/wechat_export/apply/preview`、`/api/wechat_export/apply`
+- 消息与画像：`/api/messages`、`/api/send`、`/api/contact_profile`、`/api/contact_prompt`、`/api/message_feedback`
+- 回复策略与审批：`/api/reply_policies`、`/api/pending_replies`、`/api/pending_replies/<id>/approve|reject`
+- 备份与数据治理：`/api/backups`、`/api/backups/cleanup`、`/api/backups/restore`、`/api/data_controls`、`/api/data_controls/clear`、`/api/evals/latest`
+- 成本：`/api/usage`、`/api/pricing`、`/api/pricing/refresh`、`/api/costs/summary`、`/api/costs/sessions`、`/api/costs/session_details`、`/api/costs/review_queue_export`
+- 模型与认证：`/api/model_catalog`、`/api/model_auth/overview`、`/api/model_auth/action`、兼容壳层 `/api/auth/providers*`、本地模型探测 `/api/ollama/models`
+- 配置与诊断：`/api/config`、`/api/config/audit`、`/api/test_connection`、`/api/preview_prompt`、`/api/logs`、`/api/logs/clear`
 
 ## 4. 启动与生命周期链路
 
@@ -458,15 +473,35 @@
      - 合并默认配置、override 和其他来源。
      - 提供 `get_snapshot/reload/publish/update_override`。
 
-2. `backend/api.py::save_config`
-   - 功能：保存配置入口。
+2. `backend/shared_config.py`
+   - 功能：维护共享配置文件路径、旧配置迁移和前后端共同字段。
+   - 实现：
+     - 以 `data/app_config.json` 作为运行时唯一真实配置源。
+     - 兼容迁移 `backend/config.py`、`data/config_override.json`、`data/api_keys.py`、`prompt_overrides.py`。
+     - 暴露 `get_app_config_path()` 与 `migrate_legacy_config()` 供 Electron、CLI 和后端复用。
+
+3. `src/main/shared-config.js`
+   - 功能：Electron 主进程侧共享配置入口。
+   - 实现：
+     - 解析安装包或开发环境中的可写 `data` 目录。
+     - 通过 IPC 让设置页直接读写 `app_config.json`。
+
+4. `backend/api.py::save_config`
+   - 功能：兼容 Web API 保存配置入口。
    - 实现：
      - 更新 override 文件。
      - 计算 `changed_paths`。
      - 生成 `reload_plan`。
      - 当机器人正在运行时触发 `reload_runtime_config()`。
 
-3. `backend/bot.py::reload_runtime_config`
+5. `backend/core/config_cli.py`
+   - 功能：命令行配置辅助入口。
+   - 实现：
+     - `python run.py config migrate` 迁移旧配置到 `app_config.json`。
+     - `python run.py config validate` 校验并规范化配置。
+     - `python run.py config probe` 使用当前配置或 stdin patch 测试 AI 联通。
+
+6. `backend/bot.py::reload_runtime_config`
    - 功能：运行时热应用配置。
    - 实现：
      - 更新当前 bot/config/agent 配置。
@@ -474,7 +509,7 @@
      - 必要时重连微信传输层。
      - 广播状态变化。
 
-4. `backend/core/config_audit.py`
+7. `backend/core/config_audit.py`
    - 功能：配置审计。
    - 实现：
      - 标出配置项属于 live/restart/transport 级别。

@@ -72,6 +72,133 @@ export function buildUpdateBadgeState(state) {
     return { hidden: true, text: '', disabled: false };
 }
 
+export function buildUpdateExperience(state = {}) {
+    const currentVersion = state.currentVersion || '--';
+    const latestVersion = state.latestVersion || '';
+    const releaseDate = state.releaseDate;
+    const checkedAt = state.lastCheckedAt;
+    const error = String(state.error || '').trim();
+    const readyToInstall = !!state.readyToInstall;
+    const downloading = !!state.downloading;
+    const downloadProgress = Math.min(100, Math.max(0, Number(state.downloadProgress || 0)));
+    const available = !!state.available;
+    const enabled = state.enabled !== false;
+    const skippedVersion = state.skippedVersion || '';
+    const noteItems = Array.isArray(state.notes) ? state.notes.filter(Boolean) : [];
+    const metaItems = [
+        `当前版本：v${currentVersion}`,
+        latestVersion ? `最新版本：v${latestVersion}` : '',
+        releaseDate ? `发布日期：${formatAppDateTime(releaseDate)}` : '',
+        checkedAt ? `最近检查：${formatAppDateTime(checkedAt)}` : '',
+        skippedVersion && skippedVersion === latestVersion ? `已跳过：v${latestVersion}` : '',
+    ].filter(Boolean);
+
+    if (!enabled) {
+        return {
+            statusText: '当前环境不支持应用内更新',
+            metaItems: [`当前版本：v${currentVersion}`],
+            noteItems: [
+                '可以打开 GitHub Releases 获取完整安装包。',
+                '便携版或开发环境不会自动启动安装器。',
+            ],
+            actionText: '打开发布页',
+            actionDisabled: false,
+            skipVisible: false,
+            skipDisabled: true,
+            progressHidden: true,
+            progressText: '',
+            progressWidth: '0%',
+        };
+    }
+
+    if (readyToInstall) {
+        return {
+            statusText: `更新已下载并通过校验：v${latestVersion || currentVersion}`,
+            metaItems,
+            noteItems: [
+                ...noteItems,
+                '安装前会停止本地运行态并启动已校验的安装包。',
+            ],
+            actionText: '立即安装并重启',
+            actionDisabled: false,
+            skipVisible: false,
+            skipDisabled: true,
+            progressHidden: true,
+            progressText: '',
+            progressWidth: '100%',
+        };
+    }
+
+    if (downloading) {
+        return {
+            statusText: `正在下载 v${latestVersion}...`,
+            metaItems,
+            noteItems: noteItems.length ? noteItems : ['下载完成后会进行 SHA256 校验。'],
+            actionText: `下载中 ${downloadProgress}%`,
+            actionDisabled: true,
+            skipVisible: true,
+            skipDisabled: true,
+            progressHidden: false,
+            progressText: `下载进度 ${downloadProgress}%`,
+            progressWidth: `${downloadProgress}%`,
+        };
+    }
+
+    if (error) {
+        const checksumBlocked = /(sha256|checksum|sha256sums|校验)/i.test(error);
+        return {
+            statusText: checksumBlocked
+                ? '发现新版本，但应用内安装被安全校验阻断'
+                : error,
+            metaItems,
+            noteItems: checksumBlocked
+                ? [
+                    error,
+                    '为避免安装包被篡改，应用内下载需要可信 SHA256 校验清单。',
+                    '可以打开发布页手动下载完整安装包。',
+                ]
+                : [error],
+            actionText: checksumBlocked ? '打开发布页' : '下载更新',
+            actionDisabled: checksumBlocked ? false : !available,
+            skipVisible: true,
+            skipDisabled: !latestVersion,
+            progressHidden: true,
+            progressText: '',
+            progressWidth: '0%',
+        };
+    }
+
+    if (available && latestVersion) {
+        return {
+            statusText: `发现新版本 v${latestVersion}`,
+            metaItems,
+            noteItems: noteItems.length
+                ? noteItems
+                : ['下载后会校验 SHA256，并在你确认后启动安装。'],
+            actionText: '下载更新',
+            actionDisabled: false,
+            skipVisible: true,
+            skipDisabled: false,
+            progressHidden: true,
+            progressText: '',
+            progressWidth: '0%',
+        };
+    }
+
+    return {
+        statusText: '当前已经是最新版本',
+        metaItems,
+        noteItems: ['没有需要处理的更新。'],
+        actionText: '下载更新',
+        actionDisabled: true,
+        skipVisible: false,
+        skipDisabled: true,
+        progressHidden: true,
+        progressText: '',
+        progressWidth: '0%',
+    };
+}
+
 export function renderUpdateModalContent(state, elements) {
     const {
         statusText,
@@ -87,59 +214,23 @@ export function renderUpdateModalContent(state, elements) {
         return;
     }
 
-    const currentVersion = state.currentVersion || '--';
-    const latestVersion = state.latestVersion || '';
-    const releaseDate = state.releaseDate;
-    const checkedAt = state.lastCheckedAt;
-    const error = state.error;
-    const readyToInstall = !!state.readyToInstall;
-    const downloading = !!state.downloading;
-    const downloadProgress = Math.min(100, Math.max(0, Number(state.downloadProgress || 0)));
-    const available = !!state.available;
-    const noteItems = Array.isArray(state.notes) ? state.notes : [];
-
-    if (readyToInstall) {
-        statusText.textContent = `更新已准备好：v${latestVersion || currentVersion}`;
-    } else if (downloading) {
-        statusText.textContent = `正在下载 v${latestVersion}...`;
-    } else if (error) {
-        statusText.textContent = error;
-    } else if (available && latestVersion) {
-        statusText.textContent = `发现新版本 v${latestVersion}`;
-    } else {
-        statusText.textContent = '当前已经是最新版本';
-    }
-
-    meta.textContent = [
-        `当前版本：v${currentVersion}`,
-        latestVersion ? `最新版本：v${latestVersion}` : '',
-        releaseDate ? `发布日期：${formatAppDateTime(releaseDate)}` : '',
-        checkedAt ? `最近检查：${formatAppDateTime(checkedAt)}` : '',
-    ].filter(Boolean).join(' · ');
+    const view = buildUpdateExperience(state);
+    statusText.textContent = view.statusText;
+    meta.textContent = view.metaItems.join(' · ');
 
     notes.textContent = '';
-    const renderedNotes = noteItems.length > 0 ? noteItems : ['暂无更新说明。'];
-    renderedNotes.forEach((item) => {
+    view.noteItems.forEach((item) => {
         notes.appendChild(createAppElement('li', 'update-modal-note-item', item));
     });
 
-    progress.hidden = !downloading;
-    progressFill.style.width = `${downloadProgress}%`;
-    progressText.textContent = downloading ? `下载进度 ${downloadProgress}%` : '';
+    progress.hidden = view.progressHidden;
+    progressFill.style.width = view.progressWidth;
+    progressText.textContent = view.progressText;
 
-    btnSkip.style.display = readyToInstall ? 'none' : 'inline-flex';
-    btnSkip.disabled = downloading || !latestVersion;
-
-    if (readyToInstall) {
-        btnAction.textContent = '立即安装并重启';
-        btnAction.disabled = false;
-    } else if (downloading) {
-        btnAction.textContent = `下载中 ${downloadProgress}%`;
-        btnAction.disabled = true;
-    } else {
-        btnAction.textContent = '下载更新';
-        btnAction.disabled = !latestVersion;
-    }
+    btnSkip.style.display = view.skipVisible ? 'inline-flex' : 'none';
+    btnSkip.disabled = view.skipDisabled;
+    btnAction.textContent = view.actionText;
+    btnAction.disabled = view.actionDisabled;
 }
 
 export function buildDisconnectedStatus(previousStatus = null, idleState = {}, nowMs = Date.now()) {

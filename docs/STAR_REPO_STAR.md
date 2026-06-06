@@ -1,13 +1,13 @@
 # 项目 STAR 亮点与技术难点总结
 
-> 自动更新于：2026-03-17  
+> 自动更新于：2026-06-06
 > 适用场景：项目亮点文档、简历项目经历、技术面试复盘
 
 ## 项目概览
 
 **项目名称**：WeChat AI Assistant  
 **项目定位**：面向 Windows 微信生态的本地化 AI 助手运行时，围绕微信自动化接入、LangGraph 编排、分层记忆、运行期 RAG、桌面/Web 控制台和运行观测构建。  
-**技术栈**：Python 3.9+、Quart、Electron、SQLite、ChromaDB、LangChain、LangGraph、httpx、pytest。
+**技术栈**：Python 3.9+、Quart、Electron、SQLite / aiosqlite、ChromaDB、LangChain、LangGraph、httpx、pytest、Node 原生测试。
 
 ## 差异化亮点
 
@@ -28,6 +28,17 @@
 - `MemoryManager` 提供 `get_recent_context_batch()`，减少多会话数据库往返。
 - 配置系统升级为中心化 `Config Snapshot`，保存配置后可返回 `changed_paths` 与 `reload_plan`。
 - `/api/status`、`/api/metrics`、健康检查和诊断信息让系统具备可观测性与可排障性。
+
+### 4. 模型与认证中心把 Provider/Auth 从设置页里解耦
+- 独立“模型”页统一管理 `api_key / oauth / local_import / web_session`，设置页只保留当前生效模型摘要。
+- `/api/model_catalog`、`/api/model_auth/overview`、`/api/model_auth/action` 让前端不再自行拼 Provider 状态和认证动作。
+- 支持 OpenAI / Codex、Google / Gemini、Qwen、Claude、Kimi、GLM、MiniMax 等 Provider 的不同认证路径与运行时投影。
+- 本机认证优先保存绑定关系和来源信息，运行时按需读取本机凭据，避免复制长期脱钩的静态 token。
+
+### 5. 微信导出与成本复盘形成闭环
+- 导出中心通过 `/api/wechat_export/*` 完成账号探测、数据库解密、联系人读取、CSV 导出和导出语料 RAG 应用。
+- 成本管理页通过 `/api/usage`、`/api/pricing`、`/api/costs/*` 展示 token、金额、会话明细和低质量回复复盘。
+- `/api/costs/review_queue_export` 可以导出当前筛选条件下的复盘 JSON，便于离线排查提示词、检索和上下文来源问题。
 
 ## STAR 案例
 
@@ -79,11 +90,21 @@
 | Memory | `backend/core/memory.py` | SQLite 记忆管理、批量上下文、WAL/mmap 优化 |
 | Config | `backend/core/config_service.py` | 中心化配置快照与运行时发布 |
 | Transport | `backend/transports/base.py` / `backend/transports/wcferry_adapter.py` | 传输层抽象、微信版本门禁与状态暴露 |
-| API | `backend/api.py` | `/api/status`、`/api/metrics`、本机访问约束 |
-| Tests | `tests/test_agent_runtime.py` / `tests/test_optimization_tasks.py` / `tests/test_runtime_observability.py` | 运行时、工程优化和观测能力回归验证 |
+| Model Auth | `backend/model_auth/` / `src/renderer/js/pages/ModelsPage.js` | Provider/Auth 建模、模型目录、认证状态与动作生成 |
+| Export Center | `backend/core/wechat_export_service.py` / `src/renderer/js/pages/ExportCenterPage.js` | 微信探测、解密、联系人读取、CSV 导出与 RAG 应用 |
+| API | `backend/api.py` | `/api/status`、`/api/metrics`、`/api/wechat_export/*`、`/api/model_auth/*`、`/api/costs/*` |
+| Tests | `tests/test_agent_runtime.py` / `tests/test_optimization_tasks.py` / `tests/test_runtime_observability.py` / `tests/test_api.py` | 运行时、工程优化、API 和观测能力回归验证 |
 
 ## 可直接复用的表述
 
 - 负责一个面向 Windows 微信生态的本地化 AI 助手运行时，使用 `Quart + Electron + LangGraph` 打通消息接入、上下文编排、记忆检索和可视化控制面。
 - 设计并落地分层记忆与可降级 RAG 链路，支持轻量重排和可选本地 `Cross-Encoder` 精排，在不强制联网下载模型的前提下提升召回质量。
 - 补齐中心化配置快照、热重载审计、状态诊断与 Prometheus 风格指标导出，使项目从“能跑 demo”提升到“可长期运行和可排障的工程系统”。
+- 建设模型与认证中心，将 Provider 目录、认证方式、本机凭据跟随和运行时投影统一建模，降低多模型供应商接入和排障成本。
+- 打通微信聊天记录导出、导出语料 RAG、成本统计和低质量回复复盘，让“历史风格增强”和“回复质量改进”形成可观察闭环。
+
+## 简历资料维护口径
+
+- 本文作为技术难题与解决方案入口，可与 `docs/HIGHLIGHTS.md` 配套使用。
+- 已验证内容优先来自 `backend/core`、`backend/transports`、`backend/api.py` 和 `tests` 目录，适合面试时追溯到具体实现。
+- 待补充内容包括真实回复成功率、平均响应时延、长期运行稳定性数据和公开仓库增长数据。

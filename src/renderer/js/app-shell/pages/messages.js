@@ -4,7 +4,7 @@ export function renderMessagesPageShell() {
                     <div class="page-heading">
                         <span class="page-kicker">会话回看</span>
                         <h1 class="page-title">消息中心</h1>
-                        <p class="page-subtitle">筛选消息、回看上下文，并在右侧抽屉里继续处理联系人 Prompt 与待审批回复。</p>
+                        <p class="page-subtitle">筛选消息、回看上下文，并在右侧抽屉里跟进回复反馈、待审批草稿与质量复盘线索。</p>
                     </div>
                     <div class="page-actions">
                         <div class="search-wrapper">

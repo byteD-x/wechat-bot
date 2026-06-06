@@ -23,7 +23,14 @@ const {
     createConfigCli,
     createSharedConfigService,
 } = require('./shared-config');
-const { registerIpcHandlers } = require('./ipc');
+const {
+    buildSafeDesktopNotificationOptions,
+    registerIpcHandlers,
+} = require('./ipc');
+const { stopBackendAndQuit } = require('./app-lifecycle');
+
+const APP_TITLE = '微信 AI 助手';
+const BACKGROUND_NOTIFICATION_ID = 'background-running';
 
 // Electron on Windows can be launched without a valid stdout/stderr (or the pipe can be closed),
 // which makes console.* throw synchronously with EPIPE and crash the main process.
@@ -63,6 +70,7 @@ const store = new Store({
         flaskPort: 5000,
         isFirstRun: true,
         closeBehavior: 'ask',
+        backgroundNotificationShown: false,
         growthEnableCostPromptSeen: false,
         growthDisableRiskPromptSeen: false,
         update: {
@@ -120,6 +128,7 @@ function showMainWindowSafe() {
         if (typeof win.isMinimized === 'function' && win.isMinimized()) win.restore();
         win.show();
         win.focus();
+        broadcastWindowState();
         return true;
     } catch (e) {
         return false;
@@ -163,6 +172,160 @@ function broadcastToRenderer(channel, payload) {
         try {
             webContents.send(channel, payload);
         } catch (_) {}
+    }
+}
+
+function getMainWindowState() {
+    const win = getMainWindowSafe();
+    const state = {
+        exists: !!win,
+        isVisible: false,
+        isMinimized: false,
+        isMaximized: false,
+        isFocused: false,
+        isFullScreen: false,
+        isClosable: true,
+        isMaximizable: true,
+        isMinimizable: true,
+        title: APP_TITLE,
+    };
+    if (!win) {
+        return state;
+    }
+    try { state.isVisible = typeof win.isVisible === 'function' ? !!win.isVisible() : false; } catch (_) {}
+    try { state.isMinimized = typeof win.isMinimized === 'function' ? !!win.isMinimized() : false; } catch (_) {}
+    try { state.isMaximized = typeof win.isMaximized === 'function' ? !!win.isMaximized() : false; } catch (_) {}
+    try { state.isFocused = typeof win.isFocused === 'function' ? !!win.isFocused() : false; } catch (_) {}
+    try { state.isFullScreen = typeof win.isFullScreen === 'function' ? !!win.isFullScreen() : false; } catch (_) {}
+    try { state.isClosable = typeof win.isClosable === 'function' ? !!win.isClosable() : true; } catch (_) {}
+    try { state.isMaximizable = typeof win.isMaximizable === 'function' ? !!win.isMaximizable() : true; } catch (_) {}
+    try { state.isMinimizable = typeof win.isMinimizable === 'function' ? !!win.isMinimizable() : true; } catch (_) {}
+    try {
+        const nextTitle = typeof win.getTitle === 'function' ? String(win.getTitle() || '').trim() : '';
+        if (nextTitle) state.title = nextTitle;
+    } catch (_) {}
+    return state;
+}
+
+function broadcastWindowState() {
+    const state = getMainWindowState();
+    sendToMainWindowSafe('window-state-changed', state);
+    return state;
+}
+
+function showSafeDesktopNotification(kind) {
+    const options = buildSafeDesktopNotificationOptions(kind);
+    if (!options) {
+        return false;
+    }
+    if (!Notification || typeof Notification.isSupported !== 'function' || !Notification.isSupported()) {
+        return false;
+    }
+
+    const notification = new Notification({
+        title: options.title,
+        body: options.body,
+        silent: true,
+    });
+    try {
+        notification.show();
+        return true;
+    } catch (error) {
+        console.warn('[Notification] show failed:', error?.message || error);
+        return false;
+    }
+}
+
+function maybeNotifyBackgroundRunning() {
+    if (store.get('backgroundNotificationShown')) {
+        return false;
+    }
+    const shown = showSafeDesktopNotification(BACKGROUND_NOTIFICATION_ID);
+    if (shown) {
+        store.set('backgroundNotificationShown', true);
+    }
+    return shown;
+}
+
+function hideMainWindowToTray({ notify = true } = {}) {
+    const win = getMainWindowSafe();
+    try { win?.hide(); } catch (_) {}
+    if (notify) {
+        maybeNotifyBackgroundRunning();
+    }
+    broadcastWindowState();
+    return { success: true, action: 'minimize', state: getMainWindowState() };
+}
+
+async function quitAppGracefully(reason = 'quit') {
+    return stopBackendAndQuit({
+        GLOBAL_STATE,
+        BackendManager,
+        app,
+        reason,
+    });
+}
+
+function normalizeWindowPoint(point = {}) {
+    const x = Number(point.x);
+    const y = Number(point.y);
+    return {
+        x: Number.isFinite(x) ? Math.max(0, Math.round(x)) : 12,
+        y: Number.isFinite(y) ? Math.max(0, Math.round(y)) : 12,
+    };
+}
+
+function showWindowSystemMenu(point = {}) {
+    const win = getMainWindowSafe();
+    if (!win) {
+        return { success: false, error: 'window_unavailable', state: getMainWindowState() };
+    }
+    const { x, y } = normalizeWindowPoint(point);
+    try {
+        if (typeof win.showSystemMenu === 'function') {
+            try {
+                win.showSystemMenu({ x, y });
+            } catch (_) {
+                win.showSystemMenu(x, y);
+            }
+            return { success: true, native: true, state: getMainWindowState() };
+        }
+
+        const isMaximized = typeof win.isMaximized === 'function' && win.isMaximized();
+        const contextMenu = Menu.buildFromTemplate([
+            {
+                label: '还原',
+                enabled: isMaximized,
+                click: () => {
+                    try { win.unmaximize(); } catch (_) {}
+                    broadcastWindowState();
+                },
+            },
+            { label: '移动', enabled: false },
+            { label: '大小', enabled: false },
+            {
+                label: '最小化',
+                click: () => {
+                    try { win.minimize(); } catch (_) {}
+                    broadcastWindowState();
+                },
+            },
+            {
+                label: '最大化',
+                enabled: !isMaximized,
+                click: () => {
+                    try { win.maximize(); } catch (_) {}
+                    broadcastWindowState();
+                },
+            },
+            { type: 'separator' },
+            { label: '关闭', click: () => requestAppClose({ showWindow: false }) },
+        ]);
+        contextMenu.popup({ window: win, x, y });
+        return { success: true, native: false, state: getMainWindowState() };
+    } catch (error) {
+        console.warn('[Window] show system menu failed:', error?.message || error);
+        return { success: false, error: 'system_menu_failed', state: getMainWindowState() };
     }
 }
 
@@ -402,21 +565,17 @@ const GrowthPromptStore = {
 };
 
 async function requestAppClose(options = {}) {
-    const { showWindow } = options;
-    const win = getMainWindowSafe();
+    const { showWindow, forceQuit } = options;
+    if (forceQuit) {
+        return quitAppGracefully('quit');
+    }
     const pref = store.get('closeBehavior') || 'ask';
     if (pref === 'minimize') {
-        try { win?.hide(); } catch (e) {}
+        hideMainWindowToTray();
         return { action: 'minimize' };
     }
     if (pref === 'quit') {
-        GLOBAL_STATE.isQuitting = true;
-        if (GLOBAL_STATE.tray) {
-            GLOBAL_STATE.tray.destroy();
-            GLOBAL_STATE.tray = null;
-        }
-        await BackendManager.stop('quit');
-        app.quit();
+        await quitAppGracefully('quit');
         return { action: 'quit' };
     }
     if (showWindow) {
@@ -446,16 +605,9 @@ async function installDownloadedUpdateAndQuit() {
     GLOBAL_STATE.installingUpdate = true;
     setTimeout(async () => {
         try {
-            GLOBAL_STATE.isQuitting = true;
-            if (GLOBAL_STATE.tray) {
-                GLOBAL_STATE.tray.destroy();
-                GLOBAL_STATE.tray = null;
-            }
-            await BackendManager.stop('install-update');
+            await quitAppGracefully('install-update');
         } catch (error) {
             console.warn('[Update] stop backend before install failed:', error?.message || error);
-        } finally {
-            app.quit();
         }
     }, 150);
 
@@ -527,6 +679,10 @@ const WindowManager = {
                 devTools: GLOBAL_STATE.isDev
             }
         });
+
+        try {
+            GLOBAL_STATE.mainWindow.setTitle(APP_TITLE);
+        } catch (_) {}
 
         GLOBAL_STATE.mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
         updateSplashStatus('正在加载界面资源...', 72);
@@ -671,6 +827,7 @@ const WindowManager = {
                     try {
                         win.show();
                         win.focus();
+                        broadcastWindowState();
                     } catch (e) {}
                 }
             }, 50); 
@@ -678,23 +835,44 @@ const WindowManager = {
 
         win.on('show', () => {
             RUNTIME_IDLE_CONTROLLER.setWindowVisible(getMainWindowVisible());
+            broadcastWindowState();
         });
 
         win.on('hide', () => {
             RUNTIME_IDLE_CONTROLLER.setWindowVisible(getMainWindowVisible());
+            broadcastWindowState();
         });
 
         win.on('minimize', () => {
             RUNTIME_IDLE_CONTROLLER.setWindowVisible(getMainWindowVisible());
+            broadcastWindowState();
         });
 
         win.on('restore', () => {
             RUNTIME_IDLE_CONTROLLER.setWindowVisible(getMainWindowVisible());
+            broadcastWindowState();
+        });
+
+        win.on('maximize', () => {
+            broadcastWindowState();
+        });
+
+        win.on('unmaximize', () => {
+            broadcastWindowState();
+        });
+
+        win.on('focus', () => {
+            broadcastWindowState();
+        });
+
+        win.on('blur', () => {
+            broadcastWindowState();
         });
 
         win.on('resize', () => {
             const { width, height } = win.getBounds();
             store.set('windowBounds', { width, height });
+            broadcastWindowState();
         });
 
         win.on('close', (event) => {
@@ -708,28 +886,17 @@ const WindowManager = {
     createTray() {
         const icon = nativeImage.createFromPath(PathUtils.iconPath);
         GLOBAL_STATE.tray = new Tray(icon.resize({ width: 16, height: 16 }));
-        
-        const contextMenu = Menu.buildFromTemplate([
+
+        const trayMenu = Menu.buildFromTemplate([
             { label: '显示主窗口', click: () => showMainWindowSafe() },
             { type: 'separator' },
-            { label: '启动机器人', click: () => sendToMainWindowSafe('tray-action', 'start-bot') },
-            { label: '停止机器人', click: () => sendToMainWindowSafe('tray-action', 'stop-bot') },
+            { label: '启动助手', click: () => sendToMainWindowSafe('tray-action', 'start-bot') },
+            { label: '暂停助手', click: () => sendToMainWindowSafe('tray-action', 'stop-bot') },
             { type: 'separator' },
-            { label: '退出', click: () => {
-                requestAppClose({ showWindow: true });
-            }}
+            { label: '退出应用', click: () => requestAppClose({ forceQuit: true }) },
         ]);
-
-        // Ensure tray operations won't throw if the window/webContents has been destroyed.
-        try {
-            const items = contextMenu.items || [];
-            if (items[0]) items[0].click = () => showMainWindowSafe();
-            if (items[2]) items[2].click = () => sendToMainWindowSafe('tray-action', 'start-bot');
-            if (items[3]) items[3].click = () => sendToMainWindowSafe('tray-action', 'stop-bot');
-        } catch (e) {}
-
-        GLOBAL_STATE.tray.setToolTip('微信AI助手');
-        GLOBAL_STATE.tray.setContextMenu(contextMenu);
+        GLOBAL_STATE.tray.setToolTip(APP_TITLE);
+        GLOBAL_STATE.tray.setContextMenu(trayMenu);
         GLOBAL_STATE.tray.on('double-click', () => showMainWindowSafe());
     }
 };
@@ -756,6 +923,11 @@ function setupIPC() {
         fs,
         path,
         getMainWindowSafe,
+        getMainWindowState,
+        broadcastWindowState,
+        showWindowSystemMenu,
+        hideMainWindowToTray,
+        quitAppGracefully,
         requestAppClose,
         installDownloadedUpdateAndQuit,
         showMainWindowSafe,

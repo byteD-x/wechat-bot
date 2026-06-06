@@ -15,7 +15,9 @@
 - [8. 配置说明](#8-配置说明)
 - [9. 常见问题](#9-常见问题)
 - [10. 开发与测试](#10-开发与测试)
-- [11. 模型与认证中心补充](#11-模型与认证中心补充)
+- [11. 成本管理](#11-成本管理)
+- [12. 模型与认证中心补充](#12-模型与认证中心补充)
+- [附录：成长任务管理与发布权限](#附录成长任务管理与发布权限)
 
 ## 系统链路说明
 
@@ -145,6 +147,7 @@ npm run dev
 
 - 以 `data/app_config.json` 作为唯一真实配置文件
 - 若需要回滚旧配置，请使用迁移生成的 `data/backups/legacy-config-*`
+- 命令行侧可使用 `python run.py config migrate` 迁移旧配置，使用 `python run.py config validate` 校验并规范化配置，使用 `python run.py config probe` 按当前配置测试 AI 联通。
 
 ## 4. 启动前检查
 
@@ -416,8 +419,12 @@ python -m tools.prompt_gen.generator
 - `config_reload_mode`: `auto` / `polling` / `watchdog`
 - `config_reload_debounce_ms`: 文件事件防抖窗口
 - `required_wechat_version`: 官方支持版本基线，当前应保持为 `3.9.12.51`
-- `vector_memory_enabled`: 向量记忆 / RAG 总开关，关闭后不会写入或检索向量记忆
-- `vector_memory_embedding_model`: 给向量记忆单独指定 embedding 模型，优先级高于预设和全局配置
+- `rag_enabled`: 运行期向量记忆开关，关闭后不会写入或检索运行期向量记忆
+- `export_rag_enabled`: 导出语料 RAG 开关，用于从已导出的聊天记录中召回表达风格
+- `export_rag_auto_ingest`: 启动或后台任务中是否自动增量导入导出语料
+- `export_rag_dir`: 导出语料目录，默认 `data/chat_exports/聊天记录`
+- `export_rag_top_k` / `export_rag_max_chunks_per_chat`: 导出语料召回数量与单会话片段上限
+- `vector_memory_embedding_model`: 兼容覆盖项，运行时工厂会优先用它覆盖向量检索 embedding；常规配置仍建议优先写在预设 `embedding_model` 或全局 `api.embedding_model`
 
 说明：
 - `wcferry` 是当前默认且唯一官方支持的传输后端。
@@ -454,9 +461,16 @@ python -m tools.prompt_gen.generator
 当前可直接观察的接口：
 
 - `/api/status`: 结构化运行状态
+- `/api/ping`: 轻量存活探测
+- `/api/readiness`: 启动前阻塞项与建议动作
 - `/api/metrics`: Prometheus 风格指标
+- `/api/events` / `/api/events_ticket`: SSE 状态与消息事件流
 - `/api/contact_profile`: 返回当前联系人的画像摘要、专属 Prompt 和成长元数据
 - `/api/contact_prompt`: 保存人工编辑后的联系人专属 Prompt
+- `/api/model_catalog`: 返回内置模型目录
+- `/api/model_auth/overview`: 返回模型与认证中心总览
+- `/api/usage`: 返回最近用量摘要
+- `/api/test_connection`: 使用当前配置或提交的 patch 测试 AI 联通
 
 `/api/status` 重点字段：
 
@@ -568,6 +582,23 @@ python run.py eval --dataset tests/fixtures/evals/smoke_cases.json --preset smok
 - `GET /api/data_controls`
 - `POST /api/data_controls/clear`
 - `GET /api/evals/latest`
+- `POST /api/message_feedback`
+- `GET /api/usage`
+- `GET /api/costs/review_queue_export`
+- `GET /api/model_catalog`
+- `POST /api/test_connection`
+
+#### 8.7.5 微信导出接口总览
+
+- `POST /api/wechat_export/probe`
+- `POST /api/wechat_export/decrypt/start`
+- `GET /api/wechat_export/decrypt/jobs/<job_id>`
+- `POST /api/wechat_export/contacts`
+- `POST /api/wechat_export/export`
+- `POST /api/wechat_export/apply/preview`
+- `POST /api/wechat_export/apply`
+
+桌面端和 Web API 共用 `backend/core/wechat_export_service.py`。导出前请确认只处理自己的聊天数据，解密数据库和导出 CSV 都不要提交到 Git。
 
 ## 9. 常见问题
 
@@ -603,8 +634,7 @@ python run.py eval --dataset tests/fixtures/evals/smoke_cases.json --preset smok
 
 优先排查：
 
-- `vector_memory_enabled` 是否被关闭
-- `rag_enabled` 或 `export_rag_enabled` 是否开启
+- `bot.rag_enabled` 或 `bot.export_rag_enabled` 是否开启
 - embedding 模型是否可用
 - 导出目录是否存在有效语料
 - `retriever_top_k` 是否过低
@@ -613,9 +643,9 @@ python run.py eval --dataset tests/fixtures/evals/smoke_cases.json --preset smok
 
 补充说明：
 
-- embedding 解析优先级为 `bot.vector_memory_embedding_model` > 当前预设的 `embedding_model` > `api.embedding_model`
-- 使用 `Ollama` 时可以在预设或“向量记忆 embedding 模型”里填写本地 embedding 模型，例如 `nomic-embed-text`
-- 首次打开向量记忆总开关时，桌面端会提示本地索引存储、CPU/内存占用以及潜在云端调用成本
+- embedding 解析优先级为兼容覆盖项 `bot.vector_memory_embedding_model` > 当前预设的 `embedding_model` > `api.embedding_model`
+- 使用 `Ollama` 时可以在兼容覆盖项、预设或全局 `api.embedding_model` 里填写本地 embedding 模型，例如 `nomic-embed-text`
+- 导出语料 RAG 还要确认 `bot.export_rag_dir` 指向 `data/chat_exports/聊天记录` 或实际导出目录
 
 ### 9.5 已配置 Cross-Encoder 但没有启用
 
@@ -676,6 +706,11 @@ python run.py web
 
 # 环境检查
 python run.py check
+
+# 共享配置
+python run.py config migrate
+python run.py config validate
+python run.py config probe
 ```
 
 ### 10.2 测试
@@ -756,17 +791,21 @@ Release Notes 规则：
 
 - `GET /api/pricing`
 - `POST /api/pricing/refresh`
+- `GET /api/usage`
 - `GET /api/costs/summary`
 - `GET /api/costs/sessions`
 - `GET /api/costs/session_details`
+- `GET /api/costs/review_queue_export`
 
 说明：
 
 - `/api/pricing` 返回当前价格目录、来源链接、最近校验时间和是否支持刷新
 - `/api/pricing/refresh` 用于手动刷新可自动抓取的价格来源
+- `/api/usage` 返回最近用量摘要，保留给历史用量入口兼容
 - `/api/costs/summary` 返回总览和模型聚合
 - `/api/costs/sessions` 返回会话级摘要
 - `/api/costs/session_details` 返回单个会话的 AI 回复成本明细，需要传 `chat_id`
+- `/api/costs/review_queue_export` 导出当前筛选条件下的低质量回复复盘 JSON
 
 当前测试覆盖重点包括：
 
@@ -776,7 +815,7 @@ Release Notes 规则：
 - Agent Runtime
 - 运行状态、健康检查与指标导出
 
-### 10.3 敏感数据注意事项
+### 11.2 敏感数据注意事项
 
 不要提交以下内容：
 
@@ -785,6 +824,7 @@ Release Notes 规则：
 - `data/`
 - `data/logs/`
 - 解密后的微信数据库
+
 ## 附录：成长任务管理与发布权限
 
 - 仪表盘中的“成长任务”面板现在支持按任务类型查看排队数量，并可执行“立即执行 / 暂停或恢复 / 清空队列”。
@@ -815,21 +855,26 @@ Release Notes 规则：
 `/api/readiness` 会返回 `ready`、`blocking_count`、`checks[]`、`suggested_actions[]`，并带短 TTL 缓存，适合桌面端轮询而不重复做高成本进程探测。
 命令行侧可以通过 `python run.py check --json` 直接拿到同一份机读报告，适合自动化巡检、脚本集成和问题回传。
 
-仪表盘里的“运行准备度”卡片会常驻显示当前阻塞项；“运行诊断”区域则新增了“导出诊断快照”按钮。
+仪表盘里的“运行准备度”卡片会常驻显示当前阻塞项；“运行诊断”区域提供“导出诊断快照”按钮。该按钮会在本机保存一个 JSON 格式的诊断支持包，不会自动上传到任何服务器；发送给维护者前，请先用文本编辑器预览。
 
-诊断快照会汇总：
+诊断支持包会包含：
 
+- 本地 `Diagnostic ID`，用于把支持请求和本地文件对应起来
+- `manifest`，记录 schema、生成时间、导出模式、包含的字段区块和 `automatic_upload = false`
+- 字段说明与敏感数据提示
+- 可复制的支持请求模板
 - 应用版本与更新器状态
 - `/api/status`
 - `/api/readiness`
 - `/api/config/audit`
-- 最近日志摘要
+- 最近日志摘要采样
 
 安全约束：
 
 - 只保留 `api_key_configured`、`api_key_masked` 这类安全字段
-- 不会写入原始 API Key、token、authorization 或未脱敏配置
-- 与日志页的“导出纯文本日志”是两条不同能力，前者偏排障快照，后者偏原始日志分析
+- 不会写入原始 API Key、token、authorization、OAuth/session、原始聊天正文、联系人真实标识或完整本机路径
+- 默认不包含完整日志；完整日志必须由用户单独明确授权后，才通过日志页“导出纯文本日志”等独立入口提供
+- 与日志页的“导出纯文本日志”是两条不同能力：诊断支持包偏排障快照，纯文本日志偏原始日志分析
 
 ## 附：自动提权重启与智能恢复
 
@@ -838,14 +883,15 @@ Release Notes 规则：
 - 当 readiness 检查判定“未以管理员身份运行”时，首次运行引导、运行准备度卡片和运行诊断区都会优先提供“以管理员身份重新启动”。点击后会通过 UAC 重新拉起整个桌面应用。
 - 仪表盘里的“运行诊断”恢复按钮现在会优先执行 readiness 建议动作：先提权重启、先打开微信、或先跳转设置页；只有 readiness 没有阻塞项时，才会继续调用运行态 `/api/recover`。
 - `run.py check` 的管理员权限提示也同步更新，会明确提醒用户可以直接回到桌面端执行管理员重启。
-## 11. 模型与认证中心补充
 
-### 11.1 新的入口位置
+## 12. 模型与认证中心补充
+
+### 12.1 新的入口位置
 
 - “模型”已经从原来的设置页中拆出来，桌面端侧边栏会新增独立的“模型”页。
 - 设置页只保留当前生效模型的摘要和跳转入口；真正的模型预设新增、排序、测试、切换和认证操作，都在“模型”页完成。
 
-### 11.2 认证方式规则
+### 12.2 认证方式规则
 
 - 每个 Provider 可以并存多种认证方式：`API Key`、`OAuth`、`Local Import`、`Web Session`。
 - 模型中心会为每个 Provider 维护一组 `auth_profiles`，并区分“自动选择”和“手动指定”两种生效规则。
@@ -857,7 +903,7 @@ Release Notes 规则：
 - Provider 卡片上会直接显示三类高层摘要：本机同步、连接健康、认证数量概览；这些摘要都来自后端统一聚合。
 - 已绑定的认证方法会额外显示 `运行时可用 / 运行时未就绪`；当默认认证还不能真正进入运行时，请优先查看卡片里的阻塞原因，而不是重复点“测试连接”。
 
-### 11.3 OAuth 使用方式
+### 12.3 OAuth 使用方式
 
 - 支持“同步本机登录”和“浏览器 OAuth 登录”两条路径。
 - 如果本机已经存在可同步的标准授权源，项目会优先绑定并直接同步。
@@ -871,7 +917,7 @@ Release Notes 规则：
 - 当前新增的本机来源包括 `Claude Code` 的 `~/.claude.json` / `~/.claude/settings.json` / `~/.claude/.credentials.json` / `C:/ProgramData/ClaudeCode/managed-settings.json`、`Kimi Code` 的 `~/.kimi/config.toml` / `~/.kimi/credentials/*.json`，以及 `Doubao / Yuanbao` 的浏览器 Cookie 数据库、`IndexedDB / Local Storage`、桌面私有存储或显式导出 Session 文件。
 - 模型中心现在还会把 `system_keychain` 作为补充发现信号纳入统一状态机；当前主要用于 Windows Credential Manager target 发现与跟随提示。
 
-### 11.4 当前 Provider 分层
+### 12.4 当前 Provider 分层
 
 - 已接入核心能力：
   - `OpenAI / Codex / ChatGPT`：`api_key + oauth + local_import`
@@ -902,13 +948,14 @@ Release Notes 规则：
 - 注意：模型中心的后台同步器现在也会跟踪目录级浏览器存储目标与桌面私有存储路径，因此 `IndexedDB / Local Storage` 或本地客户端存储变化也会触发本机会话快照刷新。
 - 注意：系统钥匙串当前只进入“发现/状态/绑定元数据”链路，还没有接入真正的钥匙串事件监听与稳定运行时消费。
 
-### 11.5 模型与认证中心接口
+### 12.5 模型与认证中心接口
 
 - `GET /api/model_auth/overview`
 - `POST /api/model_auth/action`
+- `GET /api/model_catalog`
 - 旧的 `/api/auth/providers/*` 接口现在只剩兼容壳层；设置页、旧预设 modal 与模型页主流程都已经切到模型中心接口，不再直接调用这组旧入口。
 
-### 11.6 新版模型中心
+### 12.6 新版模型中心
 
 - 新版模型中心已经从设置页拆出，并重构为“左侧服务方列表 + 右侧详情工作区”的双栏结构。
 - 顶部只保留少量总览：当前用于回复的 Provider、可直接使用数量、待处理数量，以及帮助入口。
@@ -916,7 +963,7 @@ Release Notes 规则：
 - 后端继续复用 `GET /api/model_auth/overview` 与 `POST /api/model_auth/action`，前端不再自行拼接 Provider 状态。
 - 详细架构、认证矩阵、扩展指南与安全边界请参考 `docs/MODEL_AUTH_CENTER.md`。
 
-### 11.7 新交互怎么用
+### 12.7 新交互怎么用
 
 - 推荐顺序只有三步：先选模型，再选认证，最后设为回复模型。
 - 如果当前 Provider 还不能直接使用，右侧会显示三步向导：`选择模型`、`选择认证方式`、`设为回复模型`。

@@ -1,6 +1,13 @@
-import { createElement, formatDateTime } from './form-codec.js';
+import { createElement } from './form-codec.js';
+import { buildUpdateExperience } from '../../app/ui-helpers.js';
 
 export function renderUpdatePanel(page) {
+    const hasDocument = typeof document !== 'undefined';
+    const hasInjectedSelector = Object.prototype.hasOwnProperty.call(page || {}, '$');
+    if (!hasDocument && !page?.container && !hasInjectedSelector) {
+        return;
+    }
+
     const statusText = page.$('#update-status-text');
     const statusMeta = page.$('#update-status-meta');
     const checkButton = page.$('#btn-check-updates');
@@ -20,52 +27,35 @@ export function renderUpdatePanel(page) {
     const downloading = !!page.getState('updater.downloading');
     const downloadProgress = Math.min(100, Math.max(0, Number(page.getState('updater.downloadProgress') || 0)));
     const readyToInstall = !!page.getState('updater.readyToInstall');
+    const notes = page.getState('updater.notes') || [];
+    const view = buildUpdateExperience({
+        enabled,
+        checking,
+        available,
+        currentVersion,
+        latestVersion,
+        lastCheckedAt,
+        releaseDate,
+        error,
+        skippedVersion,
+        downloading,
+        downloadProgress,
+        readyToInstall,
+        notes,
+    });
 
     checkButton.disabled = checking || downloading;
 
-    if (!enabled) {
-        statusText.textContent = '当前环境未启用应用内更新';
-        statusMeta.textContent = `当前版本：v${currentVersion}`;
-        downloadButton.textContent = '打开发布页';
-        downloadButton.style.display = 'inline-flex';
-        downloadButton.disabled = false;
-    } else if (checking) {
+    if (checking) {
         statusText.textContent = '正在检查更新...';
         statusMeta.textContent = `当前版本：v${currentVersion}`;
         downloadButton.style.display = 'none';
-    } else if (downloading) {
-        statusText.textContent = `正在下载新版本 v${latestVersion}...`;
-        statusMeta.textContent = `当前版本：v${currentVersion} · 下载进度：${downloadProgress}% · 最近检查：${formatDateTime(lastCheckedAt)}`;
-        downloadButton.style.display = 'inline-flex';
-        downloadButton.textContent = `下载中 ${downloadProgress}%`;
-        downloadButton.disabled = true;
-    } else if (readyToInstall) {
-        statusText.textContent = `更新已下载完成 v${latestVersion || currentVersion}`;
-        statusMeta.textContent = `当前版本：v${currentVersion} · 发布日期：${formatDateTime(releaseDate)} · 最近检查：${formatDateTime(lastCheckedAt)}`;
-        downloadButton.style.display = 'inline-flex';
-        downloadButton.textContent = '立即安装并重启';
-        downloadButton.disabled = false;
-    } else if (error) {
-        statusText.textContent = error;
-        statusMeta.textContent = `当前版本：v${currentVersion} · 最近检查：${formatDateTime(lastCheckedAt)}`;
-        downloadButton.style.display = available ? 'inline-flex' : 'none';
-        downloadButton.textContent = '下载更新';
-        downloadButton.disabled = !available;
-    } else if (available && latestVersion) {
-        statusText.textContent = `发现新版本 v${latestVersion}`;
-        statusMeta.textContent = [
-            `当前版本：v${currentVersion}`,
-            `发布日期：${formatDateTime(releaseDate)}`,
-            `最近检查：${formatDateTime(lastCheckedAt)}`,
-            skippedVersion === latestVersion ? `已跳过：v${latestVersion}` : '',
-        ].filter(Boolean).join(' · ');
-        downloadButton.style.display = 'inline-flex';
-        downloadButton.textContent = '下载更新';
-        downloadButton.disabled = false;
     } else {
-        statusText.textContent = '当前已经是最新版本';
-        statusMeta.textContent = `当前版本：v${currentVersion} · 最近检查：${formatDateTime(lastCheckedAt)}`;
-        downloadButton.style.display = 'none';
+        statusText.textContent = view.statusText;
+        statusMeta.textContent = view.metaItems.join(' · ');
+        downloadButton.style.display = view.actionDisabled && !available && enabled ? 'none' : 'inline-flex';
+        downloadButton.textContent = view.actionText;
+        downloadButton.disabled = view.actionDisabled;
     }
 }
 

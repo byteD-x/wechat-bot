@@ -5,6 +5,7 @@ import {
     renderPresetList,
     renderSaveFeedback,
     renderSettingsHero,
+    renderUpdatePanel,
 } from './renderers.js';
 
 export function initModuleSaveButtons(page) {
@@ -176,4 +177,8 @@ export function hideSaveFeedback(page) {
 
 export function renderPageExportRagStatus(page) {
     renderExportRagStatus(page);
+}
+
+export function renderPageUpdatePanel(page) {
+    renderUpdatePanel(page);
 }

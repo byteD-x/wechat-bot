@@ -163,6 +163,38 @@
       "assistant_reply": "如果想快一点，可以选楼下那家简餐。",
       "retrieval": { "augmented": false },
       "reply_quality": { "user_feedback": "unhelpful" }
+    },
+    {
+      "id": "prompt-rollback-ops",
+      "chat_id": "group:ops",
+      "user_text": "@bot 刚才系统提示词改坏了，能不能先恢复到上一版？",
+      "assistant_reply": "可以，先回滚到确认稳定的版本，并保留这次回滚原因，方便之后复盘。",
+      "retrieval": { "augmented": true, "runtime_hit_count": 2 },
+      "reply_quality": { "user_feedback": "helpful" }
+    },
+    {
+      "id": "tool-workflow-audit",
+      "chat_id": "group:agent-admin",
+      "user_text": "@bot 帮我跑一次配置审计和 readiness 检查，别执行危险命令。",
+      "assistant_reply": "我只会执行白名单里的配置审计和就绪检查，并返回每一步 trace 供你确认。",
+      "retrieval": { "augmented": true, "runtime_hit_count": 1 },
+      "reply_quality": { "user_feedback": "helpful" }
+    },
+    {
+      "id": "windows-first-run-help",
+      "chat_id": "friend:new-user",
+      "user_text": "第一次打开桌面端，提示需要管理员权限是什么意思？",
+      "assistant_reply": "这是因为默认 wcferry 传输需要接入微信进程。请用管理员身份启动，并确认微信版本是 3.9.12.51。",
+      "retrieval": { "augmented": true, "runtime_hit_count": 1 },
+      "reply_quality": { "user_feedback": "helpful" }
+    },
+    {
+      "id": "rag-style-reference",
+      "chat_id": "friend:mentor",
+      "user_text": "这段回复能不能更像我平时说话？",
+      "assistant_reply": "可以，我会优先参考已导出的历史聊天风格；如果没有命中，就保持简短自然，不硬套口吻。",
+      "retrieval": { "augmented": true, "runtime_hit_count": 3 },
+      "reply_quality": { "user_feedback": "helpful" }
     }
   ]
 }

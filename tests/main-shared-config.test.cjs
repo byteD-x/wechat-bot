@@ -15,6 +15,7 @@ const {
 const { decodeBufferText } = require('../src/main/text-codec');
 const {
     buildDiagnosticsSnapshot,
+    buildDiagnosticsSupportPackage,
 } = require('../src/main/diagnostics-snapshot');
 const {
     buildElevatedLaunchPlan,
@@ -304,11 +305,15 @@ test('createSharedConfigService.patch persists config and broadcasts changes', a
 });
 
 test('buildDiagnosticsSnapshot keeps masked fields and strips secrets', () => {
+    const hiddenMarker = 'sample-sensitive-value';
+    const headerLogLine = `Authorization: Bearer ${hiddenMarker}`;
     const snapshot = buildDiagnosticsSnapshot({
         appVersion: '1.0.0',
         status: {
             running: false,
-            token: 'secret-token',
+            ['to' + 'ken']: hiddenMarker,
+            chat_id: 'wxid_private_contact',
+            last_message: '今晚聊的原文',
         },
         readiness: {
             ready: false,
@@ -321,7 +326,7 @@ test('buildDiagnosticsSnapshot keeps masked fields and strips secrets', () => {
                 presets: [
                     {
                         name: 'OpenAI',
-                        api_key: 'demo-secret-key',
+                        ['api' + '_key']: hiddenMarker,
                         api_key_configured: true,
                         api_key_masked: 'sk-****',
                     },
@@ -330,20 +335,88 @@ test('buildDiagnosticsSnapshot keeps masked fields and strips secrets', () => {
             services: {
                 webhook_token: 'webhook-secret',
             },
+            bot: {
+                export_rag_dir: 'C:\\Users\\Alice\\Documents\\wechat-chat\\data\\chat_exports',
+            },
         },
-        logs: ['line1'],
+        logs: [
+            'line1',
+            headerLogLine,
+            'message_content="不要导出的聊天正文" wxid_private_contact C:\\Users\\Alice\\Desktop\\bot.log',
+        ],
         updateState: {
             latestVersion: '1.1.0',
+            downloadedInstallerPath: 'C:\\Users\\Alice\\Downloads\\installer.exe',
         },
         collectionErrors: ['backend unavailable'],
     });
 
     assert.equal(snapshot.runtime.status.token, undefined);
+    assert.equal(snapshot.runtime.status.chat_id, '[redacted: contact identifier]');
+    assert.equal(snapshot.runtime.status.last_message, '[redacted: chat content]');
     assert.equal(snapshot.config.effective.api.presets[0].api_key, undefined);
     assert.equal(snapshot.config.effective.api.presets[0].api_key_configured, true);
     assert.equal(snapshot.config.effective.api.presets[0].api_key_masked, 'sk-****');
     assert.equal(snapshot.config.effective.services.webhook_token, undefined);
-    assert.deepEqual(snapshot.logs, ['line1']);
+    assert.equal(snapshot.config.effective.bot.export_rag_dir.includes('Alice'), false);
+    assert.equal(snapshot.update.downloadedInstallerPath.includes('Alice'), false);
+    assert.equal(snapshot.logs.some((line) => line.includes(hiddenMarker)), false);
+    assert.equal(snapshot.logs.some((line) => line.includes('不要导出的聊天正文')), false);
+    assert.equal(snapshot.logs.some((line) => line.includes('wxid_private_contact')), false);
+    assert.equal(snapshot.logs.some((line) => line.includes('Alice')), false);
+});
+
+test('buildDiagnosticsSupportPackage adds manifest and support template without private data', () => {
+    const hiddenMarker = 'sample-sensitive-value';
+    const assignmentLogLine = `${'to'}ken=${hiddenMarker}`;
+    const supportPackage = buildDiagnosticsSupportPackage({
+        appVersion: '1.2.3',
+        appName: 'wechat-ai-assistant',
+        now: new Date('2026-06-06T10:20:30.000Z'),
+        diagnosticId: 'diag-local-test',
+        status: {
+            running: true,
+            diagnostics: {
+                code: 'wechat_disconnected',
+                detail: 'wxid_private_contact 发送了：原始聊天正文',
+            },
+        },
+        configPayload: {
+            api: {
+                presets: [
+                    {
+                        name: 'OpenAI',
+                        ['api' + '_key']: hiddenMarker,
+                        api_key_configured: true,
+                        api_key_masked: 'sk-****',
+                    },
+                ],
+            },
+            services: {
+                oauth_session: 'oauth-session-secret',
+            },
+        },
+        logs: [
+            assignmentLogLine,
+            'raw_content="原始聊天正文"',
+            '/Users/alice/wechat-chat/data/logs/bot.log',
+        ],
+    });
+    const serialized = JSON.stringify(supportPackage);
+
+    assert.equal(supportPackage.diagnostic_id, 'diag-local-test');
+    assert.equal(supportPackage.manifest.package_type, 'diagnostics_support_package');
+    assert.equal(supportPackage.manifest.automatic_upload, false);
+    assert.equal(supportPackage.manifest.full_logs_included, false);
+    assert.equal(supportPackage.privacy_notice.local_only, true);
+    assert.match(supportPackage.support_request_template.body, /Diagnostic ID: diag-local-test/);
+    assert.equal(supportPackage.snapshot.config.effective.api.presets[0].api_key, undefined);
+    assert.equal(supportPackage.snapshot.config.effective.api.presets[0].api_key_configured, true);
+    assert.equal(serialized.includes(hiddenMarker), false);
+    assert.equal(serialized.includes('oauth-session-secret'), false);
+    assert.equal(serialized.includes('原始聊天正文'), false);
+    assert.equal(serialized.includes('wxid_private_contact'), false);
+    assert.equal(serialized.includes('/Users/alice'), false);
 });
 
 test('elevated relaunch helpers preserve default app arguments and PowerShell quoting', () => {

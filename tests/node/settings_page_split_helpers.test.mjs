@@ -12,6 +12,7 @@ import { renderSettingsPageShell } from '../../src/renderer/js/app-shell/pages/s
 import {
     bindSettingsAutoSave,
     bindSettingsEvents,
+    shouldSaveSettingsChangeImmediately,
 } from '../../src/renderer/js/pages/settings/page-shell.js';
 import { renderBackupPanel } from '../../src/renderer/js/pages/settings/backup-panel.js';
 import { renderSettingsHero } from '../../src/renderer/js/pages/settings/hero-renderer.js';
@@ -1177,6 +1178,8 @@ test('settings page shell binds events and auto save routing stably', async () =
         'btn-restore-backup-apply',
         'btn-cleanup-backup-dry-run',
         'btn-cleanup-backup-apply',
+        'btn-check-updates',
+        'btn-open-update-download',
     ].forEach((id) => {
         controls.set(`#${id}`, registerElement(id, document.createElement('button')));
     });
@@ -1218,6 +1221,12 @@ test('settings page shell binds events and auto save routing stably', async () =
         _cleanupWorkspaceBackups(dryRun) {
             this.calls.push(`backup-cleanup:${dryRun}`);
         },
+        _checkUpdates() {
+            this.calls.push('check-updates');
+        },
+        _openUpdateDownload() {
+            this.calls.push('open-update-download');
+        },
         _scheduleAutoSave(options) {
             this.calls.push(`autosave:${options.immediate}`);
         },
@@ -1237,22 +1246,14 @@ test('settings page shell binds events and auto save routing stably', async () =
         rootElement: root,
     });
 
-    assert.equal(page.bindings.length, 11);
+    assert.equal(page.bindings.length, 13);
     assert.equal(page._eventCleanups.length, 1);
 
-    page.bindings[0].handler();
-    page.bindings[1].handler();
-    page.bindings[2].handler();
-    page.bindings[3].handler();
-    page.bindings[4].handler();
-    page.bindings[5].handler();
-    page.bindings[6].handler();
-    page.bindings[7].handler();
-    page.bindings[8].handler();
-    page.bindings[9].handler();
-    page.bindings[10].handler();
-    rootListeners.input({ target: { id: 'setting-group-at-only', tagName: 'INPUT', type: 'checkbox' } });
-    rootListeners.change({ target: { id: 'setting-log-level', tagName: 'SELECT' } });
+    page.bindings.forEach(({ handler }) => handler());
+    rootListeners.input({ type: 'input', target: { id: 'setting-group-at-only', tagName: 'INPUT', type: 'checkbox' } });
+    rootListeners.change({ type: 'change', target: { id: 'setting-group-at-only', tagName: 'INPUT', type: 'checkbox' } });
+    rootListeners.change({ type: 'change', target: { id: 'setting-log-level', tagName: 'SELECT' } });
+    rootListeners.change({ type: 'change', target: { id: 'setting-log-message-content', tagName: 'INPUT', type: 'checkbox' } });
     rootListeners.input({ target: { id: 'unknown-field', tagName: 'INPUT', type: 'text' } });
 
     assert.deepEqual(page.calls, [
@@ -1267,10 +1268,37 @@ test('settings page shell binds events and auto save routing stably', async () =
         'backup-restore:false',
         'backup-cleanup:true',
         'backup-cleanup:false',
+        'check-updates',
+        'open-update-download',
+        'autosave:false',
         'autosave:true',
         'autosave:true',
+        'autosave:false',
     ]);
 }));
+
+test('settings auto save helper keeps low-risk switches instant and sensitive switches explicit', () => {
+    assert.equal(shouldSaveSettingsChangeImmediately(
+        { id: 'setting-group-at-only', tagName: 'INPUT', type: 'checkbox' },
+        'change',
+    ), true);
+    assert.equal(shouldSaveSettingsChangeImmediately(
+        { id: 'setting-group-at-only', tagName: 'INPUT', type: 'checkbox' },
+        'input',
+    ), false);
+    assert.equal(shouldSaveSettingsChangeImmediately(
+        { id: 'setting-emoji-policy', tagName: 'SELECT' },
+        'change',
+    ), true);
+    assert.equal(shouldSaveSettingsChangeImmediately(
+        { id: 'setting-log-message-content', tagName: 'INPUT', type: 'checkbox' },
+        'change',
+    ), false);
+    assert.equal(shouldSaveSettingsChangeImmediately(
+        { id: 'setting-reply-suffix', tagName: 'INPUT', type: 'text' },
+        'change',
+    ), false);
+});
 
 test('runtime-sync model summary prefers model auth overview before legacy preset projection', () => {
     const summary = buildModelSummaryView(
@@ -1585,10 +1613,22 @@ test('settings export center button routes to the exports page', async () => {
     });
 });
 
-test('settings shell exposes common section as the default entry', () => {
+test('settings shell exposes mature settings center sections as the default entry', () => {
     const markup = renderSettingsPageShell();
-    assert.equal(markup.includes('data-settings-section="common"'), true);
-    assert.equal(markup.includes('data-settings-section="common" aria-pressed="true">常用'), true);
+    [
+        ['connection', '连接'],
+        ['model', '模型'],
+        ['reply', '回复策略'],
+        ['notification', '通知与托盘'],
+        ['privacy', '隐私与数据'],
+        ['advanced', '高级'],
+        ['about', '关于'],
+    ].forEach(([section, label]) => {
+        assert.equal(markup.includes(`data-settings-section="${section}"`), true);
+        assert.equal(markup.includes(`>${label}</button>`), true);
+    });
+    assert.equal(markup.includes('data-settings-section="connection" aria-pressed="true">连接'), true);
+    assert.equal(markup.includes('这里只放低频配置'), true);
 });
 
 test('settings page full payload excludes api preset state after model center split', () => {
@@ -1605,7 +1645,17 @@ test('settings page full payload excludes api preset state after model center sp
     assert.equal(payload.api, undefined);
 });
 
-test('settings page hydrates shared groups and card order for common modules', () => {
+test('settings shell keeps dangerous and disabled settings behind clear explanations', () => {
+    const markup = renderSettingsPageShell();
+    assert.equal(markup.includes('<details class="backup-action-card settings-disclosure settings-disclosure-danger">'), true);
+    assert.equal(markup.includes('按范围 dry-run 后再清理'), true);
+    assert.equal(markup.includes('settings-disabled-reason'), true);
+    assert.equal(markup.includes('不可在设置中心直接编辑'), true);
+    assert.equal(markup.includes('关于与更新'), true);
+    assert.equal(markup.includes('id="update-status-text"'), true);
+});
+
+test('settings page hydrates progressive disclosure groups and card order', () => {
     const page = new SettingsPage();
     const makeCard = (title) => ({
         dataset: {},
@@ -1618,8 +1668,9 @@ test('settings page hydrates shared groups and card order for common modules', (
         },
     });
     const cards = [
-        makeCard('模型与认证'),
+        makeCard('微信连接与传输'),
         makeCard('备份与恢复'),
+        makeCard('关于与更新'),
         makeCard('白名单管理'),
     ];
 
@@ -1627,101 +1678,102 @@ test('settings page hydrates shared groups and card order for common modules', (
 
     page._hydrateSettingsSections();
 
-    assert.equal(cards[0].dataset.settingsGroup, 'workspace');
-    assert.equal(cards[0].dataset.settingsGroups, 'workspace common');
+    assert.equal(cards[0].dataset.settingsGroup, 'connection');
+    assert.equal(cards[0].dataset.settingsGroups, 'connection');
     assert.equal(cards[0].style.order, '10');
-    assert.equal(cards[1].dataset.settingsGroups, 'workspace');
-    assert.equal(cards[2].dataset.settingsGroups, 'guard common');
+    assert.equal(cards[1].dataset.settingsGroups, 'privacy');
+    assert.equal(cards[2].dataset.settingsGroups, 'about');
+    assert.equal(cards[3].dataset.settingsGroups, 'privacy reply');
 });
 
 test('settings page switches section cards and nav state consistently', () => {
     const page = new SettingsPage();
-    const workspaceButton = {
-        dataset: { settingsSection: 'workspace' },
+    const privacyButton = {
+        dataset: { settingsSection: 'privacy' },
         classList: createClassList(),
         setAttribute(name, value) {
             this[name] = value;
         },
     };
-    const promptButton = {
-        dataset: { settingsSection: 'prompt' },
+    const replyButton = {
+        dataset: { settingsSection: 'reply' },
         classList: createClassList(),
         setAttribute(name, value) {
             this[name] = value;
         },
     };
-    const workspaceCard = {
-        dataset: { settingsGroup: 'workspace' },
+    const privacyCard = {
+        dataset: { settingsGroup: 'privacy' },
         hidden: false,
     };
-    const promptCard = {
-        dataset: { settingsGroup: 'prompt' },
+    const replyCard = {
+        dataset: { settingsGroup: 'reply' },
         hidden: false,
     };
 
     page.$$ = (selector) => {
         if (selector === '#settings-section-nav [data-settings-section]') {
-            return [workspaceButton, promptButton];
+            return [privacyButton, replyButton];
         }
         if (selector === '.settings-card') {
-            return [workspaceCard, promptCard];
+            return [privacyCard, replyCard];
         }
         return [];
     };
 
-    page._setSettingsSection('prompt');
+    page._setSettingsSection('reply');
 
-    assert.equal(page._activeSettingsSection, 'prompt');
-    assert.equal(workspaceButton.classList.contains('active'), false);
-    assert.equal(promptButton.classList.contains('active'), true);
-    assert.equal(workspaceButton['aria-pressed'], 'false');
-    assert.equal(promptButton['aria-pressed'], 'true');
-    assert.equal(workspaceCard.hidden, true);
-    assert.equal(promptCard.hidden, false);
+    assert.equal(page._activeSettingsSection, 'reply');
+    assert.equal(privacyButton.classList.contains('active'), false);
+    assert.equal(replyButton.classList.contains('active'), true);
+    assert.equal(privacyButton['aria-pressed'], 'false');
+    assert.equal(replyButton['aria-pressed'], 'true');
+    assert.equal(privacyCard.hidden, true);
+    assert.equal(replyCard.hidden, false);
 });
 
-test('settings page keeps shared cards visible in common and original sections', () => {
+test('settings page keeps shared cards visible in each assigned section', () => {
     const page = new SettingsPage();
-    const commonButton = {
-        dataset: { settingsSection: 'common' },
+    const replyButton = {
+        dataset: { settingsSection: 'reply' },
         classList: createClassList(),
         setAttribute(name, value) {
             this[name] = value;
         },
     };
-    const botButton = {
-        dataset: { settingsSection: 'bot' },
+    const privacyButton = {
+        dataset: { settingsSection: 'privacy' },
         classList: createClassList(),
         setAttribute(name, value) {
             this[name] = value;
         },
     };
     const sharedCard = {
-        dataset: { settingsGroups: 'bot common' },
+        dataset: { settingsGroups: 'privacy reply' },
         hidden: false,
     };
-    const guardCard = {
-        dataset: { settingsGroups: 'guard' },
+    const advancedCard = {
+        dataset: { settingsGroups: 'advanced' },
         hidden: false,
     };
 
     page.$$ = (selector) => {
         if (selector === '#settings-section-nav [data-settings-section]') {
-            return [commonButton, botButton];
+            return [replyButton, privacyButton];
         }
         if (selector === '.settings-card') {
-            return [sharedCard, guardCard];
+            return [sharedCard, advancedCard];
         }
         return [];
     };
 
-    page._setSettingsSection('common');
+    page._setSettingsSection('reply');
     assert.equal(sharedCard.hidden, false);
-    assert.equal(guardCard.hidden, true);
+    assert.equal(advancedCard.hidden, true);
 
-    page._setSettingsSection('bot');
+    page._setSettingsSection('privacy');
     assert.equal(sharedCard.hidden, false);
-    assert.equal(guardCard.hidden, true);
+    assert.equal(advancedCard.hidden, true);
 });
 
 test('models page callback payload parser keeps JSON and wraps plain text safely', () => {

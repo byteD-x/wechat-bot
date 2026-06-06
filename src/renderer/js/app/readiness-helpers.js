@@ -5,6 +5,49 @@ const FIRST_RUN_FOCUS_KEYS = [
     'api_config',
 ];
 
+const FIRST_RUN_STEP_DEFINITIONS = Object.freeze([
+    {
+        key: 'environment',
+        title: '环境检查',
+        shortTitle: '环境',
+        checkKeys: ['service_unavailable', 'python_version', 'dependencies', 'admin_permission'],
+        detail: '确认 Python、依赖和管理员权限，保证桌面端能稳定接管微信运行环境。',
+        readyMessage: '基础运行环境已通过。',
+        pendingMessage: '先完成环境检查，再继续后续配置。',
+    },
+    {
+        key: 'model_auth',
+        title: '模型认证',
+        shortTitle: '模型',
+        checkKeys: ['api_config'],
+        detail: '确认至少有一个可用模型预设，后续测试运行才能拿到回复。',
+        readyMessage: '已检测到可用模型预设。',
+        pendingMessage: '请先完成模型认证。',
+        fallbackAction: 'open_settings',
+        fallbackActionLabel: '前往设置',
+    },
+    {
+        key: 'wechat_connection',
+        title: '微信连接',
+        shortTitle: '微信',
+        checkKeys: ['wechat_installation', 'wechat_compatibility', 'wechat_process', 'transport_config'],
+        detail: '确认微信客户端、版本兼容性和传输配置，避免启动后再失败。',
+        readyMessage: '微信连接准备已通过。',
+        pendingMessage: '请先完成微信连接准备。',
+        fallbackAction: 'open_wechat',
+        fallbackActionLabel: '打开微信',
+    },
+    {
+        key: 'test_run',
+        title: '测试运行',
+        shortTitle: '测试',
+        checkKeys: [],
+        detail: '前面步骤通过后，回到仪表盘启动机器人并观察一次真实运行状态。',
+        readyMessage: '准备度已通过，可以进行测试运行。',
+        pendingMessage: '完成前面步骤后再进行测试运行。',
+    },
+]);
+
 function toTrimmedString(value, fallback = '') {
     const text = String(value ?? '').trim();
     return text || fallback;
@@ -88,6 +131,110 @@ function normalizeCheck(check = {}, index = 0) {
             ? defaultActionLabel
             : toTrimmedString(check?.action_label, defaultActionLabel),
     };
+}
+
+function normalizeStepKeySet(value) {
+    if (value instanceof Set) {
+        return new Set([...value].map((item) => toTrimmedString(item, '')).filter(Boolean));
+    }
+    if (Array.isArray(value)) {
+        return new Set(value.map((item) => toTrimmedString(item, '')).filter(Boolean));
+    }
+    return new Set();
+}
+
+function getStatusLabel(status) {
+    if (status === 'failed') {
+        return '待修复';
+    }
+    if (status === 'skipped') {
+        return '已跳过';
+    }
+    if (status === 'pending') {
+        return '待完成';
+    }
+    if (status === 'ready') {
+        return '可测试';
+    }
+    return '已完成';
+}
+
+function pickStepAction(blockingChecks, definition) {
+    const actionableCheck = blockingChecks.find((check) => check.action)
+        || blockingChecks[0]
+        || null;
+    if (actionableCheck) {
+        return {
+            action: actionableCheck.action,
+            label: actionableCheck.actionLabel,
+            sourceCheck: actionableCheck.key,
+        };
+    }
+
+    if (definition?.fallbackAction) {
+        return {
+            action: definition.fallbackAction,
+            label: definition.fallbackActionLabel || getDefaultActionLabel(definition.fallbackAction),
+            sourceCheck: '',
+        };
+    }
+
+    return null;
+}
+
+function buildTaskStep(definition, checks, report, skippedStepKeys, index) {
+    const blockingChecks = checks.filter((check) => check.blocking);
+    const skipped = skippedStepKeys.has(definition.key);
+    let status = 'passed';
+
+    if (definition.key === 'test_run') {
+        status = report.ready ? 'ready' : 'pending';
+    } else if (blockingChecks.length > 0) {
+        status = 'failed';
+    }
+
+    if (skipped && status !== 'passed' && status !== 'ready') {
+        status = 'skipped';
+    }
+
+    const primaryAction = pickStepAction(blockingChecks, definition);
+    const message = blockingChecks[0]?.message
+        || (status === 'passed' || status === 'ready'
+            ? definition.readyMessage
+            : definition.pendingMessage);
+
+    return {
+        key: definition.key,
+        index,
+        title: definition.title,
+        shortTitle: definition.shortTitle || definition.title,
+        detail: definition.detail,
+        status,
+        statusLabel: getStatusLabel(status),
+        skipped,
+        complete: status === 'passed' || status === 'ready',
+        canSkip: status === 'failed' || status === 'pending',
+        message,
+        checks,
+        blockingChecks,
+        primaryAction,
+    };
+}
+
+function pickDefaultActiveStep(steps) {
+    return steps.find((step) => step.status === 'failed' && !step.skipped)
+        || steps.find((step) => step.status === 'pending' && !step.skipped)
+        || steps.find((step) => step.status === 'skipped')
+        || steps[steps.length - 1]
+        || null;
+}
+
+function pickNextStep(steps, activeStep) {
+    return steps.find((step) => step.status === 'failed' && !step.skipped)
+        || steps.find((step) => step.status === 'pending' && !step.skipped)
+        || activeStep
+        || steps[0]
+        || null;
 }
 
 function buildUnavailableReport(detail = '') {
@@ -188,6 +335,41 @@ export function getReadinessDisplayChecks(report, options = {}) {
     return passedChecks.slice(0, limit);
 }
 
+export function buildReadinessTaskFlow(report = null, options = {}) {
+    const normalized = normalizeReadinessReport(report);
+    const skippedStepKeys = normalizeStepKeySet(options.skippedStepKeys);
+    const assignedKeys = new Set(FIRST_RUN_STEP_DEFINITIONS.flatMap((definition) => definition.checkKeys));
+    const extraChecks = normalized.checks.filter((check) => !assignedKeys.has(check.key));
+
+    const steps = FIRST_RUN_STEP_DEFINITIONS.map((definition, index) => {
+        let checks = normalized.checks.filter((check) => definition.checkKeys.includes(check.key));
+        if (index === 0 && extraChecks.length > 0) {
+            checks = [...checks, ...extraChecks];
+        }
+        return buildTaskStep(definition, checks, normalized, skippedStepKeys, index);
+    });
+
+    const requestedActiveStepKey = toTrimmedString(options.activeStepKey, '');
+    const requestedActiveStep = steps.find((step) => step.key === requestedActiveStepKey) || null;
+    const activeStep = requestedActiveStep || pickDefaultActiveStep(steps);
+    const nextStep = pickNextStep(steps, activeStep);
+
+    steps.forEach((step) => {
+        step.active = step.key === activeStep?.key;
+    });
+
+    return {
+        ready: normalized.ready,
+        blockingCount: normalized.blockingCount,
+        summary: normalized.summary,
+        steps,
+        activeStep,
+        nextStep,
+        nextAction: nextStep?.primaryAction || null,
+        skippedStepKeys: [...skippedStepKeys],
+    };
+}
+
 export function shouldShowFirstRunGuide({
     firstRunPending = false,
     dismissed = false,
@@ -208,4 +390,5 @@ export function shouldCompleteFirstRun({
 
 export {
     FIRST_RUN_FOCUS_KEYS,
+    FIRST_RUN_STEP_DEFINITIONS,
 };

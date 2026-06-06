@@ -1,10 +1,26 @@
 const {
-    buildDiagnosticsSnapshot,
-    buildSnapshotFilename,
+    buildDiagnosticsSupportPackage,
+    buildSupportPackageFilename,
 } = require('./diagnostics-snapshot');
 const { launchElevatedApp } = require('./elevated-relaunch');
 const { decodeBufferText } = require('./text-codec');
 const { validateExternalOpenUrl } = require('./external-url-policy');
+
+const SAFE_DESKTOP_NOTIFICATIONS = Object.freeze({
+    'background-running': Object.freeze({
+        title: '微信 AI 助手',
+        body: '应用仍在后台运行。可从任务栏托盘恢复窗口或退出应用。',
+    }),
+});
+
+function buildSafeDesktopNotificationOptions(kind) {
+    const key = String(kind || '').trim();
+    const template = SAFE_DESKTOP_NOTIFICATIONS[key];
+    if (!template) {
+        return null;
+    }
+    return { ...template };
+}
 
 function registerIpcHandlers({
     ipcMain,
@@ -23,6 +39,11 @@ function registerIpcHandlers({
     fs,
     path,
     getMainWindowSafe,
+    getMainWindowState,
+    broadcastWindowState,
+    showWindowSystemMenu,
+    hideMainWindowToTray,
+    quitAppGracefully,
     requestAppClose,
     installDownloadedUpdateAndQuit,
     showMainWindowSafe,
@@ -104,6 +125,7 @@ function registerIpcHandlers({
         '/api/pending_replies',
         '/api/config',
         '/api/config/audit',
+        '/api/v1/agents/tool-workflow',
         '/api/model_catalog',
         '/api/model_auth/overview',
         '/api/model_auth/action',
@@ -131,6 +153,7 @@ function registerIpcHandlers({
         '/api/wechat_export/apply',
     ]);
     const ALLOWED_BACKEND_PATH_PATTERNS = [
+        /^\/api\/v1\/admin\/prompts\/\d+\/rollback$/,
         /^\/api\/growth\/tasks\/[^/?#]+\/(clear|run|pause|resume)$/,
         /^\/api\/pending_replies\/[^/?#]+\/(approve|reject)$/,
         /^\/api\/wechat_export\/decrypt\/jobs\/[^/?#]+$/,
@@ -461,44 +484,60 @@ function registerIpcHandlers({
         };
     });
 
-    handleTrusted('minimize-to-tray', () => {
-        const win = getMainWindowSafe();
-        try { win?.hide(); } catch (_) {}
+    handleTrusted('minimize-to-tray', () => hideMainWindowToTray?.() || {
+        success: false,
+        error: 'window_unavailable',
+        state: getMainWindowState?.() || {},
+    });
+
+    handleTrusted('window:get-state', () => getMainWindowState?.() || {});
+
+    handleTrusted('window:show-system-menu', (_event, point) => {
+        if (typeof showWindowSystemMenu !== 'function') {
+            return { success: false, error: 'unsupported', state: getMainWindowState?.() || {} };
+        }
+        return showWindowSystemMenu(point || {});
     });
 
     handleTrusted('window-minimize', () => {
         const win = getMainWindowSafe();
         try { win?.minimize(); } catch (_) {}
+        return broadcastWindowState?.() || getMainWindowState?.() || {};
     });
     handleTrusted('window-maximize', () => {
         const win = getMainWindowSafe();
-        if (!win) return;
+        if (!win) return getMainWindowState?.() || {};
         try {
             win.isMaximized() ? win.unmaximize() : win.maximize();
         } catch (_) {}
+        return broadcastWindowState?.() || getMainWindowState?.() || {};
     });
     handleTrusted('window-close', () => requestAppClose({ showWindow: false }));
 
     handleTrusted('confirm-close-action', async (_event, payload) => {
         const { action, remember } = payload || {};
+        if (action !== 'minimize' && action !== 'quit') {
+            return { success: false, message: 'invalid action' };
+        }
         if (remember && (action === 'minimize' || action === 'quit')) {
             store.set('closeBehavior', action);
         }
         if (action === 'minimize') {
-            GLOBAL_STATE.mainWindow?.hide();
-            return { success: true };
+            return hideMainWindowToTray?.() || { success: true, action: 'minimize' };
         }
         if (action === 'quit') {
+            if (typeof quitAppGracefully === 'function') {
+                return quitAppGracefully('quit');
+            }
             GLOBAL_STATE.isQuitting = true;
             if (GLOBAL_STATE.tray) {
-                GLOBAL_STATE.tray.destroy();
+                try { GLOBAL_STATE.tray.destroy(); } catch (_) {}
                 GLOBAL_STATE.tray = null;
             }
             await BackendManager.stop('quit');
             app.quit();
-            return { success: true };
+            return { success: true, action: 'quit' };
         }
-        return { success: false, message: 'invalid action' };
     });
 
     handleTrusted('reset-close-behavior', () => {
@@ -586,9 +625,11 @@ function registerIpcHandlers({
         const logsResult = await backendJson('/api/logs?lines=120');
         const backupsResult = await backendJson('/api/backups?limit=1');
 
-        const snapshot = buildDiagnosticsSnapshot({
+        const exportNow = new Date();
+        const supportPackage = buildDiagnosticsSupportPackage({
             appVersion: app.getVersion(),
             appName: app.getName ? app.getName() : 'wechat-ai-assistant',
+            now: exportNow,
             status,
             readiness,
             configAudit,
@@ -607,10 +648,10 @@ function registerIpcHandlers({
         const win = getMainWindowSafe() || undefined;
         const defaultPath = path.join(
             app.getPath('documents'),
-            buildSnapshotFilename(new Date()),
+            buildSupportPackageFilename(supportPackage.diagnostic_id, exportNow),
         );
         const saveResult = await dialog.showSaveDialog(win, {
-            title: 'Export diagnostics snapshot',
+            title: '导出诊断支持包',
             defaultPath,
             filters: [
                 { name: 'JSON files', extensions: ['json'] },
@@ -623,13 +664,14 @@ function registerIpcHandlers({
         fs.mkdirSync(path.dirname(saveResult.filePath), { recursive: true });
         fs.writeFileSync(
             saveResult.filePath,
-            `${JSON.stringify(snapshot, null, 2)}\n`,
+            `${JSON.stringify(supportPackage, null, 2)}\n`,
             'utf8',
         );
         return {
             success: true,
             filePath: saveResult.filePath,
-            message: 'Diagnostics snapshot exported',
+            diagnosticId: supportPackage.diagnostic_id,
+            message: `诊断支持包已导出（Diagnostic ID: ${supportPackage.diagnostic_id}）`,
         };
     });
     handleTrusted('is-first-run', () => store.get('isFirstRun'));
@@ -640,6 +682,7 @@ function registerIpcHandlers({
 }
 
 module.exports = {
+    buildSafeDesktopNotificationOptions,
     registerIpcHandlers,
 };
 

@@ -9,7 +9,7 @@ def test_eval_runner_generates_report_and_passes_smoke_dataset(tmp_path: Path):
     report = evaluate_dataset(dataset_path, preset="smoke")
 
     assert report["preset"] == "smoke"
-    assert report["summary"]["total_cases"] == 20
+    assert report["summary"]["total_cases"] == 24
     assert report["summary"]["passed"] is True
     assert report["summary"]["empty_reply_rate"] == 0.0
     assert report["summary"]["runtime_exception_count"] == 0

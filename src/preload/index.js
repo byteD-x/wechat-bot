@@ -125,6 +125,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
      */
     minimizeToTray: () => ipcRenderer.invoke('minimize-to-tray'),
 
+    getWindowState: () => ipcRenderer.invoke('window:get-state'),
+
+    showWindowSystemMenu: (point) => ipcRenderer.invoke('window:show-system-menu', point || {}),
+
     // ═══════════════════════════════════════════════════════════════════════
     //                           其他功能
     // ═══════════════════════════════════════════════════════════════════════
@@ -172,9 +176,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     onRuntimeIdleStateChanged: (callback) => onChannel('runtime:idle-state-changed', callback, (_event, payload) => payload),
 
+    onWindowStateChanged: (callback) => onChannel('window-state-changed', callback, (_event, payload) => payload),
+
     removeConfigChangedListener: (callback) => removeRegisteredListeners('config:changed', callback),
 
     removeRuntimeIdleStateListener: (callback) => removeRegisteredListeners('runtime:idle-state-changed', callback),
+
+    removeWindowStateChangedListener: (callback) => removeRegisteredListeners('window-state-changed', callback),
 
     confirmCloseAction: (action, remember) => ipcRenderer.invoke('confirm-close-action', { action, remember }),
 

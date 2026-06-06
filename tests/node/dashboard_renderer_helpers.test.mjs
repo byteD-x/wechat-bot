@@ -354,9 +354,11 @@ test('renderReadiness renders blocking checks and actions', () => withDom(({ doc
     assert.equal(selectors['#bot-readiness'].hidden, false);
     assert.equal(selectors['#bot-readiness'].dataset.state, 'blocked');
     assert.equal(selectors['#bot-readiness-badge'].textContent, '阻塞 2');
-    assert.equal(selectors['#bot-readiness-list'].children.length, 2);
+    assert.equal(selectors['#bot-readiness-list'].children.length, 4);
+    assert.match(selectors['#bot-readiness-detail'].textContent, /下一步/);
+    assert.equal(selectors['#bot-readiness-list'].children[2].dataset.step, 'wechat_connection');
     assert.equal(
-        selectors['#bot-readiness-list'].children[0].children[1]?.dataset.readinessAction,
+        selectors['#bot-readiness-list'].children[2].children[1]?.dataset.readinessAction,
         'open_wechat'
     );
 }));

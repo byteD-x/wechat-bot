@@ -11,6 +11,7 @@ import {
     closeDetailModal,
     openDetailModal,
 } from '../../src/renderer/js/pages/messages/detail-controller.js';
+import { renderMessagesPageShell } from '../../src/renderer/js/app-shell/pages/messages.js';
 import { bindMessagesPage } from '../../src/renderer/js/pages/messages/page-shell.js';
 import { installDomStub } from './dom-stub.mjs';
 
@@ -115,6 +116,15 @@ function findFirstButtonByText(root, expectedText) {
     return null;
 }
 
+test('messages page shell names feedback review entry point', () => {
+    const html = renderMessagesPageShell();
+
+    assert.equal(html.includes('回复反馈'), true);
+    assert.equal(html.includes('质量复盘线索'), true);
+    assert.equal(html.includes('id="message-search"'), true);
+    assert.equal(html.includes('id="all-messages"'), true);
+});
+
 test('messages data helper resets offline state and renders loaded messages', async () => withDom(async ({ document, registerElement }) => {
     const selectors = {
         '#all-messages': document.createElement('div'),
@@ -207,6 +217,61 @@ test('messages data helper applies realtime message filter and renders list', as
         onOpenDetail: () => {},
     });
     assert.equal(page._messages.length, 2);
+}));
+
+test('messages list surfaces low quality feedback cues without error details', async () => withDom(async ({ document }) => {
+    const selectors = {
+        '#all-messages': document.createElement('div'),
+        '#message-chat-filter': document.createElement('select'),
+        '#message-filter-summary': document.createElement('div'),
+        '#message-total-count': document.createElement('div'),
+        '#btn-load-more-messages': document.createElement('button'),
+    };
+    const page = createMessagesPage({
+        bot: { connected: true },
+    }, selectors);
+
+    await fetchMessages(page, { append: false }, {
+        apiService: {
+            getMessages: async () => ({
+                success: true,
+                messages: [
+                    {
+                        id: 19,
+                        wx_id: 'friend:alice',
+                        sender: 'AI',
+                        content: 'reply',
+                        timestamp: 2,
+                        is_self: true,
+                        role: 'assistant',
+                        metadata: {
+                            reply_quality: { user_feedback: 'unhelpful' },
+                            approval_error: 'raw token should stay hidden',
+                        },
+                    },
+                    {
+                        id: 20,
+                        wx_id: 'friend:alice',
+                        sender: 'AI',
+                        content: 'rejected reply',
+                        timestamp: 1,
+                        is_self: true,
+                        role: 'assistant',
+                        metadata: {
+                            approval_status: 'rejected',
+                        },
+                    },
+                ],
+                chats: [],
+                total: 2,
+                has_more: false,
+            }),
+        },
+    });
+
+    assert.equal(selectors['#all-messages'].textContent.includes('质量线索: 需要复盘 / 失败'), true);
+    assert.equal(selectors['#all-messages'].textContent.includes('质量线索: 已拒绝'), true);
+    assert.equal(selectors['#all-messages'].textContent.includes('raw token should stay hidden'), false);
 }));
 
 test('messages list keeps detail click available through page fallback handler', async () => withDom(async ({ document }) => {
@@ -553,7 +618,77 @@ test('messages detail helper saves assistant feedback and updates local metadata
 
     assert.equal(modal.classList.contains('active'), true);
     assert.equal(page._messages[0].metadata.reply_quality.user_feedback, 'helpful');
+    assert.equal(body.textContent.includes('反馈状态: 有帮助'), true);
     assert.equal(toast.calls.some((item) => item.type === 'success'), true);
+}));
+
+test('messages detail helper shows redacted review cues for low quality replies', async () => withDom(async ({ document, registerElement }) => {
+    registerElement('message-detail-modal', document.createElement('div'));
+    const body = registerElement('message-detail-body', document.createElement('div'));
+    const page = createMessagesPage({
+        bot: { connected: true },
+    });
+
+    await openDetailModal(page, {
+        id: 21,
+        wx_id: 'friend:alice',
+        sender: 'AI',
+        content: 'reply',
+        timestamp: 2,
+        is_self: true,
+        role: 'assistant',
+        metadata: {
+            reply_quality: { user_feedback: 'unhelpful' },
+            approval_error: 'raw backend token should stay hidden',
+        },
+    }, {
+        documentObj: document,
+        toast: createToastRecorder(),
+        apiService: {
+            getContactProfile: async () => ({
+                success: true,
+                profile: {
+                    relationship: 'friend',
+                    message_count: 9,
+                    last_emotion: 'calm',
+                    profile_summary: 'summary',
+                    contact_prompt: 'prompt',
+                },
+            }),
+            listPendingReplies: async () => ({
+                success: true,
+                items: [
+                    {
+                        id: 10,
+                        chat_id: 'friend:alice',
+                        trigger_reason: 'manual_review',
+                        draft_reply: 'draft reply',
+                        status: 'pending',
+                        created_at: 1,
+                    },
+                ],
+            }),
+            getReplyPolicies: async () => ({
+                success: true,
+                reply_policy: {
+                    default_mode: 'auto',
+                    new_contact_mode: 'manual',
+                    group_mode: 'whitelist_only',
+                    per_chat_overrides: [],
+                },
+            }),
+            saveReplyPolicies: async () => ({ success: true }),
+            approvePendingReply: async () => ({ success: true }),
+            rejectPendingReply: async () => ({ success: true }),
+        },
+    });
+
+    assert.equal(body.textContent.includes('质量复盘入口'), true);
+    assert.equal(body.textContent.includes('反馈状态: 需要复盘 / 待审 1 条 / 失败'), true);
+    assert.equal(body.textContent.includes('只查看本条原文、前后上下文、联系人 Prompt 和待审草稿'), true);
+    assert.equal(body.textContent.includes('打开下方待审批回复'), true);
+    assert.equal(body.textContent.includes('不展开错误原文'), true);
+    assert.equal(body.textContent.includes('raw backend token should stay hidden'), false);
 }));
 
 test('messages detail helper renders pending approvals and saves per-chat override', async () => withDom(async ({ document, registerElement }) => {

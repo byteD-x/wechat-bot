@@ -24,15 +24,17 @@ export function renderSettingsPageShell() {
 
                 <div class="settings-workbench-bar">
                     <div class="settings-workbench-nav" id="settings-section-nav" role="tablist" aria-label="配置分组">
-                        <button type="button" class="settings-nav-pill" data-settings-section="common" aria-pressed="true">常用</button>
-                        <button type="button" class="settings-nav-pill" data-settings-section="workspace" aria-pressed="false">工作台</button>
-                        <button type="button" class="settings-nav-pill" data-settings-section="bot" aria-pressed="false">机器人</button>
-                        <button type="button" class="settings-nav-pill" data-settings-section="prompt" aria-pressed="false">提示词</button>
-                        <button type="button" class="settings-nav-pill" data-settings-section="memory" aria-pressed="false">记忆</button>
-                        <button type="button" class="settings-nav-pill" data-settings-section="delivery" aria-pressed="false">发送策略</button>
-                        <button type="button" class="settings-nav-pill" data-settings-section="guard" aria-pressed="false">限制与过滤</button>
-                        <button type="button" class="settings-nav-pill" data-settings-section="quality" aria-pressed="false">质量与日志</button>
+                        <button type="button" class="settings-nav-pill" data-settings-section="connection" aria-pressed="true">连接</button>
+                        <button type="button" class="settings-nav-pill" data-settings-section="model" aria-pressed="false">模型</button>
+                        <button type="button" class="settings-nav-pill" data-settings-section="reply" aria-pressed="false">回复策略</button>
+                        <button type="button" class="settings-nav-pill" data-settings-section="notification" aria-pressed="false">通知与托盘</button>
+                        <button type="button" class="settings-nav-pill" data-settings-section="privacy" aria-pressed="false">隐私与数据</button>
+                        <button type="button" class="settings-nav-pill" data-settings-section="advanced" aria-pressed="false">高级</button>
+                        <button type="button" class="settings-nav-pill" data-settings-section="about" aria-pressed="false">关于</button>
                         <button type="button" class="settings-nav-pill" data-settings-section="all" aria-pressed="false">全部</button>
+                    </div>
+                    <div class="settings-section-guide">
+                        这里只放低频配置。启动、停止、消息查看、模型连接测试等高频动作继续在对应主界面完成。
                     </div>
                     <div class="settings-workbench-summary">
                         <div class="settings-workbench-status">
@@ -81,8 +83,11 @@ export function renderSettingsPageShell() {
                                     <div class="detail-help" id="settings-backup-summary">正在加载备份状态...</div>
                                 </div>
 
-                                <div class="backup-action-card">
-                                    <span class="backup-action-kicker">恢复到某个时间点</span>
+                                <details class="backup-action-card settings-disclosure settings-disclosure-danger">
+                                    <summary class="settings-disclosure-summary">
+                                        <span class="backup-action-kicker">恢复到某个时间点</span>
+                                        <strong>先检查，再恢复</strong>
+                                    </summary>
                                     <h3 class="backup-action-title">先确认，再恢复</h3>
                                     <p class="backup-action-text">选择一份之前保存的备份，先检查是否可恢复，再决定是否真正恢复。</p>
                                     <label class="detail-label" for="settings-backup-select">选择一个可恢复时间点</label>
@@ -94,11 +99,14 @@ export function renderSettingsPageShell() {
                                         <button class="btn btn-secondary btn-sm" id="btn-restore-backup-dry-run" type="button">先检查</button>
                                         <button class="btn btn-primary btn-sm" id="btn-restore-backup-apply" type="button">恢复到这个时间点</button>
                                     </div>
-                                </div>
+                                </details>
                             </div>
 
-                            <div class="backup-action-card backup-action-card-wide">
-                                <span class="backup-action-kicker">清理旧备份释放空间</span>
+                            <details class="backup-action-card backup-action-card-wide settings-disclosure settings-disclosure-danger">
+                                <summary class="settings-disclosure-summary">
+                                    <span class="backup-action-kicker">清理旧备份释放空间</span>
+                                    <strong>先预览可清理内容</strong>
+                                </summary>
                                 <h3 class="backup-action-title">不影响最近可用备份的前提下腾出空间</h3>
                                 <p class="backup-action-text">系统默认会保留最近 5 份快速备份、3 份完整备份，并额外保护最近一次恢复前自动保留的保险备份。</p>
                                 <div class="backup-detail-grid">
@@ -111,10 +119,13 @@ export function renderSettingsPageShell() {
                                     <button class="btn btn-secondary btn-sm" id="btn-cleanup-backup-dry-run" type="button">先看看可清理什么</button>
                                     <button class="btn btn-secondary btn-sm" id="btn-cleanup-backup-apply" type="button">清理旧备份</button>
                                 </div>
-                            </div>
+                            </details>
 
-                            <div class="backup-action-card backup-action-card-wide">
-                                <span class="backup-action-kicker">数据治理清理</span>
+                            <details class="backup-action-card backup-action-card-wide settings-disclosure settings-disclosure-danger">
+                                <summary class="settings-disclosure-summary">
+                                    <span class="backup-action-kicker">数据治理清理</span>
+                                    <strong>按范围 dry-run 后再清理</strong>
+                                </summary>
                                 <h3 class="backup-action-title">按类别清理本地数据，并支持先预览后执行</h3>
                                 <p class="backup-action-text">可按 memory / usage / export_rag 分类执行 dry-run 或 apply，避免误删。</p>
                                 <div class="backup-detail-grid">
@@ -133,7 +144,7 @@ export function renderSettingsPageShell() {
                                     <button class="btn btn-secondary btn-sm" id="btn-data-control-dry-run" type="button">先检查</button>
                                     <button class="btn btn-secondary btn-sm" id="btn-data-control-apply" type="button">执行清理</button>
                                 </div>
-                            </div>
+                            </details>
 
                             <div class="dashboard-subsection backup-list-section">
                                 <div class="dashboard-subsection-title">最近保存的备份</div>
@@ -708,6 +719,7 @@ export function renderSettingsPageShell() {
                             <div class="form-group">
                                 <label class="form-label">LangSmith Key 状态</label>
                                 <input type="text" id="agent-langsmith-key-status" disabled placeholder="未配置">
+                                <span class="form-hint settings-disabled-reason">不可在设置中心直接编辑：密钥由模型认证中心或环境配置托管，避免误保存明文 Token。</span>
                             </div>
                         </div>
                     </div>
@@ -743,18 +755,27 @@ export function renderSettingsPageShell() {
                                 <label class="form-label">保留文件数</label>
                                 <input type="number" id="setting-log-backup-count" min="0" step="1">
                             </div>
-                            <div class="form-group">
-                                <label class="form-checkbox form-checkbox-inline">
-                                    <input type="checkbox" id="setting-log-message-content">
-                                    <span class="form-checkbox-label">记录用户消息内容</span>
-                                </label>
-                            </div>
-                            <div class="form-group">
-                                <label class="form-checkbox form-checkbox-inline">
-                                    <input type="checkbox" id="setting-log-reply-content">
-                                    <span class="form-checkbox-label">记录回复内容</span>
-                                </label>
-                            </div>
+                            <details class="form-group full-width settings-disclosure settings-disclosure-danger">
+                                <summary class="settings-disclosure-summary">
+                                    <span class="backup-action-kicker">隐私风险日志</span>
+                                    <strong>记录消息正文前请确认用途</strong>
+                                </summary>
+                                <div class="settings-grid settings-grid-nested">
+                                    <div class="form-group">
+                                        <label class="form-checkbox form-checkbox-inline">
+                                            <input type="checkbox" id="setting-log-message-content">
+                                            <span class="form-checkbox-label">记录用户消息内容</span>
+                                        </label>
+                                    </div>
+                                    <div class="form-group">
+                                        <label class="form-checkbox form-checkbox-inline">
+                                            <input type="checkbox" id="setting-log-reply-content">
+                                            <span class="form-checkbox-label">记录回复内容</span>
+                                        </label>
+                                    </div>
+                                </div>
+                                <div class="detail-help">这两个开关可能把聊天正文写入本地日志。它们不会即时保存，请确认排障目的后手动保存。</div>
+                            </details>
                         </div>
                     </div>
 
@@ -763,6 +784,25 @@ export function renderSettingsPageShell() {
                         <div class="form-group full-width">
                             <div class="detail-note">如需重新选择关闭方式，可在此重置</div>
                             <button class="btn btn-secondary btn-sm" id="btn-reset-close-behavior">重置关闭选择</button>
+                        </div>
+                    </div>
+
+                    <div class="settings-card">
+                        <h2 class="settings-card-title">关于与更新</h2>
+                        <div class="settings-grid">
+                            <div class="form-group full-width">
+                                <div class="update-panel">
+                                    <div class="update-panel-content">
+                                        <div class="update-status-text" id="update-status-text">未检查更新</div>
+                                        <div class="update-status-meta" id="update-status-meta">当前版本：--</div>
+                                    </div>
+                                    <div class="update-panel-actions">
+                                        <button class="btn btn-secondary btn-sm" id="btn-check-updates" type="button">检查更新</button>
+                                        <button class="btn btn-primary btn-sm is-hidden" id="btn-open-update-download" type="button">下载更新</button>
+                                    </div>
+                                </div>
+                                <div class="detail-help">这里仅保留低频版本信息；项目链接和反馈入口仍在“关于”主页面。</div>
+                            </div>
                         </div>
                     </div>
 

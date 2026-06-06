@@ -1,6 +1,16 @@
 import { Events } from '../../core/EventBus.js';
 import { FIELD_META_BY_ID } from './schema.js';
 
+const EXPLICIT_SAVE_FIELD_IDS = new Set([
+    'setting-reload-ai-client-on-change',
+    'setting-reload-ai-client-module',
+    'setting-whitelist-enabled',
+    'setting-usage-tracking-enabled',
+    'setting-agent-langsmith-enabled',
+    'setting-log-message-content',
+    'setting-log-reply-content',
+]);
+
 function getDocument(deps = {}) {
     return deps.documentObj || globalThis.document;
 }
@@ -19,6 +29,21 @@ function isSelectElement(target, deps = {}) {
         return target instanceof SelectClass;
     }
     return String(target?.tagName || '').toUpperCase() === 'SELECT';
+}
+
+export function shouldSaveSettingsChangeImmediately(target, eventType = '', deps = {}) {
+    const id = String(target?.id || '').trim();
+    if (!FIELD_META_BY_ID.has(id) || EXPLICIT_SAVE_FIELD_IDS.has(id)) {
+        return false;
+    }
+    const normalizedEventType = String(eventType || '').trim();
+    if (isSelectElement(target, deps)) {
+        return normalizedEventType === 'change';
+    }
+    if (!isInputElement(target, deps)) {
+        return false;
+    }
+    return target.type === 'checkbox' && normalizedEventType === 'change';
 }
 
 export function bindSettingsEvents(page, deps = {}) {
@@ -43,6 +68,8 @@ export function bindSettingsEvents(page, deps = {}) {
     bindOptional('#btn-cleanup-backup-apply', 'click', () => void page._cleanupWorkspaceBackups(false));
     bindOptional('#btn-data-control-dry-run', 'click', () => void page._runDataControls(true));
     bindOptional('#btn-data-control-apply', 'click', () => void page._runDataControls(false));
+    bindOptional('#btn-check-updates', 'click', () => void page._checkUpdates?.());
+    bindOptional('#btn-open-update-download', 'click', () => void page._openUpdateDownload?.());
     bindOptional('#btn-open-models', 'click', () => page.emit(Events.PAGE_CHANGE, 'models'));
     bindOptional('#btn-open-export-center', 'click', () => page.emit(Events.PAGE_CHANGE, 'exports'));
     bindOptional('#settings-data-control-scope', 'change', () => page._renderBackupPanel?.());
@@ -71,9 +98,7 @@ export function bindSettingsAutoSave(page, deps = {}) {
         if (!FIELD_META_BY_ID.has(id)) {
             return;
         }
-        const immediate = isInputElement(target, deps)
-            ? target.type === 'checkbox'
-            : isSelectElement(target, deps);
+        const immediate = shouldSaveSettingsChangeImmediately(target, event?.type, deps);
         page._scheduleAutoSave({ immediate, target });
     };
 

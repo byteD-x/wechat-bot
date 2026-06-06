@@ -11,6 +11,7 @@ const UPDATER_STATE_PATHS = [
     'updater.latestVersion',
     'updater.lastCheckedAt',
     'updater.releaseDate',
+    'updater.notes',
     'updater.error',
     'updater.skippedVersion',
     'updater.downloading',

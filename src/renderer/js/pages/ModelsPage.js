@@ -105,44 +105,51 @@ const MODEL_CENTER_MESSAGE_LOCALIZATIONS = new Map([
 const ONBOARDING_CONTENT = {
     api_key: {
         kicker: 'API Key',
-        title: '填入 API Key',
-        subtitle: '有 Key 就用这个。',
+        title: '用 API Key 接通',
+        subtitle: '适合已经拿到平台 Key 的情况。',
         points: [
-            { title: '1. 粘贴 Key', text: '填进去就行。' },
-            { title: '2. 保存', text: '保存后就能用。' },
+            { title: '1. 粘贴 Key', text: 'Key 只提交给后端模型认证中心保存。' },
+            { title: '2. 测试连接', text: '保存后先测一次，确认模型、认证和接口地址都通。' },
         ],
-        confirmLabel: '去填写',
+        confirmLabel: '配置 API Key',
     },
     browser_auth: {
         kicker: '网页登录',
-        title: '去网页登录',
-        subtitle: '登录后回来继续。',
+        title: '用官方登录接通',
+        subtitle: '适合服务方要求网页登录或 OAuth 授权的情况。',
         points: [
-            { title: '1. 打开登录页', text: '先在官网完成登录。' },
-            { title: '2. 回来继续', text: '再点“我已登录，继续”。' },
+            { title: '1. 打开登录页', text: '在官方页面完成登录或授权。' },
+            { title: '2. 回来继续', text: '回到模型中心完成收口，再测试连接。' },
         ],
-        confirmLabel: '去登录',
+        confirmLabel: '打开登录流程',
     },
     local_auth: {
         kicker: '本机同步',
-        title: '同步这台电脑上的账号',
-        subtitle: '这台电脑登过就优先用这个。',
+        title: '跟随这台电脑上的账号',
+        subtitle: '推荐给已经在本机登录过 CLI 或桌面端的用户。',
         points: [
-            { title: '直接同步', text: '少填一步。' },
-            { title: '导入副本', text: '需要独立凭据时再用。' },
+            { title: '直接同步', text: '默认跟随本机凭据刷新，不复制长期 token。' },
+            { title: '导入副本', text: '只有需要独立凭据时再选。' },
         ],
-        confirmLabel: '去同步',
+        confirmLabel: '同步本机登录',
     },
     session_import: {
         kicker: '会话导入',
-        title: '导入现有会话',
-        subtitle: '粘贴后就能用。',
+        title: '导入网页登录会话',
+        subtitle: '适合只有 Cookie / Session / Header 的服务。',
         points: [
-            { title: '支持内容', text: 'Cookie、Session、Header。' },
-            { title: '会话过期', text: '过期后再更新。' },
+            { title: '支持内容', text: '粘贴 Cookie、Session 或 Header 内容。' },
+            { title: '过期处理', text: '会话失效后重新导入或改用 API Key。' },
         ],
-        confirmLabel: '去导入',
+        confirmLabel: '导入会话',
     },
+};
+
+const AUTH_METHOD_EXPLANATIONS = {
+    ['api' + '_key']: '适合已有平台 Key 的用户；保存后由后端认证中心安全持久化。',
+    oauth: '适合通过官方账号授权；完成登录后回到这里继续收口。',
+    local_import: '推荐已有本机登录的用户；默认跟随本机凭据刷新。',
+    web_session: '适合只有网页登录态的服务；会话过期后需要重新导入。',
 };
 
 function escapeHtml(value) {
@@ -516,6 +523,93 @@ function getMethodHint(method = {}, state = {}) {
         return '检测到本机登录';
     }
     return '同步本机账号';
+}
+
+function getMethodExplanation(method = {}, state = {}) {
+    const type = getMethodType(method);
+    const lines = [
+        String(method?.description || '').trim(),
+        AUTH_METHOD_EXPLANATIONS[type] || '',
+    ].filter(Boolean);
+    if (method?.runtime_supported === false || state?.runtime_supported === false) {
+        lines.push('当前不会作为稳定回复链路直接启用。');
+    }
+    const runtimeReason = localizeModelCenterMessage(state?.metadata?.runtime_unavailable_reason);
+    if (runtimeReason) {
+        lines.push(`暂不能用于运行时：${runtimeReason}`);
+    }
+    return Array.from(new Set(lines)).join(' ');
+}
+
+function getProviderDefaultAuthOrder(provider = {}) {
+    return Array.isArray(provider?.default_auth_order)
+        ? provider.default_auth_order.map((item) => String(item || '').trim()).filter(Boolean)
+        : [];
+}
+
+function isRecommendedDefaultAuthGroup(provider = {}, method = {}, group = null) {
+    const [recommendedMethodId] = getProviderDefaultAuthOrder(provider);
+    if (!recommendedMethodId) {
+        return false;
+    }
+    const methodIds = [
+        String(method?.id || '').trim(),
+        String(group?.method_id || '').trim(),
+        String(group?.primary_method?.id || '').trim(),
+        ...(Array.isArray(group?.grouped_methods)
+            ? group.grouped_methods.map((item) => String(item?.id || '').trim())
+            : []),
+    ].filter(Boolean);
+    return methodIds.includes(recommendedMethodId);
+}
+
+function getMethodOrderRank(provider = {}, methodId = '') {
+    const order = getProviderDefaultAuthOrder(provider);
+    const index = order.indexOf(String(methodId || '').trim());
+    return index >= 0 ? index : 999;
+}
+
+function formatFailureWithNextStep(reason, fallback = '连接测试失败') {
+    const raw = localizeModelCenterMessage(reason).replace(/[。.\s]+$/g, '').trim();
+    const prefix = raw
+        ? (/连接测试失败|请求失败|认证失败|Authentication failed|Backend internal error|Too many requests/i.test(raw)
+            ? raw
+            : `${fallback}：${raw}`)
+        : `${fallback}：后端没有返回具体原因`;
+    return `${prefix}。请检查默认认证、模型和接口地址后重试。`;
+}
+
+function formatConnectionFailureFromError(error, fallback = '连接测试失败') {
+    const data = error?.data && typeof error.data === 'object' ? error.data : {};
+    const reason = data.message
+        || data.error
+        || data.detail
+        || data.reason
+        || error?.message
+        || '';
+    return formatFailureWithNextStep(reason, fallback);
+}
+
+function formatConnectionFailureFromResult(result, fallback = '连接测试失败') {
+    const reason = result?.message
+        || result?.error
+        || result?.detail
+        || result?.reason
+        || '';
+    return formatFailureWithNextStep(reason, fallback);
+}
+
+function formatConnectionFailureWithCode(reason, code = '') {
+    const fallbackByCode = {
+        attention: '当前认证需要处理',
+        blocked: '当前认证暂不能用于运行时',
+        idle: '还没有可测试的认证',
+        not_checked: '连接检查尚未完成',
+        unsupported: '当前认证方式暂不支持运行时测试',
+        warning: '连接检查未通过',
+    };
+    const fallback = fallbackByCode[String(code || '').trim()] || '连接测试失败';
+    return formatFailureWithNextStep(reason, fallback);
 }
 
 function getProviderListSubtitle(card = {}) {
@@ -1190,6 +1284,80 @@ export class ModelsPage extends PageController {
         }));
     }
 
+    getAuthGroupsForDisplay(card = {}, provider = {}) {
+        return groupAuthStates(card, provider)
+            .map((group, index) => ({ group, index }))
+            .sort((left, right) => {
+                const leftMethodId = String(left.group?.primary_method?.id || left.group?.method_id || '').trim();
+                const rightMethodId = String(right.group?.primary_method?.id || right.group?.method_id || '').trim();
+                const orderDelta = getMethodOrderRank(provider, leftMethodId) - getMethodOrderRank(provider, rightMethodId);
+                if (orderDelta !== 0) {
+                    return orderDelta;
+                }
+                const stateDelta = getGroupedStateRank(left.group?.primary_state || left.group) - getGroupedStateRank(right.group?.primary_state || right.group);
+                if (stateDelta !== 0) {
+                    return stateDelta;
+                }
+                return left.index - right.index;
+            })
+            .map((entry) => entry.group);
+    }
+
+    getRecommendedAuthGroup(card = {}, provider = {}) {
+        const groups = this.getAuthGroupsForDisplay(card, provider);
+        return groups.find((group) => isRecommendedDefaultAuthGroup(provider, group?.primary_method || {}, group))
+            || groups[0]
+            || null;
+    }
+
+    getBeginnerPath(card = {}, provider = {}) {
+        const recommendedGroup = this.getRecommendedAuthGroup(card, provider);
+        const recommendedMethod = recommendedGroup?.primary_method || {};
+        const recommendedLabel = String(recommendedGroup?.group_label || recommendedMethod?.label || '').trim();
+        const methodType = getMethodType(recommendedMethod);
+        const active = !!card?.metadata?.is_active_provider;
+        const ready = !!card?.metadata?.can_set_active_provider;
+        const reason = localizeModelCenterMessage(card?.metadata?.active_provider_reason);
+
+        if (active) {
+            return {
+                title: '已完成，可以先测一次连接',
+                meta: '当前回复已经使用这里的默认模型和默认认证。',
+                steps: [
+                    { title: '1. 测试连接', text: '确认认证、模型和接口地址都能正常请求。' },
+                    { title: '2. 再改模型', text: '保存模型会影响后续自动回复。' },
+                ],
+            };
+        }
+
+        if (ready) {
+            return {
+                title: '下一步：切换为当前回复模型',
+                meta: '认证已就绪，切换后会影响后续自动回复。',
+                steps: [
+                    { title: '1. 测试连接', text: '建议先测试，失败原因会显示在顶部反馈里。' },
+                    { title: '2. 确认切换', text: '切换只改变当前回复服务方，不会删除其他认证。' },
+                ],
+            };
+        }
+
+        const authTextByType = {
+            ['api' + '_key']: '先准备平台 API Key，保存后测试连接。',
+            oauth: '先通过官方页面登录，回到这里继续完成授权。',
+            local_import: '检测到本机登录时优先同步它，少填一组凭据。',
+            web_session: '先导入网页登录会话；过期后重新导入。',
+        };
+        return {
+            title: recommendedLabel ? `推荐默认：${recommendedLabel}` : '推荐先完成一组认证',
+            meta: authTextByType[methodType] || '按下方推荐顺序接入即可。',
+            steps: [
+                { title: '1. 选模型', text: getModelStepDescription(card) },
+                { title: '2. 完成认证', text: reason || '先完成下方推荐认证方式。' },
+                { title: '3. 测试并切换', text: '连接通过后再设为当前回复模型。' },
+            ],
+        };
+    }
+
     isOnboardingSeen(type) {
         return !!this._onboardingSeen[String(type || '').trim()];
     }
@@ -1505,6 +1673,7 @@ export class ModelsPage extends PageController {
                     ${this.renderDetailFact('本机状态', this.getSyncSummary(card), this.getSyncDetail(card))}
                 </div>
                 <div class="model-center-stage model-center-stage-compact">
+                    ${this.renderBeginnerPathSection(card, provider)}
                     ${this.renderQuickActionsSection(card, provider, currentModel, currentAuth)}
                     ${this.renderAuthMethodsSection(card, provider)}
                     ${this.renderRuntimeSection(card)}
@@ -1512,6 +1681,22 @@ export class ModelsPage extends PageController {
                 </div>
             </div>
         `;
+    }
+
+    renderBeginnerPathSection(card = {}, provider = {}) {
+        const path = this.getBeginnerPath(card, provider);
+        const body = `
+            <div class="model-center-tip-grid">
+                ${path.steps.map((item) => renderWorkflowCard(item)).join('')}
+            </div>
+        `;
+        return this.renderDetailSection({
+            title: path.title,
+            meta: path.meta,
+            body,
+            open: !card?.metadata?.can_set_active_provider || !!card?.metadata?.is_active_provider,
+            modifier: 'model-center-detail-section-primary',
+        });
     }
 
     renderDetailFact(label, value, note = '') {
@@ -1561,11 +1746,14 @@ export class ModelsPage extends PageController {
         }
         const canSet = !!card?.metadata?.can_set_active_provider;
         const reason = String(card?.metadata?.active_provider_reason || '').trim();
+        const impactText = canSet
+            ? '切换后，后续自动回复会使用这家服务方的默认模型和默认认证。'
+            : reason;
         const className = small ? 'btn btn-primary btn-sm' : 'btn btn-primary';
         const disabledAttr = canSet ? '' : ' disabled';
-        const titleAttr = !canSet && reason ? ` title="${escapeHtml(reason)}"` : '';
-        const reasonBlock = !canSet && showReason && reason
-            ? `<div class="model-center-inline-feedback">${escapeHtml(reason)}</div>`
+        const titleAttr = impactText ? ` title="${escapeHtml(impactText)}"` : '';
+        const reasonBlock = showReason && impactText
+            ? `<div class="model-center-inline-feedback">${escapeHtml(impactText)}</div>`
             : '';
         return `
             <div class="model-center-activate-control">
@@ -1618,7 +1806,7 @@ export class ModelsPage extends PageController {
 
     renderAuthMethodsSection(card, provider) {
         const viewMode = resolveCardViewMode(card);
-        const authRows = groupAuthStates(card, provider)
+        const authRows = this.getAuthGroupsForDisplay(card, provider)
             .map((group) => (
                 viewMode === 'wizard'
                     ? this.renderWizardAuthCard(card, provider, group.primary_method || {}, group.primary_state || group, group)
@@ -1721,7 +1909,7 @@ export class ModelsPage extends PageController {
     }
 
     renderAuthStep(card, provider) {
-        const authCards = groupAuthStates(card, provider)
+        const authCards = this.getAuthGroupsForDisplay(card, provider)
             .map((group) => this.renderWizardAuthCard(card, provider, group.primary_method || {}, group.primary_state || group, group))
             .filter(Boolean)
             .join('');
@@ -1760,7 +1948,7 @@ export class ModelsPage extends PageController {
     }
 
     renderWorkbenchView(card, provider) {
-        const rows = groupAuthStates(card, provider)
+        const rows = this.getAuthGroupsForDisplay(card, provider)
             .map((group) => this.renderWorkbenchAuthRow(card, provider, group.primary_method || {}, group.primary_state || group, group))
             .join('');
         const selectedState = this.getSelectedAuthState(card);
@@ -1855,13 +2043,23 @@ export class ModelsPage extends PageController {
         const title = String(group?.group_label || method?.label || state?.method_id || '').trim();
         const accountDisplay = this.getAccountDisplayText(group, state, method);
         const guideAction = actions[0] || {};
+        const recommendedBadge = isRecommendedDefaultAuthGroup(provider, method, group)
+            ? renderBadge('推荐默认', 'ready')
+            : '';
+        const explanation = getMethodExplanation(method, group?.primary_state || state);
+        const detail = localizeModelCenterMessage(group?.detail || state?.detail || '');
         return `
             <article class="model-center-auth-choice-card">
                 <div class="model-center-auth-choice-top">
                     <div class="model-center-auth-choice-title">${escapeHtml(title)}</div>
-                    ${renderBadge(getStateLabel(group?.status || state?.status), getStateTone(group?.status || state?.status))}
+                    <span class="model-center-provider-badges">
+                        ${recommendedBadge}
+                        ${renderBadge(getStateLabel(group?.status || state?.status), getStateTone(group?.status || state?.status))}
+                    </span>
                 </div>
                 <div class="model-center-auth-choice-text">${escapeHtml(getMethodHint(method, state))}</div>
+                ${explanation ? `<div class="model-center-auth-choice-text">${escapeHtml(explanation)}</div>` : ''}
+                ${detail ? `<div class="model-center-auth-choice-text">${escapeHtml(detail)}</div>` : ''}
                 ${accountDisplay ? `<div class="model-center-auth-choice-text">${escapeHtml(accountDisplay)}</div>` : ''}
                 <div class="model-center-auth-choice-actions">
                     ${actionButtons}
@@ -1897,12 +2095,18 @@ export class ModelsPage extends PageController {
         const methodNames = group?.grouped_method_labels?.length > 1
             ? group.grouped_method_labels.join(' / ')
             : '';
+        const recommendedBadge = isRecommendedDefaultAuthGroup(provider, method, group)
+            ? renderBadge('推荐默认', 'ready')
+            : '';
+        const explanation = getMethodExplanation(method, group?.primary_state || state);
+        const detail = localizeModelCenterMessage(group?.detail || state?.detail || '');
         return `
             <article class="model-center-auth-row">
                 <div class="model-center-auth-row-main">
                     <div class="model-center-auth-row-top">
                         <div class="model-center-auth-row-title">
                             <strong>${escapeHtml(title)}</strong>
+                            ${recommendedBadge}
                             ${(group?.default_selected || state?.default_selected) ? renderBadge('当前认证', 'ready') : ''}
                             ${(group?.experimental || state?.experimental) ? renderBadge('实验', 'attention') : ''}
                         </div>
@@ -1913,6 +2117,8 @@ export class ModelsPage extends PageController {
                         ${accountDisplay ? ` · ${escapeHtml(accountDisplay)}` : ''}
                         ${methodNames ? ` · ${escapeHtml(methodNames)}` : ''}
                     </div>
+                    ${explanation ? `<div class="model-center-auth-row-meta">${escapeHtml(explanation)}</div>` : ''}
+                    ${detail ? `<div class="model-center-auth-row-meta">${escapeHtml(detail)}</div>` : ''}
                 </div>
                 <div class="model-center-auth-row-actions">
                     ${actionButtons}
@@ -2739,7 +2945,9 @@ export class ModelsPage extends PageController {
         try {
             const result = await apiService.testConnection(target.presetName || null);
             const success = result?.success !== false;
-            const message = String(result?.message || '').trim() || (success ? '连接测试已完成' : '连接测试失败');
+            const message = success
+                ? (String(result?.message || '').trim() || '连接测试已完成')
+                : formatConnectionFailureFromResult(result);
             this.renderFeedback(message, success ? 'success' : 'error');
             if (success) {
                 toast.success(message);
@@ -2749,7 +2957,7 @@ export class ModelsPage extends PageController {
             return result;
         } catch (error) {
             console.error('[ModelsPage] current connection test failed:', error);
-            const message = error?.message || '连接测试失败';
+            const message = formatConnectionFailureFromError(error);
             this.renderFeedback(message, 'error');
             toast.error(message);
             throw error;
@@ -2897,18 +3105,50 @@ export class ModelsPage extends PageController {
         try {
             const result = await apiService.runModelAuthAction(action, payload);
             this.applyOverview(result?.overview || null, { preserveSelection: options.preserveSelection !== false });
+            const feedback = this.resolveActionFeedback(action, result, payload, options);
             if (this.isActive()) {
                 this.render();
-                this.renderFeedback(result?.message || '操作已完成');
+                this.renderFeedback(feedback.message, feedback.type);
             }
-            toast.success(result?.message || '操作已完成');
+            if (feedback.type === 'error') {
+                toast.error(feedback.message);
+            } else {
+                toast.success(feedback.message);
+            }
             return result;
         } catch (error) {
             console.error('[ModelsPage] action failed:', action, error);
-            this.renderFeedback(error?.message || '操作失败', 'error');
-            toast.error(error?.message || '操作失败');
+            const message = action === 'test_profile'
+                ? formatConnectionFailureFromError(error)
+                : (error?.message || '操作失败');
+            this.renderFeedback(message, 'error');
+            toast.error(message);
             throw error;
         }
+    }
+
+    resolveActionFeedback(action, result = {}, payload = {}, options = {}) {
+        if (action !== 'test_profile') {
+            return {
+                type: 'success',
+                message: String(result?.message || '').trim() || '操作已完成',
+            };
+        }
+        const providerId = String(payload?.provider_id || options?.providerId || '').trim();
+        const card = this.getCardByProviderId(providerId) || this.getSelectedCard() || {};
+        const health = card?.metadata?.provider_health || {};
+        const code = String(health?.code || '').trim();
+        const rawMessage = localizeModelCenterMessage(health?.message || result?.message || health?.error_code || '');
+        if (code === 'healthy') {
+            return {
+                type: 'success',
+                message: rawMessage || '连接测试通过。',
+            };
+        }
+        return {
+            type: 'error',
+            message: formatConnectionFailureWithCode(rawMessage, code),
+        };
     }
 
     renderFeedback(message, type = 'success') {

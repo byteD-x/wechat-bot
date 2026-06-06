@@ -47,9 +47,11 @@ from backend.core.oauth_support import (
     logout_oauth_provider,
     submit_auth_callback,
 )
+from backend.core.prompt_governance import get_prompt_governance_service
 from backend.core.readiness import readiness_service
 from backend.core.reply_quality_tracker import close_reply_quality_tracker
 from backend.core.reply_policy import normalize_reply_policy, update_per_chat_override
+from backend.core.tool_workflow import ControlledToolWorkflowService, ToolWorkflowError
 from backend.core.workspace_backup import (
     DEFAULT_KEEP_FULL_BACKUPS,
     DEFAULT_KEEP_QUICK_BACKUPS,
@@ -728,7 +730,15 @@ backup_service = WorkspaceBackupService()
 data_control_service = DataControlService()
 wechat_export_service = WechatExportService()
 model_auth_center_service = get_model_auth_center_service()
+prompt_governance_service = get_prompt_governance_service()
 maintenance_lock = asyncio.Lock()
+
+
+def _get_config_path_for_write() -> str | None:
+    config_path = getattr(manager, "config_path", None)
+    if not isinstance(config_path, str) or not config_path.strip():
+        return None
+    return config_path
 
 
 def _mask_preset(
@@ -1590,9 +1600,7 @@ async def save_reply_policies():
                 mode=str(data.get("mode") or "").strip(),
             )
 
-        config_path = getattr(manager, "config_path", None)
-        if not isinstance(config_path, str) or not config_path.strip():
-            config_path = None
+        config_path = _get_config_path_for_write()
 
         snapshot = await asyncio.to_thread(
             config_service.save_effective_config,
@@ -2462,6 +2470,88 @@ async def save_config():
     except Exception as e:
         logger.error("Request handling failed: %s", e)
         return jsonify({"success": False, "message": f"Request handling failed: {str(e)}"}), 500
+
+
+@app.route("/api/v1/admin/prompts/<int:revision>/rollback", methods=["POST"])
+async def rollback_prompt_revision(revision: int):
+    """Roll back system Prompt to an audited historical revision."""
+    try:
+        data = await request.get_json(silent=True) or {}
+        if not isinstance(data, dict):
+            return jsonify({"success": False, "message": "request body must be a JSON object"}), 400
+
+        current_snapshot = config_service.get_snapshot()
+        current_config = current_snapshot.to_dict()
+        result = await asyncio.to_thread(
+            prompt_governance_service.rollback,
+            revision,
+            current_system_prompt=current_snapshot.bot.get("system_prompt", ""),
+            reason=str(data.get("reason") or "").strip(),
+            operator=str(data.get("operator") or "api").strip() or "api",
+        )
+        next_prompt = result["revision"]["prompt"]
+        snapshot = await asyncio.to_thread(
+            config_service.save_effective_config,
+            {"bot": {"system_prompt": next_prompt}},
+            config_path=_get_config_path_for_write(),
+            source="api_prompt_rollback",
+        )
+        changed_paths = diff_config_paths(current_config, snapshot.to_dict())
+        reload_plan = build_reload_plan(changed_paths)
+        runtime_apply = await _reload_runtime_config_if_needed(
+            current_config=current_config,
+            snapshot=snapshot,
+        )
+        return jsonify(
+            {
+                **result,
+                "config": _build_config_payload(snapshot),
+                "changed_paths": changed_paths,
+                "reload_plan": reload_plan,
+                "runtime_apply": runtime_apply,
+            }
+        )
+    except LookupError as e:
+        return jsonify({"success": False, "message": str(e), "code": "prompt_revision_not_found"}), 404
+    except ValueError as e:
+        return jsonify({"success": False, "message": str(e), "code": "bad_request"}), 400
+    except Exception as e:
+        logger.error("Prompt rollback failed: %s", e)
+        return _json_internal_error("prompt_rollback_failed", code="prompt_rollback_failed")
+
+
+@app.route("/api/v1/agents/tool-workflow", methods=["POST"])
+async def run_agent_tool_workflow():
+    """Execute an explicit, whitelisted tool workflow and return per-step trace."""
+    try:
+        data = await request.get_json(silent=True) or {}
+        if not isinstance(data, dict):
+            return jsonify({"success": False, "message": "request body must be a JSON object"}), 400
+        steps = data.get("steps")
+        dry_run = bool(data.get("dry_run", False))
+
+        async def _load_readiness_report() -> dict[str, Any]:
+            return await asyncio.to_thread(readiness_service.get_report, force_refresh=False)
+
+        service = ControlledToolWorkflowService(
+            config_loader=config_service.get_snapshot,
+            readiness_loader=_load_readiness_report,
+        )
+        result = await service.run(steps, dry_run=dry_run)
+        if result.get("success"):
+            return jsonify(result), 200
+        first_error = next(
+            (item for item in result.get("trace", []) if isinstance(item, dict) and item.get("status") == "error"),
+            {},
+        )
+        result.setdefault("code", "bad_workflow")
+        result.setdefault("message", str(first_error.get("error") or "workflow failed"))
+        return jsonify(result), 400
+    except ToolWorkflowError as e:
+        return jsonify({"success": False, "message": str(e), "code": "bad_workflow"}), 400
+    except Exception as e:
+        logger.error("Tool workflow failed: %s", e)
+        return _json_internal_error("tool_workflow_failed", code="tool_workflow_failed")
 
 
 @app.route("/api/test_connection", methods=["POST"])

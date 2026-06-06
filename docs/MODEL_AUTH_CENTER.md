@@ -2,7 +2,7 @@
 
 本文档说明项目当前的 Provider + Auth Framework、统一认证领域模型、支持中的 provider/auth matrix、本地认证跟随机制、安全边界，以及如何继续扩展新的 provider 与 auth method。
 
-文档更新时间：2026-03-25
+文档更新时间：2026-06-06
 
 ## 1. 设计目标
 
@@ -205,8 +205,17 @@ backend/model_auth/
 - 浏览器授权收口：当后端返回待完成的 `flow_id` 时，模型页会在对应 method 下显示“继续完成授权”表单，允许直接轮询本机授权状态，或补充 callback payload 后继续完成授权。
 - 通用继续授权：对于不暴露标准 `flow_id` 的网页登录 / session 型 provider，模型页会退化为 `__local_rescan__` 本机重扫路径，而不是强行要求 legacy OAuth flow。
 - 本机重扫优先：对 `OpenAI / Codex / ChatGPT`、`Google / Gemini / Gemini CLI` 这类实际通过本机凭据落盘完成的浏览器授权方法，即使前端还带着旧 `flow_id`，后端也会优先走本机重扫收口，不会错误提交到标准 OAuth callback。
+- 新手路径：模型页会按后端 `default_auth_order` 与当前 `overview.cards[].auth_states` 展示推荐默认、认证方式解释、下一步路径、连接测试与切换影响提示；这些提示只消费 `/api/model_auth/overview` 和 `/api/model_auth/action`，不新增前端认证旁路。
+- 连接测试反馈：`test_profile` 仍由后端执行，前端根据动作返回后的 `provider_health.code/message` 展示通过或失败原因，并提示检查默认认证、模型与接口地址。
 - 设置页迁移收口：设置页顶部的“模型与认证”卡片现在直接读取 `/api/model_auth/overview` 的活动 Provider 摘要，不再自己从旧 `api.presets` 投影状态。
 - 旧设置页收口：历史预设 modal 不再承载 `/api/auth/providers/*` OAuth 流程；如果用户仍打开旧 modal，会被明确引导到独立“模型”页处理浏览器授权、本机认证跟随与导入副本。
+
+当前对外接口：
+
+- `GET /api/model_catalog`：返回内置模型目录，供模型页填充推荐模型、Provider 元数据和能力标签。
+- `GET /api/model_auth/overview`：返回 Provider/Auth 总览、当前激活状态、动作列表与运行时就绪度。
+- `POST /api/model_auth/action`：执行配置 API Key、本机同步、OAuth / Session 流程收口、测试连接、设为默认认证等动作。
+- `/api/auth/providers*`：保留为 legacy 兼容壳层，不再作为设置页或模型页主流程入口。
 
 这意味着像 Qwen 这样的 Provider 可以在同一张卡片里同时看到：
 

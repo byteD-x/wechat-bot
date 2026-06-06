@@ -17,13 +17,13 @@
 ```text
 微信正在登录
     ↓
-找到当前账号目录和数据库密钥
+在导出中心探测当前账号目录和数据库密钥
     ↓
-把数据库解密到新目录
+把数据库解密到 data/decrypted_wechat/<wxid>/Msg
     ↓
-用本项目导出联系人聊天记录为 CSV
+读取联系人并导出 CSV
     ↓
-再做 Prompt 生成或 RAG 增强
+一键应用导出语料 RAG 配置，或再做 Prompt 生成
 ```
 
 ---
@@ -73,39 +73,42 @@ Config
 
 ---
 
-## 3. 推荐方案：先用专门工具拿到 `db_key` 和已解密数据库
+## 3. 推荐方案：优先使用桌面端导出中心
 
-### 为什么推荐这样做
+当前项目已经把探测、解密、联系人读取、CSV 导出和 RAG 应用串成了桌面端流程。推荐优先走这个入口：
 
-因为本项目的强项是：
+1. 以管理员身份启动桌面端，并保持微信 PC `3.9.12.51` 已登录。
+2. 打开侧边栏的“导出”页面。
+3. 点击“探测微信账号”，选择显示为“可解密”的账号。
+4. 确认源目录与目标目录，点击“开始解密”。
+5. 解密完成后读取联系人，选择要导出的联系人或群聊。
+6. 点击导出，必要时再点击“预览应用变更”和“一键应用到系统”。
 
-- 导出 CSV
-- 生成个性化 Prompt
-- 做导出语料 RAG 增强
+桌面端背后调用的是这些 Web API：
 
-而“从运行中的微信进程提取数据库密钥并批量解密”这一步，在当前仓库里属于底层能力，不是面向新手的一键入口。
+- `POST /api/wechat_export/probe`
+- `POST /api/wechat_export/decrypt/start`
+- `GET /api/wechat_export/decrypt/jobs/<job_id>`
+- `POST /api/wechat_export/contacts`
+- `POST /api/wechat_export/export`
+- `POST /api/wechat_export/apply/preview`
+- `POST /api/wechat_export/apply`
 
-### 推荐思路
+默认目录约定：
 
-建议你用独立的微信数据库解密工具，先做这两步：
+- 解密结果：`data/decrypted_wechat/<wxid>/Msg`
+- 导出结果：`data/chat_exports/聊天记录/<联系人>/...csv`
+- 导出语料 RAG 目录：`data/chat_exports/聊天记录`
 
-1. 读取当前登录账号信息，拿到 `wx_dir` 和 `db_key`
-2. 把数据库批量解密到一个新目录
+### 什么时候还需要外部工具
 
-我联网查到的一个公开可访问参考是 `wdecipher` 的 PyPI 页面。它公开说明里写明支持：
+本项目内置的探测和解密依赖 `tools/wx_db/decrypt/*` 以及本机进程读取能力。如果导出中心提示依赖不可用、拿不到 `db_key`，或你希望在隔离环境中先完成解密，可以继续使用独立工具先得到“已解密的 `Msg` 目录”，再回到本项目读取联系人和导出 CSV。
 
-- 获取当前登录微信账号信息
-- 定位工作目录
-- 获取数据库密钥
-- 解密微信数据库
-
-参考链接：
+可参考的外部路径包括：
 
 - `wdecipher`：<https://pypi.org/project/wdecipher/>
 
-### 推荐操作方式
-
-建议在单独环境里做，不要污染你当前项目环境：
+使用外部工具时，建议在单独环境里做，不要污染当前项目环境：
 
 ```bash
 python -m venv .venv-export
@@ -113,12 +116,10 @@ python -m venv .venv-export
 pip install wdecipher
 ```
 
-然后按照它的公开说明完成：
+然后按照第三方工具说明完成：
 
-1. 获取当前登录微信信息
-2. 找到 `wx_dir`
-3. 获取 `db_key`
-4. 将数据库解密到新目录
+1. 读取当前登录账号信息，拿到 `wx_dir` 和 `db_key`
+2. 把数据库批量解密到一个新目录
 
 你解密完成后，建议把结果放在一个独立目录，类似：
 
@@ -137,17 +138,19 @@ E:\decrypted_wechat\wxid_xxx\Msg
 - `tools/wx_db/decrypt/get_wx_info.py`
 - `tools/wx_db/decrypt/decrypt_v3.py`
 - `tools/wx_db/decrypt/decrypt_v4.py`
+- `backend/core/wechat_export_service.py`
 
 它们体现的是这套思路：
 
 1. 从运行中的微信进程读取账号目录和密钥
 2. 针对不同数据库版本执行批量解密
+3. 读取联系人、导出 CSV，并把导出语料 RAG 配置写回共享配置
 
 但请注意：
 
-- 当前仓库没有把这一步封装成适合小白的完整 CLI
+- 桌面端和 Web API 已经封装了完整流程；CLI 仍主要面向“已经有解密目录”的导出场景。
 - 这部分还依赖一些额外组件，例如 `pycryptodome`、`pymem`、`pywin32`
-- 如果你只是想快速导出聊天记录，不建议从这里起步
+- 如果你只是想快速导出聊天记录，建议从桌面端“导出”页面起步，不要直接调用底层脚本。
 
 更适合的用户：
 
@@ -201,6 +204,7 @@ python -m tools.chat_exporter.cli --db-dir "E:\decrypted_wechat\wxid_xxx\Msg" --
 - `--db-version`：微信数据库版本，默认是 `4`
 - `--include-chatrooms`：包含群聊
 - `--output-dir`：导出目录，默认 `data/chat_exports`
+- `--start` / `--end`：时间范围，必须成对提供，格式为 `YYYY-MM-DD HH:MM:SS`
 
 导出成功后，通常会生成：
 

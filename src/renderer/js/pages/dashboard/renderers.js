@@ -17,7 +17,7 @@ import {
     getGrowthTaskLabel,
 } from './formatters.js';
 import {
-    getReadinessDisplayChecks,
+    buildReadinessTaskFlow,
     normalizeReadinessReport,
 } from '../../app/readiness-helpers.js';
 import { getRecoveryButtonModel } from '../../app/self-heal.js';
@@ -578,28 +578,31 @@ export function renderReadiness(page, readinessReport) {
     }
 
     const report = normalizeReadinessReport(readinessReport);
-    const checks = getReadinessDisplayChecks(report, { limit: 4 });
+    const flow = buildReadinessTaskFlow(report);
 
     panel.hidden = false;
     panel.dataset.state = report.ready ? 'ready' : 'blocked';
     badge.textContent = report.ready ? '已就绪' : `阻塞 ${report.blockingCount}`;
-    title.textContent = report.summary.title;
-    detail.textContent = report.summary.detail;
+    title.textContent = report.ready ? '首启任务流已完成' : report.summary.title;
+    detail.textContent = flow.nextStep
+        ? `下一步：${flow.nextStep.title}。${flow.nextStep.message}`
+        : report.summary.detail;
     list.textContent = '';
 
-    if (checks.length === 0) {
+    if (flow.steps.length === 0) {
         const item = document.createElement('li');
         item.className = 'readiness-check-item';
-        item.textContent = '暂时没有更多可展示的检查项。';
+        item.textContent = '暂时没有更多可展示的检查项。下一步可重新检查运行准备度。';
         list.appendChild(item);
         return;
     }
 
     const fragment = document.createDocumentFragment();
-    checks.forEach((check) => {
+    flow.steps.forEach((step) => {
         const item = document.createElement('li');
         item.className = 'readiness-check-item';
-        item.dataset.status = check.status;
+        item.dataset.status = step.status === 'ready' ? 'passed' : step.status;
+        item.dataset.step = step.key;
 
         const copy = document.createElement('div');
         copy.className = 'readiness-check-copy';
@@ -609,36 +612,37 @@ export function renderReadiness(page, readinessReport) {
 
         const label = document.createElement('strong');
         label.className = 'readiness-check-label';
-        label.textContent = check.label;
+        label.textContent = `${step.index + 1}. ${step.title}`;
 
         const status = document.createElement('span');
         status.className = 'readiness-check-status';
-        status.textContent = check.status === 'passed' ? '通过' : '待处理';
+        status.textContent = step.statusLabel;
 
         const message = document.createElement('div');
         message.className = 'readiness-check-message';
-        message.textContent = check.message;
+        message.textContent = step.message;
 
         top.appendChild(label);
         top.appendChild(status);
         copy.appendChild(top);
         copy.appendChild(message);
 
-        if (check.hint) {
+        const focusedCheck = step.blockingChecks[0];
+        if (focusedCheck?.hint) {
             const hint = document.createElement('div');
             hint.className = 'readiness-check-hint';
-            hint.textContent = check.hint;
+            hint.textContent = focusedCheck.hint;
             copy.appendChild(hint);
         }
 
         item.appendChild(copy);
 
-        if (check.action && check.status !== 'passed') {
+        if (step.primaryAction?.action && step.status !== 'passed' && step.status !== 'ready') {
             const action = document.createElement('button');
             action.type = 'button';
             action.className = 'btn btn-secondary btn-sm readiness-check-action';
-            action.dataset.readinessAction = check.action;
-            action.textContent = check.actionLabel;
+            action.dataset.readinessAction = step.primaryAction.action;
+            action.textContent = step.primaryAction.label;
             item.appendChild(action);
         }
 

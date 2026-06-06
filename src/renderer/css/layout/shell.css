@@ -3,13 +3,14 @@
     justify-content: space-between;
     align-items: center;
     height: var(--titlebar-height);
-    padding: 0 0 0 clamp(12px, 1.2vw, 16px);
+    padding: 0;
     background: var(--app-shell-bg);
     border-bottom: 1px solid var(--app-shell-border);
     color: var(--app-shell-text);
-    -webkit-app-region: drag;
+    min-width: 0;
 }
 
+.titlebar-drag-region,
 .titlebar-left,
 .titlebar-copy,
 .titlebar-controls,
@@ -20,8 +21,18 @@
     align-items: center;
 }
 
+.titlebar-drag-region {
+    flex: 1;
+    min-width: 0;
+    align-self: stretch;
+    padding-left: clamp(12px, 1.2vw, 16px);
+    -webkit-app-region: drag;
+    user-select: none;
+}
+
 .titlebar-left {
     gap: clamp(8px, 1vw, 12px);
+    min-width: 0;
 }
 
 .titlebar-copy {
@@ -32,21 +43,31 @@
     flex-direction: column;
     align-items: flex-start;
     gap: 1px;
+    min-width: 0;
 }
 
 .titlebar-logo {
     width: 22px;
     height: 22px;
+    flex: 0 0 auto;
     color: var(--app-shell-accent);
 }
 
 .titlebar-title {
+    max-width: min(42vw, 420px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     font-size: 13px;
     font-weight: 700;
     letter-spacing: 0.04em;
 }
 
 .titlebar-subtitle {
+    max-width: min(42vw, 420px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     font-size: 11px;
     color: var(--app-shell-muted);
 }
@@ -82,6 +103,18 @@
 .titlebar-btn .icon {
     width: 12px;
     height: 12px;
+}
+
+.titlebar-btn .icon-window-restore {
+    display: none;
+}
+
+.titlebar[data-window-state="maximized"] .icon-window-maximize {
+    display: none;
+}
+
+.titlebar[data-window-state="maximized"] .icon-window-restore {
+    display: block;
 }
 
 .app-shell-container {

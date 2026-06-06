@@ -138,6 +138,36 @@ def test_readiness_blocks_when_no_valid_preset(monkeypatch):
     assert preset_check['status'] == 'failed'
 
 
+def test_readiness_report_exposes_first_run_action_fields(monkeypatch):
+    monkeypatch.setattr(
+        readiness_module,
+        '_check_python_version',
+        lambda: _passing_check('python_version', 'Python 版本'),
+    )
+    monkeypatch.setattr(
+        readiness_module,
+        '_check_dependencies',
+        lambda packages=(): _passing_check('dependencies', '依赖安装'),
+    )
+
+    report = _build_report(
+        config_loader=lambda: _base_config(presets=[]),
+        admin_checker=lambda: True,
+        process_counter=lambda: 0,
+    )
+
+    process_check = next(check for check in report['checks'] if check['key'] == 'wechat_process')
+    preset_check = next(check for check in report['checks'] if check['key'] == 'api_config')
+    actions = {action['source_check']: action for action in report['suggested_actions']}
+
+    assert report['summary']['title'] == '还差 2 项准备'
+    assert process_check['action_label'] == '打开微信'
+    assert preset_check['action_label'] == '前往设置'
+    assert actions['wechat_process']['action'] == 'open_wechat'
+    assert actions['api_config']['action'] == 'open_settings'
+    assert any(action['action'] == 'retry' for action in report['suggested_actions'])
+
+
 def test_readiness_passes_when_all_core_checks_pass(monkeypatch):
     monkeypatch.setattr(
         readiness_module,

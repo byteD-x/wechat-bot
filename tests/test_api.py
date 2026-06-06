@@ -1635,6 +1635,153 @@ async def test_api_preview_prompt_uses_contact_prompt_when_chat_id_is_provided(c
 
 
 @pytest.mark.asyncio
+async def test_api_prompt_rollback_appends_audited_revision_and_updates_config(client, mock_manager, tmp_path):
+    current_config = {
+        "api": {"active_preset": "OpenAI", "presets": []},
+        "bot": {"system_prompt": "current prompt"},
+        "logging": {},
+        "agent": {},
+        "services": {},
+    }
+    updated_config = {
+        **current_config,
+        "bot": {"system_prompt": "old prompt"},
+    }
+    current_snapshot = _build_snapshot(current_config)
+    updated_snapshot = _build_snapshot(updated_config)
+    service = api_module.get_prompt_governance_service()
+    service.ledger_path = tmp_path / "prompt_revisions.json"
+    service.save_ledger({
+        "schema_version": 1,
+        "active_revision": 2,
+        "revisions": [
+            {
+                "revision": 1,
+                "status": "superseded",
+                "source": "test",
+                "prompt": "old prompt",
+                "editable_prompt": "old prompt",
+                "created_at": 1,
+            },
+            {
+                "revision": 2,
+                "status": "active",
+                "source": "test",
+                "prompt": "current prompt",
+                "editable_prompt": "current prompt",
+                "created_at": 2,
+            },
+        ],
+    })
+
+    async def _fake_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    save_effective_config = MagicMock(return_value=updated_snapshot)
+    with (
+        patch.object(api_module, "prompt_governance_service", service),
+        patch("backend.api.asyncio.to_thread", AsyncMock(side_effect=_fake_to_thread)),
+        patch.object(api_module.config_service, "get_snapshot", return_value=current_snapshot),
+        patch.object(api_module.config_service, "save_effective_config", save_effective_config),
+    ):
+        response = await client.post(
+            "/api/v1/admin/prompts/1/rollback",
+            json={"reason": "bad answer", "operator": "tester"},
+        )
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["success"] is True
+    assert data["active_revision"] == 3
+    assert data["rolled_back_from"] == 1
+    assert data["revision"]["source"] == "rollback"
+    assert data["revision"]["operator"] == "tester"
+    assert "bot.system_prompt" in data["changed_paths"]
+    save_effective_config.assert_called_once()
+    _, kwargs = save_effective_config.call_args
+    assert kwargs["source"] == "api_prompt_rollback"
+    mock_manager.reload_runtime_config.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_api_prompt_rollback_returns_404_for_unknown_revision(client, tmp_path):
+    snapshot = _build_snapshot({
+        "api": {"presets": []},
+        "bot": {"system_prompt": "current prompt"},
+        "logging": {},
+        "agent": {},
+        "services": {},
+    })
+    service = api_module.get_prompt_governance_service()
+    service.ledger_path = tmp_path / "prompt_revisions.json"
+
+    with (
+        patch.object(api_module, "prompt_governance_service", service),
+        patch.object(api_module.config_service, "get_snapshot", return_value=snapshot),
+    ):
+        response = await client.post("/api/v1/admin/prompts/99/rollback", json={})
+
+    assert response.status_code == 404
+    data = await response.get_json()
+    assert data["success"] is False
+    assert data["code"] == "prompt_revision_not_found"
+
+
+@pytest.mark.asyncio
+async def test_api_tool_workflow_runs_whitelisted_steps(client):
+    snapshot = _build_snapshot({
+        "api": {"presets": []},
+        "bot": {"system_prompt": "base prompt", "profile_inject_in_prompt": True},
+        "logging": {},
+        "agent": {},
+        "services": {},
+    })
+
+    with (
+        patch.object(api_module.config_service, "get_snapshot", return_value=snapshot),
+        patch.object(api_module.readiness_service, "get_report", return_value={"success": True, "ready": True}),
+    ):
+        response = await client.post(
+            "/api/v1/agents/tool-workflow",
+            json={
+                "steps": [
+                    {"tool": "config_audit"},
+                    {"tool": "prompt_preview", "payload": {"sample": {"sender": "Alice", "message": "hi"}}},
+                    {"tool": "readiness_check"},
+                ]
+            },
+        )
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["success"] is True
+    assert [item["tool"] for item in data["trace"]] == [
+        "config_audit",
+        "prompt_preview",
+        "readiness_check",
+    ]
+    assert data["trace"][0]["output"]["active_paths"] >= 1
+    assert "base prompt" in data["trace"][1]["output"]["prompt"]
+    assert data["trace"][2]["output"]["ready"] is True
+
+
+@pytest.mark.asyncio
+async def test_api_tool_workflow_rejects_unknown_tool(client):
+    response = await client.post(
+        "/api/v1/agents/tool-workflow",
+        json={"steps": [{"tool": "shell_exec", "payload": {"cmd": "dir"}}]},
+    )
+
+    assert response.status_code == 400
+    data = await response.get_json()
+    assert data["success"] is False
+    assert data["code"] == "bad_workflow"
+    assert "unsupported tool" in data["message"]
+    assert data["trace"][0]["status"] == "error"
+    assert "unsupported tool" in data["trace"][0]["error"]
+
+
+@pytest.mark.asyncio
 async def test_api_save_config_triggers_runtime_reload(client, mock_manager):
     test_config = {
         "api": {
