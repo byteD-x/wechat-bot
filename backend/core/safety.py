@@ -66,6 +66,10 @@ class SafetyGuard:
             self.bot_cfg.get("safety_block_prompt_injection", False)
             or self.agent_cfg.get("safety_block_prompt_injection", False)
         )
+        block_pii = bool(
+            self.bot_cfg.get("safety_block_pii", False)
+            or self.agent_cfg.get("safety_block_pii", False)
+        )
         knowledge_query = bool(KNOWLEDGE_QUERY_PATTERN.search(str(user_text or "")))
         rag_augmented = bool(retrieval_payload.get("augmented"))
         grounded = bool(citations)
@@ -85,6 +89,9 @@ class SafetyGuard:
         if block_prompt_injection and prompt_injection_detected:
             action = "refuse"
             refusal = "\u8fd9\u4e2a\u8bf7\u6c42\u6d89\u53ca\u4fee\u6539\u6216\u6cc4\u9732\u7cfb\u7edf\u89c4\u5219\uff0c\u6211\u4e0d\u80fd\u6309\u8fd9\u4e2a\u65b9\u5411\u5904\u7406\u3002"
+        elif block_pii and pii_detected:
+            action = "refuse"
+            refusal = "\u8fd9\u4e2a\u8bf7\u6c42\u6216\u56de\u590d\u53ef\u80fd\u5305\u542b\u4e2a\u4eba\u654f\u611f\u4fe1\u606f\uff0c\u6211\u5148\u4e0d\u76f4\u63a5\u5904\u7406\u6216\u590d\u8ff0\u8fd9\u4e9b\u5185\u5bb9\u3002"
         elif citation_required and (
             "missing_required_citation" in reasons or "answer_missing_citation_reference" in reasons
         ):
@@ -97,6 +104,7 @@ class SafetyGuard:
             "prompt_injection_detected": prompt_injection_detected,
             "pii_detected": pii_detected,
             "citation_required": citation_required,
+            "pii_blocked": block_pii and pii_detected,
             "grounded": grounded,
             "answer_citation_bound": answer_citation_bound,
             "citation_count": len(citations),

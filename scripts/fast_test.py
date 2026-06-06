@@ -57,6 +57,18 @@ SUITES: dict[str, FastSuite] = {
         ),
         plugins=("pytest_asyncio.plugin",),
     ),
+    "safety-guard": FastSuite(
+        description="Safety guard refusals and runtime safety statistics checks.",
+        targets=(
+            "tests/test_rag_citations.py::test_safety_guard_records_pii_without_blocking_by_default",
+            "tests/test_rag_citations.py::test_safety_guard_can_refuse_pii_when_enabled",
+            "tests/test_rag_citations.py::test_safety_guard_can_refuse_prompt_injection",
+            "tests/test_rag_citations.py::test_safety_guard_can_require_citations_for_rag_answers",
+            "tests/test_rag_citations.py::test_safety_guard_requires_answer_to_reference_returned_citation",
+            "tests/test_agent_runtime.py::test_agent_runtime_records_safety_stats_without_raw_text",
+        ),
+        plugins=("pytest_asyncio.plugin",),
+    ),
     "eval": FastSuite(
         description="Deterministic offline eval metrics and threshold checks.",
         targets=("tests/test_eval_runner.py",),

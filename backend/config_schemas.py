@@ -182,6 +182,7 @@ class BotConfig(BaseModel):
     export_rag_prefer_recent: bool = True
     safety_require_citations_for_rag: bool = False
     safety_block_prompt_injection: bool = False
+    safety_block_pii: bool = False
 
     # Control commands
     control_commands_enabled: bool = True

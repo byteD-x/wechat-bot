@@ -429,6 +429,9 @@ python -m tools.prompt_gen.generator
 - `export_rag_dir`: 导出语料目录，默认 `data/chat_exports/聊天记录`
 - `export_rag_top_k` / `export_rag_max_chunks_per_chat`: 导出语料召回数量与单会话片段上限
 - `vector_memory_embedding_model`: 兼容覆盖项，运行时工厂会优先用它覆盖向量检索 embedding；常规配置仍建议优先写在预设 `embedding_model` 或全局 `api.embedding_model`
+- `safety_require_citations_for_rag`: RAG 增强回答必须引用返回证据，默认关闭
+- `safety_block_prompt_injection`: 检测到明显 Prompt Injection 时直接拒答，默认关闭
+- `safety_block_pii`: 检测到手机号、邮箱、身份证号等 PII 时直接拒答，默认关闭；关闭时仍会在 `safety` 元数据中记录 `pii_detected`
 
 说明：
 - `wcferry` 是当前默认且唯一官方支持的传输后端。
@@ -495,6 +498,7 @@ python -m tools.prompt_gen.generator
 - `next_background_batch_at`
 - `last_background_batch`
 - `response_cache_stats`
+- `safety_stats`
 - `model_route_stats`
 
 消息页里的“消息详情”面板现在会展示当前联系人的画像摘要和专属 Prompt，并允许直接编辑；人工编辑后的版本会继续作为后台渐进式更新的基础。

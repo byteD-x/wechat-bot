@@ -604,6 +604,44 @@ async def test_agent_runtime_invoke_can_refuse_prompt_injection(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_agent_runtime_records_safety_stats_without_raw_text(monkeypatch):
+    monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
+
+    runtime = AgentRuntime(
+        settings={
+            "base_url": "https://example.com/v1",
+            "api_key": "sk-test",
+            "model": "test-model",
+        },
+        bot_cfg={"safety_block_pii": True},
+        agent_cfg={"enabled": True},
+    )
+    prepared = SimpleNamespace(
+        prompt_messages=[_FakeMessage("hello")],
+        chat_id="friend:alice",
+        user_text="my phone is 13800138000",
+        response_metadata={},
+        timings={},
+    )
+
+    async def _ainvoke(messages, config=None):
+        return _FakeMessage("I will repeat 13800138000")
+
+    runtime._chat_model.ainvoke = _ainvoke
+
+    reply = await runtime.invoke(prepared)
+    status = runtime.get_status()["safety_stats"]
+
+    assert reply != "I will repeat 13800138000"
+    assert prepared.response_metadata["safety"]["action"] == "refuse"
+    assert prepared.response_metadata["safety"]["pii_blocked"] is True
+    assert status["action_counts"]["refuse"] == 1
+    assert status["reason_counts"]["pii_detected"] == 1
+    assert status["last"]["pii_blocked"] is True
+    assert "13800138000" not in str(status)
+
+
+@pytest.mark.asyncio
 async def test_agent_runtime_response_cache_disabled_does_not_write_metadata(monkeypatch):
     monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
 

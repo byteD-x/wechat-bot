@@ -319,6 +319,9 @@ class AgentRuntime:
             "model_route_counts": {},
             "model_route_latency_priority": 0,
             "last_model_route": {},
+            "safety_action_counts": {},
+            "safety_reason_counts": {},
+            "last_safety": {},
         }
 
         self._imports = self._load_integrations()
@@ -1655,6 +1658,10 @@ class AgentRuntime:
                 self.bot_cfg.get("safety_require_citations_for_rag", False)
                 or self.agent_cfg.get("safety_require_citations_for_rag", False)
             ),
+            "safety_block_pii": bool(
+                self.bot_cfg.get("safety_block_pii", False)
+                or self.agent_cfg.get("safety_block_pii", False)
+            ),
         }
 
     def _apply_safety_guard(self, prepared: AgentPreparedRequest, reply_text: str) -> str:
@@ -1664,6 +1671,7 @@ class AgentRuntime:
             retrieval=(getattr(prepared, "response_metadata", {}) or {}).get("retrieval"),
         )
         prepared.response_metadata["safety"] = safety_result
+        self._record_safety_result(safety_result)
         if safety_result.get("action") == "refuse" and safety_result.get("refusal"):
             return str(safety_result.get("refusal") or "")
         return reply_text
@@ -2199,6 +2207,11 @@ class AgentRuntime:
                 "embedding_cache_misses": self._stats["embedding_cache_misses"],
             },
             "response_cache_stats": self.response_cache.get_status(),
+            "safety_stats": {
+                "action_counts": dict(self._stats["safety_action_counts"]),
+                "reason_counts": dict(self._stats["safety_reason_counts"]),
+                "last": dict(self._stats["last_safety"]),
+            },
             "model_route_stats": {
                 "complexity_counts": dict(self._stats["model_route_counts"]),
                 "latency_priority_count": self._stats["model_route_latency_priority"],
@@ -2217,6 +2230,35 @@ class AgentRuntime:
                 self._stats.get("model_route_latency_priority", 0)
             ) + 1
         self._stats["last_model_route"] = dict(route)
+
+    def _record_safety_result(self, safety_result: Dict[str, Any]) -> None:
+        action = str(safety_result.get("action") or "unknown").strip() or "unknown"
+        action_counts = dict(self._stats.get("safety_action_counts") or {})
+        action_counts[action] = int(action_counts.get(action, 0)) + 1
+        self._stats["safety_action_counts"] = action_counts
+
+        reason_counts = dict(self._stats.get("safety_reason_counts") or {})
+        for reason in safety_result.get("reasons") or []:
+            reason_text = str(reason or "").strip()
+            if not reason_text:
+                continue
+            reason_counts[reason_text] = int(reason_counts.get(reason_text, 0)) + 1
+        self._stats["safety_reason_counts"] = reason_counts
+        self._stats["last_safety"] = {
+            key: safety_result[key]
+            for key in (
+                "action",
+                "reasons",
+                "prompt_injection_detected",
+                "pii_detected",
+                "pii_blocked",
+                "citation_required",
+                "grounded",
+                "answer_citation_bound",
+                "citation_count",
+            )
+            if key in safety_result
+        }
 
     def _remaining_prepare_budget(self, started: float) -> float:
         return prepare_remaining_prepare_budget(self, started)

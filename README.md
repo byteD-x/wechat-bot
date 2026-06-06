@@ -227,6 +227,9 @@ python run.py web
     "export_rag_enabled": false,
     "export_rag_auto_ingest": true,
     "export_rag_dir": "data/chat_exports/聊天记录",
+    "safety_require_citations_for_rag": false,
+    "safety_block_prompt_injection": false,
+    "safety_block_pii": false,
 }
 
 "agent": {

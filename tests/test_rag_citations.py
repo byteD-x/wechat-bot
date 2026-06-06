@@ -204,7 +204,22 @@ def test_safety_guard_records_pii_without_blocking_by_default():
 
     assert result["action"] == "allow"
     assert result["pii_detected"] is True
+    assert result["pii_blocked"] is False
     assert "pii_detected" in result["reasons"]
+
+
+def test_safety_guard_can_refuse_pii_when_enabled():
+    result = SafetyGuard({"safety_block_pii": True}).assess(
+        user_text="my phone is 13800138000",
+        answer_text="ok",
+        retrieval=None,
+    )
+
+    assert result["action"] == "refuse"
+    assert result["pii_detected"] is True
+    assert result["pii_blocked"] is True
+    assert "pii_detected" in result["reasons"]
+    assert result["refusal"]
 
 
 def test_safety_guard_can_refuse_prompt_injection():

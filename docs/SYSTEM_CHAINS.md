@@ -87,8 +87,8 @@
 
 2. `/api/status`
    - 功能：返回结构化运行状态。
-   - 实现：委托 `BotManager.get_status()` 组装启动状态、健康检查、诊断、系统指标、`response_cache_stats` 和 `model_route_stats`。
-   - 约束：`response_cache_stats` 只暴露默认关闭的精确响应缓存统计，不包含原始 prompt、聊天正文、真实联系人标识或 token；`model_route_stats` 只记录当前请求的可解释模型路由决策，不自动切换用户选择的 provider、model 或认证方式。
+   - 实现：委托 `BotManager.get_status()` 组装启动状态、健康检查、诊断、系统指标、`response_cache_stats`、`safety_stats` 和 `model_route_stats`。
+   - 约束：`response_cache_stats` 只暴露默认关闭的精确响应缓存统计，不包含原始 prompt、聊天正文、真实联系人标识或 token；`safety_stats` 只记录安全护栏 action/reason 聚合与最近一次脱敏结果，不记录原始请求或回复；`model_route_stats` 只记录当前请求的可解释模型路由决策，不自动切换用户选择的 provider、model 或认证方式。
 
 3. `/api/config`
    - 功能：读取/保存有效配置。
