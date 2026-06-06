@@ -83,6 +83,19 @@ SUITES: dict[str, FastSuite] = {
         targets=("tests/test_tool_workflow.py",),
         plugins=("pytest_asyncio.plugin",),
     ),
+    "prompt-governance": FastSuite(
+        description="Prompt revision listing, diff preview, and rollback governance checks.",
+        targets=(
+            "tests/test_api.py::test_api_prompt_revisions_lists_metadata_without_prompt_body",
+            "tests/test_api.py::test_api_prompt_revisions_handles_empty_and_corrupt_ledgers",
+            "tests/test_api.py::test_api_prompt_revisions_reports_invalid_active_revision_count",
+            "tests/test_api.py::test_api_prompt_revision_diff_returns_active_to_target_preview",
+            "tests/test_api.py::test_api_prompt_revision_diff_returns_404_for_unknown_revision",
+            "tests/test_api.py::test_api_prompt_rollback_appends_audited_revision_and_updates_config",
+            "tests/test_api.py::test_api_prompt_rollback_returns_404_for_unknown_revision",
+        ),
+        plugins=("pytest_asyncio.plugin",),
+    ),
 }
 
 

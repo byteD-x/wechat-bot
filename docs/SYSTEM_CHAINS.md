@@ -120,12 +120,14 @@
    - 功能：预览系统提示词。
    - 实现：构造一个示例事件对象，调用 `resolve_system_prompt()` 生成预览。
 
-9. `/api/v1/admin/prompts/<revision>/rollback`
-   - 功能：把系统 Prompt 回滚到指定历史 revision。
+9. Prompt governance routes
+   - 功能：查看系统 Prompt revision 元数据、预览 active 到目标 revision 的差异，并把系统 Prompt 回滚到指定历史 revision。
    - 实现：
+     - `backend/api.py::list_prompt_revisions` 调用 `PromptGovernanceService.list_revisions()`，返回 revision/status/source/created_at/rollback_from/reason 等元数据，不返回完整 `prompt` 或 `editable_prompt`。
+     - `backend/api.py::diff_prompt_revision` 调用 `PromptGovernanceService.diff_revision()`，返回 active revision 到目标 revision 的 unified diff，供回滚确认前预览。
      - `backend/api.py::rollback_prompt_revision` 调用 `PromptGovernanceService.rollback()`。
      - 回滚会复制目标 Prompt 并追加新的 active revision，默认写入 `data/prompt_revisions.json` 审计账本。
-     - Electron 主进程只允许转发匹配 `^/api/v1/admin/prompts/\d+/rollback$` 的路径，避免非数字 revision 或任意管理路径穿透。
+     - Electron 主进程只允许转发固定列表路径 `/api/v1/admin/prompts/revisions`，以及匹配 `^/api/v1/admin/prompts/\d+/(diff|rollback)$` 的数字 revision 路径，避免任意管理路径穿透。
 
 10. `/api/v1/agents/tool-workflow`
     - 功能：按顺序执行受控本机工具，并返回每一步 trace。
@@ -150,7 +152,7 @@
 - 成本：`/api/usage`、`/api/pricing`、`/api/pricing/refresh`、`/api/costs/summary`、`/api/costs/sessions`、`/api/costs/session_details`、`/api/costs/review_queue_export`
 - 模型与认证：`/api/model_catalog`、`/api/model_auth/overview`、`/api/model_auth/action`、兼容壳层 `/api/auth/providers*`、本地模型探测 `/api/ollama/models`
 - 配置与诊断：`/api/config`、`/api/config/audit`、`/api/test_connection`、`/api/preview_prompt`、`/api/logs`、`/api/logs/clear`
-- Prompt 与工具治理：`/api/v1/admin/prompts/<revision>/rollback`、`/api/v1/agents/tool-workflow`
+- Prompt 与工具治理：`/api/v1/admin/prompts/revisions`、`/api/v1/admin/prompts/<revision>/diff`、`/api/v1/admin/prompts/<revision>/rollback`、`/api/v1/agents/tool-workflow`
 
 ## 4. 启动与生命周期链路
 

@@ -2472,6 +2472,32 @@ async def save_config():
         return jsonify({"success": False, "message": f"Request handling failed: {str(e)}"}), 500
 
 
+@app.route("/api/v1/admin/prompts/revisions", methods=["GET"])
+async def list_prompt_revisions():
+    """List audited Prompt revisions without exposing full Prompt bodies."""
+    try:
+        result = await asyncio.to_thread(prompt_governance_service.list_revisions)
+        return jsonify(result)
+    except Exception as e:
+        logger.error("Prompt revision list failed: %s", e)
+        return _json_internal_error("prompt_revision_list_failed", code="prompt_revision_list_failed")
+
+
+@app.route("/api/v1/admin/prompts/<int:revision>/diff", methods=["GET"])
+async def diff_prompt_revision(revision: int):
+    """Preview the diff from the active Prompt to a target revision."""
+    try:
+        result = await asyncio.to_thread(prompt_governance_service.diff_revision, revision)
+        return jsonify(result)
+    except LookupError as e:
+        return jsonify({"success": False, "message": str(e), "code": "prompt_revision_not_found"}), 404
+    except ValueError as e:
+        return jsonify({"success": False, "message": str(e), "code": "bad_request"}), 400
+    except Exception as e:
+        logger.error("Prompt revision diff failed: %s", e)
+        return _json_internal_error("prompt_revision_diff_failed", code="prompt_revision_diff_failed")
+
+
 @app.route("/api/v1/admin/prompts/<int:revision>/rollback", methods=["POST"])
 async def rollback_prompt_revision(revision: int):
     """Roll back system Prompt to an audited historical revision."""

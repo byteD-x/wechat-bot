@@ -1635,6 +1635,182 @@ async def test_api_preview_prompt_uses_contact_prompt_when_chat_id_is_provided(c
 
 
 @pytest.mark.asyncio
+async def test_api_prompt_revisions_lists_metadata_without_prompt_body(client, tmp_path):
+    service = api_module.get_prompt_governance_service()
+    service.ledger_path = tmp_path / "prompt_revisions.json"
+    service.save_ledger({
+        "schema_version": 1,
+        "active_revision": 2,
+        "revisions": [
+            {
+                "revision": 1,
+                "status": "superseded",
+                "source": "test",
+                "prompt": "old prompt",
+                "editable_prompt": "old prompt",
+                "created_at": 1,
+                "reason": "baseline",
+            },
+            {
+                "revision": 2,
+                "status": "active",
+                "source": "test",
+                "prompt": "current prompt",
+                "editable_prompt": "current prompt",
+                "created_at": 2,
+            },
+        ],
+    })
+
+    with patch.object(api_module, "prompt_governance_service", service):
+        response = await client.get("/api/v1/admin/prompts/revisions")
+
+    assert response.status_code == 200
+    raw_body = (await response.get_data()).decode("utf-8")
+    data = await response.get_json()
+    assert data["success"] is True
+    assert data["revision_count"] == 2
+    assert data["active_revision"] == 2
+    assert data["revisions"][0]["revision"] == 1
+    assert data["revisions"][1]["active"] is True
+    assert "prompt" not in data["revisions"][0]
+    assert "editable_prompt" not in data["revisions"][0]
+    assert "old prompt" not in raw_body
+    assert "current prompt" not in raw_body
+
+
+@pytest.mark.asyncio
+async def test_api_prompt_revisions_handles_empty_and_corrupt_ledgers(client, tmp_path):
+    service = api_module.get_prompt_governance_service()
+    service.ledger_path = tmp_path / "prompt_revisions.json"
+
+    with patch.object(api_module, "prompt_governance_service", service):
+        missing_response = await client.get("/api/v1/admin/prompts/revisions")
+
+    assert missing_response.status_code == 200
+    missing_data = await missing_response.get_json()
+    assert missing_data["success"] is True
+    assert missing_data["revision_count"] == 0
+    assert "ledger_missing" in missing_data["issues"]
+
+    service.ledger_path.write_text("{not-json", encoding="utf-8")
+    with patch.object(api_module, "prompt_governance_service", service):
+        corrupt_response = await client.get("/api/v1/admin/prompts/revisions")
+
+    assert corrupt_response.status_code == 200
+    corrupt_data = await corrupt_response.get_json()
+    assert corrupt_data["success"] is True
+    assert corrupt_data["revision_count"] == 0
+    assert "ledger_parse_failed" in corrupt_data["issues"]
+
+
+@pytest.mark.asyncio
+async def test_api_prompt_revisions_reports_invalid_active_revision_count(client, tmp_path):
+    service = api_module.get_prompt_governance_service()
+    service.ledger_path = tmp_path / "prompt_revisions.json"
+    service.save_ledger({
+        "schema_version": 1,
+        "active_revision": 2,
+        "revisions": [
+            {
+                "revision": 1,
+                "status": "active",
+                "source": "test",
+                "prompt": "old prompt",
+                "editable_prompt": "old prompt",
+                "created_at": 1,
+            },
+            {
+                "revision": 2,
+                "status": "active",
+                "source": "test",
+                "prompt": "current prompt",
+                "editable_prompt": "current prompt",
+                "created_at": 2,
+            },
+        ],
+    })
+
+    with patch.object(api_module, "prompt_governance_service", service):
+        response = await client.get("/api/v1/admin/prompts/revisions")
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["success"] is True
+    assert "invalid_active_revision_count" in data["issues"]
+
+
+@pytest.mark.asyncio
+async def test_api_prompt_revision_diff_returns_active_to_target_preview(client, tmp_path):
+    service = api_module.get_prompt_governance_service()
+    service.ledger_path = tmp_path / "prompt_revisions.json"
+    service.save_ledger({
+        "schema_version": 1,
+        "active_revision": 2,
+        "revisions": [
+            {
+                "revision": 1,
+                "status": "superseded",
+                "source": "test",
+                "prompt": "old prompt",
+                "editable_prompt": "old prompt",
+                "created_at": 1,
+            },
+            {
+                "revision": 2,
+                "status": "active",
+                "source": "test",
+                "prompt": "current prompt",
+                "editable_prompt": "current prompt",
+                "created_at": 2,
+            },
+        ],
+    })
+
+    with patch.object(api_module, "prompt_governance_service", service):
+        response = await client.get("/api/v1/admin/prompts/1/diff")
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["success"] is True
+    assert data["active_revision"] == 2
+    assert data["target_revision"] == 1
+    assert data["summary"]["changed"] is True
+    assert "prompt" not in data["from_revision"]
+    assert "editable_prompt" not in data["to_revision"]
+    assert "--- active:2" in data["diff"]
+    assert "+++ target:1" in data["diff"]
+
+
+@pytest.mark.asyncio
+async def test_api_prompt_revision_diff_returns_404_for_unknown_revision(client, tmp_path):
+    service = api_module.get_prompt_governance_service()
+    service.ledger_path = tmp_path / "prompt_revisions.json"
+    service.save_ledger({
+        "schema_version": 1,
+        "active_revision": 1,
+        "revisions": [
+            {
+                "revision": 1,
+                "status": "active",
+                "source": "test",
+                "prompt": "current prompt",
+                "editable_prompt": "current prompt",
+                "created_at": 1,
+            },
+        ],
+    })
+
+    with patch.object(api_module, "prompt_governance_service", service):
+        response = await client.get("/api/v1/admin/prompts/99/diff")
+
+    assert response.status_code == 404
+    data = await response.get_json()
+    assert data["success"] is False
+    assert data["code"] == "prompt_revision_not_found"
+
+
+@pytest.mark.asyncio
 async def test_api_prompt_rollback_appends_audited_revision_and_updates_config(client, mock_manager, tmp_path):
     current_config = {
         "api": {"active_preset": "OpenAI", "presets": []},

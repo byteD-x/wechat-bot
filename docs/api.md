@@ -6,8 +6,72 @@
 
 - 默认只允许本机访问；绑定非回环地址运行 `python run.py web` 时必须显式设置 `WECHAT_BOT_API_TOKEN`。
 - 设置 `WECHAT_BOT_API_TOKEN` 后，`/api/*` 请求需要携带 `X-Api-Token` 或 `Authorization: Bearer <token>`。
-- Electron 主进程只允许转发白名单路径；Prompt 回滚与 Agent Tool Workflow 已加入 `src/main/ipc.js` 的 allowlist。
+- Electron 主进程只允许转发白名单路径；Prompt 治理与 Agent Tool Workflow 已加入 `src/main/ipc.js` 的 allowlist。
 - 不要把 API token、模型密钥、OAuth/session、聊天原文或诊断支持包中的敏感内容写入日志、截图或文档。
+
+## GET `/api/v1/admin/prompts/revisions`
+
+用途：只读列出系统 Prompt 审计账本中的 revision 元数据，用于桌面端展示版本历史，不直接返回完整 Prompt 正文。
+
+实现入口：
+
+- `backend/api.py::list_prompt_revisions`
+- `backend/core/prompt_governance.py::PromptGovernanceService.list_revisions`
+
+成功响应包含：
+
+- `success`: 固定为 `true`。
+- `schema_version`: Prompt 审计账本 schema 版本。
+- `active_revision`: 当前 active revision；账本为空时为 `0`。
+- `revision_count`: 当前可读取 revision 数量。
+- `revisions`: revision 元数据列表，只包含 `revision`、`status`、`source`、`created_at`、`rollback_from`、`reason`、`operator`、`active`、`prompt_length`、`editable_prompt_length`。
+- `issues`: 账本诊断问题，例如 `ledger_missing`、`ledger_parse_failed`、`revisions_not_array`、`invalid_active_revision_count`、`active_revision_not_found`。
+- `ledger_path`: 本地审计账本路径，默认 `data/prompt_revisions.json`。
+
+错误响应：
+
+- `500 prompt_revision_list_failed`: 未预期的服务端错误。
+
+产品约束：
+
+- 该接口不会 seed、写入或修复账本，只暴露可诊断的只读视图。
+- `revisions` 不包含 `prompt` 或 `editable_prompt` 字段，避免桌面端列表、日志或调试输出意外泄露完整 Prompt。
+
+## GET `/api/v1/admin/prompts/{revision}/diff`
+
+用途：预览当前 active Prompt 与目标历史 revision 的统一 diff，供回滚确认前展示“将要回滚哪些内容”。
+
+实现入口：
+
+- `backend/api.py::diff_prompt_revision`
+- `backend/core/prompt_governance.py::PromptGovernanceService.diff_revision`
+
+字段说明：
+
+- `revision`: 路径参数，正整数，表示要对比的历史版本。
+
+成功响应包含：
+
+- `success`: 固定为 `true`。
+- `active_revision`: 当前 active revision。
+- `target_revision`: 目标历史 revision。
+- `from_revision`: active revision 的元数据摘要，不含完整 Prompt 字段。
+- `to_revision`: 目标 revision 的元数据摘要，不含完整 Prompt 字段。
+- `diff`: 从 active 到 target 的 unified diff 行数组，`fromfile` 为 `active:<revision>`，`tofile` 为 `target:<revision>`。
+- `summary`: 包含 `changed`、`line_count`、`active_prompt_length`、`target_prompt_length`。
+- `issues`: 账本诊断问题。
+- `ledger_path`: 本地审计账本路径。
+
+错误响应：
+
+- `400 bad_request`: revision 非正整数。
+- `404 prompt_revision_not_found`: 指定 revision 不存在，或账本没有可对比的 active revision。
+- `500 prompt_revision_diff_failed`: 未预期的服务端错误。
+
+产品约束：
+
+- diff 是受信任本机治理预览能力，可能包含 Prompt 片段；不要把 diff 内容写入日志、诊断支持包或公开文档。
+- 该接口不修改账本，也不会触发回滚。
 
 ## POST `/api/v1/admin/prompts/{revision}/rollback`
 
@@ -55,7 +119,7 @@
 
 - 回滚不会覆盖历史记录，而是复制目标 Prompt 生成一个新的 active revision。
 - 首次回滚前如果账本不存在，会从当前配置 seed 出 revision `1`。
-- 当前仅提供回滚写入能力；完整的版本创建、列表、差异对比和 UI 审批仍在后续 TODO 中。
+- 当前已提供只读版本列表、差异预览和回滚写入能力；完整的版本创建与 UI 审批仍在后续 TODO 中。
 
 ## POST `/api/v1/agents/tool-workflow`
 

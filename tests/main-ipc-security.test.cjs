@@ -330,28 +330,44 @@ test('backend:request allows wechat export endpoints and pattern-based job query
     ]);
 });
 
-test('backend:request only allows numeric prompt rollback revisions', async () => {
+test('backend:request only allows prompt governance paths', async () => {
     const harness = createHarness();
     const event = createTrustedEvent();
 
-    const allowed = await harness.backendRequestHandler(event, {
+    const rollbackAllowed = await harness.backendRequestHandler(event, {
         method: 'POST',
         endpoint: '/api/v1/admin/prompts/12/rollback',
         payload: { reason: 'restore stable prompt' },
     });
-    const blocked = await harness.backendRequestHandler(event, {
+    const revisionsAllowed = await harness.backendRequestHandler(event, {
+        method: 'GET',
+        endpoint: '/api/v1/admin/prompts/revisions',
+    });
+    const diffAllowed = await harness.backendRequestHandler(event, {
+        method: 'GET',
+        endpoint: '/api/v1/admin/prompts/12/diff',
+    });
+    const rollbackBlocked = await harness.backendRequestHandler(event, {
         method: 'POST',
         endpoint: '/api/v1/admin/prompts/abc/rollback',
         payload: { reason: 'bad path' },
+    });
+    const diffBlocked = await harness.backendRequestHandler(event, {
+        method: 'GET',
+        endpoint: '/api/v1/admin/prompts/abc/diff',
     });
     const blockedList = await harness.backendRequestHandler(event, {
         method: 'GET',
         endpoint: '/api/v1/admin/prompts',
     });
 
-    assert.equal(allowed.ok, true);
-    assert.equal(blocked.ok, false);
-    assert.equal(blocked.error?.message, 'endpoint_not_allowed');
+    assert.equal(rollbackAllowed.ok, true);
+    assert.equal(revisionsAllowed.ok, true);
+    assert.equal(diffAllowed.ok, true);
+    assert.equal(rollbackBlocked.ok, false);
+    assert.equal(rollbackBlocked.error?.message, 'endpoint_not_allowed');
+    assert.equal(diffBlocked.ok, false);
+    assert.equal(diffBlocked.error?.message, 'endpoint_not_allowed');
     assert.equal(blockedList.ok, false);
     assert.equal(blockedList.error?.message, 'endpoint_not_allowed');
     assert.deepEqual(harness.backendCalls, [
@@ -359,6 +375,16 @@ test('backend:request only allows numeric prompt rollback revisions', async () =
             method: 'POST',
             endpoint: '/api/v1/admin/prompts/12/rollback',
             payload: { reason: 'restore stable prompt' },
+        },
+        {
+            method: 'GET',
+            endpoint: '/api/v1/admin/prompts/revisions',
+            payload: null,
+        },
+        {
+            method: 'GET',
+            endpoint: '/api/v1/admin/prompts/12/diff',
+            payload: null,
         },
     ]);
 });

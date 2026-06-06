@@ -582,19 +582,27 @@ python run.py eval --dataset tests/fixtures/evals/smoke_cases.json --preset smok
 
 #### 8.7.4 Prompt 治理与受控工具工作流
 
+- Prompt 版本列表 API：`GET /api/v1/admin/prompts/revisions`
+  - 返回 revision、status、source、created_at、rollback_from、reason 等元数据，不返回完整 `prompt` 或 `editable_prompt`。
+  - 空账本或损坏账本不会直接写入修复，而是通过 `issues` 返回 `ledger_missing`、`ledger_parse_failed`、`invalid_active_revision_count` 等诊断信息。
+- Prompt 差异预览 API：`GET /api/v1/admin/prompts/{revision}/diff`
+  - 返回当前 active Prompt 到目标 revision 的 unified diff，供 UI 在回滚确认前展示影响范围。
+  - diff 可能包含 Prompt 片段，只应作为受信任本机治理预览使用，不写入日志、诊断支持包或公开文档。
 - Prompt 回滚 API：`POST /api/v1/admin/prompts/{revision}/rollback`
   - 回滚目标是历史 revision，但执行结果会追加一条新的 active revision。
   - 审计账本默认写入 `data/prompt_revisions.json`，记录 `rollback_from`、`reason`、`operator`、`created_at`。
-  - 回滚不会覆盖或删除历史记录；版本列表、差异对比和 UI 审批仍属于后续路线。
+  - 回滚不会覆盖或删除历史记录；UI 审批仍属于后续路线。
 - 受控 Agent Tool Workflow API：`POST /api/v1/agents/tool-workflow`
   - 当前最多 `8` 步，单步 payload 字符串化后最多 `12000` 字符。
   - 当前白名单只包含 `config_audit`、`readiness_check`、`prompt_preview`。
   - 未知工具会返回失败 trace 和 `bad_workflow`，不会降级为任意命令、任意文件写入、任意网络请求或动态插件执行。
-- Electron 主进程只允许转发受控路径：Prompt 回滚必须匹配数字 revision，Tool Workflow 只走固定 endpoint。
+- Electron 主进程只允许转发受控路径：Prompt 列表走固定 endpoint，Prompt diff 与回滚必须匹配数字 revision，Tool Workflow 只走固定 endpoint。
 - 完整请求体、响应字段和错误码见 [API 契约与治理接口](api.md)。
 
 #### 8.7.5 新增接口总览
 
+- `GET /api/v1/admin/prompts/revisions`
+- `GET /api/v1/admin/prompts/{revision}/diff`
 - `POST /api/v1/admin/prompts/{revision}/rollback`
 - `POST /api/v1/agents/tool-workflow`
 - `GET/POST /api/reply_policies`

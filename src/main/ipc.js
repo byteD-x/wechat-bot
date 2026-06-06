@@ -130,6 +130,7 @@ function registerIpcHandlers({
         '/api/model_auth/overview',
         '/api/model_auth/action',
         '/api/preview_prompt',
+        '/api/v1/admin/prompts/revisions',
         '/api/backups',
         '/api/backups/cleanup',
         '/api/backups/restore',
@@ -153,6 +154,7 @@ function registerIpcHandlers({
         '/api/wechat_export/apply',
     ]);
     const ALLOWED_BACKEND_PATH_PATTERNS = [
+        /^\/api\/v1\/admin\/prompts\/\d+\/diff$/,
         /^\/api\/v1\/admin\/prompts\/\d+\/rollback$/,
         /^\/api\/growth\/tasks\/[^/?#]+\/(clear|run|pause|resume)$/,
         /^\/api\/pending_replies\/[^/?#]+\/(approve|reject)$/,
