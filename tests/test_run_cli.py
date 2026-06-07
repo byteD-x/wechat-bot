@@ -5,6 +5,7 @@ import sys
 import types
 
 import run
+from backend.core import knowledge_base_cli
 
 
 def test_build_parser_supports_check_json_and_backup_restore():
@@ -40,6 +41,15 @@ def test_build_parser_supports_check_json_and_backup_restore():
     assert cleanup_args.keep_full == 2
     assert cleanup_args.apply is True
     assert cleanup_args.json is True
+
+    knowledge_args = parser.parse_args(
+        ["knowledge-base", "import-files", "--file", "docs/runbook.md", "--file", "docs/faq.txt", "--json"]
+    )
+    assert knowledge_args.command == "knowledge-base"
+    assert knowledge_args.knowledge_base_command == "import-files"
+    assert knowledge_args.file_paths == ["docs/runbook.md", "docs/faq.txt"]
+    assert knowledge_args.apply is False
+    assert knowledge_args.json is True
 
 
 def test_cmd_check_forwards_json_and_cache_flags(monkeypatch):
@@ -367,6 +377,128 @@ def test_cmd_backup_cleanup_apply_json(monkeypatch, capsys):
     assert payload["dry_run"] is False
     assert payload["deleted_count"] == 1
     assert payload["deleted_backups"][0]["id"] == "quick-2"
+
+
+def _knowledge_cli_args(**overrides):
+    values = {
+        "files": [],
+        "file_paths": [],
+        "apply": False,
+        "rebuild": False,
+        "content_type": "auto",
+        "version": "v1",
+        "doc_id": "",
+        "url": "",
+        "host": "127.0.0.1",
+        "port": 5000,
+        "json": True,
+    }
+    values.update(overrides)
+    return argparse.Namespace(**values)
+
+
+def test_cmd_knowledge_base_import_files_defaults_to_dry_run_json(monkeypatch, capsys, tmp_path):
+    source = tmp_path / "runbook.md"
+    source.write_text("# Runbook\n\nRelease checks stay explicit.", encoding="utf-8")
+
+    def fail_post(**_kwargs):
+        raise AssertionError("dry-run must not call the local API")
+
+    monkeypatch.setattr(knowledge_base_cli, "_post_json_to_local_api", fail_post)
+
+    result = knowledge_base_cli.cmd_import_files(
+        _knowledge_cli_args(files=[str(source)])
+    )
+
+    output = capsys.readouterr().out
+    payload = json.loads(output)
+    assert result == 0
+    assert payload["success"] is True
+    assert payload["dry_run"] is True
+    assert payload["total_files"] == 1
+    assert payload["total_chunks"] >= 1
+    assert payload["files"][0]["path"] == ".../runbook.md"
+    assert payload["files"][0]["source_file"] == ".../runbook.md"
+    assert payload["files"][0]["doc_id"] == ".../runbook.md"
+    assert "# Runbook" not in output
+    assert str(tmp_path) not in output
+
+
+def test_cmd_knowledge_base_import_files_rejects_directory_and_glob(capsys, tmp_path):
+    directory_result = knowledge_base_cli.cmd_import_files(
+        _knowledge_cli_args(files=[str(tmp_path)])
+    )
+    directory_payload = json.loads(capsys.readouterr().out)
+
+    glob_result = knowledge_base_cli.cmd_import_files(
+        _knowledge_cli_args(files=["docs/*.md"])
+    )
+    glob_payload = json.loads(capsys.readouterr().out)
+
+    assert directory_result == 1
+    assert directory_payload["success"] is False
+    assert "不支持目录导入" in directory_payload["message"]
+    assert str(tmp_path) not in directory_payload["message"]
+
+    assert glob_result == 1
+    assert glob_payload["success"] is False
+    assert "不支持通配符" in glob_payload["message"]
+
+
+def test_cmd_knowledge_base_import_files_apply_calls_fixed_local_endpoint(monkeypatch, capsys, tmp_path):
+    source = tmp_path / "runbook.txt"
+    source.write_text("Operational checks stay reviewable.", encoding="utf-8")
+    calls = []
+
+    def fake_post_json_to_local_api(**kwargs):
+        calls.append(kwargs)
+        return {
+            "success": True,
+            "doc_id": kwargs["payload"]["doc_id"],
+            "indexed_chunks": 1,
+        }
+
+    monkeypatch.setattr(knowledge_base_cli, "_post_json_to_local_api", fake_post_json_to_local_api)
+
+    result = knowledge_base_cli.cmd_import_files(
+        _knowledge_cli_args(files=[str(source)], apply=True, rebuild=True, doc_id="ops-runbook")
+    )
+
+    output = capsys.readouterr().out
+    payload = json.loads(output)
+    assert result == 0
+    assert payload["success"] is True
+    assert payload["dry_run"] is False
+    assert payload["mode"] == "rebuild"
+    assert calls == [
+        {
+            "host": "127.0.0.1",
+            "port": 5000,
+            "endpoint": "/api/knowledge_base/rebuild",
+            "payload": {
+                "content": "Operational checks stay reviewable.",
+                "content_type": "text",
+                "version": "v1",
+                "source_file": ".../runbook.txt",
+                "doc_id": "ops-runbook",
+            },
+        }
+    ]
+    assert "Operational checks" not in output
+
+
+def test_knowledge_base_cli_rejects_non_loopback_api_host():
+    try:
+        knowledge_base_cli._post_json_to_local_api(
+            host="192.0.2.10",
+            port=5000,
+            endpoint="/api/knowledge_base/ingest",
+            payload={"content": "hello"},
+        )
+    except ValueError as exc:
+        assert "loopback" in str(exc)
+    else:
+        raise AssertionError("non-loopback host must be rejected")
 
 
 def test_cmd_web_rejects_non_loopback_without_explicit_token(monkeypatch):

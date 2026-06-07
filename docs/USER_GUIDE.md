@@ -615,6 +615,11 @@ python run.py eval --dataset tests/fixtures/evals/smoke_cases.json --preset smok
 
 - 设置页“数据与恢复 / 知识库治理”已经提供最小 UI 入口：手动粘贴纯文本或 Markdown，先执行“预览分块”，确认 chunk 摘要后才允许“写入知识库”。内容或元数据变更后，界面会清空上一次 dry-run 签名并要求重新预览。
 - 当前设置页入口不提供文件上传、目录扫描、任意本机文件读取、批量重建或删除；`rebuild / delete` 仍仅作为受控 API 能力存在，后续如接入 UI 需要继续保持显式预览和固定端点白名单。
+- 本机 CLI 提供显式文件列表入口，适合把已经确认可信的 `.txt/.md` 文档先预览再写入运行中的本机 Web API：
+  - `python run.py knowledge-base import-files --file docs/runbook.md --json`
+  - `python run.py knowledge-base import-files docs/runbook.md docs/faq.txt --json`
+  - `python run.py knowledge-base import-files --file docs/runbook.md --apply --json`
+  - CLI 不展开 glob、不扫描目录、不自动发现文件；默认只 dry-run，`--apply` 才会调用 loopback 本机 API，`WECHAT_BOT_API_TOKEN` 仅从环境变量读取，不会打印到输出。
 - 知识库文档预览：`POST /api/knowledge_base/dry-run`
   - 请求体只接收纯文本或 Markdown 的 `content`，不会读取任意本机文件路径，也不会扫描目录。
   - 预览只返回 `doc_id`、`version`、chunk 数量、chunk id 和每个 chunk 的字符数、脱敏来源、URL、页码等摘要，不返回完整正文或 chunk text。

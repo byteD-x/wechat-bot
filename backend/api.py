@@ -38,8 +38,11 @@ from backend.core.cost_analytics import CostAnalyticsService
 from backend.core.data_controls import DataControlService
 from backend.core.knowledge_base import (
     KNOWLEDGE_SOURCE,
+    MAX_KNOWLEDGE_CONTENT_CHARS,
     KnowledgeBaseService,
-    KnowledgeDocument,
+    build_knowledge_dry_run_payload,
+    parse_knowledge_document_payload,
+    redact_knowledge_local_path,
 )
 from backend.core.oauth_support import (
     OAuthSupportError,
@@ -93,7 +96,6 @@ configure_http_access_log_filters()
 MAX_LOG_LINES = 2000
 MAX_SEND_TARGET_CHARS = 256
 MAX_SEND_CONTENT_CHARS = 8000
-MAX_KNOWLEDGE_CONTENT_CHARS = 120000
 IDEMPOTENCY_CACHE_TTL_SEC = 300
 IDEMPOTENCY_CACHE_MAX_ENTRIES = 1024
 IDEMPOTENCY_INFLIGHT_WAIT_SEC = 30
@@ -1041,91 +1043,6 @@ def _knowledge_vector_available(vector_memory: Any) -> bool:
         return bool(vector_memory)
     except Exception:
         return vector_memory is not None
-
-
-def _redact_knowledge_local_path(value: Any) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return ""
-    parsed = urlsplit(text)
-    if parsed.scheme.lower() == "file":
-        return _redact_path_value(parsed.path or parsed.netloc or text)
-    normalized = text.replace("\\", "/")
-    if re.match(r"^(?:[A-Za-z]:/|/|~(?:/|$)|//)", normalized):
-        return _redact_path_value(text)
-    return normalized
-
-
-def _parse_knowledge_document_payload(data: dict[str, Any]) -> KnowledgeDocument:
-    if not isinstance(data, dict):
-        raise ValueError("request body must be an object")
-
-    content = str(data.get("content") or "")
-    if not content.strip():
-        raise ValueError("content is required")
-    if len(content) > MAX_KNOWLEDGE_CONTENT_CHARS:
-        raise ValueError(f"content is too long; max {MAX_KNOWLEDGE_CONTENT_CHARS} characters")
-
-    content_type = str(data.get("content_type") or "text").strip().lower()
-    if content_type not in {"text", "plain", "markdown", "text/plain", "text/markdown"}:
-        raise ValueError("content_type must be text or markdown")
-
-    metadata = data.get("metadata")
-    if metadata is None:
-        metadata = {}
-    if not isinstance(metadata, dict):
-        raise ValueError("metadata must be an object")
-    metadata = dict(metadata)
-    if "page" in data and "page" not in metadata:
-        metadata["page"] = data.get("page")
-    for key in ("source_file", "url", "source_url"):
-        if key in metadata:
-            metadata[key] = _redact_knowledge_local_path(metadata.get(key))
-
-    return KnowledgeDocument(
-        content=content,
-        doc_id=_redact_knowledge_local_path(data.get("doc_id")),
-        version=str(data.get("version") or data.get("doc_version") or "v1").strip() or "v1",
-        source_file=_redact_knowledge_local_path(data.get("source_file") or metadata.get("source_file")),
-        url=_redact_knowledge_local_path(data.get("url") or metadata.get("url") or metadata.get("source_url")),
-        metadata=metadata,
-    )
-
-
-def _build_knowledge_chunk_preview(chunks: list[Any]) -> list[dict[str, Any]]:
-    preview: list[dict[str, Any]] = []
-    for chunk in chunks:
-        metadata = dict(getattr(chunk, "metadata", {}) or {})
-        preview.append(
-            {
-                "doc_id": str(getattr(chunk, "doc_id", "") or ""),
-                "doc_version": str(getattr(chunk, "version", "") or ""),
-                "chunk_id": str(getattr(chunk, "chunk_id", "") or ""),
-                "chunk_index": _safe_int(getattr(chunk, "chunk_index", 0), 0),
-                "char_count": len(str(getattr(chunk, "text", "") or "")),
-                "source_file": str(metadata.get("source_file") or ""),
-                "url": str(metadata.get("url") or ""),
-                "page": metadata.get("page", ""),
-            }
-        )
-    return preview
-
-
-def _build_knowledge_dry_run_payload(document: KnowledgeDocument) -> dict[str, Any]:
-    service = KnowledgeBaseService(None)
-    chunks = service.build_chunks(document)
-    doc_id = service._resolve_doc_id(document)
-    version = str(document.version or "v1").strip() or "v1"
-    return {
-        "success": True,
-        "dry_run": True,
-        "doc_id": doc_id,
-        "version": version,
-        "chunk_count": len(chunks),
-        "chunk_ids": [chunk.chunk_id for chunk in chunks],
-        "chunks": _build_knowledge_chunk_preview(chunks),
-        "char_count": len(str(document.content or "")),
-    }
 
 
 def _operation_failed(result: Any) -> bool:
@@ -2232,8 +2149,8 @@ async def preview_knowledge_base_document():
     try:
         raw_data = await request.get_json(silent=True)
         data = raw_data if raw_data is not None else {}
-        document = _parse_knowledge_document_payload(data)
-        return jsonify(_build_knowledge_dry_run_payload(document))
+        document = parse_knowledge_document_payload(data)
+        return jsonify(build_knowledge_dry_run_payload(document))
     except ValueError as e:
         return jsonify({"success": False, "message": str(e)}), 400
     except Exception as e:
@@ -2257,7 +2174,7 @@ async def _run_knowledge_base_ingest(*, rebuild: bool):
     try:
         raw_data = await request.get_json(silent=True)
         data = raw_data if raw_data is not None else {}
-        document = _parse_knowledge_document_payload(data)
+        document = parse_knowledge_document_payload(data)
         vector_memory = _get_knowledge_vector_memory()
         if not _knowledge_vector_available(vector_memory):
             return jsonify({"success": False, "message": "vector_memory_unavailable"}), 409
@@ -2288,7 +2205,7 @@ async def delete_knowledge_base_document():
         data = raw_data if raw_data is not None else {}
         if not isinstance(data, dict):
             return jsonify({"success": False, "message": "request body must be an object"}), 400
-        doc_id = _redact_knowledge_local_path(data.get("doc_id"))
+        doc_id = redact_knowledge_local_path(data.get("doc_id"))
         if not doc_id:
             return jsonify({"success": False, "message": "doc_id is required"}), 400
 

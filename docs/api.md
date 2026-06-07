@@ -230,6 +230,7 @@
 - `backend/api.py::rebuild_knowledge_base_document`
 - `backend/api.py::delete_knowledge_base_document`
 - `backend/core/knowledge_base.py::KnowledgeBaseService`
+- `backend/core/knowledge_base_cli.py::build_knowledge_base_parser`
 
 当前端点：
 
@@ -281,6 +282,7 @@
 产品约束：
 
 - 首版只接收请求体中的纯文本或 Markdown；不会读取任意本机文件路径、不会扫描目录，也不提供文件上传。
+- 本机 CLI `python run.py knowledge-base import-files` 是独立的显式文件列表入口：只读取用户逐个传入的 `.txt/.md` 文件，拒绝目录和 glob，默认 dry-run；`--apply` 才调用 loopback 本机 API 写入，不改变 Web API “不读取文件路径”的约束。
 - `doc_id / source_file / url / source_url` 只用于引用元数据；如果看起来像完整本机路径或 `file://` 本机 URI，响应和删除匹配会收敛为 `.../<filename>`。
 - 预览和治理响应不返回完整正文、chunk text、embedding 或完整本机路径。
 - `ingest`、`rebuild` 依赖运行中的向量库和 embedding 客户端；`rebuild` 会先完整准备新版本 chunk embedding，准备失败时返回 `no_chunks_indexed` 或 `incomplete_embeddings`，并保留旧 chunk。

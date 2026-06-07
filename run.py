@@ -665,6 +665,7 @@ def cmd_eval(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     from backend.core.config_cli import build_config_parser
+    from backend.core.knowledge_base_cli import build_knowledge_base_parser
 
     parser = argparse.ArgumentParser(
         prog="run.py",
@@ -895,6 +896,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser_backup_cleanup.set_defaults(func=cmd_backup_cleanup)
 
+    build_knowledge_base_parser(subparsers)
     build_config_parser(subparsers)
     return parser
 

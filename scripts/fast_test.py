@@ -74,8 +74,8 @@ SUITES: dict[str, FastSuite] = {
         targets=("tests/test_eval_runner.py",),
     ),
     "knowledge-base": FastSuite(
-        description="Knowledge base ingestion, chunk metadata, and rebuild checks.",
-        targets=("tests/test_knowledge_base.py",),
+        description="Knowledge base ingestion, chunk metadata, CLI import, and rebuild checks.",
+        targets=("tests/test_knowledge_base.py", "tests/test_run_cli.py"),
         plugins=("pytest_asyncio.plugin",),
     ),
     "tool-workflow": FastSuite(

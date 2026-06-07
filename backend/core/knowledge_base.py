@@ -5,9 +5,11 @@ import hashlib
 import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlsplit
 
 
 KNOWLEDGE_SOURCE = "knowledge_base"
+MAX_KNOWLEDGE_CONTENT_CHARS = 120000
 
 
 def _normalize_text(value: Any) -> str:
@@ -19,6 +21,28 @@ def _normalize_text(value: Any) -> str:
 
 def _stable_hash(value: str, *, length: int = 20) -> str:
     return hashlib.sha1(value.encode("utf-8", errors="ignore")).hexdigest()[:length]
+
+
+def _redact_path_value(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    normalized = text.replace("\\", "/")
+    leaf = normalized.rsplit("/", 1)[-1].strip()
+    return f".../{leaf}" if leaf else "..."
+
+
+def redact_knowledge_local_path(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    parsed = urlsplit(text)
+    if parsed.scheme.lower() == "file":
+        return _redact_path_value(parsed.path or parsed.netloc or text)
+    normalized = text.replace("\\", "/")
+    if re.match(r"^(?:[A-Za-z]:/|/|~(?:/|$)|//)", normalized):
+        return _redact_path_value(text)
+    return normalized
 
 
 @dataclass
@@ -39,6 +63,78 @@ class KnowledgeChunk:
     chunk_index: int
     text: str
     metadata: Dict[str, Any]
+
+
+def parse_knowledge_document_payload(data: Dict[str, Any]) -> KnowledgeDocument:
+    if not isinstance(data, dict):
+        raise ValueError("request body must be an object")
+
+    content = str(data.get("content") or "")
+    if not content.strip():
+        raise ValueError("content is required")
+    if len(content) > MAX_KNOWLEDGE_CONTENT_CHARS:
+        raise ValueError(f"content is too long; max {MAX_KNOWLEDGE_CONTENT_CHARS} characters")
+
+    content_type = str(data.get("content_type") or "text").strip().lower()
+    if content_type not in {"text", "plain", "markdown", "text/plain", "text/markdown"}:
+        raise ValueError("content_type must be text or markdown")
+
+    metadata = data.get("metadata")
+    if metadata is None:
+        metadata = {}
+    if not isinstance(metadata, dict):
+        raise ValueError("metadata must be an object")
+    metadata = dict(metadata)
+    if "page" in data and "page" not in metadata:
+        metadata["page"] = data.get("page")
+    for key in ("source_file", "url", "source_url"):
+        if key in metadata:
+            metadata[key] = redact_knowledge_local_path(metadata.get(key))
+
+    return KnowledgeDocument(
+        content=content,
+        doc_id=redact_knowledge_local_path(data.get("doc_id")),
+        version=str(data.get("version") or data.get("doc_version") or "v1").strip() or "v1",
+        source_file=redact_knowledge_local_path(data.get("source_file") or metadata.get("source_file")),
+        url=redact_knowledge_local_path(data.get("url") or metadata.get("url") or metadata.get("source_url")),
+        metadata=metadata,
+    )
+
+
+def build_knowledge_chunk_preview(chunks: List[Any]) -> List[Dict[str, Any]]:
+    preview: List[Dict[str, Any]] = []
+    for chunk in chunks:
+        metadata = dict(getattr(chunk, "metadata", {}) or {})
+        preview.append(
+            {
+                "doc_id": str(getattr(chunk, "doc_id", "") or ""),
+                "doc_version": str(getattr(chunk, "version", "") or ""),
+                "chunk_id": str(getattr(chunk, "chunk_id", "") or ""),
+                "chunk_index": int(getattr(chunk, "chunk_index", 0) or 0),
+                "char_count": len(str(getattr(chunk, "text", "") or "")),
+                "source_file": str(metadata.get("source_file") or ""),
+                "url": str(metadata.get("url") or ""),
+                "page": metadata.get("page", ""),
+            }
+        )
+    return preview
+
+
+def build_knowledge_dry_run_payload(document: KnowledgeDocument) -> Dict[str, Any]:
+    service = KnowledgeBaseService(None)
+    chunks = service.build_chunks(document)
+    doc_id = service._resolve_doc_id(document)
+    version = str(document.version or "v1").strip() or "v1"
+    return {
+        "success": True,
+        "dry_run": True,
+        "doc_id": doc_id,
+        "version": version,
+        "chunk_count": len(chunks),
+        "chunk_ids": [chunk.chunk_id for chunk in chunks],
+        "chunks": build_knowledge_chunk_preview(chunks),
+        "char_count": len(str(document.content or "")),
+    }
 
 
 class KnowledgeBaseService:
@@ -238,7 +334,12 @@ class KnowledgeBaseService:
 
 __all__ = [
     "KNOWLEDGE_SOURCE",
+    "MAX_KNOWLEDGE_CONTENT_CHARS",
+    "build_knowledge_chunk_preview",
+    "build_knowledge_dry_run_payload",
     "KnowledgeBaseService",
     "KnowledgeChunk",
     "KnowledgeDocument",
+    "parse_knowledge_document_payload",
+    "redact_knowledge_local_path",
 ]
