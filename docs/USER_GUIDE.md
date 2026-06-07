@@ -601,6 +601,11 @@ python run.py eval --dataset tests/fixtures/evals/smoke_cases.json --preset smok
   - 当前最多 `8` 步，单步 payload 字符串化后最多 `12000` 字符。
   - 当前白名单只包含 `config_audit`、`readiness_check`、`prompt_preview`。
   - 未知工具会返回失败 trace 和 `bad_workflow`，不会降级为任意命令、任意文件写入、任意网络请求或动态插件执行。
+- 仪表盘“风险与恢复 / 受控工具流”已经接入该接口：
+  - 只能从下拉框选择白名单工具，不能输入任意工具名或任意 JSON。
+  - 建议先执行 `dry-run`，确认步骤顺序后再执行真实工具流。
+  - 执行结果会在面板内显示逐步 trace；失败步骤会突出展示，并给出恢复建议。
+  - `Prompt 预览`只发送示例消息并展示摘要，不在 trace 面板暴露完整 Prompt。
 - Electron 主进程只允许转发受控路径：Prompt 列表走固定 endpoint，Prompt diff 与回滚必须匹配数字 revision，Tool Workflow 只走固定 endpoint。
 - 完整请求体、响应字段和错误码见 [API 契约与治理接口](api.md)。
 

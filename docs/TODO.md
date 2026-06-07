@@ -9,17 +9,11 @@
 - Prompt 版本列表与差异 API：`GET /api/v1/admin/prompts/revisions` 与 `GET /api/v1/admin/prompts/{revision}/diff` 已落地；列表只返回 revision 元数据，不泄露完整 Prompt，diff 供回滚确认前预览。
 - Prompt 回滚 UI：设置页系统提示区已提供“Prompt 版本治理”折叠面板，可查看版本历史、先预览 diff、再确认回滚，并在成功后刷新只读注入块与运行时状态。
 - 受控 Agent Tool Workflow API：`POST /api/v1/agents/tool-workflow` 已落地，当前白名单包含 `config_audit`、`readiness_check`、`prompt_preview`。
+- Tool Workflow UI：仪表盘“风险与恢复 / 受控工具流”已接入白名单工具选择、dry-run、逐步 trace、失败步骤突出和恢复建议；Renderer 测试覆盖 dry-run、单步失败 trace 与 `continue_on_error`。
 - API 测试：已覆盖 Prompt 版本列表、diff 预览、空/损坏账本诊断、active revision 唯一性、Prompt 回滚成功、revision 不存在、白名单工具执行和未知工具拒绝。
 - Renderer 测试：已覆盖 Prompt 版本治理入口、ApiService 幂等回滚策略、必须先预览差异再执行回滚，以及成功回滚后的设置刷新与反馈。
 - RAG/eval smoke 扩样：`tests/fixtures/evals/smoke_cases.json` 已从 20 条扩到 24 条，新增 Prompt 回滚、工具审计、Windows 首次运行和 RAG 风格参考场景。
 - 文档入口：`README.md`、`docs/USER_GUIDE.md`、`docs/SYSTEM_CHAINS.md`、`docs/HIGHLIGHTS.md`、`docs/api.md` 和 `docs/interview-playbook.md` 已补充。
-
-## 下一阶段 P0
-
-- Tool Workflow UI
-  - 在诊断或 Agent 管理区展示可选工具、dry-run、执行 trace 和失败恢复建议。
-  - 交互要求：未知工具不可输入；长任务展示逐步状态；失败步骤突出但不吞掉 trace。
-  - 验证：Node renderer 测试覆盖成功、dry-run、单步失败和 `continue_on_error`。
 
 ## 下一阶段 P1
 

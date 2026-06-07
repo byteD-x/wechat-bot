@@ -21,6 +21,11 @@ import {
     refreshDashboardStability,
 } from './data-loader.js';
 import { updateBotUI } from './status-presenter.js';
+import {
+    renderToolWorkflowPanel,
+    resetToolWorkflow,
+    runToolWorkflow as executeToolWorkflow,
+} from './tool-workflow.js';
 
 function getToast(deps = {}) {
     return deps.toast || toast;
@@ -45,6 +50,9 @@ export function bindDashboardEvents(page, deps = {}) {
     const runHandleReadinessClick = getHelper(deps, 'handleReadinessPanelClick', handleReadinessPanelClick);
     const runExportDiagnosticsSnapshot = getHelper(deps, 'exportDiagnosticsSnapshot', exportDiagnosticsSnapshot);
     const runHandleSectionTabClick = getHelper(deps, 'handleDashboardSectionTabClick', handleDashboardSectionTabClick);
+    const runRenderToolWorkflowPanel = getHelper(deps, 'renderToolWorkflowPanel', renderToolWorkflowPanel);
+    const runResetToolWorkflow = getHelper(deps, 'resetToolWorkflow', resetToolWorkflow);
+    const runExecuteToolWorkflow = getHelper(deps, 'runToolWorkflow', executeToolWorkflow);
 
     page.bindEvent('#btn-toggle-bot', 'click', () => runToggleBot(page));
     page.bindEvent('#btn-toggle-growth', 'click', () => runToggleGrowth(page));
@@ -66,6 +74,22 @@ export function bindDashboardEvents(page, deps = {}) {
         void runExportDiagnosticsSnapshot(deps);
     });
     page.bindEvent('#dashboard-section-tabs', 'click', (event) => runHandleSectionTabClick(page, event));
+    page.bindEvent('#btn-tool-workflow-dry-run', 'click', () => {
+        void runExecuteToolWorkflow(page, { dryRun: true }, deps);
+    });
+    page.bindEvent('#btn-run-tool-workflow', 'click', () => {
+        void runExecuteToolWorkflow(page, { dryRun: false }, deps);
+    });
+    page.bindEvent('#btn-reset-tool-workflow', 'click', () => runResetToolWorkflow(page));
+    [
+        '#dashboard-tool-workflow-step-1',
+        '#dashboard-tool-workflow-step-2',
+        '#dashboard-tool-workflow-step-3',
+        '#dashboard-tool-workflow-continue',
+        '#dashboard-tool-workflow-sample',
+    ].forEach((selector) => {
+        page.bindEvent(selector, 'change', () => runRenderToolWorkflowPanel(page));
+    });
 
     bindDashboardWatchers(page, deps);
 }
@@ -95,8 +119,10 @@ export function bindDashboardWatchers(page, deps = {}) {
         runUpdateBotUI(page);
         if (!connected) {
             runClearOfflineData(page);
+            page._renderToolWorkflowPanel?.();
             return;
         }
+        page._renderToolWorkflowPanel?.();
         void runLoadRecentMessages(page);
         void runRefreshDashboardCost(page, true);
         void runRefreshDashboardStability(page, true);

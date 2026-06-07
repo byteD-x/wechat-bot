@@ -217,6 +217,60 @@ test('api service prompt governance helpers use trusted endpoints and idempotent
     );
 });
 
+test('api service tool workflow helper uses controlled endpoint without retries', async () => {
+    const previousRequest = apiService.request;
+    const calls = [];
+    apiService.request = async (endpoint, options = {}, retries = undefined) => {
+        calls.push({ endpoint, options, retries });
+        return { success: true };
+    };
+
+    try {
+        await apiService.runToolWorkflow({
+            dry_run: true,
+            steps: [
+                {
+                    tool: 'prompt_preview',
+                    payload: {
+                        sample: {
+                            message: 'hello',
+                        },
+                    },
+                    continue_on_error: true,
+                },
+            ],
+            ignored: 'not-forwarded',
+        });
+    } finally {
+        apiService.request = previousRequest;
+    }
+
+    assert.deepEqual(calls, [
+        {
+            endpoint: '/api/v1/agents/tool-workflow',
+            options: {
+                method: 'POST',
+                body: {
+                    dry_run: true,
+                    steps: [
+                        {
+                            tool: 'prompt_preview',
+                            payload: {
+                                sample: {
+                                    message: 'hello',
+                                },
+                            },
+                            continue_on_error: true,
+                        },
+                    ],
+                },
+                timeoutMs: 60000,
+            },
+            retries: 0,
+        },
+    ]);
+});
+
 test('api service SSE connection does not leak token in URL', async () => {
     const previousEventSource = globalThis.EventSource;
     const previousInitialized = apiService.initialized;

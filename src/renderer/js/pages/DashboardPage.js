@@ -30,6 +30,7 @@ import {
     updateStats as presentStats,
 } from './dashboard/status-presenter.js';
 import { bindDashboardEvents } from './dashboard/page-shell.js';
+import { renderToolWorkflowPanel } from './dashboard/tool-workflow.js';
 
 const DASHBOARD_SECTIONS = new Set(['overview', 'recovery', 'business', 'messages']);
 
@@ -50,6 +51,7 @@ export class DashboardPage extends PageController {
         };
         this._lastStabilityFetchAt = 0;
         this._dashboardSection = 'overview';
+        this._toolWorkflowState = null;
         this._renderIdlePanel = () => {
             const status = this.getState('bot.status') || {};
             const idleState = getIdleState(this);
@@ -71,6 +73,7 @@ export class DashboardPage extends PageController {
             this._stability || {},
         );
         this._updateBotUI = () => updateBotUI(this);
+        this._renderToolWorkflowPanel = () => renderToolWorkflowPanel(this);
     }
 
     _setDashboardSection(section = 'overview') {
@@ -98,6 +101,7 @@ export class DashboardPage extends PageController {
         }
         bindDashboardEvents(this);
         this._setDashboardSection(this._dashboardSection);
+        this._renderToolWorkflowPanel();
         this.listenEvent(Events.MESSAGE_RECEIVED, (message) => {
             appendRecentMessage(this, message);
         });
@@ -108,6 +112,7 @@ export class DashboardPage extends PageController {
         this._setDashboardSection(this._dashboardSection);
         startIdleTimer(this);
         updateBotUI(this);
+        this._renderToolWorkflowPanel();
 
         const status = this.getState('bot.status');
         if (status) {

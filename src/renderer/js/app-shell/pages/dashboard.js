@@ -290,6 +290,72 @@ export function renderDashboardPageShell() {
                                     </div>
                                 </div>
                             </div>
+
+                            <div class="card">
+                                <div class="card-header">
+                                    <div>
+                                        <h2 class="card-title">受控工具流</h2>
+                                        <p class="card-subtitle">只运行白名单工具，先 dry-run，再查看逐步 trace。</p>
+                                    </div>
+                                </div>
+                                <div class="card-body">
+                                    <div class="tool-workflow-panel" id="dashboard-tool-workflow-panel">
+                                        <div class="tool-workflow-grid">
+                                            <div class="form-group">
+                                                <label class="form-label" for="dashboard-tool-workflow-step-1">步骤 1</label>
+                                                <select class="form-input" id="dashboard-tool-workflow-step-1">
+                                                    <option value="">跳过</option>
+                                                    <option value="config_audit" selected>配置审计</option>
+                                                    <option value="prompt_preview">Prompt 预览</option>
+                                                    <option value="readiness_check">启动准备检查</option>
+                                                </select>
+                                            </div>
+                                            <div class="form-group">
+                                                <label class="form-label" for="dashboard-tool-workflow-step-2">步骤 2</label>
+                                                <select class="form-input" id="dashboard-tool-workflow-step-2">
+                                                    <option value="">跳过</option>
+                                                    <option value="config_audit">配置审计</option>
+                                                    <option value="prompt_preview" selected>Prompt 预览</option>
+                                                    <option value="readiness_check">启动准备检查</option>
+                                                </select>
+                                            </div>
+                                            <div class="form-group">
+                                                <label class="form-label" for="dashboard-tool-workflow-step-3">步骤 3</label>
+                                                <select class="form-input" id="dashboard-tool-workflow-step-3">
+                                                    <option value="">跳过</option>
+                                                    <option value="config_audit">配置审计</option>
+                                                    <option value="prompt_preview">Prompt 预览</option>
+                                                    <option value="readiness_check" selected>启动准备检查</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                        <div class="form-group">
+                                            <label class="form-label" for="dashboard-tool-workflow-sample">Prompt 预览示例消息</label>
+                                            <textarea id="dashboard-tool-workflow-sample" rows="3" placeholder="你好，帮我确认当前运行准备状态。">你好，帮我确认当前运行准备状态。</textarea>
+                                        </div>
+                                        <label class="form-checkbox form-checkbox-inline">
+                                            <input type="checkbox" id="dashboard-tool-workflow-continue">
+                                            <span class="form-checkbox-label">失败后继续执行后续步骤</span>
+                                        </label>
+                                        <div class="tool-workflow-actions">
+                                            <button class="btn btn-secondary btn-sm" id="btn-tool-workflow-dry-run" type="button">
+                                                <span>先 dry-run</span>
+                                            </button>
+                                            <button class="btn btn-primary btn-sm" id="btn-run-tool-workflow" type="button">
+                                                <span>执行工具流</span>
+                                            </button>
+                                            <button class="btn btn-secondary btn-sm" id="btn-reset-tool-workflow" type="button">
+                                                <span>恢复默认</span>
+                                            </button>
+                                        </div>
+                                        <div class="tool-workflow-meta" id="dashboard-tool-workflow-meta">请先连接 Python 服务后执行工具流。</div>
+                                        <div class="tool-workflow-feedback" id="dashboard-tool-workflow-feedback" data-state="idle">尚未执行工具流</div>
+                                        <div class="tool-workflow-trace" id="dashboard-tool-workflow-trace">
+                                            <div class="tool-workflow-empty">尚未执行工具流</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
 
                         <div class="dashboard-stage-column">

@@ -682,6 +682,17 @@ class ApiService {
         }, 0);
     }
 
+    async runToolWorkflow(payload = {}) {
+        return this.request('/api/v1/agents/tool-workflow', {
+            method: 'POST',
+            body: {
+                dry_run: !!payload?.dry_run,
+                steps: Array.isArray(payload?.steps) ? payload.steps : [],
+            },
+            timeoutMs: 60000,
+        }, 0);
+    }
+
     async getBackups(limit = 20) {
         return this.request(`/api/backups${this._buildQueryString({ limit })}`);
     }

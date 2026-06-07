@@ -82,8 +82,130 @@
     gap: 12px;
 }
 
+.tool-workflow-panel {
+    display: grid;
+    gap: 12px;
+}
+
+.tool-workflow-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.tool-workflow-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.tool-workflow-meta {
+    color: var(--text-secondary);
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.tool-workflow-feedback {
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    background: rgba(255, 255, 255, 0.76);
+    color: var(--text-secondary);
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.tool-workflow-feedback[data-state="success"] {
+    border-color: rgba(22, 163, 74, 0.2);
+    background: rgba(240, 253, 244, 0.78);
+    color: var(--color-success);
+}
+
+.tool-workflow-feedback[data-state="warning"],
+.tool-workflow-feedback[data-state="loading"] {
+    border-color: rgba(217, 119, 6, 0.22);
+    background: rgba(255, 251, 235, 0.78);
+    color: var(--color-warning);
+}
+
+.tool-workflow-feedback[data-state="error"] {
+    border-color: rgba(220, 38, 38, 0.22);
+    background: rgba(254, 242, 242, 0.78);
+    color: var(--color-error);
+}
+
+.tool-workflow-trace {
+    display: grid;
+    gap: 10px;
+    max-height: 320px;
+    overflow: auto;
+}
+
+.tool-workflow-empty,
+.tool-workflow-trace-item {
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-panel);
+}
+
+.tool-workflow-empty {
+    padding: 12px;
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+.tool-workflow-trace-item {
+    display: grid;
+    gap: 6px;
+    padding: 12px;
+}
+
+.tool-workflow-trace-item.is-ok {
+    border-color: rgba(22, 163, 74, 0.2);
+}
+
+.tool-workflow-trace-item.is-skipped {
+    border-color: rgba(217, 119, 6, 0.22);
+    background: rgba(255, 251, 235, 0.48);
+}
+
+.tool-workflow-trace-item.is-error {
+    border-color: rgba(220, 38, 38, 0.26);
+    background: rgba(254, 242, 242, 0.58);
+}
+
+.tool-workflow-trace-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.tool-workflow-trace-meta,
+.tool-workflow-trace-output,
+.tool-workflow-trace-advice {
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--text-secondary);
+}
+
+.tool-workflow-trace-error {
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--color-error);
+}
+
+.tool-workflow-trace-advice {
+    color: var(--color-warning);
+}
+
 @media (min-width: 1500px) {
     .stats-row {
         grid-template-columns: repeat(5, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 980px) {
+    .tool-workflow-grid {
+        grid-template-columns: 1fr;
     }
 }
