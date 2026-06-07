@@ -308,6 +308,8 @@ export function renderDashboardPageShell() {
                                                     <option value="config_audit" selected>配置审计</option>
                                                     <option value="prompt_preview">Prompt 预览</option>
                                                     <option value="readiness_check">启动准备检查</option>
+                                                    <option value="eval_latest">最新评测</option>
+                                                    <option value="cost_summary">成本摘要</option>
                                                 </select>
                                             </div>
                                             <div class="form-group">
@@ -317,6 +319,8 @@ export function renderDashboardPageShell() {
                                                     <option value="config_audit">配置审计</option>
                                                     <option value="prompt_preview" selected>Prompt 预览</option>
                                                     <option value="readiness_check">启动准备检查</option>
+                                                    <option value="eval_latest">最新评测</option>
+                                                    <option value="cost_summary">成本摘要</option>
                                                 </select>
                                             </div>
                                             <div class="form-group">
@@ -326,6 +330,8 @@ export function renderDashboardPageShell() {
                                                     <option value="config_audit">配置审计</option>
                                                     <option value="prompt_preview">Prompt 预览</option>
                                                     <option value="readiness_check" selected>启动准备检查</option>
+                                                    <option value="eval_latest">最新评测</option>
+                                                    <option value="cost_summary">成本摘要</option>
                                                 </select>
                                             </div>
                                         </div>

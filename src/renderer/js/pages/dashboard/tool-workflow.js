@@ -5,6 +5,8 @@ export const TOOL_WORKFLOW_TOOLS = Object.freeze([
     { value: 'config_audit', label: '配置审计' },
     { value: 'prompt_preview', label: 'Prompt 预览' },
     { value: 'readiness_check', label: '启动准备检查' },
+    { value: 'eval_latest', label: '最新评测' },
+    { value: 'cost_summary', label: '成本摘要' },
 ]);
 
 const DEFAULT_SEQUENCE = ['config_audit', 'prompt_preview', 'readiness_check'];
@@ -24,6 +26,17 @@ function getToast(deps = {}) {
 
 function asArray(value) {
     return Array.isArray(value) ? value : [];
+}
+
+function formatCurrencyGroups(groups) {
+    const values = asArray(groups)
+        .map((item) => {
+            const currency = String(item?.currency || '').trim();
+            const totalCost = Number(item?.total_cost || 0);
+            return currency ? `${currency} ${totalCost.toFixed(4)}` : '';
+        })
+        .filter(Boolean);
+    return values.length ? values.slice(0, 2).join('、') : '暂无费用';
 }
 
 function normalizeTool(value) {
@@ -142,6 +155,27 @@ function formatOutputSummary(item) {
         const ready = output.ready === true ? '已就绪' : output.ready === false ? '未就绪' : '已返回';
         const blocking = Number(output.blockingCount ?? output.blocking_count ?? 0);
         return blocking ? `${ready}，阻塞项 ${blocking} 个` : ready;
+    }
+    if (item?.tool === 'eval_latest') {
+        if (output.has_report === false) {
+            return '暂无评测报告';
+        }
+        const summary = output.summary && typeof output.summary === 'object' ? output.summary : {};
+        const totalCases = Number(summary.total_cases || 0);
+        const passed = summary.passed === true ? '通过' : summary.passed === false ? '未通过' : '已返回';
+        const regressions = Number(output.regression_count || 0);
+        return totalCases
+            ? `最新评测：${totalCases} 个用例，${passed}，回归 ${regressions} 项`
+            : `最新评测${passed}，回归 ${regressions} 项`;
+    }
+    if (item?.tool === 'cost_summary') {
+        const overview = output.overview && typeof output.overview === 'object' ? output.overview : {};
+        const replyCount = Number(overview.reply_count || 0);
+        const totalTokens = Number(overview.total_tokens || 0);
+        const modelCount = Number(output.model_count || 0);
+        const reviewQueueCount = Number(output.review_queue_count || 0);
+        const costText = formatCurrencyGroups(overview.currency_groups);
+        return `成本摘要：回复 ${replyCount} 条，Token ${totalTokens}，模型 ${modelCount} 个，复核 ${reviewQueueCount} 条，${costText}`;
     }
     if (item?.tool === 'config_audit') {
         const dormant = asArray(output.dormant_paths).length;

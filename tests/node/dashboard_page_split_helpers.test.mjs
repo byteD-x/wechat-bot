@@ -43,6 +43,7 @@ import {
 import {
     buildToolWorkflowSteps,
     runToolWorkflow,
+    TOOL_WORKFLOW_TOOLS,
 } from '../../src/renderer/js/pages/dashboard/tool-workflow.js';
 import { installDomStub } from './dom-stub.mjs';
 
@@ -478,6 +479,79 @@ test('dashboard tool workflow helper builds whitelisted dry-run payload and rend
     assert.equal(JSON.stringify(calls[0]).includes('shell_exec'), false);
     assert.equal(selectors['#dashboard-tool-workflow-feedback'].dataset.state, 'success');
     assert.equal(selectors['#dashboard-tool-workflow-trace'].textContent.includes('dry-run 已跳过真实执行'), true);
+    assert.equal(toast.calls.at(-1)?.type, 'success');
+}));
+
+test('dashboard tool workflow helper supports readonly observability tools with summaries', async () => withDom(async ({ document }) => {
+    const selectors = createToolWorkflowSelectors(document, {
+        stepValues: ['eval_latest', 'cost_summary', 'shell_exec'],
+    });
+    const page = createDashboardPage({ bot: { connected: true } }, selectors);
+    const toast = createToastRecorder();
+    let captured = null;
+
+    assert.deepEqual(
+        TOOL_WORKFLOW_TOOLS.map((item) => item.value),
+        ['config_audit', 'prompt_preview', 'readiness_check', 'eval_latest', 'cost_summary'],
+    );
+    assert.deepEqual(buildToolWorkflowSteps(page), [
+        { tool: 'eval_latest', payload: {} },
+        { tool: 'cost_summary', payload: {} },
+    ]);
+
+    const result = await runToolWorkflow(page, {}, {
+        toast,
+        apiService: {
+            runToolWorkflow: async (payload) => {
+                captured = payload;
+                return {
+                    success: true,
+                    trace: [
+                        {
+                            index: 1,
+                            tool: 'eval_latest',
+                            status: 'ok',
+                            duration_ms: 1.2,
+                            attempts: 1,
+                            retry_count: 0,
+                            output: {
+                                has_report: true,
+                                summary: { total_cases: 12, passed: true },
+                                regression_count: 1,
+                                cases: [{ id: 'should-not-leak' }],
+                            },
+                        },
+                        {
+                            index: 2,
+                            tool: 'cost_summary',
+                            status: 'ok',
+                            duration_ms: 2.4,
+                            attempts: 1,
+                            retry_count: 0,
+                            output: {
+                                overview: {
+                                    reply_count: 3,
+                                    total_tokens: 420,
+                                    currency_groups: [{ currency: 'USD', total_cost: 0.18 }],
+                                },
+                                model_count: 2,
+                                review_queue_count: 1,
+                                review_queue: [{ reply_preview: 'should-not-leak' }],
+                            },
+                        },
+                    ],
+                };
+            },
+        },
+    });
+
+    const traceText = selectors['#dashboard-tool-workflow-trace'].textContent;
+    assert.equal(result.success, true);
+    assert.deepEqual(captured.steps.map((item) => item.tool), ['eval_latest', 'cost_summary']);
+    assert.equal(JSON.stringify(captured).includes('shell_exec'), false);
+    assert.equal(traceText.includes('最新评测：12 个用例，通过，回归 1 项'), true);
+    assert.equal(traceText.includes('成本摘要：回复 3 条，Token 420，模型 2 个，复核 1 条，USD 0.1800'), true);
+    assert.equal(traceText.includes('should-not-leak'), false);
     assert.equal(toast.calls.at(-1)?.type, 'success');
 }));
 

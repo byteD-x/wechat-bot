@@ -14,6 +14,10 @@ from backend.utils.config import resolve_system_prompt
 MAX_WORKFLOW_STEPS = 8
 MAX_STEP_PAYLOAD_CHARS = 12000
 DEFAULT_TOOL_TIMEOUT_SEC = 5.0
+DEFAULT_COST_SUMMARY_TIMEOUT_SEC = 10.0
+
+EvalReportLoader = Callable[[], Awaitable[dict[str, Any]]]
+CostSummaryLoader = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 
 
 class ToolWorkflowError(ValueError):
@@ -132,11 +136,15 @@ class ControlledToolWorkflowService:
         *,
         config_loader: Callable[[], Any],
         readiness_loader: Callable[[], Awaitable[dict[str, Any]]],
+        eval_report_loader: Optional[EvalReportLoader] = None,
+        cost_summary_loader: Optional[CostSummaryLoader] = None,
         registry: Optional[ToolRegistry] = None,
         allowed_permissions: Optional[set[str]] = None,
     ) -> None:
         self._config_loader = config_loader
         self._readiness_loader = readiness_loader
+        self._eval_report_loader = eval_report_loader or self._default_eval_report_loader
+        self._cost_summary_loader = cost_summary_loader or self._default_cost_summary_loader
         self._registry = registry or self._build_default_registry()
         self._allowed_permissions = set(allowed_permissions or {"admin_read"})
 
@@ -202,6 +210,35 @@ class ControlledToolWorkflowService:
                 permission="admin_read",
                 timeout_sec=DEFAULT_TOOL_TIMEOUT_SEC,
                 handler=self._tool_prompt_preview,
+            )
+        )
+        registry.register(
+            ToolDefinition(
+                name="eval_latest",
+                payload_schema={
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": False,
+                },
+                permission="admin_read",
+                timeout_sec=DEFAULT_TOOL_TIMEOUT_SEC,
+                handler=self._tool_eval_latest,
+            )
+        )
+        registry.register(
+            ToolDefinition(
+                name="cost_summary",
+                payload_schema={
+                    "type": "object",
+                    "properties": {
+                        "period": {"type": "string"},
+                        "include_estimated": {"type": "boolean"},
+                    },
+                    "additionalProperties": False,
+                },
+                permission="admin_read",
+                timeout_sec=DEFAULT_COST_SUMMARY_TIMEOUT_SEC,
+                handler=self._tool_cost_summary,
             )
         )
         return registry
@@ -367,4 +404,59 @@ class ControlledToolWorkflowService:
                 "chars": len(prompt),
                 "lines": len([line for line in prompt.splitlines() if line.strip()]),
             },
+        }
+
+    async def _tool_eval_latest(self, payload: dict[str, Any]) -> dict[str, Any]:
+        source = await self._eval_report_loader()
+        report = source.get("report") if isinstance(source, dict) else None
+        has_report = isinstance(report, dict)
+        summary = report.get("summary") if has_report and isinstance(report.get("summary"), dict) else {}
+        regressions = report.get("regressions") if has_report and isinstance(report.get("regressions"), list) else []
+        return {
+            "success": bool(source.get("success", True)) if isinstance(source, dict) else True,
+            "has_report": has_report,
+            "name": str(source.get("name") or "") if isinstance(source, dict) else "",
+            "generated_at": report.get("generated_at") if has_report else None,
+            "preset": report.get("preset") if has_report else None,
+            "app_version": report.get("app_version") if has_report else None,
+            "summary": dict(summary),
+            "regression_count": len(regressions),
+        }
+
+    async def _tool_cost_summary(self, payload: dict[str, Any]) -> dict[str, Any]:
+        period = str(payload.get("period") or "30d").strip().lower()
+        if period not in {"today", "7d", "30d", "all"}:
+            period = "30d"
+        include_estimated = bool(payload.get("include_estimated", True))
+        source = await self._cost_summary_loader({
+            "period": period,
+            "include_estimated": include_estimated,
+        })
+        overview = source.get("overview") if isinstance(source, dict) and isinstance(source.get("overview"), dict) else {}
+        filters = source.get("filters") if isinstance(source, dict) and isinstance(source.get("filters"), dict) else {}
+        models = source.get("models") if isinstance(source, dict) and isinstance(source.get("models"), list) else []
+        review_queue = source.get("review_queue") if isinstance(source, dict) and isinstance(source.get("review_queue"), list) else []
+        return {
+            "success": bool(source.get("success", True)) if isinstance(source, dict) else True,
+            "filters": dict(filters),
+            "overview": dict(overview),
+            "model_count": len(models),
+            "review_queue_count": len(review_queue),
+        }
+
+    @staticmethod
+    async def _default_eval_report_loader() -> dict[str, Any]:
+        return {"success": True, "report": None, "name": ""}
+
+    @staticmethod
+    async def _default_cost_summary_loader(payload: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "success": True,
+            "filters": {
+                "period": payload.get("period") or "30d",
+                "include_estimated": bool(payload.get("include_estimated", True)),
+            },
+            "overview": {},
+            "models": [],
+            "review_queue": [],
         }

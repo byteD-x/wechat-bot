@@ -62,7 +62,7 @@
 - `Readiness & Recovery`: `run.py check`、`GET /api/readiness` 与桌面端首次运行引导共用同一套环境检查逻辑；仪表盘会常驻显示“运行准备度”，并支持导出自动脱敏的诊断支持包。
 - `Hot Reload`: 配置热重载优先使用 `watchdog` 事件监听，缺失依赖时自动回退轮询，并带防抖。
 - `Config Snapshot`: 后端已引入中心化配置快照服务，`/api/config/audit` 可返回当前生效配置、已知未消费字段和配置变更影响摘要。
-- `Controlled Agent Tools`: `POST /api/v1/agents/tool-workflow` 只执行白名单工具 `config_audit`、`readiness_check`、`prompt_preview`，每步返回 trace，明确不支持任意命令或动态插件执行。
+- `Controlled Agent Tools`: `POST /api/v1/agents/tool-workflow` 只执行白名单工具 `config_audit`、`readiness_check`、`prompt_preview`、`eval_latest`、`cost_summary`，每步返回 trace，明确不支持任意命令或动态插件执行。
 
 ## Architecture
 

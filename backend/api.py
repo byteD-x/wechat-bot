@@ -2085,30 +2085,32 @@ async def clear_data_controls():
 async def get_latest_eval_report():
     """Return the newest locally generated eval report if one exists."""
     try:
-        eval_root = Path(get_app_config_path()).resolve().parent / "evals"
-        if not eval_root.exists():
-            return jsonify({"success": True, "report": None})
-
-        candidates = sorted(
-            (path for path in eval_root.glob("*.json") if path.is_file()),
-            key=lambda path: path.stat().st_mtime,
-            reverse=True,
-        )
-        if not candidates:
-            return jsonify({"success": True, "report": None})
-
-        report_path = candidates[0]
-        report = json.loads(report_path.read_text(encoding="utf-8"))
-        return jsonify(
-            {
-                "success": True,
-                "report": report,
-                "name": report_path.name,
-            }
-        )
+        return jsonify(_read_latest_eval_report_payload())
     except Exception as e:
         logger.error("Request handling failed: %s", e)
         return jsonify({"success": False, "message": f"Request handling failed: {str(e)}"}), 500
+
+
+def _read_latest_eval_report_payload() -> dict[str, Any]:
+    eval_root = Path(get_app_config_path()).resolve().parent / "evals"
+    if not eval_root.exists():
+        return {"success": True, "report": None}
+
+    candidates = sorted(
+        (path for path in eval_root.glob("*.json") if path.is_file()),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    if not candidates:
+        return {"success": True, "report": None}
+
+    report_path = candidates[0]
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    return {
+        "success": True,
+        "report": report,
+        "name": report_path.name,
+    }
 
 
 @app.route("/api/usage", methods=["GET"])
@@ -2559,9 +2561,23 @@ async def run_agent_tool_workflow():
         async def _load_readiness_report() -> dict[str, Any]:
             return await asyncio.to_thread(readiness_service.get_report, force_refresh=False)
 
+        async def _load_latest_eval_report() -> dict[str, Any]:
+            return await asyncio.to_thread(_read_latest_eval_report_payload)
+
+        async def _load_cost_summary(payload: dict[str, Any]) -> dict[str, Any]:
+            snapshot = config_service.get_snapshot()
+            return await cost_service.get_summary(
+                manager.get_memory_manager(),
+                snapshot.config,
+                period=str(payload.get("period") or "30d"),
+                include_estimated=bool(payload.get("include_estimated", True)),
+            )
+
         service = ControlledToolWorkflowService(
             config_loader=config_service.get_snapshot,
             readiness_loader=_load_readiness_report,
+            eval_report_loader=_load_latest_eval_report,
+            cost_summary_loader=_load_cost_summary,
         )
         result = await service.run(steps, dry_run=dry_run)
         if result.get("success"):

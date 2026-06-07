@@ -27,6 +27,42 @@ async def _readiness():
     return {"success": True, "ready": True}
 
 
+async def _eval_report():
+    return {
+        "success": True,
+        "name": "smoke-report.json",
+        "report": {
+            "preset": "smoke",
+            "app_version": "1.6.2",
+            "generated_at": "2026-06-07T00:00:00Z",
+            "summary": {
+                "total_cases": 24,
+                "passed": True,
+                "retrieval_hit_rate": 0.5,
+            },
+            "regressions": [],
+            "cases": [{"id": "should-not-leak"}],
+        },
+    }
+
+
+async def _cost_summary(payload):
+    return {
+        "success": True,
+        "filters": {
+            "period": payload["period"],
+            "include_estimated": payload["include_estimated"],
+        },
+        "overview": {
+            "reply_count": 3,
+            "total_tokens": 420,
+            "currency_groups": [{"currency": "USD", "total_cost": 0.18}],
+        },
+        "models": [{"model": "gpt-5-mini"}, {"model": "deepseek-chat"}],
+        "review_queue": [{"reply_preview": "should-not-leak"}],
+    }
+
+
 @pytest.mark.asyncio
 async def test_tool_workflow_runs_registered_builtin_tools():
     service = ControlledToolWorkflowService(
@@ -51,6 +87,64 @@ async def test_tool_workflow_runs_registered_builtin_tools():
     assert "base prompt" in result["trace"][0]["output"]["prompt"]
     assert result["trace"][1]["retry_count"] == 1
     assert result["trace"][1]["output"]["ready"] is True
+
+
+@pytest.mark.asyncio
+async def test_tool_workflow_runs_readonly_observability_tools():
+    service = ControlledToolWorkflowService(
+        config_loader=_snapshot,
+        readiness_loader=_readiness,
+        eval_report_loader=_eval_report,
+        cost_summary_loader=_cost_summary,
+    )
+
+    result = await service.run(
+        [
+            {"tool": "eval_latest"},
+            {"tool": "cost_summary", "payload": {"period": "7d", "include_estimated": False}},
+        ]
+    )
+
+    assert result["success"] is True
+    assert [item["tool"] for item in result["trace"]] == ["eval_latest", "cost_summary"]
+    eval_output = result["trace"][0]["output"]
+    assert eval_output["has_report"] is True
+    assert eval_output["name"] == "smoke-report.json"
+    assert eval_output["summary"]["total_cases"] == 24
+    assert eval_output["regression_count"] == 0
+    assert "cases" not in eval_output
+
+    cost_output = result["trace"][1]["output"]
+    assert cost_output["filters"]["period"] == "7d"
+    assert cost_output["filters"]["include_estimated"] is False
+    assert cost_output["overview"]["total_tokens"] == 420
+    assert cost_output["model_count"] == 2
+    assert cost_output["review_queue_count"] == 1
+    assert "review_queue" not in cost_output
+
+
+@pytest.mark.asyncio
+async def test_tool_workflow_rejects_cost_summary_extra_payload():
+    service = ControlledToolWorkflowService(
+        config_loader=_snapshot,
+        readiness_loader=_readiness,
+        cost_summary_loader=_cost_summary,
+    )
+
+    result = await service.run(
+        [
+            {
+                "tool": "cost_summary",
+                "payload": {"period": "30d", "chat_id": "friend:alice"},
+            }
+        ]
+    )
+
+    assert result["success"] is False
+    assert result["trace"][0]["status"] == "error"
+    assert result["trace"][0]["attempts"] == 0
+    assert result["trace"][0]["error_type"] == "schema_validation"
+    assert "payload.chat_id is not allowed" in result["trace"][0]["error"]
 
 
 @pytest.mark.asyncio

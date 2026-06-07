@@ -1942,6 +1942,81 @@ async def test_api_tool_workflow_runs_whitelisted_steps(client):
 
 
 @pytest.mark.asyncio
+async def test_api_tool_workflow_runs_observability_tools(client, mock_manager):
+    snapshot = _build_snapshot({
+        "api": {"presets": []},
+        "bot": {},
+        "logging": {},
+        "agent": {},
+        "services": {},
+    })
+    eval_payload = {
+        "success": True,
+        "name": "smoke-report.json",
+        "report": {
+            "preset": "ci-smoke",
+            "app_version": "1.6.2",
+            "generated_at": "2026-06-07T00:00:00Z",
+            "summary": {"total_cases": 12, "passed": True},
+            "regressions": [{"case_id": "regressed"}],
+            "cases": [{"id": "should-not-leak"}],
+        },
+    }
+    summary_payload = {
+        "success": True,
+        "filters": {"period": "7d", "include_estimated": False},
+        "overview": {
+            "reply_count": 3,
+            "total_tokens": 420,
+            "currency_groups": [{"currency": "USD", "total_cost": 0.18}],
+        },
+        "models": [{"model": "gpt-5-mini"}, {"model": "deepseek-chat"}],
+        "review_queue": [{"reply_preview": "should-not-leak"}],
+    }
+
+    with (
+        patch.object(api_module.config_service, "get_snapshot", return_value=snapshot),
+        patch.object(api_module, "_read_latest_eval_report_payload", return_value=eval_payload) as eval_mock,
+        patch.object(api_module.cost_service, "get_summary", AsyncMock(return_value=summary_payload)) as get_summary_mock,
+    ):
+        response = await client.post(
+            "/api/v1/agents/tool-workflow",
+            json={
+                "steps": [
+                    {"tool": "eval_latest"},
+                    {"tool": "cost_summary", "payload": {"period": "7d", "include_estimated": False}},
+                ]
+            },
+        )
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["success"] is True
+    assert [item["tool"] for item in data["trace"]] == ["eval_latest", "cost_summary"]
+
+    eval_output = data["trace"][0]["output"]
+    assert eval_output["has_report"] is True
+    assert eval_output["name"] == "smoke-report.json"
+    assert eval_output["summary"]["total_cases"] == 12
+    assert eval_output["regression_count"] == 1
+    assert "cases" not in eval_output
+    eval_mock.assert_called_once()
+
+    cost_output = data["trace"][1]["output"]
+    assert cost_output["filters"]["period"] == "7d"
+    assert cost_output["filters"]["include_estimated"] is False
+    assert cost_output["overview"]["total_tokens"] == 420
+    assert cost_output["model_count"] == 2
+    assert cost_output["review_queue_count"] == 1
+    assert "review_queue" not in cost_output
+    get_summary_mock.assert_awaited_once()
+    assert get_summary_mock.await_args.args[0] is mock_manager.get_memory_manager.return_value
+    assert get_summary_mock.await_args.args[1] is snapshot.config
+    assert get_summary_mock.await_args.kwargs["period"] == "7d"
+    assert get_summary_mock.await_args.kwargs["include_estimated"] is False
+
+
+@pytest.mark.asyncio
 async def test_api_tool_workflow_rejects_unknown_tool(client):
     response = await client.post(
         "/api/v1/agents/tool-workflow",

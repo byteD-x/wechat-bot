@@ -148,7 +148,9 @@
           "message": "你好"
         }
       }
-    }
+    },
+    { "tool": "eval_latest", "payload": {} },
+    { "tool": "cost_summary", "payload": { "period": "30d", "include_estimated": true } }
   ]
 }
 ```
@@ -174,6 +176,8 @@
 - `config_audit`: 返回配置审计结果。
 - `readiness_check`: 返回启动前就绪检查报告。
 - `prompt_preview`: 基于示例消息生成 Prompt 预览和长度摘要。
+- `eval_latest`: 返回最新本地评测报告的名称、版本、摘要和回归数量，不返回完整 `cases`。
+- `cost_summary`: 返回成本概览、筛选条件、模型数量和待复核数量，不返回完整 `review_queue`。
 
 成功响应：
 
@@ -207,6 +211,7 @@
 
 - 不支持任意 shell、文件写入、网络请求或动态插件执行。
 - 所有步骤都返回 `index/tool/status/duration_ms/attempts/retry_count`，注册工具还会返回 `permission/schema_valid/timeout_ms`；失败步骤会返回 `error_type`，例如 `unsupported_tool`、`schema_validation`、`permission_denied`、`timeout`、`invalid_tool_result` 或 `tool_error`，方便桌面端展示进度、失败位置、输入校验结果和恢复建议。
+- `prompt_preview`、`eval_latest` 和 `cost_summary` 的 trace 输出只用于本机诊断摘要，不在响应中展开完整 Prompt、评测用例、聊天正文或成本复核队列。
 - 后续新增工具必须先进入白名单，并补充 API 测试与文档。
 
 ## 成熟产品化参考
