@@ -342,6 +342,9 @@ python -m py_compile backend\\core\\agent_runtime.py backend\\core\\prompt_gover
 # 重点测试
 python -m pytest tests\\test_runtime_observability.py -q
 
+# 长 pytest 分组诊断：输出 heartbeat、日志字节数、idle 秒数，并在失败时打印有限日志尾部
+python scripts\\quality\\run_pytest_groups.py --group runtime=tests\\test_runtime_observability.py --pytest-arg=-q --idle-timeout-seconds 120 --tail-lines-on-failure 20
+
 # Scoped lint for the productization surface
 python -m ruff check backend\\api.py backend\\bot.py backend\\bot_reply_flow.py backend\\config_schemas.py backend\\core\\memory.py backend\\core\\reply_policy.py backend\\core\\workspace_backup.py backend\\core\\eval_runner.py backend\\core\\prompt_governance.py backend\\core\\tool_workflow.py run.py tests\\test_api.py tests\\test_reply_policy.py tests\\test_backup_service.py tests\\test_eval_runner.py
 

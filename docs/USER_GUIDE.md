@@ -769,6 +769,9 @@ npm run test:renderer
 python -m pytest tests\test_runtime_observability.py -q
 python -m pytest tests\test_smoke.py tests\test_api.py tests\test_runtime_observability.py -q
 
+# 长 pytest 分组诊断
+python scripts\quality\run_pytest_groups.py --group runtime=tests\test_runtime_observability.py --pytest-arg=-q --idle-timeout-seconds 120 --tail-lines-on-failure 20
+
 # 语法检查
 python -m py_compile backend\core\agent_runtime.py backend\core\prompt_governance.py backend\core\tool_workflow.py backend\bot.py backend\bot_manager.py backend\api.py
 
@@ -780,6 +783,7 @@ python run.py eval --dataset tests\fixtures\evals\smoke_cases.json --preset smok
 
 - `npm test` 会顺序执行 `update-manager`、`backend-idle-controller` 和 renderer helper 测试。
 - `npm run test:renderer` 适合只验证 `src/renderer/js/pages/settings/` 与 `src/renderer/js/pages/dashboard/` 拆分后的辅助模块。
+- `scripts\quality\run_pytest_groups.py` 适合排查较长 pytest 分组；默认只记录 heartbeat，`--idle-timeout-seconds` 默认 `0` 表示关闭，失败或超时时默认只打印 stdout/stderr 各 `20` 行尾部，完整日志保存在 `data\runtime\test\pytest-groups\`。
 
 ### 10.3 Windows 发布说明
 
