@@ -195,6 +195,30 @@
       "assistant_reply": "可以，我会优先参考已导出的历史聊天风格；如果没有命中，就保持简短自然，不硬套口吻。",
       "retrieval": { "augmented": true, "runtime_hit_count": 3 },
       "reply_quality": { "user_feedback": "helpful" }
+    },
+    {
+      "id": "export-rag-style-recall",
+      "chat_id": "friend:zhou",
+      "user_text": "帮我回小周，语气像我一点，别太正式。",
+      "assistant_reply": "可以，我会参考导出语料里你常用的短句和轻松语气，保持自然但不照搬原话。",
+      "retrieval": { "augmented": true, "runtime_hit_count": 2 },
+      "reply_quality": { "user_feedback": "helpful" }
+    },
+    {
+      "id": "export-rag-no-hit-fallback",
+      "chat_id": "friend:new-client",
+      "user_text": "这个新客户没有历史聊天记录，怎么回比较稳？",
+      "assistant_reply": "没有可用导出语料时，我会回退到简短、礼貌、明确下一步的默认风格，不强行模仿。",
+      "retrieval": { "augmented": false, "runtime_hit_count": 0 },
+      "reply_quality": { "user_feedback": "helpful" }
+    },
+    {
+      "id": "export-rag-mismatch-guard",
+      "chat_id": "group:customer-success",
+      "user_text": "@bot 导出语料里那句吐槽很像我，能不能直接发给客户？",
+      "assistant_reply": "不建议直接照抄负面表达；我会只提炼你的简洁口吻，再改成适合客户沟通的版本。",
+      "retrieval": { "augmented": true, "runtime_hit_count": 1 },
+      "reply_quality": { "user_feedback": "helpful" }
     }
   ]
 }

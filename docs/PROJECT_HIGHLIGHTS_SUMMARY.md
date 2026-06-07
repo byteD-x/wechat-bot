@@ -352,7 +352,7 @@ def _enable_receiving_msg_robust(self):
 - [`tests/test_optimization_tasks.py`](tests/test_optimization_tasks.py) - 连接池复用、批量上下文、传输层抽象测试
 - [`tests/test_runtime_observability.py`](tests/test_runtime_observability.py) - 配置监听、防抖、健康检查与指标导出测试
 - [`tests/test_api.py`](tests/test_api.py) - Prompt 回滚、Tool Workflow、回复策略和备份恢复接口测试
-- [`tests/fixtures/evals/smoke_cases.json`](tests/fixtures/evals/smoke_cases.json) - 24 条离线 smoke 用例
+- [`tests/fixtures/evals/smoke_cases.json`](tests/fixtures/evals/smoke_cases.json) - 27 条离线 smoke 用例
 
 ### 5.4 文档
 - [`docs/HIGHLIGHTS.md`](docs/HIGHLIGHTS.md) - 项目亮点详细说明

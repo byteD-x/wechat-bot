@@ -44,7 +44,7 @@
 - Prompt 回滚通过 `POST /api/v1/admin/prompts/{revision}/rollback` 追加新的 active revision，并保留 `rollback_from / reason / operator / created_at`。
 - 受控 Agent Tool Workflow 只允许 `config_audit`、`readiness_check`、`prompt_preview` 三类白名单工具。
 - 工作流返回逐步 trace，并限制步骤数量与 payload 大小，避免把本机 Agent 能力扩成任意命令或动态插件执行。
-- 离线 smoke 数据集扩展到 24 条，覆盖 Prompt 回滚、工具审计、Windows 首次运行和 RAG 风格参考场景。
+- 离线 smoke 数据集扩展到 27 条，覆盖 Prompt 回滚、工具审计、Windows 首次运行、导出语料 RAG 风格召回、无命中回退和误命中防护场景。
 
 ## STAR 案例
 
@@ -112,7 +112,7 @@
 | Export Center | `backend/core/wechat_export_service.py` / `src/renderer/js/pages/ExportCenterPage.js` | 微信探测、解密、联系人读取、CSV 导出与 RAG 应用 |
 | API | `backend/api.py` | `/api/status`、`/api/metrics`、`/api/wechat_export/*`、`/api/model_auth/*`、`/api/costs/*`、Prompt 回滚、Tool Workflow |
 | Diagnostics | `src/main/diagnostics-snapshot.js` / `src/main/ipc.js` | 诊断支持包导出、敏感字段脱敏和 IPC allowlist |
-| Tests | `tests/test_agent_runtime.py` / `tests/test_optimization_tasks.py` / `tests/test_runtime_observability.py` / `tests/test_api.py` / `tests/test_eval_runner.py` | 运行时、工程优化、API、观测和 24 条 smoke 门禁验证 |
+| Tests | `tests/test_agent_runtime.py` / `tests/test_optimization_tasks.py` / `tests/test_runtime_observability.py` / `tests/test_api.py` / `tests/test_eval_runner.py` | 运行时、工程优化、API、观测和 27 条 smoke 门禁验证 |
 
 ## 可直接复用的表述
 

@@ -37,7 +37,7 @@ async def _eval_report():
             "app_version": "1.6.2",
             "generated_at": "2026-06-07T00:00:00Z",
             "summary": {
-                "total_cases": 24,
+                "total_cases": 27,
                 "passed": True,
                 "retrieval_hit_rate": 0.5,
             },
@@ -157,7 +157,7 @@ async def test_tool_workflow_runs_readonly_observability_tools():
     eval_output = result["trace"][0]["output"]
     assert eval_output["has_report"] is True
     assert eval_output["name"] == "smoke-report.json"
-    assert eval_output["summary"]["total_cases"] == 24
+    assert eval_output["summary"]["total_cases"] == 27
     assert eval_output["regression_count"] == 0
     assert "cases" not in eval_output
 

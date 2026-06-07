@@ -12,15 +12,11 @@
 - Tool Workflow UI：仪表盘“风险与恢复 / 受控工具流”已接入白名单工具选择、dry-run、逐步 trace、失败步骤突出和恢复建议；Renderer 测试覆盖 dry-run、单步失败 trace、`continue_on_error`、最新评测、成本摘要、备份清理预览和数据治理预览的只读摘要展示。
 - API 测试：已覆盖 Prompt 版本列表、diff 预览、空/损坏账本诊断、active revision 唯一性、Prompt 回滚成功、revision 不存在、白名单工具执行、只读评测/成本/维护 dry-run 工具、未知工具拒绝和危险 payload 拒绝。
 - Renderer 测试：已覆盖 Prompt 版本治理入口、ApiService 幂等回滚策略、必须先预览差异再执行回滚，以及成功回滚后的设置刷新与反馈。
-- RAG/eval smoke 扩样：`tests/fixtures/evals/smoke_cases.json` 已从 20 条扩到 24 条，新增 Prompt 回滚、工具审计、Windows 首次运行和 RAG 风格参考场景。
+- RAG/eval smoke 扩样：`tests/fixtures/evals/smoke_cases.json` 已从 20 条扩到 27 条，新增 Prompt 回滚、工具审计、Windows 首次运行、导出语料 RAG 风格召回、无命中回退和误命中防护场景。
+- RAG/eval 数据集治理：当前 smoke fixture 已确认 UTF-8 可读，并补充导出语料 RAG 的风格召回、无命中回退和误命中防护样例。
 - 文档入口：`README.md`、`docs/USER_GUIDE.md`、`docs/SYSTEM_CHAINS.md`、`docs/HIGHLIGHTS.md`、`docs/api.md` 和 `docs/interview-playbook.md` 已补充。
 
 ## 下一阶段 P1
-
-- RAG/eval 数据集治理
-  - 修复或替换历史 fixture 中不可读的乱码样例，保留相同指标分布，避免评测语义不可审查。
-  - 为导出语料 RAG 增加更明确的风格召回、无命中回退和误命中场景。
-  - 验证：`python run.py eval --dataset tests/fixtures/evals/smoke_cases.json --preset smoke --report data/evals/smoke-report.json`。
 
 - Windows 真实环境手测
   - 在 Windows 10/11、管理员权限、微信 PC `3.9.12.51` 下跑一次完整首启、连接、发消息、诊断导出和停止流程。

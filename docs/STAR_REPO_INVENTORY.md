@@ -79,7 +79,7 @@ Generated: 2026-06-06
 - `python -m py_compile backend\core\agent_runtime.py backend\core\prompt_governance.py backend\core\tool_workflow.py backend\bot.py backend\bot_manager.py backend\api.py`
 - `python -m ruff check` 指定后端、CLI 和测试文件集。
 - 重点 Python 回归测试：`tests\test_smoke.py`、`tests\test_api.py`、`tests\test_runtime_observability.py`、`tests\test_agent_runtime.py`、`tests\test_optimization_tasks.py`、`tests\test_reply_policy.py`、`tests\test_backup_service.py`、`tests\test_eval_runner.py`
-- 离线评测烟雾门禁：`python run.py eval --dataset tests\fixtures\evals\smoke_cases.json --preset ci-smoke --report data\evals\ci-smoke-report.json`，当前固定数据集为 24 条。
+- 离线评测烟雾门禁：`python run.py eval --dataset tests\fixtures\evals\smoke_cases.json --preset ci-smoke --report data\evals\ci-smoke-report.json`，当前固定数据集为 27 条。
 - Node 测试：`npm test`
 
 `package.json` 当前还提供：

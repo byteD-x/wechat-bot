@@ -577,7 +577,7 @@ python run.py eval --dataset tests/fixtures/evals/smoke_cases.json --preset smok
 - 评测报告 JSON 固定包含 `summary`、`cases`、`regressions`、`generated_at`、`preset`、`app_version`。
 - 当前确定性指标为 `empty_reply_rate`、`short_reply_rate`、`retrieval_hit_rate`、`manual_feedback_hit_rate`、`runtime_exception_count`。
 - 当前失败阈值为 `runtime_exception_count > 0` 直接失败、`empty_reply_rate > 0` 直接失败、`short_reply_rate` 不得高于基线 `+15%`、`retrieval_hit_rate` 不得低于基线 `-10%`。
-- 固定烟雾集位于 `tests/fixtures/evals/smoke_cases.json`，当前共 `24` 条，覆盖基础回复、Prompt 回滚、受控工具工作流、Windows 首次运行提示和导出语料 RAG 风格参考。
+- 固定烟雾集位于 `tests/fixtures/evals/smoke_cases.json`，当前共 `27` 条，覆盖基础回复、Prompt 回滚、受控工具工作流、Windows 首次运行提示、导出语料 RAG 风格召回、无命中回退和误命中防护。
 - CI 现在会继续执行现有 pytest 和 Node 测试，并额外执行 `ruff check` 和 `python run.py eval` 烟雾门禁。
 
 #### 8.7.4 Prompt 治理与受控工具工作流

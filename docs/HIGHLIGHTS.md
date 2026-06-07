@@ -275,7 +275,7 @@ Provider 分层策略也更清晰：
 - `tests/test_optimization_tasks.py`：连接池复用、批量上下文、传输层抽象与重排测试
 - `tests/test_runtime_observability.py`：配置监听、防抖、健康检查与指标导出测试
 - `tests/test_api.py`：Prompt 回滚、Tool Workflow、备份恢复、回复策略等 API 回归
-- `tests/fixtures/evals/smoke_cases.json`：24 条固定离线评测 smoke 用例
+- `tests/fixtures/evals/smoke_cases.json`：27 条固定离线评测 smoke 用例
 
 ## 补充亮点：运行准备度与自愈排障
 
@@ -300,7 +300,7 @@ Provider 分层策略也更清晰：
 - 工具工作流限制最多 `8` 步、单步 payload 最多 `12000` 字符，并在执行前校验注册工具的 payload schema、权限和超时时间。
 - 每步 trace 返回 `index / tool / status / duration_ms / permission / schema_valid / timeout_ms`，方便桌面端展示失败位置、输入校验结果和恢复建议。
 - Electron 主进程只转发固定治理路径；Prompt 回滚必须匹配数字 revision，Tool Workflow 不支持任意 shell、文件写入、网络请求或动态插件执行，维护 dry-run 只返回聚合摘要，不展示备份候选列表、清理 targets 或完整本机路径。
-- API 测试已覆盖回滚成功、revision 不存在、白名单工具执行、维护 dry-run 输出脱敏、危险 payload 拒绝和未知工具拒绝，离线 smoke 数据集也扩展到 24 条，纳入 Prompt 回滚、工具审计、Windows 首次运行和 RAG 风格参考场景。
+- API 测试已覆盖回滚成功、revision 不存在、白名单工具执行、维护 dry-run 输出脱敏、危险 payload 拒绝和未知工具拒绝，离线 smoke 数据集也扩展到 27 条，纳入 Prompt 回滚、工具审计、Windows 首次运行、导出语料 RAG 风格召回、无命中回退和误命中防护场景。
 
 这组能力的重点不是“让 Agent 做更多事”，而是先把可恢复、可审计和可解释的边界立起来。
 
@@ -318,7 +318,7 @@ Provider 分层策略也更清晰：
 - 工作区备份与恢复形成闭环：支持 `quick/full` 两种备份、`backup_manifest.json` 清单、恢复前 `dry-run` 校验（默认 dry-run）、`checksum_summary` 完整性校验、`provider_credentials.json` 凭据快照、SQLite sidecar（`chat_memory.db-wal/-shm`）与 `vector_db` 全量快照，以及 `pre-restore` 自动快照；对缺失 `checksum_summary` 的旧备份，需显式 `allow_legacy_unverified=true` 才允许 apply，强调可恢复且可控。
 - 设置页新增数据治理清理：`memory / usage / export_rag` 支持 dry-run / apply，`apply` 仅在显式 scope 且 bot/growth 已停止时可执行，避免长期运行后历史产物无上限膨胀。
 - `run.py backup list/create/verify/cleanup/restore` 让这套恢复能力从“只有界面里能点”升级成“可以脚本化演练和 headless 运维”，同时控制长期运行下的备份膨胀。
-- 离线评测从“主观感觉质量还行”升级成确定性门禁：固定 smoke 数据集已扩展到 24 条，覆盖 Prompt 回滚、工具流审计、Windows 首次运行和导出语料 RAG 风格参考，并直接接入 CI。
+- 离线评测从“主观感觉质量还行”升级成确定性门禁：固定 smoke 数据集已扩展到 27 条，覆盖 Prompt 回滚、工具流审计、Windows 首次运行、导出语料 RAG 风格召回、无命中回退和误命中防护，并直接接入 CI。
 - Electron renderer 目录单独声明 ESM 边界，消除了 `MODULE_TYPELESS_PACKAGE_JSON` 警告，同时保持主进程 CommonJS，不把模块制式切换扩散成全仓重构。
 
 这组能力说明项目已经不只是“把微信接上大模型”，而是在往“可长期运行、可恢复、可验证”的个人产品演进。

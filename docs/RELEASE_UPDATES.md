@@ -30,7 +30,7 @@
 
 ## Improvements
 
-- 扩展离线 smoke 数据集到 24 条，覆盖 Prompt 回滚、工具流审计、Windows 首次运行和导出语料 RAG 风格参考场景。
+- 扩展离线 smoke 数据集到 27 条，覆盖 Prompt 回滚、工具流审计、Windows 首次运行、导出语料 RAG 风格召回、无命中回退和误命中防护场景。
 - 同步 README、用户手册、系统链路、项目亮点、STAR 材料和 API 文档，让成熟 Windows 产品化、治理接口和诊断边界保持一致。
 
 ## Fixes

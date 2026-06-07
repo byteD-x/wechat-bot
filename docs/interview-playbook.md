@@ -60,7 +60,7 @@ Result：
 
 - 当前新增 API 的目标测试已覆盖成功、404、白名单执行和未知工具拒绝。
 - 全量 `tests/test_api.py` 已通过。
-- 离线 smoke dataset 扩展到 24 条，覆盖 Prompt 回滚、工具流审计、Windows 首次运行和 RAG 风格参考场景。
+- 离线 smoke dataset 扩展到 27 条，覆盖 Prompt 回滚、工具流审计、Windows 首次运行、导出语料 RAG 风格召回、无命中回退和误命中防护场景。
 
 ## 不要夸大的点
 
