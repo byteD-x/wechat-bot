@@ -9,6 +9,12 @@
 - Electron 主进程只允许转发白名单路径；Prompt 治理与 Agent Tool Workflow 已加入 `src/main/ipc.js` 的 allowlist。
 - 不要把 API token、模型密钥、OAuth/session、聊天原文或诊断支持包中的敏感内容写入日志、截图或文档。
 
+## 自动生成路由索引
+
+- [`docs/API_ROUTE_INDEX.md`](API_ROUTE_INDEX.md) 由 `scripts/generate_api_route_index.py` 从 `backend/api.py` 的 `@app.route` 装饰器静态生成。
+- 该索引只记录路由、方法、处理函数和源码行号，用于发现接口清单漂移；请求体、响应字段、错误码和安全边界仍以本文的详细契约为准。
+- 更新命令：`.\.venv\Scripts\python.exe scripts\generate_api_route_index.py`
+
 ## GET `/api/v1/admin/prompts/revisions`
 
 用途：只读列出系统 Prompt 审计账本中的 revision 元数据，用于桌面端展示版本历史，不直接返回完整 Prompt 正文。

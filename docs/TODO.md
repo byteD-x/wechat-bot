@@ -21,6 +21,7 @@
 - RAG Hybrid Search + Query Rewrite：`agent.retriever_hybrid_enabled` 已支持显式开启规则化 query rewrite、本地关键词召回、向量/关键词候选融合与 `/api/status.retriever_stats` 计数；默认关闭以保持旧行为。
 - Semantic Cache：`agent.response_cache.semantic_enabled` 已作为默认关闭的响应缓存扩展落地；开启后仅在同一 provider、model、chat、system prompt、非当前用户 prompt context、RAG citation ids 与安全策略边界内相似命中，命中后仍重新执行安全护栏。
 - 运行时治理指标：`/api/status.governance_metrics` 与 `/api/metrics` 已暴露 Prompt 回滚和 API Tool Workflow 的聚合次数、成功率、失败原因与耗时；指标只记录短枚举和数值，不记录完整 Prompt、聊天正文、token、工具输出或完整本机路径。
+- 统一 API 路由索引生成：`scripts/generate_api_route_index.py` 已可从 `backend/api.py` 的 `@app.route` 装饰器静态生成 `docs/API_ROUTE_INDEX.md`；测试会校验生成文档与当前路由保持一致，减少人工维护的接口清单漂移。
 - 知识库治理 API：`GET /api/knowledge_base/status` 与 `POST /api/knowledge_base/dry-run|ingest|rebuild|delete` 已落地，首版只支持请求体 text/Markdown，不读取任意本机文件，预览不返回正文或完整本机路径。
 - 知识库治理 UI 最小入口：设置页“数据与恢复 / 知识库治理”已支持粘贴纯文本或 Markdown、刷新状态、预览分块，并要求同一份内容 dry-run 后才允许写入；暂不开放文件上传、目录扫描、rebuild 或 delete。
 - 知识库治理 CLI 显式文件入口：`python run.py knowledge-base import-files` 已支持 `.txt/.md` 显式文件列表，默认只 dry-run，拒绝目录和 glob，`--apply` 才调用 loopback 本机 API 写入。
@@ -37,9 +38,6 @@
   - 记录：环境、命令、截图或日志位置、失败项、是否需要用户操作。
 
 ## 下一阶段 P2
-
-- 统一 API 文档生成
-  - 当前 `docs/api.md` 是人工维护；后续可从路由和测试生成接口清单，减少文档漂移。
 
 - 安装包级体验打磨
   - 检查首次运行引导、权限提示、更新失败恢复和后台服务异常退出提示是否符合成熟 Windows 产品预期。
