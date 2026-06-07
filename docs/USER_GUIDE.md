@@ -287,6 +287,7 @@ Invoke-RestMethod -Headers @{ "Authorization" = "Bearer your_token" } http://127
     "llm_foreground_max_concurrency": 1,
     "model_routing": {},
     "response_cache": {},
+    "model_tool_calls_enabled": False,
     "background_ai_batch_time": "04:00",
     "background_ai_missed_window_policy": "wait_until_next_day",
     "background_ai_defer_mode": "defer_all",
@@ -302,6 +303,7 @@ Invoke-RestMethod -Headers @{ "Authorization" = "Bearer your_token" } http://127
 - `retriever_keyword_weight`: Hybrid 融合时关键词召回的权重，默认 `0.35`，取值范围 `0.0` 到 `1.0`。
 - `model_routing`: 可解释模型路由决策配置。当前只记录 `model_route`/`model_route_stats`，不会自动切换用户选择的 provider 或认证方式。
 - `response_cache`: 精确响应缓存配置，默认 `{}` 等价于关闭。开启后仅缓存最终回复和由 provider/model、chat_id、用户文本、system prompt、prompt messages、RAG citation ids、安全策略生成的 hash key，不保存原始 prompt、聊天正文、真实联系人标识或 token；命中后仍会重新执行安全护栏与引用校验。
+- `model_tool_calls_enabled`: 模型侧 Tool Calling 开关，默认关闭。开启后仅在 OpenAI-compatible 对话接口中向模型暴露安全白名单工具，执行仍复用受控工具工作流的 schema、权限、超时和 trace 边界。
 - `background_ai_batch_time`: 后台 AI 任务统一批处理时间，默认每天 `04:00`
 - `background_ai_missed_window_policy`: 错过当天批处理窗口后的策略，当前默认 `wait_until_next_day`
 - `background_ai_defer_mode`: 白天后台 AI 的处理模式，当前默认 `defer_all`
@@ -454,6 +456,7 @@ python -m tools.prompt_gen.generator
 - RAG 精排模式
 - Embedding 缓存
 - 精确响应缓存
+- 模型侧 Tool Calling 开关
 - 后台事实提取
 - LangSmith tracing
 
@@ -464,6 +467,14 @@ python -m tools.prompt_gen.generator
 - `retriever_keyword_weight`
 - `retriever_cross_encoder_model`
 - `retriever_cross_encoder_device`
+- `model_tool_calls_enabled`: 默认 `false`；开启后仅在 OpenAI-compatible 对话接口中暴露模型侧安全白名单工具，并仍复用受控工具工作流的 schema、权限、超时和 trace。
+
+模型侧 Tool Calling 边界：
+
+- 模型可见工具只包含 `readiness_check`、`eval_latest`、`cost_summary`、`backup_cleanup_dry_run`、`data_controls_dry_run`。
+- 模型侧不暴露 `prompt_preview`、`config_audit`，也不开放 shell、文件写入、任意 HTTP 或动态插件。
+- 运行时最多执行一轮模型工具调用，再请求一轮 final 回复；如果 final 仍返回 `tool_calls`，只记录 `model_tool_call_loop_blocked`，不会继续循环。
+- `/api/status.model_tool_call_stats` 只记录 `enabled / requests / successes / failures / blocked` 聚合计数，不保存原始 Prompt、聊天正文、token、完整本机路径或工具原始敏感输出。
 
 ### 8.4 `logging`
 
@@ -510,6 +521,7 @@ python -m tools.prompt_gen.generator
 - `response_cache_stats`
 - `safety_stats`
 - `model_route_stats`
+- `model_tool_call_stats`
 
 消息页里的“消息详情”面板现在会展示当前联系人的画像摘要和专属 Prompt，并允许直接编辑；人工编辑后的版本会继续作为后台渐进式更新的基础。
 设置页支持“保存本模块”；日志页默认启用自动换行，并会把成长任务、发送链和 API 请求整理成更容易扫描的摘要行；侧边栏底部新增“关于”页面入口，可直接查看作者主页、开源仓库、Issue 反馈入口与赞助说明文档。
@@ -613,6 +625,11 @@ python run.py eval --dataset tests/fixtures/evals/smoke_cases.json --preset smok
   - 当前白名单只包含 `config_audit`、`readiness_check`、`prompt_preview`、`eval_latest`、`cost_summary`、`backup_cleanup_dry_run`、`data_controls_dry_run`。
   - `eval_latest`、`cost_summary`、`backup_cleanup_dry_run` 与 `data_controls_dry_run` 只读取本地评测、成本统计或维护 dry-run 结果，trace 仅返回摘要、计数和筛选条件，不展开完整评测用例、聊天正文、成本复核队列、备份候选列表、清理 targets 或完整本机路径。
   - 未知工具会返回失败 trace 和 `bad_workflow`，不会降级为任意命令、任意文件写入、任意网络请求或动态插件执行。
+- 模型侧 Tool Calling：
+  - 由 `agent.model_tool_calls_enabled` 显式开启，默认关闭。
+  - 只适用于 OpenAI-compatible 对话接口；Anthropic native、Vertex、OpenAI Responses、Google Code Assist 等专用传输会跳过模型侧工具执行。
+  - 模型可见白名单比 API 工具流更窄，只包含 `readiness_check`、`eval_latest`、`cost_summary`、`backup_cleanup_dry_run`、`data_controls_dry_run`。
+  - 模型侧不会看到 `prompt_preview` 或 `config_audit`；未知工具、非法 JSON、非对象参数或 schema 不通过都会记录拒绝 trace，并且不会进入任意命令、文件写入、网络请求或动态插件路径。
 - 仪表盘“风险与恢复 / 受控工具流”已经接入该接口：
   - 只能从下拉框选择白名单工具，不能输入任意工具名或任意 JSON。
   - 建议先执行 `dry-run`，确认步骤顺序后再执行真实工具流。

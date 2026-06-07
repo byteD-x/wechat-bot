@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional
@@ -17,6 +18,22 @@ DEFAULT_TOOL_TIMEOUT_SEC = 5.0
 DEFAULT_COST_SUMMARY_TIMEOUT_SEC = 10.0
 DEFAULT_BACKUP_KEEP_QUICK = 5
 DEFAULT_BACKUP_KEEP_FULL = 3
+MODEL_VISIBLE_TOOL_NAMES = frozenset(
+    {
+        "readiness_check",
+        "eval_latest",
+        "cost_summary",
+        "backup_cleanup_dry_run",
+        "data_controls_dry_run",
+    }
+)
+MODEL_TOOL_DESCRIPTIONS = {
+    "readiness_check": "Return a read-only readiness summary for the local assistant runtime.",
+    "eval_latest": "Return the latest offline evaluation report summary without raw cases.",
+    "cost_summary": "Return aggregate model usage and cost statistics for a safe period.",
+    "backup_cleanup_dry_run": "Preview backup cleanup impact without deleting files.",
+    "data_controls_dry_run": "Preview local data cleanup impact for selected supported scopes.",
+}
 
 EvalReportLoader = Callable[[], Awaitable[dict[str, Any]]]
 CostSummaryLoader = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
@@ -74,6 +91,72 @@ class ToolRegistry:
 
     def names(self) -> list[str]:
         return sorted(self._definitions)
+
+
+def build_model_tool_schemas(
+    registry: ToolRegistry,
+    *,
+    allowed_names: Optional[set[str]] = None,
+) -> list[dict[str, Any]]:
+    """Build OpenAI-compatible function tool schemas for the model-visible subset."""
+    visible_names = set(allowed_names or MODEL_VISIBLE_TOOL_NAMES)
+    tools: list[dict[str, Any]] = []
+    for name in registry.names():
+        if name not in visible_names:
+            continue
+        definition = registry.get(name)
+        tools.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": definition.name,
+                    "description": MODEL_TOOL_DESCRIPTIONS.get(
+                        definition.name,
+                        f"Run read-only local tool: {definition.name}.",
+                    ),
+                    "parameters": dict(definition.payload_schema),
+                },
+            }
+        )
+    return tools
+
+
+def model_tool_calls_to_steps(
+    tool_calls: list[Any],
+    *,
+    allowed_names: Optional[set[str]] = None,
+) -> list[dict[str, Any]]:
+    """Convert normalized model tool calls into controlled workflow steps."""
+    visible_names = set(allowed_names or MODEL_VISIBLE_TOOL_NAMES)
+    steps: list[dict[str, Any]] = []
+    for item in tool_calls or []:
+        name = str(getattr(item, "name", "") or "").strip()
+        if name not in visible_names:
+            raise ToolWorkflowError(f"unsupported model tool: {name}")
+        raw_arguments = str(getattr(item, "arguments", "") or "").strip()
+        if len(raw_arguments) > MAX_STEP_PAYLOAD_CHARS:
+            raise ToolWorkflowError("model tool arguments are too large")
+        if raw_arguments:
+            try:
+                payload = json.loads(raw_arguments)
+            except json.JSONDecodeError as exc:
+                raise ToolWorkflowError(f"model tool arguments must be valid JSON: {name}") from exc
+        else:
+            payload = {}
+        if not isinstance(payload, dict):
+            raise ToolWorkflowError(f"model tool arguments must be a JSON object: {name}")
+        steps.append(
+            {
+                "tool": name,
+                "payload": payload,
+                "tool_call_id": str(getattr(item, "id", "") or "").strip(),
+            }
+        )
+    if not steps:
+        raise ToolWorkflowError("model tool_calls are required")
+    if len(steps) > MAX_WORKFLOW_STEPS:
+        raise ToolWorkflowError(f"model tool_calls cannot exceed {MAX_WORKFLOW_STEPS}")
+    return steps
 
 
 def _json_type_matches(value: Any, expected_type: str) -> bool:
@@ -332,6 +415,9 @@ class ControlledToolWorkflowService:
                 "attempts": 0,
                 "retry_count": 0,
             }
+            tool_call_id = str(step.get("tool_call_id") or "").strip()
+            if tool_call_id:
+                item["tool_call_id"] = tool_call_id
             try:
                 definition = self._registry.get(tool)
                 item["permission"] = definition.permission
@@ -369,6 +455,9 @@ class ControlledToolWorkflowService:
                 break
 
         return {"success": success, "trace": trace}
+
+    def model_tool_schemas(self) -> list[dict[str, Any]]:
+        return build_model_tool_schemas(self._registry)
 
     @staticmethod
     def _normalize_retry_count(value: Any) -> int:

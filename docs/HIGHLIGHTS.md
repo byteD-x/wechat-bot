@@ -255,13 +255,13 @@ Provider 分层策略也更清晰：
 - 不是单模型绑定，而是兼容 OpenAI-compatible 生态，模型供应商可以替换，运行时链路不需要重写
 - 不是只有召回，还做了轻量精排和可选本地 `Cross-Encoder` 精排，并且支持失败自动回退
 - 不是只追求功能可用，而是补齐了配置热重载、状态诊断、指标导出和工程级降级策略
-- 不是把 Agent 能力无边界开放，而是先把 Prompt 回滚、配置审计、就绪检查和 Prompt 预览做成可审计、可追踪、可拒绝的受控工作流
+- 不是把 Agent 能力无边界开放，而是先把 Prompt 回滚、配置审计、就绪检查、Prompt 预览和模型侧安全工具调用做成可审计、可追踪、可拒绝的受控工作流
 
 ## 5. 证据索引
 
 下面这些文件可以直接作为亮点表述的证据来源：
 
-- `backend/core/agent_runtime.py`：LangGraph 运行时、并发上下文准备、精排与回退、Embedding 缓存、后台任务
+- `backend/core/agent_runtime.py`：LangGraph 运行时、并发上下文准备、精排与回退、Embedding 缓存、模型侧 Tool Calling、后台任务
 - `backend/core/ai_client.py`：共享 `httpx.AsyncClient` 连接池、引用计数释放
 - `backend/core/memory.py`：SQLite 记忆层、批量上下文读取、WAL 和 mmap 优化
 - `backend/core/config_service.py`：中心化配置快照与运行时发布
@@ -272,7 +272,7 @@ Provider 分层策略也更清晰：
 - `backend/transports/wcferry_adapter.py`：版本门禁、管理员权限校验、消息接收通道初始化与状态暴露
 - `src/main/diagnostics-snapshot.js`：自动脱敏的本机诊断支持包导出
 - `src/main/ipc.js`：桌面端后端请求 allowlist、Prompt 回滚 revision 路径约束和 Tool Workflow 转发边界
-- `tests/test_agent_runtime.py`：运行时上下文聚合、缓存命中、Cross-Encoder 精排测试
+- `tests/test_agent_runtime.py`：运行时上下文聚合、缓存命中、模型侧 Tool Calling、Cross-Encoder 精排测试
 - `tests/test_optimization_tasks.py`：连接池复用、批量上下文、传输层抽象与重排测试
 - `tests/test_runtime_observability.py`：配置监听、防抖、健康检查与指标导出测试
 - `tests/test_api.py`：Prompt 回滚、Tool Workflow、备份恢复、回复策略等 API 回归
@@ -298,8 +298,10 @@ Provider 分层策略也更清晰：
 
 - Prompt 回滚通过 `POST /api/v1/admin/prompts/{revision}/rollback` 落地，回滚时追加新的 active revision，并在 `data/prompt_revisions.json` 保留 `rollback_from / reason / operator / created_at`。
 - 受控 Agent Tool Workflow 通过 `POST /api/v1/agents/tool-workflow` 落地，当前只允许 `config_audit`、`readiness_check`、`prompt_preview`、`eval_latest`、`cost_summary`、`backup_cleanup_dry_run`、`data_controls_dry_run` 七类注册工具。
+- 模型侧 Tool Calling 通过 `agent.model_tool_calls_enabled` 显式开启，默认关闭；开启后只向 OpenAI-compatible 对话模型暴露 `readiness_check`、`eval_latest`、`cost_summary`、`backup_cleanup_dry_run`、`data_controls_dry_run` 五个安全工具，不暴露 `prompt_preview` 或 `config_audit`。
 - 工具工作流限制最多 `8` 步、单步 payload 最多 `12000` 字符，并在执行前校验注册工具的 payload schema、权限和超时时间。
 - 每步 trace 返回 `index / tool / status / duration_ms / permission / schema_valid / timeout_ms`，方便桌面端展示失败位置、输入校验结果和恢复建议。
+- 模型侧工具调用最多执行一轮，再请求一轮 final 回复；如果 final 继续返回 `tool_calls`，只记录 `model_tool_call_loop_blocked`，不会进入循环；`/api/status.model_tool_call_stats` 仅返回开关、请求、成功、失败和阻断聚合计数。
 - Electron 主进程只转发固定治理路径；Prompt 回滚必须匹配数字 revision，Tool Workflow 不支持任意 shell、文件写入、网络请求或动态插件执行，维护 dry-run 只返回聚合摘要，不展示备份候选列表、清理 targets 或完整本机路径。
 - API 测试已覆盖回滚成功、revision 不存在、白名单工具执行、维护 dry-run 输出脱敏、危险 payload 拒绝和未知工具拒绝，离线 smoke 数据集也扩展到 27 条，纳入 Prompt 回滚、工具审计、Windows 首次运行、导出语料 RAG 风格召回、无命中回退和误命中防护场景。
 

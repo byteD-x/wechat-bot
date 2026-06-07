@@ -1,10 +1,12 @@
 import asyncio
+import json
 from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
 
 from backend.core.agent_runtime import AgentRuntime
+from backend.core.provider_compat import NormalizedChatResult, NormalizedToolCall
 
 
 class _FakeMessage:
@@ -1009,6 +1011,266 @@ async def test_agent_runtime_invoke_does_not_fallback_for_tool_call_only_respons
 
     assert reply == ""
     assert prepared.response_metadata["tool_call_only_response"] is True
+
+
+def _model_tool_runtime(monkeypatch, *, enabled=True, auth_transport=None):
+    monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
+    settings = {
+        "base_url": "http://127.0.0.1:11434/v1",
+        "api_key": "",
+        "model": "test-model",
+        "allow_empty_key": True,
+    }
+    if auth_transport:
+        settings["auth_transport"] = auth_transport
+    return AgentRuntime(
+        settings=settings,
+        bot_cfg={},
+        agent_cfg={"enabled": True, "model_tool_calls_enabled": enabled},
+    )
+
+
+def _model_tool_prepared():
+    return SimpleNamespace(
+        prompt_messages=[_FakeMessage("hello")],
+        chat_id="friend:alice",
+        user_text="hello",
+        response_metadata={},
+        timings={},
+    )
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_model_tool_calls_feature_off_keeps_langchain_path(monkeypatch):
+    runtime = _model_tool_runtime(monkeypatch, enabled=False)
+    prepared = _model_tool_prepared()
+    fallback_calls = []
+
+    async def _fallback(prepared_request, **kwargs):
+        fallback_calls.append(kwargs)
+        return NormalizedChatResult(text="unexpected fallback")
+
+    monkeypatch.setattr(runtime, "_invoke_openai_compatible_reply", _fallback)
+
+    reply = await runtime.invoke(prepared)
+
+    assert reply == "ok"
+    assert fallback_calls == []
+    assert "model_tool_calls_enabled" not in prepared.response_metadata
+    assert runtime.get_status()["model_tool_call_stats"] == {
+        "enabled": False,
+        "requests": 0,
+        "successes": 0,
+        "failures": 0,
+        "blocked": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_model_tool_calls_run_safe_tool_and_final_reply(monkeypatch):
+    runtime = _model_tool_runtime(monkeypatch, enabled=True)
+    prepared = _model_tool_prepared()
+    observed_calls = []
+
+    async def _cost_summary_loader(payload):
+        return {
+            "success": True,
+            "filters": dict(payload),
+            "overview": {"total_tokens": 42},
+            "models": [{"model": "test-model"}],
+            "review_queue": [{"raw": "hidden"}],
+        }
+
+    runtime.update_runtime_dependencies({"cost_summary_loader": _cost_summary_loader})
+
+    async def _fallback(prepared_request, **kwargs):
+        observed_calls.append(kwargs)
+        if len(observed_calls) == 1:
+            return NormalizedChatResult(
+                text="",
+                tool_calls=[
+                    NormalizedToolCall(
+                        id="call_cost",
+                        name="cost_summary",
+                        arguments='{"period":"7d","include_estimated":false}',
+                    )
+                ],
+                finish_reason="tool_calls",
+            )
+        return NormalizedChatResult(text="cost summary ready", finish_reason="stop")
+
+    monkeypatch.setattr(runtime, "_invoke_openai_compatible_reply", _fallback)
+
+    reply = await runtime.invoke(prepared)
+
+    assert reply == "cost summary ready"
+    initial_tools = observed_calls[0]["tools"]
+    tool_names = [item["function"]["name"] for item in initial_tools]
+    assert tool_names == [
+        "backup_cleanup_dry_run",
+        "cost_summary",
+        "data_controls_dry_run",
+        "eval_latest",
+        "readiness_check",
+    ]
+    assert "prompt_preview" not in tool_names
+    assert "config_audit" not in tool_names
+    assert observed_calls[0]["tool_choice"] == "auto"
+    final_messages = observed_calls[1]["messages"]
+    tool_message = next(item for item in final_messages if item["role"] == "tool")
+    assert tool_message["tool_call_id"] == "call_cost"
+    tool_payload = json.loads(tool_message["content"])
+    assert tool_payload["success"] is True
+    assert tool_payload["output"]["overview"]["total_tokens"] == 42
+    assert tool_payload["output"]["review_queue_count"] == 1
+    assert "review_queue" not in tool_payload["output"]
+    workflow = prepared.response_metadata["model_tool_workflow"]
+    assert workflow["success"] is True
+    assert workflow["trace"][0]["tool"] == "cost_summary"
+    assert workflow["trace"][0]["tool_call_id"] == "call_cost"
+    assert "tool_call_only_response" not in prepared.response_metadata
+    assert runtime.get_status()["model_tool_call_stats"] == {
+        "enabled": True,
+        "requests": 1,
+        "successes": 1,
+        "failures": 0,
+        "blocked": 0,
+    }
+
+
+@pytest.mark.parametrize(
+    ("tool_call", "error_match"),
+    [
+        (
+            NormalizedToolCall(id="call_shell", name="shell_exec", arguments='{"cmd":"dir"}'),
+            "unsupported model tool",
+        ),
+        (
+            NormalizedToolCall(id="call_prompt", name="prompt_preview", arguments="{}"),
+            "unsupported model tool",
+        ),
+        (
+            NormalizedToolCall(id="call_bad_json", name="readiness_check", arguments="{broken"),
+            "valid JSON",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_agent_runtime_model_tool_calls_reject_invalid_calls_with_trace(
+    monkeypatch,
+    tool_call,
+    error_match,
+):
+    runtime = _model_tool_runtime(monkeypatch, enabled=True)
+    prepared = _model_tool_prepared()
+    observed_calls = []
+
+    async def _fallback(prepared_request, **kwargs):
+        observed_calls.append(kwargs)
+        if len(observed_calls) > 1:
+            raise AssertionError("rejected model tool calls must not trigger final model pass")
+        return NormalizedChatResult(
+            text="",
+            tool_calls=[tool_call],
+            finish_reason="tool_calls",
+        )
+
+    monkeypatch.setattr(runtime, "_invoke_openai_compatible_reply", _fallback)
+
+    reply = await runtime.invoke(prepared)
+
+    assert reply == ""
+    assert len(observed_calls) == 1
+    workflow = prepared.response_metadata["model_tool_workflow"]
+    assert workflow["success"] is False
+    assert workflow["error_type"] == "tool_call_rejected"
+    assert error_match in workflow["error"]
+    assert workflow["trace"][0]["tool"] == tool_call.name
+    assert workflow["trace"][0]["tool_call_id"] == tool_call.id
+    assert workflow["trace"][0]["error_type"] == "tool_call_rejected"
+    assert prepared.response_metadata["tool_call_only_response"] is True
+    stats = runtime.get_status()["model_tool_call_stats"]
+    assert stats["requests"] == 1
+    assert stats["blocked"] == 1
+    assert stats["successes"] == 0
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_model_tool_calls_block_final_tool_call_loop(monkeypatch):
+    runtime = _model_tool_runtime(monkeypatch, enabled=True)
+    prepared = _model_tool_prepared()
+    observed_calls = []
+    runtime.update_runtime_dependencies(
+        {"readiness_loader": lambda: {"success": True, "ready": True}}
+    )
+
+    async def _fallback(prepared_request, **kwargs):
+        observed_calls.append(kwargs)
+        if len(observed_calls) == 1:
+            return NormalizedChatResult(
+                text="",
+                tool_calls=[
+                    NormalizedToolCall(
+                        id="call_ready",
+                        name="readiness_check",
+                        arguments="{}",
+                    )
+                ],
+                finish_reason="tool_calls",
+            )
+        return NormalizedChatResult(
+            text="",
+            tool_calls=[
+                NormalizedToolCall(
+                    id="call_loop",
+                    name="readiness_check",
+                    arguments="{}",
+                )
+            ],
+            finish_reason="tool_calls",
+        )
+
+    monkeypatch.setattr(runtime, "_invoke_openai_compatible_reply", _fallback)
+
+    reply = await runtime.invoke(prepared)
+
+    assert reply == ""
+    assert len(observed_calls) == 2
+    assert prepared.response_metadata["model_tool_workflow"]["success"] is True
+    assert prepared.response_metadata["model_tool_call_loop_blocked"] is True
+    assert prepared.response_metadata["tool_call_only_response"] is True
+    stats = runtime.get_status()["model_tool_call_stats"]
+    assert stats["requests"] == 1
+    assert stats["successes"] == 1
+    assert stats["blocked"] == 1
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_model_tool_calls_skip_unsupported_transport(monkeypatch):
+    runtime = _model_tool_runtime(
+        monkeypatch,
+        enabled=True,
+        auth_transport="anthropic_native",
+    )
+    prepared = _model_tool_prepared()
+    fallback_calls = []
+
+    async def _fallback(prepared_request, **kwargs):
+        fallback_calls.append(kwargs)
+        return NormalizedChatResult(text="unexpected fallback")
+
+    async def _ainvoke(messages, config=None):
+        return _FakeMessage("anthropic reply")
+
+    runtime._chat_model.ainvoke = _ainvoke
+    monkeypatch.setattr(runtime, "_invoke_openai_compatible_reply", _fallback)
+
+    reply = await runtime.invoke(prepared)
+
+    assert reply == "anthropic reply"
+    assert fallback_calls == []
+    assert prepared.response_metadata["model_tool_calls_skipped"] == "unsupported_transport"
+    assert runtime.get_status()["model_tool_call_stats"]["requests"] == 0
 
 
 @pytest.mark.asyncio

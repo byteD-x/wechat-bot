@@ -9,6 +9,7 @@
 - Prompt 版本列表与差异 API：`GET /api/v1/admin/prompts/revisions` 与 `GET /api/v1/admin/prompts/{revision}/diff` 已落地；列表只返回 revision 元数据，不泄露完整 Prompt，diff 供回滚确认前预览。
 - Prompt 回滚 UI：设置页系统提示区已提供“Prompt 版本治理”折叠面板，可查看版本历史、先预览 diff、再确认回滚，并在成功后刷新只读注入块与运行时状态。
 - 受控 Agent Tool Workflow API：`POST /api/v1/agents/tool-workflow` 已落地，当前白名单包含 `config_audit`、`readiness_check`、`prompt_preview`、`eval_latest`、`cost_summary`、`backup_cleanup_dry_run`、`data_controls_dry_run`。
+- 模型 Tool Calling 接入 ToolRegistry：`agent.model_tool_calls_enabled` 已作为默认关闭开关落地；开启后模型侧只暴露 `readiness_check`、`eval_latest`、`cost_summary`、`backup_cleanup_dry_run`、`data_controls_dry_run` 五个安全工具，不暴露 `prompt_preview` 或 `config_audit`，并通过 `/api/status.model_tool_call_stats` 返回聚合计数。
 - Tool Workflow UI：仪表盘“风险与恢复 / 受控工具流”已接入白名单工具选择、dry-run、逐步 trace、失败步骤突出和恢复建议；Renderer 测试覆盖 dry-run、单步失败 trace、`continue_on_error`、最新评测、成本摘要、备份清理预览和数据治理预览的只读摘要展示。
 - API 测试：已覆盖 Prompt 版本列表、diff 预览、空/损坏账本诊断、active revision 唯一性、Prompt 回滚成功、revision 不存在、白名单工具执行、只读评测/成本/维护 dry-run 工具、未知工具拒绝和危险 payload 拒绝。
 - Renderer 测试：已覆盖 Prompt 版本治理入口、ApiService 幂等回滚策略、必须先预览差异再执行回滚，以及成功回滚后的设置刷新与反馈。
@@ -36,7 +37,7 @@
   - 当前 `docs/api.md` 是人工维护；后续可从路由和测试生成接口清单，减少文档漂移。
 
 - 运行时治理指标
-  - 为 Prompt 回滚次数、Tool Workflow 成功率、失败原因和耗时增加可观测指标。
+  - 继续为 Prompt 回滚次数、API Tool Workflow 成功率、失败原因和耗时增加可观测指标。
   - 注意不要记录完整 Prompt、聊天正文或 token。
 
 - 安装包级体验打磨

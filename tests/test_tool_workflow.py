@@ -8,7 +8,9 @@ from backend.core.tool_workflow import (
     ControlledToolWorkflowService,
     ToolDefinition,
     ToolRegistry,
+    model_tool_calls_to_steps,
 )
+from backend.core.provider_compat import NormalizedToolCall
 
 
 def _snapshot():
@@ -168,6 +170,70 @@ async def test_tool_workflow_runs_readonly_observability_tools():
     assert cost_output["model_count"] == 2
     assert cost_output["review_queue_count"] == 1
     assert "review_queue" not in cost_output
+
+
+def test_tool_workflow_model_tool_schemas_expose_safe_subset_only():
+    service = ControlledToolWorkflowService(
+        config_loader=_snapshot,
+        readiness_loader=_readiness,
+    )
+
+    tools = service.model_tool_schemas()
+    names = [item["function"]["name"] for item in tools]
+
+    assert names == [
+        "backup_cleanup_dry_run",
+        "cost_summary",
+        "data_controls_dry_run",
+        "eval_latest",
+        "readiness_check",
+    ]
+    assert "prompt_preview" not in names
+    assert "config_audit" not in names
+    assert tools[0]["type"] == "function"
+    assert tools[0]["function"]["parameters"]["type"] == "object"
+
+
+def test_tool_workflow_converts_model_tool_calls_to_steps():
+    calls = [
+        NormalizedToolCall(
+            id="call_1",
+            name="cost_summary",
+            arguments='{"period":"7d","include_estimated":false}',
+        )
+    ]
+
+    steps = model_tool_calls_to_steps(calls)
+
+    assert steps == [
+        {
+            "tool": "cost_summary",
+            "payload": {"period": "7d", "include_estimated": False},
+            "tool_call_id": "call_1",
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("tool_call", "message"),
+    [
+        (
+            NormalizedToolCall(id="call_1", name="shell_exec", arguments='{"cmd":"dir"}'),
+            "unsupported model tool",
+        ),
+        (
+            NormalizedToolCall(id="call_2", name="readiness_check", arguments="{broken"),
+            "valid JSON",
+        ),
+        (
+            NormalizedToolCall(id="call_3", name="readiness_check", arguments='["not-object"]'),
+            "JSON object",
+        ),
+    ],
+)
+def test_tool_workflow_rejects_invalid_model_tool_calls(tool_call, message):
+    with pytest.raises(ValueError, match=message):
+        model_tool_calls_to_steps([tool_call])
 
 
 @pytest.mark.asyncio

@@ -64,6 +64,7 @@
 - `Hot Reload`: 配置热重载优先使用 `watchdog` 事件监听，缺失依赖时自动回退轮询，并带防抖。
 - `Config Snapshot`: 后端已引入中心化配置快照服务，`/api/config/audit` 可返回当前生效配置、已知未消费字段和配置变更影响摘要。
 - `Controlled Agent Tools`: `POST /api/v1/agents/tool-workflow` 只执行白名单工具 `config_audit`、`readiness_check`、`prompt_preview`、`eval_latest`、`cost_summary`、`backup_cleanup_dry_run`、`data_controls_dry_run`，每步返回 trace；维护 dry-run 工具只返回聚合摘要，不暴露备份候选列表、清理 targets 或完整本机路径，明确不支持任意命令或动态插件执行。
+- `Model Tool Calling`: `agent.model_tool_calls_enabled` 默认关闭；开启后仅在 OpenAI-compatible 对话接口中向模型暴露 `readiness_check`、`eval_latest`、`cost_summary`、`backup_cleanup_dry_run`、`data_controls_dry_run` 五个只读/预览工具，并复用 `ControlledToolWorkflowService` 的 schema、权限、超时和 trace 边界，不向模型暴露 `prompt_preview` 或 `config_audit`。
 
 > 知识库 UI 说明：设置页已经提供粘贴式治理入口，支持手动粘贴纯文本或 Markdown 后刷新状态、预览分块，并且只有同一份内容完成 dry-run 后才允许写入；文件上传、目录扫描、rebuild 和 delete 仍未在桌面设置页开放。
 
@@ -246,6 +247,7 @@ python run.py web
     "llm_foreground_max_concurrency": 1,
     "model_routing": {},                     # 记录可解释模型路由决策，不自动切换 provider
     "response_cache": {},                    # 默认关闭；只缓存最终回复与安全 hash key，不保存原始 prompt/聊天正文
+    "model_tool_calls_enabled": false,       # 默认关闭；开启后只允许模型调用安全白名单治理工具
     "background_ai_batch_time": "04:00",
     "background_ai_missed_window_policy": "wait_until_next_day",
     "background_ai_defer_mode": "defer_all",
@@ -290,6 +292,7 @@ This phase turns the project from a demo-style assistant into a safer personal p
 - `Prompt Governance + Controlled Tools`
   - Prompt rollback appends a new audited active revision instead of overwriting history.
   - Agent Tool Workflow is deliberately limited to whitelisted local tools and bounded payloads; see [API 契约与治理接口](docs/api.md) for request/response details.
+  - Model Tool Calling remains opt-in and bounded to the model-visible safe subset; it records aggregate `model_tool_call_stats` without storing raw prompts, chat text, token strings, or full local paths.
 
 Key APIs introduced in this phase:
 
