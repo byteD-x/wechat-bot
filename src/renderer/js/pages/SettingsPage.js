@@ -873,6 +873,59 @@ export class SettingsPage extends PageController {
         }
     }
 
+    async _rebuildKnowledgeBaseDocument() {
+        if (this._backupState.knowledgeBaseBusy) {
+            return;
+        }
+        let payload;
+        try {
+            payload = this._buildKnowledgeBasePayload();
+        } catch (error) {
+            const message = toast.getErrorMessage(error, '知识库重建失败');
+            this._backupState.knowledgeBaseFeedback = message;
+            this._renderBackupPanel();
+            toast.info(message);
+            return;
+        }
+
+        const signature = this._buildKnowledgeBasePayloadSignature(payload);
+        if (!this._backupState.knowledgeBaseDryRunSignature || this._backupState.knowledgeBaseDryRunSignature !== signature) {
+            const message = '请先对当前内容执行一次预览，再重建知识库文档';
+            this._backupState.knowledgeBaseFeedback = message;
+            this._backupState.knowledgeBaseDryRunSignature = '';
+            this._renderBackupPanel();
+            toast.info(message);
+            return;
+        }
+
+        this._backupState.knowledgeBaseBusy = true;
+        this._backupState.knowledgeBaseFeedback = '正在重建知识库文档...';
+        this._renderBackupPanel();
+        try {
+            const result = await apiService.rebuildKnowledgeDocument(payload);
+            if (!result?.success) {
+                throw new Error(result?.message || result?.reason || '知识库重建失败');
+            }
+            const docId = result.doc_id || payload.doc_id || '--';
+            const versionText = result.version ? `（版本 ${result.version}）` : '';
+            const chunkCount = Number(result.indexed_chunks || result.chunk_count || 0);
+            const deletedText = result.deleted_previous ? '已删除旧 chunk，' : '';
+            this._backupState.knowledgeBaseFeedback = `重建完成：${docId}${versionText} ${deletedText}已索引 ${chunkCount} 个 chunk。`;
+            this._backupState.knowledgeBaseDryRunSignature = '';
+            this._backupState.knowledgeBasePreview = null;
+            await this._refreshKnowledgeBaseStatus({ silent: true });
+            toast.success('知识库文档已重建');
+        } catch (error) {
+            const message = toast.getErrorMessage(error, '知识库重建失败');
+            this._backupState.knowledgeBaseFeedback = message;
+            this._renderBackupPanel();
+            toast.error(message);
+        } finally {
+            this._backupState.knowledgeBaseBusy = false;
+            this._renderBackupPanel();
+        }
+    }
+
     _hydrateSettingsSections() {
         this.$$('.settings-card').forEach((card) => {
             const title = String(card.querySelector('.settings-card-title')?.textContent || '').trim();

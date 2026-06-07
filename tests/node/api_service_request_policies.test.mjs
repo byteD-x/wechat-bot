@@ -187,6 +187,11 @@ test('api service knowledge base helpers use fixed governance endpoints', async 
             content: 'release notes',
             doc_id: 'release',
         });
+        await apiService.rebuildKnowledgeDocument({
+            content: 'release notes v2',
+            doc_id: 'release',
+            version: 'v2',
+        });
     } finally {
         apiService.request = previousRequest;
     }
@@ -217,6 +222,19 @@ test('api service knowledge base helpers use fixed governance endpoints', async 
                 body: {
                     content: 'release notes',
                     doc_id: 'release',
+                },
+                timeoutMs: 60000,
+            },
+            retries: 0,
+        },
+        {
+            endpoint: '/api/knowledge_base/rebuild',
+            options: {
+                method: 'POST',
+                body: {
+                    content: 'release notes v2',
+                    doc_id: 'release',
+                    version: 'v2',
                 },
                 timeoutMs: 60000,
             },

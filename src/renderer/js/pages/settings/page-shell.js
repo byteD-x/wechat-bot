@@ -75,6 +75,7 @@ export function bindSettingsEvents(page, deps = {}) {
     bindOptional('#btn-knowledge-base-refresh', 'click', () => void page._refreshKnowledgeBaseStatus?.({ silent: false }));
     bindOptional('#btn-knowledge-base-dry-run', 'click', () => void page._previewKnowledgeBaseDocument?.());
     bindOptional('#btn-knowledge-base-ingest', 'click', () => void page._ingestKnowledgeBaseDocument?.());
+    bindOptional('#btn-knowledge-base-rebuild', 'click', () => void page._rebuildKnowledgeBaseDocument?.());
     bindOptional('#btn-check-updates', 'click', () => void page._checkUpdates?.());
     bindOptional('#btn-open-update-download', 'click', () => void page._openUpdateDownload?.());
     bindOptional('#btn-open-models', 'click', () => page.emit(Events.PAGE_CHANGE, 'models'));

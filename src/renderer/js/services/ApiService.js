@@ -757,6 +757,14 @@ class ApiService {
         }, 0);
     }
 
+    async rebuildKnowledgeDocument(payload = {}) {
+        return this.request('/api/knowledge_base/rebuild', {
+            method: 'POST',
+            body: payload,
+            timeoutMs: 60000,
+        }, 0);
+    }
+
     async getLogs(lines = 200) {
         return this.request(`/api/logs?lines=${lines}`);
     }

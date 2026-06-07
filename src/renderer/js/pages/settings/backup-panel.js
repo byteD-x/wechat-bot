@@ -156,6 +156,7 @@ export function renderBackupPanel(page) {
     const knowledgeBaseRefreshBtn = page.$('#btn-knowledge-base-refresh');
     const knowledgeBaseDryRunBtn = page.$('#btn-knowledge-base-dry-run');
     const knowledgeBaseIngestBtn = page.$('#btn-knowledge-base-ingest');
+    const knowledgeBaseRebuildBtn = page.$('#btn-knowledge-base-rebuild');
     const listElem = page.$('#settings-backup-list');
     if (!summaryElem || !evalElem || !selectElem || !feedbackElem || !listElem) {
         return;
@@ -239,6 +240,9 @@ export function renderBackupPanel(page) {
     }
     if (knowledgeBaseIngestBtn) {
         knowledgeBaseIngestBtn.disabled = knowledgeBusy || !state.knowledgeBaseDryRunSignature;
+    }
+    if (knowledgeBaseRebuildBtn) {
+        knowledgeBaseRebuildBtn.disabled = knowledgeBusy || !state.knowledgeBaseDryRunSignature;
     }
 
     populateBackupSelect(selectElem, backups);

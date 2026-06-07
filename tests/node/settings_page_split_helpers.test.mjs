@@ -1325,6 +1325,7 @@ test('settings page shell binds events and auto save routing stably', async () =
         'btn-knowledge-base-refresh',
         'btn-knowledge-base-dry-run',
         'btn-knowledge-base-ingest',
+        'btn-knowledge-base-rebuild',
         'btn-check-updates',
         'btn-open-update-download',
         'settings-data-control-scope',
@@ -1400,6 +1401,9 @@ test('settings page shell binds events and auto save routing stably', async () =
         _ingestKnowledgeBaseDocument() {
             this.calls.push('kb-ingest');
         },
+        _rebuildKnowledgeBaseDocument() {
+            this.calls.push('kb-rebuild');
+        },
         _resetKnowledgeBasePreview() {
             this.calls.push('kb-reset');
         },
@@ -1428,7 +1432,7 @@ test('settings page shell binds events and auto save routing stably', async () =
         rootElement: root,
     });
 
-    assert.equal(page.bindings.length, 37);
+    assert.equal(page.bindings.length, 38);
     assert.equal(page._eventCleanups.length, 1);
 
     page.bindings.forEach(({ handler }) => handler());
@@ -1459,6 +1463,7 @@ test('settings page shell binds events and auto save routing stably', async () =
         'kb-refresh:false',
         'kb-preview',
         'kb-ingest',
+        'kb-rebuild',
         'check-updates',
         'open-update-download',
         'kb-reset',
@@ -1968,10 +1973,130 @@ test('settings page knowledge base ingest requires matching dry-run preview', as
     }
 });
 
+test('settings page knowledge base rebuild requires matching dry-run preview', async () => {
+    const originalDryRun = apiService.dryRunKnowledgeDocument;
+    const originalRebuild = apiService.rebuildKnowledgeDocument;
+    const originalStatus = apiService.getKnowledgeBaseStatus;
+    const originalToastInfo = toast.info;
+    const originalToastSuccess = toast.success;
+    const originalToastError = toast.error;
+    const page = new SettingsPage();
+    const inputs = new Map([
+        ['#settings-knowledge-base-content', { value: '  # Release\ncontent  ' }],
+        ['#settings-knowledge-base-content-type', { value: 'markdown' }],
+        ['#settings-knowledge-base-doc-id', { value: 'release' }],
+        ['#settings-knowledge-base-version', { value: 'v1' }],
+        ['#settings-knowledge-base-source-file', { value: 'docs/release.md' }],
+        ['#settings-knowledge-base-url', { value: 'https://example.test/release' }],
+        ['#settings-knowledge-base-page', { value: '2' }],
+    ]);
+    const dryRunPayloads = [];
+    const rebuildPayloads = [];
+    const toastCalls = [];
+    let statusCalls = 0;
+    let renderCount = 0;
+
+    page.$ = (selector) => inputs.get(selector) || null;
+    page._renderBackupPanel = () => {
+        renderCount += 1;
+    };
+    apiService.dryRunKnowledgeDocument = async (payload) => {
+        dryRunPayloads.push(payload);
+        return {
+            success: true,
+            doc_id: payload.doc_id,
+            version: payload.version,
+            chunk_count: 2,
+            char_count: payload.content.length,
+        };
+    };
+    apiService.rebuildKnowledgeDocument = async (payload) => {
+        rebuildPayloads.push(payload);
+        return {
+            success: true,
+            doc_id: payload.doc_id,
+            version: payload.version,
+            chunk_count: 3,
+            indexed_chunks: 3,
+            deleted_previous: true,
+        };
+    };
+    apiService.getKnowledgeBaseStatus = async () => {
+        statusCalls += 1;
+        return {
+            success: true,
+            vector_memory_available: true,
+            chunk_count: 3,
+        };
+    };
+    toast.info = (message) => {
+        toastCalls.push({ type: 'info', message });
+    };
+    toast.success = (message) => {
+        toastCalls.push({ type: 'success', message });
+    };
+    toast.error = (message) => {
+        toastCalls.push({ type: 'error', message });
+    };
+
+    try {
+        const firstPayload = {
+            content: '# Release\ncontent',
+            content_type: 'markdown',
+            doc_id: 'release',
+            version: 'v1',
+            source_file: 'docs/release.md',
+            url: 'https://example.test/release',
+            page: 2,
+        };
+
+        await page._rebuildKnowledgeBaseDocument();
+        assert.equal(rebuildPayloads.length, 0);
+        assert.equal(page._backupState.knowledgeBaseDryRunSignature, '');
+
+        await page._previewKnowledgeBaseDocument();
+        assert.deepEqual(dryRunPayloads, [firstPayload]);
+        assert.equal(page._backupState.knowledgeBaseDryRunSignature, JSON.stringify(firstPayload));
+
+        inputs.get('#settings-knowledge-base-version').value = 'v2';
+        page._resetKnowledgeBasePreview();
+        await page._rebuildKnowledgeBaseDocument();
+        assert.equal(rebuildPayloads.length, 0);
+
+        const secondPayload = {
+            ...firstPayload,
+            version: 'v2',
+        };
+        await page._previewKnowledgeBaseDocument();
+        await page._rebuildKnowledgeBaseDocument();
+
+        assert.deepEqual(dryRunPayloads, [firstPayload, secondPayload]);
+        assert.deepEqual(rebuildPayloads, [secondPayload]);
+        assert.equal(statusCalls, 1);
+        assert.equal(page._backupState.knowledgeBaseDryRunSignature, '');
+        assert.equal(page._backupState.knowledgeBasePreview, null);
+        assert.equal(page._backupState.knowledgeBaseStatus?.chunk_count, 3);
+        assert.match(page._backupState.knowledgeBaseFeedback, /重建完成/);
+        assert.match(page._backupState.knowledgeBaseFeedback, /已删除旧 chunk/);
+        assert.equal(toastCalls.filter((item) => item.type === 'info').length, 2);
+        assert.equal(toastCalls.filter((item) => item.type === 'success').length, 3);
+        assert.equal(toastCalls.filter((item) => item.type === 'error').length, 0);
+        assert.ok(renderCount > 0);
+    } finally {
+        apiService.dryRunKnowledgeDocument = originalDryRun;
+        apiService.rebuildKnowledgeDocument = originalRebuild;
+        apiService.getKnowledgeBaseStatus = originalStatus;
+        toast.info = originalToastInfo;
+        toast.success = originalToastSuccess;
+        toast.error = originalToastError;
+    }
+});
+
 test('settings shell keeps dangerous and disabled settings behind clear explanations', () => {
     const markup = renderSettingsPageShell();
     assert.equal(markup.includes('<details class="backup-action-card settings-disclosure settings-disclosure-danger">'), true);
     assert.equal(markup.includes('按范围 dry-run 后再清理'), true);
+    assert.equal(markup.includes('id="btn-knowledge-base-rebuild"'), true);
     assert.equal(markup.includes('settings-disabled-reason'), true);
     assert.equal(markup.includes('不可在设置中心直接编辑'), true);
     assert.equal(markup.includes('关于与更新'), true);

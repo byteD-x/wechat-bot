@@ -194,6 +194,7 @@ export function renderSettingsPageShell() {
                                     <button class="btn btn-secondary btn-sm" id="btn-knowledge-base-refresh" type="button">刷新状态</button>
                                     <button class="btn btn-secondary btn-sm" id="btn-knowledge-base-dry-run" type="button">预览分块</button>
                                     <button class="btn btn-primary btn-sm" id="btn-knowledge-base-ingest" type="button">写入知识库</button>
+                                    <button class="btn btn-secondary btn-sm" id="btn-knowledge-base-rebuild" type="button">重建同文档</button>
                                 </div>
                             </details>
 

@@ -320,6 +320,7 @@ Provider 分层策略也更清晰：
 
 - 知识库治理接口已提供 `status / dry-run / ingest / rebuild / delete` 五个本机 API，复用现有 `KnowledgeBaseService` 和运行时 `vector_memory`，不另起一套索引存储。
 - 首版只接收请求体中的纯文本或 Markdown，不读取任意文件路径、不扫描目录、不开放上传管道；`dry-run` 只返回 chunk 数量、chunk id、字符数和脱敏来源摘要，不回显正文。
+- 设置页粘贴式入口已支持刷新状态、预览分块、写入知识库和重建同文档；写入或重建前都必须先对当前内容完成 dry-run，内容或元数据变化后会强制重新预览。
 - 本机 CLI `python run.py knowledge-base import-files` 已提供显式 `.txt/.md` 文件列表入口，默认只预览分块；拒绝目录和 glob，`--apply` 才调用 loopback 本机 API 写入。
 - `ingest / rebuild` 依赖运行中 bot 的 embedding 客户端，写入 `source=knowledge_base`、`doc_id`、`doc_version`、`chunk_id`、`source_file`、`url`、`page` 等 citation metadata，让 RAG 引用能绑定到文档级来源。
 - `delete` 只按精确 `doc_id` 删除知识库来源 chunk，不影响聊天记忆、导出语料 RAG 或其他向量来源；路径形式的 `doc_id/source_file` 会收敛为 `.../<filename>`，避免治理响应泄露完整本机路径。

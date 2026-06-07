@@ -680,8 +680,8 @@ python run.py eval --dataset tests/fixtures/evals/smoke_cases.json --preset smok
 
 #### 8.7.5 知识库治理 API
 
-- 设置页“数据与恢复 / 知识库治理”已经提供最小 UI 入口：手动粘贴纯文本或 Markdown，先执行“预览分块”，确认 chunk 摘要后才允许“写入知识库”。内容或元数据变更后，界面会清空上一次 dry-run 签名并要求重新预览。
-- 当前设置页入口不提供文件上传、目录扫描、任意本机文件读取、批量重建或删除；`rebuild / delete` 仍仅作为受控 API 能力存在，后续如接入 UI 需要继续保持显式预览和固定端点白名单。
+- 设置页“数据与恢复 / 知识库治理”已经提供最小 UI 入口：手动粘贴纯文本或 Markdown，先执行“预览分块”，确认 chunk 摘要后才允许“写入知识库”或“重建同文档”。内容或元数据变更后，界面会清空上一次 dry-run 签名并要求重新预览。
+- 当前设置页入口不提供文件上传、目录扫描、任意本机文件读取、批量重建或删除；`delete` 仍仅作为受控 API 能力存在，后续如接入 UI 需要继续保持显式预览和固定端点白名单。
 - 本机 CLI 提供显式文件列表入口，适合把已经确认可信的 `.txt/.md` 文档先预览再写入运行中的本机 Web API：
   - `python run.py knowledge-base import-files --file docs/runbook.md --json`
   - `python run.py knowledge-base import-files docs/runbook.md docs/faq.txt --json`
@@ -695,6 +695,7 @@ python run.py eval --dataset tests/fixtures/evals/smoke_cases.json --preset smok
   - `source_file / url / page / metadata` 会进入 chunk metadata，供 RAG citation 绑定。
 - 知识库重建：`POST /api/knowledge_base/rebuild`
   - 先完整准备新版本 chunk embedding，再删除同一 `doc_id` 的旧 chunk 并写入新版本；如果新版本 embedding 准备失败，会保留旧 chunk。
+  - 设置页的“重建同文档”按钮复用该端点，但必须先对当前粘贴内容完成一次 dry-run；成功响应只展示 `doc_id`、版本、索引 chunk 数和是否删除旧 chunk 的摘要。
 - 知识库删除：`POST /api/knowledge_base/delete`
   - 只按精确 `doc_id` 删除 `source=knowledge_base` 的 chunk，不影响聊天记忆或导出语料 RAG。
 - 知识库状态：`GET /api/knowledge_base/status`
