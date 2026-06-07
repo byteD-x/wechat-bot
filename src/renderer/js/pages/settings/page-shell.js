@@ -72,11 +72,26 @@ export function bindSettingsEvents(page, deps = {}) {
     bindOptional('#btn-cleanup-backup-apply', 'click', () => void page._cleanupWorkspaceBackups(false));
     bindOptional('#btn-data-control-dry-run', 'click', () => void page._runDataControls(true));
     bindOptional('#btn-data-control-apply', 'click', () => void page._runDataControls(false));
+    bindOptional('#btn-knowledge-base-refresh', 'click', () => void page._refreshKnowledgeBaseStatus?.({ silent: false }));
+    bindOptional('#btn-knowledge-base-dry-run', 'click', () => void page._previewKnowledgeBaseDocument?.());
+    bindOptional('#btn-knowledge-base-ingest', 'click', () => void page._ingestKnowledgeBaseDocument?.());
     bindOptional('#btn-check-updates', 'click', () => void page._checkUpdates?.());
     bindOptional('#btn-open-update-download', 'click', () => void page._openUpdateDownload?.());
     bindOptional('#btn-open-models', 'click', () => page.emit(Events.PAGE_CHANGE, 'models'));
     bindOptional('#btn-open-export-center', 'click', () => page.emit(Events.PAGE_CHANGE, 'exports'));
     bindOptional('#settings-data-control-scope', 'change', () => page._renderBackupPanel?.());
+    [
+        '#settings-knowledge-base-content',
+        '#settings-knowledge-base-content-type',
+        '#settings-knowledge-base-doc-id',
+        '#settings-knowledge-base-version',
+        '#settings-knowledge-base-source-file',
+        '#settings-knowledge-base-url',
+        '#settings-knowledge-base-page',
+    ].forEach((selector) => {
+        bindOptional(selector, 'input', () => page._resetKnowledgeBasePreview?.());
+        bindOptional(selector, 'change', () => page._resetKnowledgeBasePreview?.());
+    });
     bindOptional('#settings-section-nav', 'click', (event) => {
         const button = event?.target?.closest?.('[data-settings-section]');
         if (!button) {

@@ -613,6 +613,8 @@ python run.py eval --dataset tests/fixtures/evals/smoke_cases.json --preset smok
 
 #### 8.7.5 知识库治理 API
 
+- 设置页“数据与恢复 / 知识库治理”已经提供最小 UI 入口：手动粘贴纯文本或 Markdown，先执行“预览分块”，确认 chunk 摘要后才允许“写入知识库”。内容或元数据变更后，界面会清空上一次 dry-run 签名并要求重新预览。
+- 当前设置页入口不提供文件上传、目录扫描、任意本机文件读取、批量重建或删除；`rebuild / delete` 仍仅作为受控 API 能力存在，后续如接入 UI 需要继续保持显式预览和固定端点白名单。
 - 知识库文档预览：`POST /api/knowledge_base/dry-run`
   - 请求体只接收纯文本或 Markdown 的 `content`，不会读取任意本机文件路径，也不会扫描目录。
   - 预览只返回 `doc_id`、`version`、chunk 数量、chunk id 和每个 chunk 的字符数、脱敏来源、URL、页码等摘要，不返回完整正文或 chunk text。

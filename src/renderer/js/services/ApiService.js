@@ -737,6 +737,26 @@ class ApiService {
         return this.request('/api/evals/latest', {}, 0);
     }
 
+    async getKnowledgeBaseStatus() {
+        return this.request('/api/knowledge_base/status', {}, 0);
+    }
+
+    async dryRunKnowledgeDocument(payload = {}) {
+        return this.request('/api/knowledge_base/dry-run', {
+            method: 'POST',
+            body: payload,
+            timeoutMs: 20000,
+        }, 0);
+    }
+
+    async ingestKnowledgeDocument(payload = {}) {
+        return this.request('/api/knowledge_base/ingest', {
+            method: 'POST',
+            body: payload,
+            timeoutMs: 60000,
+        }, 0);
+    }
+
     async getLogs(lines = 200) {
         return this.request(`/api/logs?lines=${lines}`);
     }

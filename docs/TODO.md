@@ -16,12 +16,13 @@
 - RAG/eval 数据集治理：当前 smoke fixture 已确认 UTF-8 可读，并补充导出语料 RAG 的风格召回、无命中回退和误命中防护样例。
 - RAG/eval 专项门禁：`tests/fixtures/evals/rag_cases.json` 已接入 CI 离线评测门禁，`run.py eval` 摘要会展示 citation accuracy、context recall、faithfulness、answer-citation binding 和 refusal accuracy。
 - 知识库治理 API：`GET /api/knowledge_base/status` 与 `POST /api/knowledge_base/dry-run|ingest|rebuild|delete` 已落地，首版只支持请求体 text/Markdown，不读取任意本机文件，预览不返回正文或完整本机路径。
+- 知识库治理 UI 最小入口：设置页“数据与恢复 / 知识库治理”已支持粘贴纯文本或 Markdown、刷新状态、预览分块，并要求同一份内容 dry-run 后才允许写入；暂不开放文件上传、目录扫描、rebuild 或 delete。
 - 文档入口：`README.md`、`docs/USER_GUIDE.md`、`docs/SYSTEM_CHAINS.md`、`docs/HIGHLIGHTS.md`、`docs/api.md` 和 `docs/interview-playbook.md` 已补充。
 
 ## 下一阶段 P1
 
 - RAG 知识库治理增强
-  - 为知识库导入增加更完整的 UI 或 CLI 工作流，并评估后台队列、文件选择器和批量重建；继续保持不开放任意路径扫描。
+  - 在当前粘贴式最小 UI 入口之上，评估后台队列、文件选择器、CLI 批量导入和批量重建；继续保持不开放任意路径扫描。
 
 - Windows 真实环境手测
   - 在 Windows 10/11、管理员权限、微信 PC `3.9.12.51` 下跑一次完整首启、连接、发消息、诊断导出和停止流程。

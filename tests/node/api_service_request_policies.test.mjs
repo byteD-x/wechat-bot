@@ -168,6 +168,63 @@ test('api service maintenance endpoints use long timeout budget', async () => {
     );
 });
 
+test('api service knowledge base helpers use fixed governance endpoints', async () => {
+    const previousRequest = apiService.request;
+    const calls = [];
+    apiService.request = async (endpoint, options = {}, retries = undefined) => {
+        calls.push({ endpoint, options, retries });
+        return { success: true };
+    };
+
+    try {
+        await apiService.getKnowledgeBaseStatus();
+        await apiService.dryRunKnowledgeDocument({
+            content: 'release notes',
+            content_type: 'markdown',
+            doc_id: 'release',
+        });
+        await apiService.ingestKnowledgeDocument({
+            content: 'release notes',
+            doc_id: 'release',
+        });
+    } finally {
+        apiService.request = previousRequest;
+    }
+
+    assert.deepEqual(calls, [
+        {
+            endpoint: '/api/knowledge_base/status',
+            options: {},
+            retries: 0,
+        },
+        {
+            endpoint: '/api/knowledge_base/dry-run',
+            options: {
+                method: 'POST',
+                body: {
+                    content: 'release notes',
+                    content_type: 'markdown',
+                    doc_id: 'release',
+                },
+                timeoutMs: 20000,
+            },
+            retries: 0,
+        },
+        {
+            endpoint: '/api/knowledge_base/ingest',
+            options: {
+                method: 'POST',
+                body: {
+                    content: 'release notes',
+                    doc_id: 'release',
+                },
+                timeoutMs: 60000,
+            },
+            retries: 0,
+        },
+    ]);
+});
+
 test('api service prompt governance helpers use trusted endpoints and idempotent rollback', async () => {
     const previousRequest = apiService.request;
     const calls = [];

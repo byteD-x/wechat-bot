@@ -160,6 +160,11 @@ export class SettingsPage extends PageController {
             backupBusy: false,
             dataControlBusy: false,
             dataControlDryRunScope: '',
+            knowledgeBaseStatus: null,
+            knowledgeBasePreview: null,
+            knowledgeBaseFeedback: '',
+            knowledgeBaseDryRunSignature: '',
+            knowledgeBaseBusy: false,
         };
         this._backupPromise = null;
         this._promptGovernanceState = null;
@@ -416,10 +421,11 @@ export class SettingsPage extends PageController {
 
         this._backupPromise = (async () => {
             try {
-                const [backupsResult, evalResult, dataControlsResult] = await Promise.all([
+                const [backupsResult, evalResult, dataControlsResult, knowledgeBaseStatus] = await Promise.all([
                     apiService.getBackups(10),
                     apiService.getLatestEvalReport(),
                     apiService.getDataControls().catch(() => null),
+                    apiService.getKnowledgeBaseStatus().catch(() => null),
                 ]);
                 const supportedDataControlScopes = Array.isArray(dataControlsResult?.supported_scopes)
                     ? dataControlsResult.supported_scopes
@@ -434,6 +440,11 @@ export class SettingsPage extends PageController {
                     backupBusy: !!this._backupState.backupBusy,
                     dataControlBusy: !!this._backupState.dataControlBusy,
                     dataControlDryRunScope: this._backupState.dataControlDryRunScope || '',
+                    knowledgeBaseStatus: knowledgeBaseStatus || this._backupState.knowledgeBaseStatus || null,
+                    knowledgeBasePreview: this._backupState.knowledgeBasePreview || null,
+                    knowledgeBaseFeedback: this._backupState.knowledgeBaseFeedback || '',
+                    knowledgeBaseDryRunSignature: this._backupState.knowledgeBaseDryRunSignature || '',
+                    knowledgeBaseBusy: !!this._backupState.knowledgeBaseBusy,
                 };
                 this._syncDataControlScopeOptions(supportedDataControlScopes);
                 this._renderBackupPanel();
@@ -452,6 +463,11 @@ export class SettingsPage extends PageController {
                     backupBusy: !!this._backupState.backupBusy,
                     dataControlBusy: !!this._backupState.dataControlBusy,
                     dataControlDryRunScope: this._backupState.dataControlDryRunScope || '',
+                    knowledgeBaseStatus: this._backupState.knowledgeBaseStatus || null,
+                    knowledgeBasePreview: this._backupState.knowledgeBasePreview || null,
+                    knowledgeBaseFeedback: this._backupState.knowledgeBaseFeedback || '',
+                    knowledgeBaseDryRunSignature: this._backupState.knowledgeBaseDryRunSignature || '',
+                    knowledgeBaseBusy: !!this._backupState.knowledgeBaseBusy,
                 };
                 this._syncDataControlScopeOptions(this._backupState.supportedDataControlScopes || []);
                 this._renderBackupPanel();
@@ -687,6 +703,174 @@ export class SettingsPage extends PageController {
             this._renderBackupPanel();
         }
         return;
+    }
+
+    _buildKnowledgeBasePayload() {
+        const content = String(this.$('#settings-knowledge-base-content')?.value || '').trim();
+        if (!content) {
+            throw new Error('请先粘贴知识库内容');
+        }
+        const payload = {
+            content,
+            content_type: String(this.$('#settings-knowledge-base-content-type')?.value || 'markdown').trim() || 'markdown',
+        };
+        const docId = String(this.$('#settings-knowledge-base-doc-id')?.value || '').trim();
+        const version = String(this.$('#settings-knowledge-base-version')?.value || '').trim();
+        const sourceFile = String(this.$('#settings-knowledge-base-source-file')?.value || '').trim();
+        const url = String(this.$('#settings-knowledge-base-url')?.value || '').trim();
+        const pageValue = String(this.$('#settings-knowledge-base-page')?.value || '').trim();
+
+        if (docId) {
+            payload.doc_id = docId;
+        }
+        if (version) {
+            payload.version = version;
+        }
+        if (sourceFile) {
+            payload.source_file = sourceFile;
+        }
+        if (url) {
+            payload.url = url;
+        }
+        if (pageValue) {
+            const parsedPage = Number.parseInt(pageValue, 10);
+            if (!Number.isFinite(parsedPage) || parsedPage <= 0) {
+                throw new Error('页码必须是正整数');
+            }
+            payload.page = parsedPage;
+        }
+        return payload;
+    }
+
+    _buildKnowledgeBasePayloadSignature(payload) {
+        return JSON.stringify(payload || {});
+    }
+
+    _resetKnowledgeBasePreview() {
+        if (!this._backupState.knowledgeBaseDryRunSignature && !this._backupState.knowledgeBasePreview) {
+            return;
+        }
+        this._backupState.knowledgeBaseDryRunSignature = '';
+        this._backupState.knowledgeBasePreview = null;
+        this._backupState.knowledgeBaseFeedback = '内容或元数据已变更，请重新预览。';
+        this._renderBackupPanel();
+    }
+
+    async _refreshKnowledgeBaseStatus(options = {}) {
+        this._backupState.knowledgeBaseBusy = true;
+        this._backupState.knowledgeBaseFeedback = options?.silent ? this._backupState.knowledgeBaseFeedback : '正在读取知识库状态...';
+        this._renderBackupPanel();
+        try {
+            const result = await apiService.getKnowledgeBaseStatus();
+            this._backupState.knowledgeBaseStatus = result || null;
+            if (!options?.silent) {
+                this._backupState.knowledgeBaseFeedback = result?.success
+                    ? '知识库状态已刷新。'
+                    : (result?.message || '知识库状态读取失败');
+                toast.success('知识库状态已刷新');
+            }
+        } catch (error) {
+            const message = toast.getErrorMessage(error, '读取知识库状态失败');
+            this._backupState.knowledgeBaseFeedback = message;
+            if (!options?.silent) {
+                toast.error(message);
+            }
+        } finally {
+            this._backupState.knowledgeBaseBusy = false;
+            this._renderBackupPanel();
+        }
+    }
+
+    async _previewKnowledgeBaseDocument() {
+        if (this._backupState.knowledgeBaseBusy) {
+            return;
+        }
+        let payload;
+        try {
+            payload = this._buildKnowledgeBasePayload();
+        } catch (error) {
+            const message = toast.getErrorMessage(error, '知识库预览失败');
+            this._backupState.knowledgeBaseFeedback = message;
+            this._backupState.knowledgeBaseDryRunSignature = '';
+            this._backupState.knowledgeBasePreview = null;
+            this._renderBackupPanel();
+            toast.info(message);
+            return;
+        }
+
+        this._backupState.knowledgeBaseBusy = true;
+        this._backupState.knowledgeBaseFeedback = '正在预览知识库分块...';
+        this._renderBackupPanel();
+        try {
+            const result = await apiService.dryRunKnowledgeDocument(payload);
+            if (!result?.success) {
+                throw new Error(result?.message || '知识库预览失败');
+            }
+            this._backupState.knowledgeBasePreview = result;
+            this._backupState.knowledgeBaseDryRunSignature = this._buildKnowledgeBasePayloadSignature(payload);
+            this._backupState.knowledgeBaseFeedback = `预览完成：预计生成 ${Number(result.chunk_count || 0)} 个 chunk。`;
+            this._renderBackupPanel();
+            toast.success('知识库预览完成');
+        } catch (error) {
+            const message = toast.getErrorMessage(error, '知识库预览失败');
+            this._backupState.knowledgeBaseFeedback = message;
+            this._backupState.knowledgeBaseDryRunSignature = '';
+            this._backupState.knowledgeBasePreview = null;
+            this._renderBackupPanel();
+            toast.error(message);
+        } finally {
+            this._backupState.knowledgeBaseBusy = false;
+            this._renderBackupPanel();
+        }
+    }
+
+    async _ingestKnowledgeBaseDocument() {
+        if (this._backupState.knowledgeBaseBusy) {
+            return;
+        }
+        let payload;
+        try {
+            payload = this._buildKnowledgeBasePayload();
+        } catch (error) {
+            const message = toast.getErrorMessage(error, '知识库写入失败');
+            this._backupState.knowledgeBaseFeedback = message;
+            this._renderBackupPanel();
+            toast.info(message);
+            return;
+        }
+
+        const signature = this._buildKnowledgeBasePayloadSignature(payload);
+        if (!this._backupState.knowledgeBaseDryRunSignature || this._backupState.knowledgeBaseDryRunSignature !== signature) {
+            const message = '请先对当前内容执行一次预览，再写入知识库';
+            this._backupState.knowledgeBaseFeedback = message;
+            this._backupState.knowledgeBaseDryRunSignature = '';
+            this._renderBackupPanel();
+            toast.info(message);
+            return;
+        }
+
+        this._backupState.knowledgeBaseBusy = true;
+        this._backupState.knowledgeBaseFeedback = '正在写入知识库...';
+        this._renderBackupPanel();
+        try {
+            const result = await apiService.ingestKnowledgeDocument(payload);
+            if (!result?.success) {
+                throw new Error(result?.message || result?.reason || '知识库写入失败');
+            }
+            this._backupState.knowledgeBaseFeedback = `写入完成：${result.doc_id || payload.doc_id || '--'} 已索引 ${Number(result.indexed_chunks || 0)} 个 chunk。`;
+            this._backupState.knowledgeBaseDryRunSignature = '';
+            this._backupState.knowledgeBasePreview = null;
+            await this._refreshKnowledgeBaseStatus({ silent: true });
+            toast.success('知识库写入完成');
+        } catch (error) {
+            const message = toast.getErrorMessage(error, '知识库写入失败');
+            this._backupState.knowledgeBaseFeedback = message;
+            this._renderBackupPanel();
+            toast.error(message);
+        } finally {
+            this._backupState.knowledgeBaseBusy = false;
+            this._renderBackupPanel();
+        }
     }
 
     _hydrateSettingsSections() {

@@ -146,6 +146,57 @@ export function renderSettingsPageShell() {
                                 </div>
                             </details>
 
+                            <details class="backup-action-card backup-action-card-wide settings-disclosure">
+                                <summary class="settings-disclosure-summary">
+                                    <span class="backup-action-kicker">知识库治理</span>
+                                    <strong>粘贴文本，先预览再入库</strong>
+                                </summary>
+                                <h3 class="backup-action-title">把可信文本写入 RAG 知识库</h3>
+                                <p class="backup-action-text">首版只处理手动粘贴的纯文本或 Markdown，不读取本机文件、不扫描目录。</p>
+                                <div class="backup-detail-grid">
+                                    <div class="detail-item">
+                                        <span class="detail-label">当前状态</span>
+                                        <div class="detail-help" id="settings-knowledge-base-status">尚未读取知识库状态</div>
+                                    </div>
+                                    <div class="detail-item">
+                                        <label class="detail-label" for="settings-knowledge-base-content-type">内容类型</label>
+                                        <select class="form-input" id="settings-knowledge-base-content-type">
+                                            <option value="markdown">Markdown</option>
+                                            <option value="text">纯文本</option>
+                                        </select>
+                                    </div>
+                                    <div class="detail-item">
+                                        <label class="detail-label" for="settings-knowledge-base-doc-id">文档 ID</label>
+                                        <input class="form-input" id="settings-knowledge-base-doc-id" type="text" placeholder="release-playbook">
+                                    </div>
+                                    <div class="detail-item">
+                                        <label class="detail-label" for="settings-knowledge-base-version">版本</label>
+                                        <input class="form-input" id="settings-knowledge-base-version" type="text" placeholder="v1">
+                                    </div>
+                                    <div class="detail-item">
+                                        <label class="detail-label" for="settings-knowledge-base-source-file">来源标识</label>
+                                        <input class="form-input" id="settings-knowledge-base-source-file" type="text" placeholder="docs/release-playbook.md">
+                                    </div>
+                                    <div class="detail-item">
+                                        <label class="detail-label" for="settings-knowledge-base-url">来源 URL</label>
+                                        <input class="form-input" id="settings-knowledge-base-url" type="url" placeholder="https://example.test/release-playbook">
+                                    </div>
+                                    <div class="detail-item">
+                                        <label class="detail-label" for="settings-knowledge-base-page">页码</label>
+                                        <input class="form-input" id="settings-knowledge-base-page" type="number" min="1" step="1" placeholder="可选">
+                                    </div>
+                                </div>
+                                <label class="detail-label" for="settings-knowledge-base-content">知识库内容</label>
+                                <textarea class="form-input" id="settings-knowledge-base-content" rows="6" maxlength="50000" placeholder="粘贴需要进入知识库的文本或 Markdown。"></textarea>
+                                <div class="detail-help" id="settings-knowledge-base-feedback">请先粘贴内容并执行预览。</div>
+                                <div class="detail-help" id="settings-knowledge-base-preview">尚未生成 chunk 预览。</div>
+                                <div class="backup-button-row backup-button-row-end">
+                                    <button class="btn btn-secondary btn-sm" id="btn-knowledge-base-refresh" type="button">刷新状态</button>
+                                    <button class="btn btn-secondary btn-sm" id="btn-knowledge-base-dry-run" type="button">预览分块</button>
+                                    <button class="btn btn-primary btn-sm" id="btn-knowledge-base-ingest" type="button">写入知识库</button>
+                                </div>
+                            </details>
+
                             <div class="dashboard-subsection backup-list-section">
                                 <div class="dashboard-subsection-title">最近保存的备份</div>
                                 <div class="dashboard-model-list" id="settings-backup-list">

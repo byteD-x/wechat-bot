@@ -1320,8 +1320,21 @@ test('settings page shell binds events and auto save routing stably', async () =
         'btn-restore-backup-apply',
         'btn-cleanup-backup-dry-run',
         'btn-cleanup-backup-apply',
+        'btn-data-control-dry-run',
+        'btn-data-control-apply',
+        'btn-knowledge-base-refresh',
+        'btn-knowledge-base-dry-run',
+        'btn-knowledge-base-ingest',
         'btn-check-updates',
         'btn-open-update-download',
+        'settings-data-control-scope',
+        'settings-knowledge-base-content',
+        'settings-knowledge-base-content-type',
+        'settings-knowledge-base-doc-id',
+        'settings-knowledge-base-version',
+        'settings-knowledge-base-source-file',
+        'settings-knowledge-base-url',
+        'settings-knowledge-base-page',
     ].forEach((id) => {
         controls.set(`#${id}`, registerElement(id, document.createElement('button')));
     });
@@ -1375,6 +1388,21 @@ test('settings page shell binds events and auto save routing stably', async () =
         _cleanupWorkspaceBackups(dryRun) {
             this.calls.push(`backup-cleanup:${dryRun}`);
         },
+        _runDataControls(dryRun) {
+            this.calls.push(`data-control:${dryRun}`);
+        },
+        _refreshKnowledgeBaseStatus(options) {
+            this.calls.push(`kb-refresh:${options?.silent}`);
+        },
+        _previewKnowledgeBaseDocument() {
+            this.calls.push('kb-preview');
+        },
+        _ingestKnowledgeBaseDocument() {
+            this.calls.push('kb-ingest');
+        },
+        _resetKnowledgeBasePreview() {
+            this.calls.push('kb-reset');
+        },
         _checkUpdates() {
             this.calls.push('check-updates');
         },
@@ -1400,7 +1428,7 @@ test('settings page shell binds events and auto save routing stably', async () =
         rootElement: root,
     });
 
-    assert.equal(page.bindings.length, 17);
+    assert.equal(page.bindings.length, 37);
     assert.equal(page._eventCleanups.length, 1);
 
     page.bindings.forEach(({ handler }) => handler());
@@ -1426,8 +1454,27 @@ test('settings page shell binds events and auto save routing stably', async () =
         'backup-restore:false',
         'backup-cleanup:true',
         'backup-cleanup:false',
+        'data-control:true',
+        'data-control:false',
+        'kb-refresh:false',
+        'kb-preview',
+        'kb-ingest',
         'check-updates',
         'open-update-download',
+        'kb-reset',
+        'kb-reset',
+        'kb-reset',
+        'kb-reset',
+        'kb-reset',
+        'kb-reset',
+        'kb-reset',
+        'kb-reset',
+        'kb-reset',
+        'kb-reset',
+        'kb-reset',
+        'kb-reset',
+        'kb-reset',
+        'kb-reset',
         'autosave:false',
         'autosave:true',
         'autosave:true',
@@ -1801,6 +1848,124 @@ test('settings page full payload excludes api preset state after model center sp
 
     assert.equal(payload.bot?.self_name, '???');
     assert.equal(payload.api, undefined);
+});
+
+test('settings page knowledge base ingest requires matching dry-run preview', async () => {
+    const originalDryRun = apiService.dryRunKnowledgeDocument;
+    const originalIngest = apiService.ingestKnowledgeDocument;
+    const originalStatus = apiService.getKnowledgeBaseStatus;
+    const originalToastInfo = toast.info;
+    const originalToastSuccess = toast.success;
+    const originalToastError = toast.error;
+    const page = new SettingsPage();
+    const inputs = new Map([
+        ['#settings-knowledge-base-content', { value: '  # Release\ncontent  ' }],
+        ['#settings-knowledge-base-content-type', { value: 'markdown' }],
+        ['#settings-knowledge-base-doc-id', { value: 'release' }],
+        ['#settings-knowledge-base-version', { value: 'v1' }],
+        ['#settings-knowledge-base-source-file', { value: 'docs/release.md' }],
+        ['#settings-knowledge-base-url', { value: 'https://example.test/release' }],
+        ['#settings-knowledge-base-page', { value: '2' }],
+    ]);
+    const dryRunPayloads = [];
+    const ingestPayloads = [];
+    const toastCalls = [];
+    let statusCalls = 0;
+    let renderCount = 0;
+
+    page.$ = (selector) => inputs.get(selector) || null;
+    page._renderBackupPanel = () => {
+        renderCount += 1;
+    };
+    apiService.dryRunKnowledgeDocument = async (payload) => {
+        dryRunPayloads.push(payload);
+        return {
+            success: true,
+            doc_id: payload.doc_id,
+            version: payload.version,
+            chunk_count: 2,
+            char_count: payload.content.length,
+        };
+    };
+    apiService.ingestKnowledgeDocument = async (payload) => {
+        ingestPayloads.push(payload);
+        return {
+            success: true,
+            doc_id: payload.doc_id,
+            indexed_chunks: 2,
+        };
+    };
+    apiService.getKnowledgeBaseStatus = async () => {
+        statusCalls += 1;
+        return {
+            success: true,
+            vector_memory_available: true,
+            chunk_count: 2,
+        };
+    };
+    toast.info = (message) => {
+        toastCalls.push({ type: 'info', message });
+    };
+    toast.success = (message) => {
+        toastCalls.push({ type: 'success', message });
+    };
+    toast.error = (message) => {
+        toastCalls.push({ type: 'error', message });
+    };
+
+    try {
+        const firstPayload = {
+            content: '# Release\ncontent',
+            content_type: 'markdown',
+            doc_id: 'release',
+            version: 'v1',
+            source_file: 'docs/release.md',
+            url: 'https://example.test/release',
+            page: 2,
+        };
+
+        await page._ingestKnowledgeBaseDocument();
+        assert.equal(ingestPayloads.length, 0);
+        assert.equal(page._backupState.knowledgeBaseDryRunSignature, '');
+
+        await page._previewKnowledgeBaseDocument();
+        assert.deepEqual(dryRunPayloads, [firstPayload]);
+        assert.equal(page._backupState.knowledgeBaseDryRunSignature, JSON.stringify(firstPayload));
+        assert.equal(page._backupState.knowledgeBasePreview?.chunk_count, 2);
+
+        inputs.get('#settings-knowledge-base-url').value = 'https://example.test/release-v2';
+        page._resetKnowledgeBasePreview();
+        assert.equal(page._backupState.knowledgeBaseDryRunSignature, '');
+        assert.equal(page._backupState.knowledgeBasePreview, null);
+
+        await page._ingestKnowledgeBaseDocument();
+        assert.equal(ingestPayloads.length, 0);
+
+        const secondPayload = {
+            ...firstPayload,
+            url: 'https://example.test/release-v2',
+        };
+        await page._previewKnowledgeBaseDocument();
+        await page._ingestKnowledgeBaseDocument();
+
+        assert.deepEqual(dryRunPayloads, [firstPayload, secondPayload]);
+        assert.deepEqual(ingestPayloads, [secondPayload]);
+        assert.equal(statusCalls, 1);
+        assert.equal(page._backupState.knowledgeBaseDryRunSignature, '');
+        assert.equal(page._backupState.knowledgeBasePreview, null);
+        assert.equal(page._backupState.knowledgeBaseStatus?.chunk_count, 2);
+        assert.equal(toastCalls.filter((item) => item.type === 'info').length, 2);
+        assert.equal(toastCalls.filter((item) => item.type === 'success').length, 3);
+        assert.equal(toastCalls.filter((item) => item.type === 'error').length, 0);
+        assert.ok(renderCount > 0);
+    } finally {
+        apiService.dryRunKnowledgeDocument = originalDryRun;
+        apiService.ingestKnowledgeDocument = originalIngest;
+        apiService.getKnowledgeBaseStatus = originalStatus;
+        toast.info = originalToastInfo;
+        toast.success = originalToastSuccess;
+        toast.error = originalToastError;
+    }
 });
 
 test('settings shell keeps dangerous and disabled settings behind clear explanations', () => {

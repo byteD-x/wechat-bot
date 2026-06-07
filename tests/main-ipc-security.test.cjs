@@ -308,6 +308,57 @@ test('backend:request rejects endpoints outside the trusted allowlist', async ()
     assert.deepEqual(harness.backendCalls, []);
 });
 
+test('backend:request allows fixed knowledge base governance endpoints only', async () => {
+    const harness = createHarness();
+    const event = createTrustedEvent();
+
+    const statusResult = await harness.backendRequestHandler(event, {
+        method: 'GET',
+        endpoint: '/api/knowledge_base/status',
+    });
+    const dryRunResult = await harness.backendRequestHandler(event, {
+        method: 'POST',
+        endpoint: '/api/knowledge_base/dry-run',
+        payload: { content: 'release notes', content_type: 'markdown' },
+    });
+    const ingestResult = await harness.backendRequestHandler(event, {
+        method: 'POST',
+        endpoint: '/api/knowledge_base/ingest',
+        payload: { content: 'release notes', doc_id: 'release' },
+    });
+    const rebuildBlocked = await harness.backendRequestHandler(event, {
+        method: 'POST',
+        endpoint: '/api/knowledge_base/rebuild',
+        payload: { content: 'release notes', doc_id: 'release' },
+    });
+    const deleteBlocked = await harness.backendRequestHandler(event, {
+        method: 'POST',
+        endpoint: '/api/knowledge_base/delete',
+        payload: { doc_id: 'release' },
+    });
+
+    assert.equal(statusResult.ok, true);
+    assert.equal(dryRunResult.ok, true);
+    assert.equal(ingestResult.ok, true);
+    assert.equal(rebuildBlocked.ok, false);
+    assert.equal(rebuildBlocked.error?.message, 'endpoint_not_allowed');
+    assert.equal(deleteBlocked.ok, false);
+    assert.equal(deleteBlocked.error?.message, 'endpoint_not_allowed');
+    assert.deepEqual(harness.backendCalls, [
+        { method: 'GET', endpoint: '/api/knowledge_base/status', payload: null },
+        {
+            method: 'POST',
+            endpoint: '/api/knowledge_base/dry-run',
+            payload: { content: 'release notes', content_type: 'markdown' },
+        },
+        {
+            method: 'POST',
+            endpoint: '/api/knowledge_base/ingest',
+            payload: { content: 'release notes', doc_id: 'release' },
+        },
+    ]);
+});
+
 test('backend:request allows wechat export endpoints and pattern-based job query', async () => {
     const harness = createHarness();
     const event = createTrustedEvent();

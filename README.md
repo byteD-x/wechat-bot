@@ -65,6 +65,8 @@
 - `Config Snapshot`: 后端已引入中心化配置快照服务，`/api/config/audit` 可返回当前生效配置、已知未消费字段和配置变更影响摘要。
 - `Controlled Agent Tools`: `POST /api/v1/agents/tool-workflow` 只执行白名单工具 `config_audit`、`readiness_check`、`prompt_preview`、`eval_latest`、`cost_summary`、`backup_cleanup_dry_run`、`data_controls_dry_run`，每步返回 trace；维护 dry-run 工具只返回聚合摘要，不暴露备份候选列表、清理 targets 或完整本机路径，明确不支持任意命令或动态插件执行。
 
+> 知识库 UI 说明：设置页已经提供粘贴式治理入口，支持手动粘贴纯文本或 Markdown 后刷新状态、预览分块，并且只有同一份内容完成 dry-run 后才允许写入；文件上传、目录扫描、rebuild 和 delete 仍未在桌面设置页开放。
+
 ## Architecture
 
 ```mermaid
