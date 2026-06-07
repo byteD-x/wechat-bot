@@ -326,7 +326,7 @@ test('backend:request allows fixed knowledge base governance endpoints only', as
         endpoint: '/api/knowledge_base/ingest',
         payload: { content: 'release notes', doc_id: 'release' },
     });
-    const rebuildBlocked = await harness.backendRequestHandler(event, {
+    const rebuildResult = await harness.backendRequestHandler(event, {
         method: 'POST',
         endpoint: '/api/knowledge_base/rebuild',
         payload: { content: 'release notes', doc_id: 'release' },
@@ -340,8 +340,7 @@ test('backend:request allows fixed knowledge base governance endpoints only', as
     assert.equal(statusResult.ok, true);
     assert.equal(dryRunResult.ok, true);
     assert.equal(ingestResult.ok, true);
-    assert.equal(rebuildBlocked.ok, false);
-    assert.equal(rebuildBlocked.error?.message, 'endpoint_not_allowed');
+    assert.equal(rebuildResult.ok, true);
     assert.equal(deleteBlocked.ok, false);
     assert.equal(deleteBlocked.error?.message, 'endpoint_not_allowed');
     assert.deepEqual(harness.backendCalls, [
@@ -354,6 +353,11 @@ test('backend:request allows fixed knowledge base governance endpoints only', as
         {
             method: 'POST',
             endpoint: '/api/knowledge_base/ingest',
+            payload: { content: 'release notes', doc_id: 'release' },
+        },
+        {
+            method: 'POST',
+            endpoint: '/api/knowledge_base/rebuild',
             payload: { content: 'release notes', doc_id: 'release' },
         },
     ]);

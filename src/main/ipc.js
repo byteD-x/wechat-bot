@@ -140,6 +140,7 @@ function registerIpcHandlers({
         '/api/knowledge_base/status',
         '/api/knowledge_base/dry-run',
         '/api/knowledge_base/ingest',
+        '/api/knowledge_base/rebuild',
         '/api/logs',
         '/api/logs/clear',
         '/api/usage',
