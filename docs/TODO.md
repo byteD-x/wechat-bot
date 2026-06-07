@@ -8,18 +8,14 @@
 - Prompt 回滚 API：`POST /api/v1/admin/prompts/{revision}/rollback` 已落地，回滚追加新 active revision，并写入 `data/prompt_revisions.json` 审计账本。
 - Prompt 版本列表与差异 API：`GET /api/v1/admin/prompts/revisions` 与 `GET /api/v1/admin/prompts/{revision}/diff` 已落地；列表只返回 revision 元数据，不泄露完整 Prompt，diff 供回滚确认前预览。
 - Prompt 回滚 UI：设置页系统提示区已提供“Prompt 版本治理”折叠面板，可查看版本历史、先预览 diff、再确认回滚，并在成功后刷新只读注入块与运行时状态。
-- 受控 Agent Tool Workflow API：`POST /api/v1/agents/tool-workflow` 已落地，当前白名单包含 `config_audit`、`readiness_check`、`prompt_preview`、`eval_latest`、`cost_summary`。
-- Tool Workflow UI：仪表盘“风险与恢复 / 受控工具流”已接入白名单工具选择、dry-run、逐步 trace、失败步骤突出和恢复建议；Renderer 测试覆盖 dry-run、单步失败 trace、`continue_on_error`、最新评测与成本摘要的只读摘要展示。
-- API 测试：已覆盖 Prompt 版本列表、diff 预览、空/损坏账本诊断、active revision 唯一性、Prompt 回滚成功、revision 不存在、白名单工具执行、只读评测/成本工具和未知工具拒绝。
+- 受控 Agent Tool Workflow API：`POST /api/v1/agents/tool-workflow` 已落地，当前白名单包含 `config_audit`、`readiness_check`、`prompt_preview`、`eval_latest`、`cost_summary`、`backup_cleanup_dry_run`、`data_controls_dry_run`。
+- Tool Workflow UI：仪表盘“风险与恢复 / 受控工具流”已接入白名单工具选择、dry-run、逐步 trace、失败步骤突出和恢复建议；Renderer 测试覆盖 dry-run、单步失败 trace、`continue_on_error`、最新评测、成本摘要、备份清理预览和数据治理预览的只读摘要展示。
+- API 测试：已覆盖 Prompt 版本列表、diff 预览、空/损坏账本诊断、active revision 唯一性、Prompt 回滚成功、revision 不存在、白名单工具执行、只读评测/成本/维护 dry-run 工具、未知工具拒绝和危险 payload 拒绝。
 - Renderer 测试：已覆盖 Prompt 版本治理入口、ApiService 幂等回滚策略、必须先预览差异再执行回滚，以及成功回滚后的设置刷新与反馈。
 - RAG/eval smoke 扩样：`tests/fixtures/evals/smoke_cases.json` 已从 20 条扩到 24 条，新增 Prompt 回滚、工具审计、Windows 首次运行和 RAG 风格参考场景。
 - 文档入口：`README.md`、`docs/USER_GUIDE.md`、`docs/SYSTEM_CHAINS.md`、`docs/HIGHLIGHTS.md`、`docs/api.md` 和 `docs/interview-playbook.md` 已补充。
 
 ## 下一阶段 P1
-
-- 扩展工具白名单
-  - 候选：备份 dry-run、数据治理 dry-run。
-  - 原则：先只读或 dry-run，再考虑可写工具；每个工具必须有输入限制、审计字段和测试。
 
 - RAG/eval 数据集治理
   - 修复或替换历史 fixture 中不可读的乱码样例，保留相同指标分布，避免评测语义不可审查。

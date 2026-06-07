@@ -1,4 +1,5 @@
 import asyncio
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -63,6 +64,52 @@ async def _cost_summary(payload):
     }
 
 
+async def _backup_cleanup_preview(payload):
+    return {
+        "success": True,
+        "dry_run": True,
+        "keep_policy": {
+            "keep_quick": payload["keep_quick"],
+            "keep_full": payload["keep_full"],
+            "protect_restore_anchor": payload["protect_restore_anchor"],
+            "path": "C:/secret/should-not-leak",
+        },
+        "candidate_count": 2,
+        "delete_candidates": [
+            {"id": "quick-1", "path": "C:/secret/delete-me"},
+            {"id": "quick-2", "path": "E:\\private\\delete-me"},
+        ],
+        "preserved_backups": [{"id": "full-1", "path": "C:/secret/preserve-me"}],
+        "protected_backup_ids": ["restore-anchor"],
+        "backups": [{"id": "quick-3", "path": "E:\\private\\backup"}],
+        "deleted_targets": [{"path": "C:/secret/deleted-target"}],
+        "reclaimable_bytes": 8192,
+        "summary": {
+            "total_backups": 5,
+            "quick_backup_count": 3,
+            "full_backup_count": 2,
+        },
+    }
+
+
+async def _data_controls_preview(payload):
+    return {
+        "success": True,
+        "dry_run": True,
+        "scopes": list(payload["scopes"]),
+        "target_count": 3,
+        "existing_target_count": 2,
+        "unsupported_target_count": 1,
+        "reclaimable_bytes": 4096,
+        "targets": [
+            {"path": "C:/secret/chat_memory.db", "relative_path": "chat_memory.db"},
+            {"path": "E:\\private\\vector_db", "relative_path": "vector_db"},
+        ],
+        "unsupported_targets": [{"path": "C:/secret/unsupported"}],
+        "deleted_targets": [{"path": "E:\\private\\deleted"}],
+    }
+
+
 @pytest.mark.asyncio
 async def test_tool_workflow_runs_registered_builtin_tools():
     service = ControlledToolWorkflowService(
@@ -121,6 +168,124 @@ async def test_tool_workflow_runs_readonly_observability_tools():
     assert cost_output["model_count"] == 2
     assert cost_output["review_queue_count"] == 1
     assert "review_queue" not in cost_output
+
+
+@pytest.mark.asyncio
+async def test_tool_workflow_runs_maintenance_dry_run_tools_without_leaking_raw_targets():
+    service = ControlledToolWorkflowService(
+        config_loader=_snapshot,
+        readiness_loader=_readiness,
+        backup_cleanup_loader=_backup_cleanup_preview,
+        data_controls_loader=_data_controls_preview,
+    )
+
+    result = await service.run(
+        [
+            {
+                "tool": "backup_cleanup_dry_run",
+                "payload": {"keep_quick": 0, "keep_full": 2, "protect_restore_anchor": False},
+            },
+            {
+                "tool": "data_controls_dry_run",
+                "payload": {"scopes": ["memory", "export_rag"]},
+            },
+        ]
+    )
+
+    assert result["success"] is True
+    backup_output = result["trace"][0]["output"]
+    assert backup_output == {
+        "success": True,
+        "dry_run": True,
+        "keep_policy": {"keep_quick": 0, "keep_full": 2, "protect_restore_anchor": False},
+        "candidate_count": 2,
+        "preserved_count": 1,
+        "protected_count": 1,
+        "reclaimable_bytes": 8192,
+        "total_backups": 5,
+        "quick_backup_count": 3,
+        "full_backup_count": 2,
+        "deleted_count": 0,
+    }
+
+    data_output = result["trace"][1]["output"]
+    assert data_output == {
+        "success": True,
+        "dry_run": True,
+        "scopes": ["memory", "export_rag"],
+        "target_count": 3,
+        "existing_target_count": 2,
+        "unsupported_target_count": 1,
+        "reclaimable_bytes": 4096,
+        "deleted_count": 0,
+    }
+
+    serialized = json.dumps(result, ensure_ascii=False)
+    for forbidden in (
+        '"delete_candidates"',
+        '"preserved_backups"',
+        '"backups"',
+        '"targets"',
+        '"unsupported_targets"',
+        '"path"',
+        '"relative_path"',
+        "C:/secret",
+        "E:\\private",
+    ):
+        assert forbidden not in serialized
+
+
+@pytest.mark.asyncio
+async def test_tool_workflow_data_controls_dry_run_uses_default_scopes():
+    observed = {}
+
+    async def _loader(payload):
+        observed["payload"] = payload
+        return await _data_controls_preview(payload)
+
+    service = ControlledToolWorkflowService(
+        config_loader=_snapshot,
+        readiness_loader=_readiness,
+        data_controls_loader=_loader,
+    )
+
+    result = await service.run([{"tool": "data_controls_dry_run"}])
+
+    assert result["success"] is True
+    assert observed["payload"]["scopes"] == ["memory", "usage", "export_rag"]
+    assert result["trace"][0]["output"]["scopes"] == ["memory", "usage", "export_rag"]
+
+
+@pytest.mark.asyncio
+async def test_tool_workflow_rejects_maintenance_dry_run_unsafe_payloads():
+    service = ControlledToolWorkflowService(
+        config_loader=_snapshot,
+        readiness_loader=_readiness,
+        backup_cleanup_loader=_backup_cleanup_preview,
+        data_controls_loader=_data_controls_preview,
+    )
+
+    backup_result = await service.run(
+        [{"tool": "backup_cleanup_dry_run", "payload": {"apply": True, "backup_id": "b1"}}]
+    )
+    assert backup_result["success"] is False
+    assert backup_result["trace"][0]["error_type"] == "schema_validation"
+    assert "payload.apply is not allowed" in backup_result["trace"][0]["error"]
+    assert "payload.backup_id is not allowed" in backup_result["trace"][0]["error"]
+
+    empty_scopes_result = await service.run(
+        [{"tool": "data_controls_dry_run", "payload": {"scopes": []}}]
+    )
+    assert empty_scopes_result["success"] is False
+    assert empty_scopes_result["trace"][0]["error_type"] == "schema_validation"
+    assert "payload.scopes must contain at least 1 item(s)" in empty_scopes_result["trace"][0]["error"]
+
+    unknown_scope_result = await service.run(
+        [{"tool": "data_controls_dry_run", "payload": {"scopes": ["memory", "unknown"]}}]
+    )
+    assert unknown_scope_result["success"] is False
+    assert unknown_scope_result["trace"][0]["error_type"] == "schema_validation"
+    assert "payload.scopes[1] must be one of: memory, usage, export_rag" in unknown_scope_result["trace"][0]["error"]
 
 
 @pytest.mark.asyncio

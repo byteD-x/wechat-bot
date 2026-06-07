@@ -135,11 +135,11 @@
     - 实现：
       - `backend/api.py::run_agent_tool_workflow` 调用 `ControlledToolWorkflowService`。
       - 当前最多 `8` 步，单步 payload 字符串化后最多 `12000` 字符。
-      - 当前注册工具只包含 `config_audit`、`readiness_check`、`prompt_preview`、`eval_latest`、`cost_summary`。
+      - 当前注册工具只包含 `config_audit`、`readiness_check`、`prompt_preview`、`eval_latest`、`cost_summary`、`backup_cleanup_dry_run`、`data_controls_dry_run`。
       - 每个注册工具声明 payload schema、permission 和 timeout，执行前完成输入校验与权限检查。
       - 未知工具、schema 不通过、权限不匹配或超时都会返回 `bad_workflow` 和失败 trace，不会执行任意 shell、任意文件写入、任意网络请求或动态插件。
       - 仪表盘“风险与恢复 / 受控工具流”通过 `src/renderer/js/pages/dashboard/tool-workflow.js` 构造白名单步骤、dry-run 和 `continue_on_error`，再由 `ApiService.runToolWorkflow()` 调用该接口。
-      - 前端 trace 只展示工具名、状态、耗时、失败原因和结果摘要；`prompt_preview` 不在界面 trace 中展示完整 Prompt，`eval_latest` 不展示完整 `cases`，`cost_summary` 不展示完整 `review_queue`。
+      - 前端 trace 只展示工具名、状态、耗时、失败原因和结果摘要；`prompt_preview` 不在界面 trace 中展示完整 Prompt，`eval_latest` 不展示完整 `cases`，`cost_summary` 不展示完整 `review_queue`，维护 dry-run 工具不展示备份候选列表、清理 targets 或完整本机路径。
 
 ### 当前接口分组
 

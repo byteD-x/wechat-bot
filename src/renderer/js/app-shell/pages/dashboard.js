@@ -310,6 +310,8 @@ export function renderDashboardPageShell() {
                                                     <option value="readiness_check">启动准备检查</option>
                                                     <option value="eval_latest">最新评测</option>
                                                     <option value="cost_summary">成本摘要</option>
+                                                    <option value="backup_cleanup_dry_run">备份清理预览</option>
+                                                    <option value="data_controls_dry_run">数据治理预览</option>
                                                 </select>
                                             </div>
                                             <div class="form-group">
@@ -321,6 +323,8 @@ export function renderDashboardPageShell() {
                                                     <option value="readiness_check">启动准备检查</option>
                                                     <option value="eval_latest">最新评测</option>
                                                     <option value="cost_summary">成本摘要</option>
+                                                    <option value="backup_cleanup_dry_run">备份清理预览</option>
+                                                    <option value="data_controls_dry_run">数据治理预览</option>
                                                 </select>
                                             </div>
                                             <div class="form-group">
@@ -332,6 +336,8 @@ export function renderDashboardPageShell() {
                                                     <option value="readiness_check" selected>启动准备检查</option>
                                                     <option value="eval_latest">最新评测</option>
                                                     <option value="cost_summary">成本摘要</option>
+                                                    <option value="backup_cleanup_dry_run">备份清理预览</option>
+                                                    <option value="data_controls_dry_run">数据治理预览</option>
                                                 </select>
                                             </div>
                                         </div>

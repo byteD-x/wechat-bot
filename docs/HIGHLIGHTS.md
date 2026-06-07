@@ -296,11 +296,11 @@ Provider 分层策略也更清晰：
 这一轮把原先容易散落在配置和调试脚本里的高风险操作，收口成可审计的本机治理接口：
 
 - Prompt 回滚通过 `POST /api/v1/admin/prompts/{revision}/rollback` 落地，回滚时追加新的 active revision，并在 `data/prompt_revisions.json` 保留 `rollback_from / reason / operator / created_at`。
-- 受控 Agent Tool Workflow 通过 `POST /api/v1/agents/tool-workflow` 落地，当前只允许 `config_audit`、`readiness_check`、`prompt_preview` 三类注册工具。
+- 受控 Agent Tool Workflow 通过 `POST /api/v1/agents/tool-workflow` 落地，当前只允许 `config_audit`、`readiness_check`、`prompt_preview`、`eval_latest`、`cost_summary`、`backup_cleanup_dry_run`、`data_controls_dry_run` 七类注册工具。
 - 工具工作流限制最多 `8` 步、单步 payload 最多 `12000` 字符，并在执行前校验注册工具的 payload schema、权限和超时时间。
 - 每步 trace 返回 `index / tool / status / duration_ms / permission / schema_valid / timeout_ms`，方便桌面端展示失败位置、输入校验结果和恢复建议。
-- Electron 主进程只转发固定治理路径；Prompt 回滚必须匹配数字 revision，Tool Workflow 不支持任意 shell、文件写入、网络请求或动态插件执行。
-- API 测试已覆盖回滚成功、revision 不存在、白名单工具执行和未知工具拒绝，离线 smoke 数据集也扩展到 24 条，纳入 Prompt 回滚、工具审计、Windows 首次运行和 RAG 风格参考场景。
+- Electron 主进程只转发固定治理路径；Prompt 回滚必须匹配数字 revision，Tool Workflow 不支持任意 shell、文件写入、网络请求或动态插件执行，维护 dry-run 只返回聚合摘要，不展示备份候选列表、清理 targets 或完整本机路径。
+- API 测试已覆盖回滚成功、revision 不存在、白名单工具执行、维护 dry-run 输出脱敏、危险 payload 拒绝和未知工具拒绝，离线 smoke 数据集也扩展到 24 条，纳入 Prompt 回滚、工具审计、Windows 首次运行和 RAG 风格参考场景。
 
 这组能力的重点不是“让 Agent 做更多事”，而是先把可恢复、可审计和可解释的边界立起来。
 

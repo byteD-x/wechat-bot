@@ -2017,6 +2017,178 @@ async def test_api_tool_workflow_runs_observability_tools(client, mock_manager):
 
 
 @pytest.mark.asyncio
+async def test_api_tool_workflow_runs_maintenance_dry_runs_without_raw_leaks(client, mock_manager):
+    snapshot = _build_snapshot({
+        "api": {"presets": []},
+        "bot": {"backup_dir": "E:/private/backups"},
+        "logging": {},
+        "agent": {},
+        "services": {},
+    })
+    backup_payload = {
+        "success": True,
+        "dry_run": True,
+        "keep_policy": {
+            "keep_quick": 0,
+            "keep_full": 2,
+            "protect_restore_anchor": False,
+            "path": "C:/secret/keep-policy",
+        },
+        "candidate_count": 2,
+        "delete_candidates": [{"id": "quick-1", "path": "C:/secret/delete"}],
+        "preserved_backups": [{"id": "full-1", "path": "E:\\private\\preserve"}],
+        "protected_backup_ids": ["restore-anchor"],
+        "backups": [{"id": "quick-2", "path": "E:\\private\\backup"}],
+        "reclaimable_bytes": 8192,
+        "summary": {
+            "total_backups": 5,
+            "quick_backup_count": 3,
+            "full_backup_count": 2,
+        },
+    }
+    data_payload = {
+        "success": True,
+        "dry_run": True,
+        "scopes": ["memory", "export_rag"],
+        "target_count": 3,
+        "existing_target_count": 2,
+        "unsupported_target_count": 1,
+        "reclaimable_bytes": 4096,
+        "targets": [{"path": "C:/secret/chat_memory.db", "relative_path": "chat_memory.db"}],
+        "unsupported_targets": [{"path": "E:\\private\\unsupported"}],
+        "deleted_targets": [{"path": "C:/secret/deleted"}],
+    }
+
+    with (
+        patch.object(api_module.config_service, "get_snapshot", return_value=snapshot),
+        patch.object(api_module.backup_service, "update_config") as backup_update_mock,
+        patch.object(api_module.backup_service, "cleanup_backups", return_value=backup_payload) as cleanup_mock,
+        patch.object(api_module.data_control_service, "update_config") as data_update_mock,
+        patch.object(api_module.data_control_service, "clear", return_value=data_payload) as clear_mock,
+    ):
+        response = await client.post(
+            "/api/v1/agents/tool-workflow",
+            json={
+                "steps": [
+                    {
+                        "tool": "backup_cleanup_dry_run",
+                        "payload": {
+                            "keep_quick": 0,
+                            "keep_full": 2,
+                            "protect_restore_anchor": False,
+                        },
+                    },
+                    {
+                        "tool": "data_controls_dry_run",
+                        "payload": {"scopes": ["memory", "export_rag"]},
+                    },
+                ]
+            },
+        )
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["success"] is True
+    assert [item["tool"] for item in data["trace"]] == [
+        "backup_cleanup_dry_run",
+        "data_controls_dry_run",
+    ]
+    assert data["trace"][0]["output"] == {
+        "success": True,
+        "dry_run": True,
+        "keep_policy": {
+            "keep_quick": 0,
+            "keep_full": 2,
+            "protect_restore_anchor": False,
+        },
+        "candidate_count": 2,
+        "preserved_count": 1,
+        "protected_count": 1,
+        "reclaimable_bytes": 8192,
+        "total_backups": 5,
+        "quick_backup_count": 3,
+        "full_backup_count": 2,
+        "deleted_count": 0,
+    }
+    assert data["trace"][1]["output"] == {
+        "success": True,
+        "dry_run": True,
+        "scopes": ["memory", "export_rag"],
+        "target_count": 3,
+        "existing_target_count": 2,
+        "unsupported_target_count": 1,
+        "reclaimable_bytes": 4096,
+        "deleted_count": 0,
+    }
+    backup_update_mock.assert_called_once_with(snapshot.bot)
+    data_update_mock.assert_called_once_with(snapshot.bot)
+    assert cleanup_mock.call_args.kwargs == {
+        "keep_quick": 0,
+        "keep_full": 2,
+        "protect_restore_anchor": False,
+        "apply": False,
+        "list_limit": 20,
+    }
+    assert clear_mock.call_args.args == (["memory", "export_rag"],)
+    assert clear_mock.call_args.kwargs == {"apply": False}
+
+    response_text = (await response.get_data()).decode("utf-8")
+    for forbidden in (
+        "delete_candidates",
+        "preserved_backups",
+        '"backups"',
+        '"targets"',
+        "unsupported_targets",
+        '"path"',
+        "relative_path",
+        "C:/secret",
+        "E:\\private",
+    ):
+        assert forbidden not in response_text
+
+
+@pytest.mark.asyncio
+async def test_api_tool_workflow_rejects_maintenance_dry_run_unsafe_payloads(client):
+    backup_response = await client.post(
+        "/api/v1/agents/tool-workflow",
+        json={
+            "steps": [
+                {
+                    "tool": "backup_cleanup_dry_run",
+                    "payload": {"apply": True, "backup_id": "b1"},
+                }
+            ]
+        },
+    )
+
+    assert backup_response.status_code == 400
+    backup_data = await backup_response.get_json()
+    assert backup_data["success"] is False
+    assert backup_data["code"] == "bad_workflow"
+    assert backup_data["trace"][0]["error_type"] == "schema_validation"
+    assert "payload.apply is not allowed" in backup_data["trace"][0]["error"]
+    assert "payload.backup_id is not allowed" in backup_data["trace"][0]["error"]
+
+    data_controls_response = await client.post(
+        "/api/v1/agents/tool-workflow",
+        json={
+            "steps": [
+                {
+                    "tool": "data_controls_dry_run",
+                    "payload": {"scopes": ["memory", "unknown"]},
+                }
+            ]
+        },
+    )
+
+    assert data_controls_response.status_code == 400
+    data_controls_data = await data_controls_response.get_json()
+    assert data_controls_data["success"] is False
+    assert data_controls_data["trace"][0]["error_type"] == "schema_validation"
+    assert "payload.scopes[1] must be one of: memory, usage, export_rag" in data_controls_data["trace"][0]["error"]
+
+
+@pytest.mark.asyncio
 async def test_api_tool_workflow_rejects_unknown_tool(client):
     response = await client.post(
         "/api/v1/agents/tool-workflow",

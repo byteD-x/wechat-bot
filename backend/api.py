@@ -2573,11 +2573,45 @@ async def run_agent_tool_workflow():
                 include_estimated=bool(payload.get("include_estimated", True)),
             )
 
+        async def _load_backup_cleanup_preview(payload: dict[str, Any]) -> dict[str, Any]:
+            snapshot = config_service.get_snapshot()
+            backup_service.update_config(snapshot.bot)
+            keep_quick = (
+                int(payload["keep_quick"])
+                if "keep_quick" in payload
+                else DEFAULT_KEEP_QUICK_BACKUPS
+            )
+            keep_full = (
+                int(payload["keep_full"])
+                if "keep_full" in payload
+                else DEFAULT_KEEP_FULL_BACKUPS
+            )
+            return await asyncio.to_thread(
+                backup_service.cleanup_backups,
+                keep_quick=keep_quick,
+                keep_full=keep_full,
+                protect_restore_anchor=bool(payload.get("protect_restore_anchor", True)),
+                apply=False,
+                list_limit=20,
+            )
+
+        async def _load_data_controls_preview(payload: dict[str, Any]) -> dict[str, Any]:
+            snapshot = config_service.get_snapshot()
+            data_control_service.update_config(snapshot.bot)
+            scopes = payload.get("scopes") if isinstance(payload.get("scopes"), list) else ["memory", "usage", "export_rag"]
+            return await asyncio.to_thread(
+                data_control_service.clear,
+                scopes,
+                apply=False,
+            )
+
         service = ControlledToolWorkflowService(
             config_loader=config_service.get_snapshot,
             readiness_loader=_load_readiness_report,
             eval_report_loader=_load_latest_eval_report,
             cost_summary_loader=_load_cost_summary,
+            backup_cleanup_loader=_load_backup_cleanup_preview,
+            data_controls_loader=_load_data_controls_preview,
         )
         result = await service.run(steps, dry_run=dry_run)
         if result.get("success"):

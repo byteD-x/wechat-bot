@@ -15,9 +15,12 @@ MAX_WORKFLOW_STEPS = 8
 MAX_STEP_PAYLOAD_CHARS = 12000
 DEFAULT_TOOL_TIMEOUT_SEC = 5.0
 DEFAULT_COST_SUMMARY_TIMEOUT_SEC = 10.0
+DEFAULT_BACKUP_KEEP_QUICK = 5
+DEFAULT_BACKUP_KEEP_FULL = 3
 
 EvalReportLoader = Callable[[], Awaitable[dict[str, Any]]]
 CostSummaryLoader = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
+MaintenanceDryRunLoader = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 
 
 class ToolWorkflowError(ValueError):
@@ -98,6 +101,23 @@ def _validate_schema_value(schema: dict[str, Any], value: Any, path: str) -> lis
         errors.append(f"{path} must be {expected_type}")
         return errors
 
+    enum_values = schema.get("enum")
+    if isinstance(enum_values, list) and value not in enum_values:
+        allowed = ", ".join(str(item) for item in enum_values)
+        errors.append(f"{path} must be one of: {allowed}")
+        return errors
+
+    if expected_type == "array" and isinstance(value, list):
+        min_items = schema.get("minItems")
+        if isinstance(min_items, int) and len(value) < min_items:
+            errors.append(f"{path} must contain at least {min_items} item(s)")
+            return errors
+        item_schema = schema.get("items")
+        if isinstance(item_schema, dict):
+            for index, item in enumerate(value):
+                errors.extend(_validate_schema_value(item_schema, item, f"{path}[{index}]"))
+        return errors
+
     if expected_type != "object" or not isinstance(value, dict):
         return errors
 
@@ -138,6 +158,8 @@ class ControlledToolWorkflowService:
         readiness_loader: Callable[[], Awaitable[dict[str, Any]]],
         eval_report_loader: Optional[EvalReportLoader] = None,
         cost_summary_loader: Optional[CostSummaryLoader] = None,
+        backup_cleanup_loader: Optional[MaintenanceDryRunLoader] = None,
+        data_controls_loader: Optional[MaintenanceDryRunLoader] = None,
         registry: Optional[ToolRegistry] = None,
         allowed_permissions: Optional[set[str]] = None,
     ) -> None:
@@ -145,6 +167,8 @@ class ControlledToolWorkflowService:
         self._readiness_loader = readiness_loader
         self._eval_report_loader = eval_report_loader or self._default_eval_report_loader
         self._cost_summary_loader = cost_summary_loader or self._default_cost_summary_loader
+        self._backup_cleanup_loader = backup_cleanup_loader or self._default_backup_cleanup_loader
+        self._data_controls_loader = data_controls_loader or self._default_data_controls_loader
         self._registry = registry or self._build_default_registry()
         self._allowed_permissions = set(allowed_permissions or {"admin_read"})
 
@@ -239,6 +263,45 @@ class ControlledToolWorkflowService:
                 permission="admin_read",
                 timeout_sec=DEFAULT_COST_SUMMARY_TIMEOUT_SEC,
                 handler=self._tool_cost_summary,
+            )
+        )
+        registry.register(
+            ToolDefinition(
+                name="backup_cleanup_dry_run",
+                payload_schema={
+                    "type": "object",
+                    "properties": {
+                        "keep_quick": {"type": "integer"},
+                        "keep_full": {"type": "integer"},
+                        "protect_restore_anchor": {"type": "boolean"},
+                    },
+                    "additionalProperties": False,
+                },
+                permission="admin_read",
+                timeout_sec=DEFAULT_TOOL_TIMEOUT_SEC,
+                handler=self._tool_backup_cleanup_dry_run,
+            )
+        )
+        registry.register(
+            ToolDefinition(
+                name="data_controls_dry_run",
+                payload_schema={
+                    "type": "object",
+                    "properties": {
+                        "scopes": {
+                            "type": "array",
+                            "minItems": 1,
+                            "items": {
+                                "type": "string",
+                                "enum": ["memory", "usage", "export_rag"],
+                            },
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+                permission="admin_read",
+                timeout_sec=DEFAULT_TOOL_TIMEOUT_SEC,
+                handler=self._tool_data_controls_dry_run,
             )
         )
         return registry
@@ -444,6 +507,72 @@ class ControlledToolWorkflowService:
             "review_queue_count": len(review_queue),
         }
 
+    async def _tool_backup_cleanup_dry_run(self, payload: dict[str, Any]) -> dict[str, Any]:
+        keep_quick = self._safe_int(payload.get("keep_quick"), DEFAULT_BACKUP_KEEP_QUICK, min_value=0)
+        keep_full = self._safe_int(payload.get("keep_full"), DEFAULT_BACKUP_KEEP_FULL, min_value=0)
+        protect_restore_anchor = bool(payload.get("protect_restore_anchor", True))
+        source = await self._backup_cleanup_loader(
+            {
+                "keep_quick": keep_quick,
+                "keep_full": keep_full,
+                "protect_restore_anchor": protect_restore_anchor,
+            }
+        )
+        summary = source.get("summary") if isinstance(source, dict) and isinstance(source.get("summary"), dict) else {}
+        source_keep_policy = source.get("keep_policy") if isinstance(source, dict) and isinstance(source.get("keep_policy"), dict) else {}
+        protected_backup_ids = (
+            source.get("protected_backup_ids")
+            if isinstance(source, dict) and isinstance(source.get("protected_backup_ids"), list)
+            else []
+        )
+        return {
+            "success": bool(source.get("success", True)) if isinstance(source, dict) else True,
+            "dry_run": True,
+            "keep_policy": {
+                "keep_quick": self._safe_int(source_keep_policy.get("keep_quick"), keep_quick, min_value=0),
+                "keep_full": self._safe_int(source_keep_policy.get("keep_full"), keep_full, min_value=0),
+                "protect_restore_anchor": bool(source_keep_policy.get("protect_restore_anchor", protect_restore_anchor)),
+            },
+            "candidate_count": self._safe_int(source.get("candidate_count"), 0, min_value=0) if isinstance(source, dict) else 0,
+            "preserved_count": len(source.get("preserved_backups") or []) if isinstance(source, dict) else 0,
+            "protected_count": len(protected_backup_ids),
+            "reclaimable_bytes": self._safe_int(source.get("reclaimable_bytes"), 0, min_value=0) if isinstance(source, dict) else 0,
+            "total_backups": self._safe_int(summary.get("total_backups"), 0, min_value=0),
+            "quick_backup_count": self._safe_int(summary.get("quick_backup_count"), 0, min_value=0),
+            "full_backup_count": self._safe_int(summary.get("full_backup_count"), 0, min_value=0),
+            "deleted_count": 0,
+        }
+
+    async def _tool_data_controls_dry_run(self, payload: dict[str, Any]) -> dict[str, Any]:
+        scopes = payload.get("scopes")
+        if scopes is None:
+            scopes = ["memory", "usage", "export_rag"]
+        source = await self._data_controls_loader({"scopes": list(scopes)})
+        source_scopes = source.get("scopes") if isinstance(source, dict) and isinstance(source.get("scopes"), list) else scopes
+        safe_scopes = [
+            str(item)
+            for item in source_scopes
+            if str(item) in {"memory", "usage", "export_rag"}
+        ]
+        return {
+            "success": bool(source.get("success", True)) if isinstance(source, dict) else True,
+            "dry_run": True,
+            "scopes": safe_scopes,
+            "target_count": self._safe_int(source.get("target_count"), 0, min_value=0) if isinstance(source, dict) else 0,
+            "existing_target_count": self._safe_int(source.get("existing_target_count"), 0, min_value=0) if isinstance(source, dict) else 0,
+            "unsupported_target_count": self._safe_int(source.get("unsupported_target_count"), 0, min_value=0) if isinstance(source, dict) else 0,
+            "reclaimable_bytes": self._safe_int(source.get("reclaimable_bytes"), 0, min_value=0) if isinstance(source, dict) else 0,
+            "deleted_count": 0,
+        }
+
+    @staticmethod
+    def _safe_int(value: Any, default: int, *, min_value: int = 0) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            parsed = int(default)
+        return max(int(min_value), parsed)
+
     @staticmethod
     async def _default_eval_report_loader() -> dict[str, Any]:
         return {"success": True, "report": None, "name": ""}
@@ -459,4 +588,38 @@ class ControlledToolWorkflowService:
             "overview": {},
             "models": [],
             "review_queue": [],
+        }
+
+    @staticmethod
+    async def _default_backup_cleanup_loader(payload: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "success": True,
+            "dry_run": True,
+            "keep_policy": {
+                "keep_quick": payload.get("keep_quick"),
+                "keep_full": payload.get("keep_full"),
+                "protect_restore_anchor": bool(payload.get("protect_restore_anchor", True)),
+            },
+            "candidate_count": 0,
+            "preserved_backups": [],
+            "protected_backup_ids": [],
+            "reclaimable_bytes": 0,
+            "summary": {
+                "total_backups": 0,
+                "quick_backup_count": 0,
+                "full_backup_count": 0,
+            },
+        }
+
+    @staticmethod
+    async def _default_data_controls_loader(payload: dict[str, Any]) -> dict[str, Any]:
+        scopes = payload.get("scopes") if isinstance(payload.get("scopes"), list) else []
+        return {
+            "success": True,
+            "dry_run": True,
+            "scopes": scopes,
+            "target_count": 0,
+            "existing_target_count": 0,
+            "unsupported_target_count": 0,
+            "reclaimable_bytes": 0,
         }

@@ -7,6 +7,8 @@ export const TOOL_WORKFLOW_TOOLS = Object.freeze([
     { value: 'readiness_check', label: '启动准备检查' },
     { value: 'eval_latest', label: '最新评测' },
     { value: 'cost_summary', label: '成本摘要' },
+    { value: 'backup_cleanup_dry_run', label: '备份清理预览' },
+    { value: 'data_controls_dry_run', label: '数据治理预览' },
 ]);
 
 const DEFAULT_SEQUENCE = ['config_audit', 'prompt_preview', 'readiness_check'];
@@ -92,17 +94,29 @@ function getSampleMessage(page) {
 }
 
 function buildPayload(tool, page) {
-    if (tool !== 'prompt_preview') {
-        return {};
+    if (tool === 'backup_cleanup_dry_run') {
+        return {
+            keep_quick: 5,
+            keep_full: 3,
+            protect_restore_anchor: true,
+        };
     }
-    return {
-        sample: {
-            chat_name: 'tool_workflow_preview',
-            sender: 'preview_user',
-            message: getSampleMessage(page),
-            is_group: false,
-        },
-    };
+    if (tool === 'data_controls_dry_run') {
+        return {
+            scopes: ['memory', 'usage', 'export_rag'],
+        };
+    }
+    if (tool === 'prompt_preview') {
+        return {
+            sample: {
+                chat_name: 'tool_workflow_preview',
+                sender: 'preview_user',
+                message: getSampleMessage(page),
+                is_group: false,
+            },
+        };
+    }
+    return {};
 }
 
 export function buildToolWorkflowSteps(page) {
@@ -142,7 +156,7 @@ function getRecoveryAdvice(item) {
 
 function formatOutputSummary(item) {
     const output = item?.output && typeof item.output === 'object' ? item.output : {};
-    if (output.dry_run) {
+    if (output.dry_run && item?.status === 'skipped') {
         return 'dry-run 已跳过真实执行';
     }
     if (item?.tool === 'prompt_preview') {
@@ -176,6 +190,22 @@ function formatOutputSummary(item) {
         const reviewQueueCount = Number(output.review_queue_count || 0);
         const costText = formatCurrencyGroups(overview.currency_groups);
         return `成本摘要：回复 ${replyCount} 条，Token ${totalTokens}，模型 ${modelCount} 个，复核 ${reviewQueueCount} 条，${costText}`;
+    }
+    if (item?.tool === 'backup_cleanup_dry_run') {
+        const candidateCount = Number(output.candidate_count || 0);
+        const preservedCount = Number(output.preserved_count || 0);
+        const protectedCount = Number(output.protected_count || 0);
+        const reclaimableBytes = Number(output.reclaimable_bytes || 0);
+        const totalBackups = Number(output.total_backups || 0);
+        return `备份清理预览：候选 ${candidateCount} 个，保留 ${preservedCount} 个，保护 ${protectedCount} 个，可回收 ${reclaimableBytes} bytes，总备份 ${totalBackups} 个`;
+    }
+    if (item?.tool === 'data_controls_dry_run') {
+        const scopes = asArray(output.scopes).length;
+        const targetCount = Number(output.target_count || 0);
+        const existingTargetCount = Number(output.existing_target_count || 0);
+        const unsupportedTargetCount = Number(output.unsupported_target_count || 0);
+        const reclaimableBytes = Number(output.reclaimable_bytes || 0);
+        return `数据治理预览：范围 ${scopes} 个，目标 ${targetCount} 个，现存 ${existingTargetCount} 个，不支持 ${unsupportedTargetCount} 个，可回收 ${reclaimableBytes} bytes`;
     }
     if (item?.tool === 'config_audit') {
         const dormant = asArray(output.dormant_paths).length;

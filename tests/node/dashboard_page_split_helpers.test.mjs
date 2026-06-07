@@ -492,7 +492,15 @@ test('dashboard tool workflow helper supports readonly observability tools with 
 
     assert.deepEqual(
         TOOL_WORKFLOW_TOOLS.map((item) => item.value),
-        ['config_audit', 'prompt_preview', 'readiness_check', 'eval_latest', 'cost_summary'],
+        [
+            'config_audit',
+            'prompt_preview',
+            'readiness_check',
+            'eval_latest',
+            'cost_summary',
+            'backup_cleanup_dry_run',
+            'data_controls_dry_run',
+        ],
     );
     assert.deepEqual(buildToolWorkflowSteps(page), [
         { tool: 'eval_latest', payload: {} },
@@ -552,6 +560,92 @@ test('dashboard tool workflow helper supports readonly observability tools with 
     assert.equal(traceText.includes('最新评测：12 个用例，通过，回归 1 项'), true);
     assert.equal(traceText.includes('成本摘要：回复 3 条，Token 420，模型 2 个，复核 1 条，USD 0.1800'), true);
     assert.equal(traceText.includes('should-not-leak'), false);
+    assert.equal(toast.calls.at(-1)?.type, 'success');
+}));
+
+test('dashboard tool workflow helper supports maintenance dry-run tools with safe summaries', async () => withDom(async ({ document }) => {
+    const selectors = createToolWorkflowSelectors(document, {
+        stepValues: ['backup_cleanup_dry_run', 'data_controls_dry_run', 'shell_exec'],
+    });
+    const page = createDashboardPage({ bot: { connected: true } }, selectors);
+    const toast = createToastRecorder();
+    let captured = null;
+
+    assert.deepEqual(buildToolWorkflowSteps(page), [
+        {
+            tool: 'backup_cleanup_dry_run',
+            payload: {
+                keep_quick: 5,
+                keep_full: 3,
+                protect_restore_anchor: true,
+            },
+        },
+        {
+            tool: 'data_controls_dry_run',
+            payload: {
+                scopes: ['memory', 'usage', 'export_rag'],
+            },
+        },
+    ]);
+
+    const result = await runToolWorkflow(page, {}, {
+        toast,
+        apiService: {
+            runToolWorkflow: async (payload) => {
+                captured = payload;
+                return {
+                    success: true,
+                    trace: [
+                        {
+                            index: 1,
+                            tool: 'backup_cleanup_dry_run',
+                            status: 'ok',
+                            duration_ms: 3,
+                            attempts: 1,
+                            retry_count: 0,
+                            output: {
+                                dry_run: true,
+                                candidate_count: 2,
+                                preserved_count: 1,
+                                protected_count: 1,
+                                reclaimable_bytes: 8192,
+                                total_backups: 5,
+                                delete_candidates: [{ path: 'C:/secret/delete' }],
+                            },
+                        },
+                        {
+                            index: 2,
+                            tool: 'data_controls_dry_run',
+                            status: 'ok',
+                            duration_ms: 4,
+                            attempts: 1,
+                            retry_count: 0,
+                            output: {
+                                dry_run: true,
+                                scopes: ['memory', 'usage', 'export_rag'],
+                                target_count: 3,
+                                existing_target_count: 2,
+                                unsupported_target_count: 1,
+                                reclaimable_bytes: 4096,
+                                targets: [{ path: 'E:\\private\\vector_db' }],
+                            },
+                        },
+                    ],
+                };
+            },
+        },
+    });
+
+    const traceText = selectors['#dashboard-tool-workflow-trace'].textContent;
+    assert.equal(result.success, true);
+    assert.deepEqual(captured.steps.map((item) => item.tool), ['backup_cleanup_dry_run', 'data_controls_dry_run']);
+    assert.equal(JSON.stringify(captured).includes('shell_exec'), false);
+    assert.equal(traceText.includes('备份清理预览：候选 2 个，保留 1 个，保护 1 个，可回收 8192 bytes，总备份 5 个'), true);
+    assert.equal(traceText.includes('数据治理预览：范围 3 个，目标 3 个，现存 2 个，不支持 1 个，可回收 4096 bytes'), true);
+    assert.equal(traceText.includes('delete_candidates'), false);
+    assert.equal(traceText.includes('targets'), false);
+    assert.equal(traceText.includes('C:/secret'), false);
+    assert.equal(traceText.includes('E:\\private'), false);
     assert.equal(toast.calls.at(-1)?.type, 'success');
 }));
 

@@ -599,14 +599,14 @@ python run.py eval --dataset tests/fixtures/evals/smoke_cases.json --preset smok
   - 失败信息会显示在治理面板内；diff 仅用于本机受控预览，不会写入公开文档或诊断包。
 - 受控 Agent Tool Workflow API：`POST /api/v1/agents/tool-workflow`
   - 当前最多 `8` 步，单步 payload 字符串化后最多 `12000` 字符。
-  - 当前白名单只包含 `config_audit`、`readiness_check`、`prompt_preview`、`eval_latest`、`cost_summary`。
-  - `eval_latest` 与 `cost_summary` 只读取本地评测和成本统计，trace 仅返回摘要、计数和筛选条件，不展开完整评测用例、聊天正文或成本复核队列。
+  - 当前白名单只包含 `config_audit`、`readiness_check`、`prompt_preview`、`eval_latest`、`cost_summary`、`backup_cleanup_dry_run`、`data_controls_dry_run`。
+  - `eval_latest`、`cost_summary`、`backup_cleanup_dry_run` 与 `data_controls_dry_run` 只读取本地评测、成本统计或维护 dry-run 结果，trace 仅返回摘要、计数和筛选条件，不展开完整评测用例、聊天正文、成本复核队列、备份候选列表、清理 targets 或完整本机路径。
   - 未知工具会返回失败 trace 和 `bad_workflow`，不会降级为任意命令、任意文件写入、任意网络请求或动态插件执行。
 - 仪表盘“风险与恢复 / 受控工具流”已经接入该接口：
   - 只能从下拉框选择白名单工具，不能输入任意工具名或任意 JSON。
   - 建议先执行 `dry-run`，确认步骤顺序后再执行真实工具流。
   - 执行结果会在面板内显示逐步 trace；失败步骤会突出展示，并给出恢复建议。
-  - `Prompt 预览`只发送示例消息并展示摘要，不在 trace 面板暴露完整 Prompt；最新评测和成本摘要同样只展示聚合信息。
+  - `Prompt 预览`只发送示例消息并展示摘要，不在 trace 面板暴露完整 Prompt；最新评测、成本摘要、备份清理预览和数据治理预览同样只展示聚合信息。
 - Electron 主进程只允许转发受控路径：Prompt 列表走固定 endpoint，Prompt diff 与回滚必须匹配数字 revision，Tool Workflow 只走固定 endpoint。
 - 完整请求体、响应字段和错误码见 [API 契约与治理接口](api.md)。
 

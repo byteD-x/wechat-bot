@@ -79,8 +79,15 @@ SUITES: dict[str, FastSuite] = {
         plugins=("pytest_asyncio.plugin",),
     ),
     "tool-workflow": FastSuite(
-        description="Controlled tool workflow retries, trace, and guardrail checks.",
-        targets=("tests/test_tool_workflow.py",),
+        description="Controlled tool workflow retries, trace, guardrails, and API integration checks.",
+        targets=(
+            "tests/test_tool_workflow.py",
+            "tests/test_api.py::test_api_tool_workflow_runs_whitelisted_steps",
+            "tests/test_api.py::test_api_tool_workflow_runs_observability_tools",
+            "tests/test_api.py::test_api_tool_workflow_runs_maintenance_dry_runs_without_raw_leaks",
+            "tests/test_api.py::test_api_tool_workflow_rejects_maintenance_dry_run_unsafe_payloads",
+            "tests/test_api.py::test_api_tool_workflow_rejects_unknown_tool",
+        ),
         plugins=("pytest_asyncio.plugin",),
     ),
     "prompt-governance": FastSuite(
