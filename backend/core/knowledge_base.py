@@ -10,6 +10,8 @@ from urllib.parse import urlsplit
 
 KNOWLEDGE_SOURCE = "knowledge_base"
 MAX_KNOWLEDGE_CONTENT_CHARS = 120000
+MAX_KNOWLEDGE_BATCH_DOCUMENTS = 20
+MAX_KNOWLEDGE_BATCH_CONTENT_CHARS = 300000
 
 
 def _normalize_text(value: Any) -> str:
@@ -101,6 +103,33 @@ def parse_knowledge_document_payload(data: Dict[str, Any]) -> KnowledgeDocument:
     )
 
 
+def parse_knowledge_batch_payload(data: Dict[str, Any]) -> List[KnowledgeDocument]:
+    if not isinstance(data, dict):
+        raise ValueError("request body must be an object")
+
+    documents = data.get("documents")
+    if not isinstance(documents, list):
+        raise ValueError("documents must be an array")
+    if not documents:
+        raise ValueError("documents is required")
+    if len(documents) > MAX_KNOWLEDGE_BATCH_DOCUMENTS:
+        raise ValueError(f"documents is too large; max {MAX_KNOWLEDGE_BATCH_DOCUMENTS} documents")
+
+    parsed_documents: List[KnowledgeDocument] = []
+    total_chars = 0
+    for index, item in enumerate(documents):
+        if not isinstance(item, dict):
+            raise ValueError(f"documents[{index}] must be an object")
+        document = parse_knowledge_document_payload(item)
+        total_chars += len(str(document.content or ""))
+        if total_chars > MAX_KNOWLEDGE_BATCH_CONTENT_CHARS:
+            raise ValueError(
+                f"total content is too long; max {MAX_KNOWLEDGE_BATCH_CONTENT_CHARS} characters"
+            )
+        parsed_documents.append(document)
+    return parsed_documents
+
+
 def build_knowledge_chunk_preview(chunks: List[Any]) -> List[Dict[str, Any]]:
     preview: List[Dict[str, Any]] = []
     for chunk in chunks:
@@ -134,6 +163,26 @@ def build_knowledge_dry_run_payload(document: KnowledgeDocument) -> Dict[str, An
         "chunk_ids": [chunk.chunk_id for chunk in chunks],
         "chunks": build_knowledge_chunk_preview(chunks),
         "char_count": len(str(document.content or "")),
+    }
+
+
+def build_knowledge_batch_dry_run_payload(documents: List[KnowledgeDocument]) -> Dict[str, Any]:
+    document_payloads: List[Dict[str, Any]] = []
+    total_chunks = 0
+    total_chars = 0
+    for index, document in enumerate(documents):
+        payload = build_knowledge_dry_run_payload(document)
+        total_chunks += int(payload.get("chunk_count") or 0)
+        total_chars += int(payload.get("char_count") or 0)
+        document_payloads.append({"index": index, **payload})
+    return {
+        "success": True,
+        "dry_run": True,
+        "batch": True,
+        "document_count": len(document_payloads),
+        "chunk_count": total_chunks,
+        "char_count": total_chars,
+        "documents": document_payloads,
     }
 
 
@@ -334,12 +383,16 @@ class KnowledgeBaseService:
 
 __all__ = [
     "KNOWLEDGE_SOURCE",
+    "MAX_KNOWLEDGE_BATCH_CONTENT_CHARS",
+    "MAX_KNOWLEDGE_BATCH_DOCUMENTS",
     "MAX_KNOWLEDGE_CONTENT_CHARS",
+    "build_knowledge_batch_dry_run_payload",
     "build_knowledge_chunk_preview",
     "build_knowledge_dry_run_payload",
     "KnowledgeBaseService",
     "KnowledgeChunk",
     "KnowledgeDocument",
+    "parse_knowledge_batch_payload",
     "parse_knowledge_document_payload",
     "redact_knowledge_local_path",
 ]

@@ -690,6 +690,9 @@ python run.py eval --dataset tests/fixtures/evals/smoke_cases.json --preset smok
 - 知识库文档预览：`POST /api/knowledge_base/dry-run`
   - 请求体只接收纯文本或 Markdown 的 `content`，不会读取任意本机文件路径，也不会扫描目录。
   - 预览只返回 `doc_id`、`version`、chunk 数量、chunk id 和每个 chunk 的字符数、脱敏来源、URL、页码等摘要，不返回完整正文或 chunk text。
+- 知识库批量预览：`POST /api/knowledge_base/batch-dry-run`
+  - 请求体使用 `{"documents": [...]}`，最多 20 份文档，每份文档沿用单文档字段校验，批量正文总长度最多 300000 字符。
+  - 只返回聚合 chunk/字符数和每份文档的脱敏 dry-run 摘要，不写入向量库，不读取本机路径，也不提供批量重建。
 - 知识库写入：`POST /api/knowledge_base/ingest`
   - 复用运行中 bot 的 `vector_memory` 和 `ai_client.get_embedding`，将文本切分后写入 `source=knowledge_base` 的 chunk。
   - `source_file / url / page / metadata` 会进入 chunk metadata，供 RAG citation 绑定。
@@ -702,6 +705,7 @@ python run.py eval --dataset tests/fixtures/evals/smoke_cases.json --preset smok
   - 返回运行中向量库是否可用，以及当前知识库 chunk 数。
 - 首版限制：
   - 不提供文件上传、目录扫描、任意文件读取或后台批量索引。
+  - 桌面设置页当前只接入单文档粘贴式 dry-run / ingest / rebuild；`batch-dry-run` 是 Web API 预览能力，未接入桌面批量 UI。
   - `ingest / rebuild` 需要后端已经启动并具备可用 embedding 客户端；缺少运行时依赖时会返回 `409 vector_memory_unavailable` 或 `409 embedding_unavailable`。
   - 如果 `doc_id / source_file / url / source_url` 看起来像完整本机路径或 `file://` 本机 URI，接口响应会收敛为 `.../<filename>`，避免泄露本机目录结构。
 
@@ -724,6 +728,7 @@ python run.py eval --dataset tests/fixtures/evals/smoke_cases.json --preset smok
 - `GET /api/evals/latest`
 - `GET /api/knowledge_base/status`
 - `POST /api/knowledge_base/dry-run`
+- `POST /api/knowledge_base/batch-dry-run`
 - `POST /api/knowledge_base/ingest`
 - `POST /api/knowledge_base/rebuild`
 - `POST /api/knowledge_base/delete`

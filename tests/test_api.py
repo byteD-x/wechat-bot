@@ -3727,6 +3727,71 @@ async def test_api_knowledge_base_dry_run_redacts_file_uri_sources(client, mock_
 
 
 @pytest.mark.asyncio
+async def test_api_knowledge_base_batch_dry_run_returns_sanitized_document_summaries(client, mock_manager):
+    first_content = (
+        "Secret batch runbook says operator credentials and rollback notes must never be echoed. "
+        "Keep this raw sentence out of previews."
+    )
+    second_content = "Second trusted FAQ entry with public citation metadata."
+
+    response = await client.post(
+        "/api/knowledge_base/batch-dry-run",
+        json={
+            "documents": [
+                {
+                    "content": first_content,
+                    "content_type": "markdown",
+                    "doc_id": "batch-runbook",
+                    "version": "2026-06",
+                    "source_file": "Z:/fixture/private/batch-runbook.md",
+                    "url": "file:///Z:/fixture/private/source-url.md",
+                    "page": 4,
+                },
+                {
+                    "content": second_content,
+                    "content_type": "text",
+                    "doc_id": "batch-faq",
+                    "source_file": "docs/faq.md",
+                    "url": "https://example.test/faq",
+                },
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["success"] is True
+    assert data["dry_run"] is True
+    assert data["batch"] is True
+    assert data["document_count"] == 2
+    assert data["chunk_count"] == sum(item["chunk_count"] for item in data["documents"])
+    assert data["char_count"] == len(first_content) + len(second_content)
+
+    first = data["documents"][0]
+    second = data["documents"][1]
+    assert first["index"] == 0
+    assert first["doc_id"] == "batch-runbook"
+    assert first["version"] == "2026-06"
+    assert first["chunks"][0]["source_file"] == ".../batch-runbook.md"
+    assert first["chunks"][0]["url"] == ".../source-url.md"
+    assert first["chunks"][0]["page"] == 4
+    assert second["index"] == 1
+    assert second["doc_id"] == "batch-faq"
+    assert second["chunks"][0]["source_file"] == "docs/faq.md"
+    assert second["chunks"][0]["url"] == "https://example.test/faq"
+
+    response_text = (await response.get_data()).decode("utf-8")
+    for forbidden in (
+        "Secret batch runbook",
+        "operator credentials",
+        "raw sentence",
+        "file://",
+        "Z:/fixture/private",
+    ):
+        assert forbidden not in response_text
+
+
+@pytest.mark.asyncio
 async def test_api_knowledge_base_rejects_invalid_payload_shapes(client, mock_manager):
     vector_memory = DummyKnowledgeVectorMemory()
     mock_manager.bot.vector_memory = vector_memory
@@ -3734,10 +3799,23 @@ async def test_api_knowledge_base_rejects_invalid_payload_shapes(client, mock_ma
 
     cases = [
         ("/api/knowledge_base/dry-run", []),
+        ("/api/knowledge_base/batch-dry-run", []),
         ("/api/knowledge_base/ingest", "not-object"),
         ("/api/knowledge_base/rebuild", ["not-object"]),
         ("/api/knowledge_base/delete", []),
         ("/api/knowledge_base/dry-run", {"content": "  "}),
+        ("/api/knowledge_base/batch-dry-run", {}),
+        ("/api/knowledge_base/batch-dry-run", {"documents": "not-array"}),
+        ("/api/knowledge_base/batch-dry-run", {"documents": []}),
+        ("/api/knowledge_base/batch-dry-run", {"documents": ["not-object"]}),
+        (
+            "/api/knowledge_base/batch-dry-run",
+            {"documents": [{"content": "ok"}] * (api_module.MAX_KNOWLEDGE_BATCH_DOCUMENTS + 1)},
+        ),
+        (
+            "/api/knowledge_base/batch-dry-run",
+            {"documents": [{"content": "x" * 100001}, {"content": "y" * 100001}, {"content": "z" * 100001}]},
+        ),
         ("/api/knowledge_base/dry-run", {"content": "ok", "content_type": "application/pdf"}),
         ("/api/knowledge_base/dry-run", {"content": "ok", "metadata": []}),
         ("/api/knowledge_base/dry-run", {"content": "x" * (api_module.MAX_KNOWLEDGE_CONTENT_CHARS + 1)}),

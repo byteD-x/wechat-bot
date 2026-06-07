@@ -38,9 +38,13 @@ from backend.core.cost_analytics import CostAnalyticsService
 from backend.core.data_controls import DataControlService
 from backend.core.knowledge_base import (
     KNOWLEDGE_SOURCE,
+    MAX_KNOWLEDGE_BATCH_CONTENT_CHARS as MAX_KNOWLEDGE_BATCH_CONTENT_CHARS,
+    MAX_KNOWLEDGE_BATCH_DOCUMENTS as MAX_KNOWLEDGE_BATCH_DOCUMENTS,
     MAX_KNOWLEDGE_CONTENT_CHARS as MAX_KNOWLEDGE_CONTENT_CHARS,
     KnowledgeBaseService,
+    build_knowledge_batch_dry_run_payload,
     build_knowledge_dry_run_payload,
+    parse_knowledge_batch_payload,
     parse_knowledge_document_payload,
     redact_knowledge_local_path,
 )
@@ -2159,6 +2163,21 @@ async def preview_knowledge_base_document():
     except Exception as e:
         logger.exception("knowledge base dry-run failed: %s", e)
         return _json_internal_error("knowledge_base_dry_run_failed", code="knowledge_base_dry_run_failed")
+
+
+@app.route("/api/knowledge_base/batch-dry-run", methods=["POST"])
+async def preview_knowledge_base_documents():
+    """Preview chunking for multiple text/Markdown knowledge documents."""
+    try:
+        raw_data = await request.get_json(silent=True)
+        data = raw_data if raw_data is not None else {}
+        documents = parse_knowledge_batch_payload(data)
+        return jsonify(build_knowledge_batch_dry_run_payload(documents))
+    except ValueError as e:
+        return jsonify({"success": False, "message": str(e)}), 400
+    except Exception as e:
+        logger.exception("knowledge base batch dry-run failed: %s", e)
+        return _json_internal_error("knowledge_base_batch_dry_run_failed", code="knowledge_base_batch_dry_run_failed")
 
 
 @app.route("/api/knowledge_base/ingest", methods=["POST"])
