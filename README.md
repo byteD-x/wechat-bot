@@ -59,6 +59,7 @@
 - `Transport Abstraction`: 传输层统一抽象为 `BaseTransport`，默认走 `wcferry`，并保证“接收消息 → 发送消息 → 完成落盘”的主闭环可独立演进。
 - `Provider Compatibility`: 后端统一标准化请求字段、响应正文、工具调用、错误结构与落盘元数据，避免为单一提供方写定向分支。
 - `Desktop + Web`: Electron 桌面客户端与 Quart Web API 并存。
+- `Semantic Cache`: 响应缓存可选开启同上下文语义相似命中，默认关闭；精确命中优先，语义命中不跨 chat、provider、model、安全策略或 citation 边界。
 - `Observability`: `/api/status` 提供启动进度、诊断、健康检查、系统指标、回复质量、人工反馈、成长链状态与内存级脱敏 trace 摘要，`/api/metrics` 提供 Prometheus 风格导出。
 - `Readiness & Recovery`: `run.py check`、`GET /api/readiness` 与桌面端首次运行引导共用同一套环境检查逻辑；仪表盘会常驻显示“运行准备度”，并支持导出自动脱敏的诊断支持包。
 - `Hot Reload`: 配置热重载优先使用 `watchdog` 事件监听，缺失依赖时自动回退轮询，并带防抖。
@@ -246,7 +247,11 @@ python run.py web
     "retriever_cross_encoder_device": "",    # cpu / cuda
     "llm_foreground_max_concurrency": 1,
     "model_routing": {},                     # 记录可解释模型路由决策，不自动切换 provider
-    "response_cache": {},                    # 默认关闭；只缓存最终回复与安全 hash key，不保存原始 prompt/聊天正文
+    "response_cache": {
+        "enabled": false,
+        "semantic_enabled": false,           # 默认关闭；开启后仅在同上下文边界内做相似命中
+        "semantic_similarity_threshold": 0.92
+    },
     "model_tool_calls_enabled": false,       # 默认关闭；开启后只允许模型调用安全白名单治理工具
     "background_ai_batch_time": "04:00",
     "background_ai_missed_window_policy": "wait_until_next_day",

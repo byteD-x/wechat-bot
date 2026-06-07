@@ -261,19 +261,20 @@ Provider 分层策略也更清晰：
 
 下面这些文件可以直接作为亮点表述的证据来源：
 
-- `backend/core/agent_runtime.py`：LangGraph 运行时、并发上下文准备、精排与回退、Embedding 缓存、模型侧 Tool Calling、内存级脱敏 trace 摘要、后台任务
+- `backend/core/agent_runtime.py`：LangGraph 运行时、并发上下文准备、精排与回退、Embedding 缓存、默认关闭的 Semantic Cache、模型侧 Tool Calling、内存级脱敏 trace 摘要、后台任务
 - `backend/core/trace_logger.py`：TraceLogger-lite 内存 ring buffer、hash 引用与聚合摘要脱敏
 - `backend/core/ai_client.py`：共享 `httpx.AsyncClient` 连接池、引用计数释放
 - `backend/core/memory.py`：SQLite 记忆层、批量上下文读取、WAL 和 mmap 优化
 - `backend/core/config_service.py`：中心化配置快照与运行时发布
 - `backend/core/prompt_governance.py`：Prompt revision 审计账本与回滚逻辑
 - `backend/core/tool_workflow.py`：受控 Agent Tool Workflow、工具白名单和 trace 输出
+- `backend/core/response_cache.py`：精确响应缓存与默认关闭的同上下文语义相似缓存
 - `backend/api.py`：`/api/status`、`/api/metrics`、本机访问限制、配置接口、Prompt 回滚和 Tool Workflow 接口
 - `backend/transports/base.py`：传输层抽象边界
 - `backend/transports/wcferry_adapter.py`：版本门禁、管理员权限校验、消息接收通道初始化与状态暴露
 - `src/main/diagnostics-snapshot.js`：自动脱敏的本机诊断支持包导出
 - `src/main/ipc.js`：桌面端后端请求 allowlist、Prompt 回滚 revision 路径约束和 Tool Workflow 转发边界
-- `tests/test_agent_runtime.py`：运行时上下文聚合、缓存命中、模型侧 Tool Calling、TraceLogger-lite 状态接入、Cross-Encoder 精排测试
+- `tests/test_agent_runtime.py`：运行时上下文聚合、精确/语义缓存命中、模型侧 Tool Calling、TraceLogger-lite 状态接入、Cross-Encoder 精排测试
 - `tests/test_trace_logger.py`：trace 摘要容量限制、敏感字段脱敏、工具输出省略和错误 hash 测试
 - `tests/test_optimization_tasks.py`：连接池复用、批量上下文、传输层抽象与重排测试
 - `tests/test_runtime_observability.py`：配置监听、防抖、健康检查与指标导出测试

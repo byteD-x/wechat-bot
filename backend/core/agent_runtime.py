@@ -1711,12 +1711,15 @@ class AgentRuntime:
         self._stats["requests"] += 1
         started = time.perf_counter()
         response_cache_key = None
+        response_cache_query_embedding = None
         if self.response_cache.enabled:
             response_cache_key = self._build_response_cache_key(prepared)
             cached_response = self.response_cache.get(response_cache_key)
             if cached_response is not None:
                 prepared.response_metadata["response_cache"] = {
                     "hit": True,
+                    "exact_hit": True,
+                    "semantic_hit": False,
                     **cached_response.key.to_dict(),
                     "created_at": round(cached_response.created_at, 4),
                 }
@@ -1728,8 +1731,38 @@ class AgentRuntime:
                 return reply_text
             prepared.response_metadata["response_cache"] = {
                 "hit": False,
+                "exact_hit": False,
+                "semantic_hit": False,
                 **response_cache_key.to_dict(),
             }
+            if self.response_cache.semantic_enabled:
+                response_cache_query_embedding = await self.get_embedding(
+                    str(getattr(prepared, "user_text", "") or ""),
+                    priority=priority,
+                )
+                semantic_response = self.response_cache.get_semantic(
+                    response_cache_key,
+                    response_cache_query_embedding,
+                )
+                if semantic_response is not None:
+                    prepared.response_metadata["response_cache"] = {
+                        "hit": True,
+                        "exact_hit": False,
+                        "semantic_hit": True,
+                        **response_cache_key.to_dict(),
+                        "matched_key": semantic_response.key.key,
+                        "semantic_similarity": semantic_response.semantic_similarity,
+                        "created_at": round(semantic_response.created_at, 4),
+                    }
+                    reply_text = self._apply_safety_guard(
+                        prepared,
+                        semantic_response.answer_text,
+                    )
+                    prepared.timings["invoke_sec"] = round(time.perf_counter() - started, 4)
+                    self._stats["successes"] += 1
+                    self._stats["last_timings"] = dict(prepared.timings)
+                    self._record_trace_logger(prepared, status="cache_hit", priority=priority)
+                    return reply_text
 
         self._refresh_runtime_auth_clients()
         model_call_started = time.perf_counter()
@@ -1888,6 +1921,7 @@ class AgentRuntime:
                             "",
                         ),
                     },
+                    query_embedding=response_cache_query_embedding,
                 )
                 cache_metadata = dict(prepared.response_metadata.get("response_cache") or {})
                 cache_metadata["stored"] = stored

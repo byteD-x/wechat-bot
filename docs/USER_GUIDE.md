@@ -287,7 +287,11 @@ Invoke-RestMethod -Headers @{ "Authorization" = "Bearer your_token" } http://127
     "emotion_fast_path_enabled": True,
     "llm_foreground_max_concurrency": 1,
     "model_routing": {},
-    "response_cache": {},
+    "response_cache": {
+        "enabled": False,
+        "semantic_enabled": False,
+        "semantic_similarity_threshold": 0.92,
+    },
     "model_tool_calls_enabled": False,
     "background_ai_batch_time": "04:00",
     "background_ai_missed_window_policy": "wait_until_next_day",
@@ -303,7 +307,7 @@ Invoke-RestMethod -Headers @{ "Authorization" = "Bearer your_token" } http://127
 - `retriever_hybrid_enabled`: 是否开启 Hybrid Search + Query Rewrite，默认关闭；开启后会在同一 `filter_meta` 范围内融合向量召回与本地关键词召回，不新增外部搜索、不扫描本机文件。
 - `retriever_keyword_weight`: Hybrid 融合时关键词召回的权重，默认 `0.35`，取值范围 `0.0` 到 `1.0`。
 - `model_routing`: 可解释模型路由决策配置。当前只记录 `model_route`/`model_route_stats`，不会自动切换用户选择的 provider 或认证方式。
-- `response_cache`: 精确响应缓存配置，默认 `{}` 等价于关闭。开启后仅缓存最终回复和由 provider/model、chat_id、用户文本、system prompt、prompt messages、RAG citation ids、安全策略生成的 hash key，不保存原始 prompt、聊天正文、真实联系人标识或 token；命中后仍会重新执行安全护栏与引用校验。
+- `response_cache`: 响应缓存配置，默认关闭。`enabled=true` 时先使用精确缓存；`semantic_enabled=true` 时在精确未命中后才尝试语义相似命中，且只允许在同一 provider、model、chat、system prompt、非当前用户 prompt context、RAG citation ids 与安全策略边界内复用，不跨会话、模型、引用策略或安全策略命中。缓存只保存最终回复、hash key 和可选 query embedding，不保存原始 prompt、聊天正文、真实联系人标识或 token；命中后仍会重新执行安全护栏与引用校验。
 - `model_tool_calls_enabled`: 模型侧 Tool Calling 开关，默认关闭。开启后仅在 OpenAI-compatible 对话接口中向模型暴露安全白名单工具，执行仍复用受控工具工作流的 schema、权限、超时和 trace 边界。
 - `background_ai_batch_time`: 后台 AI 任务统一批处理时间，默认每天 `04:00`
 - `background_ai_missed_window_policy`: 错过当天批处理窗口后的策略，当前默认 `wait_until_next_day`
@@ -521,6 +525,7 @@ python -m tools.prompt_gen.generator
 - `next_background_batch_at`
 - `last_background_batch`
 - `response_cache_stats`
+  - `semantic_enabled / semantic_similarity_threshold / semantic_hits / semantic_misses / semantic_skipped`
 - `safety_stats`
 - `model_route_stats`
 - `model_tool_call_stats`

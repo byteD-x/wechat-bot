@@ -749,6 +749,136 @@ async def test_agent_runtime_response_cache_hit_reuses_answer_and_rechecks_safet
 
 
 @pytest.mark.asyncio
+async def test_agent_runtime_semantic_response_cache_hit_reuses_answer(monkeypatch):
+    monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
+
+    runtime = AgentRuntime(
+        settings={
+            "base_url": "https://example.com/v1",
+            "api_key": "sk-test",
+            "model": "test-model",
+            "embedding_model": "embed-model",
+            "provider_id": "openai",
+        },
+        bot_cfg={"safety_block_pii": True},
+        agent_cfg={
+            "enabled": True,
+            "response_cache": {
+                "enabled": True,
+                "ttl_sec": 300,
+                "max_entries": 8,
+                "semantic_enabled": True,
+                "semantic_similarity_threshold": 0.99,
+            },
+        },
+    )
+
+    def _prepared(user_text):
+        return SimpleNamespace(
+            prompt_messages=[
+                _FakeMessage("stable system context"),
+                _FakeMessage(user_text),
+            ],
+            chat_id="friend:alice",
+            user_text=user_text,
+            system_prompt="base prompt",
+            response_metadata={},
+            timings={},
+        )
+
+    calls = 0
+
+    async def _ainvoke(messages, config=None):
+        nonlocal calls
+        calls += 1
+        return _FakeMessage("semantic answer ready")
+
+    runtime._chat_model.ainvoke = _ainvoke
+
+    first = _prepared("abcde")
+    first_reply = await runtime.invoke(first)
+    second = _prepared("13800138000")
+    second_reply = await runtime.invoke(second)
+
+    assert calls == 1
+    assert first_reply == "semantic answer ready"
+    assert second_reply != first_reply
+    assert first.response_metadata["response_cache"]["hit"] is False
+    assert first.response_metadata["response_cache"]["stored"] is True
+    assert second.response_metadata["response_cache"]["hit"] is True
+    assert second.response_metadata["response_cache"]["exact_hit"] is False
+    assert second.response_metadata["response_cache"]["semantic_hit"] is True
+    assert second.response_metadata["safety"]["action"] == "refuse"
+    status = runtime.get_status()["response_cache_stats"]
+    assert status["semantic_hits"] == 1
+    assert status["hits"] == 0
+    assert status["misses"] == 2
+    assert "abcde" not in json.dumps(status, ensure_ascii=False)
+    assert "13800138000" not in json.dumps(status, ensure_ascii=False)
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_semantic_response_cache_respects_chat_boundary(monkeypatch):
+    monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
+
+    runtime = AgentRuntime(
+        settings={
+            "base_url": "https://example.com/v1",
+            "api_key": "sk-test",
+            "model": "test-model",
+            "embedding_model": "embed-model",
+            "provider_id": "openai",
+        },
+        bot_cfg={},
+        agent_cfg={
+            "enabled": True,
+            "response_cache": {
+                "enabled": True,
+                "ttl_sec": 300,
+                "max_entries": 8,
+                "semantic_enabled": True,
+                "semantic_similarity_threshold": 0.99,
+            },
+        },
+    )
+
+    def _prepared(chat_id, user_text):
+        return SimpleNamespace(
+            prompt_messages=[
+                _FakeMessage("stable system context"),
+                _FakeMessage(user_text),
+            ],
+            chat_id=chat_id,
+            user_text=user_text,
+            system_prompt="base prompt",
+            response_metadata={},
+            timings={},
+        )
+
+    calls = 0
+
+    async def _ainvoke(messages, config=None):
+        nonlocal calls
+        calls += 1
+        return _FakeMessage(f"answer {calls}")
+
+    runtime._chat_model.ainvoke = _ainvoke
+
+    first_reply = await runtime.invoke(_prepared("friend:alice", "abcde"))
+    second = _prepared("friend:bob", "vwxyz")
+    second_reply = await runtime.invoke(second)
+
+    assert calls == 2
+    assert first_reply == "answer 1"
+    assert second_reply == "answer 2"
+    assert second.response_metadata["response_cache"]["hit"] is False
+    assert second.response_metadata["response_cache"]["stored"] is True
+    status = runtime.get_status()["response_cache_stats"]
+    assert status["semantic_hits"] == 0
+    assert status["semantic_misses"] == 2
+
+
+@pytest.mark.asyncio
 async def test_agent_runtime_applies_qwen_timeout_floor(monkeypatch):
     monkeypatch.setattr(AgentRuntime, "_load_integrations", _fake_integrations)
 

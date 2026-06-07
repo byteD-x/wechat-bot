@@ -3,24 +3,36 @@ import json
 from backend.core.response_cache import ResponseCache
 
 
-def _build_key(cache, *, chat_id="friend:alice", citation_ids=None, policy_context=None):
+def _build_key(
+    cache,
+    *,
+    chat_id="friend:alice",
+    provider_id="OpenAI",
+    model="test-model",
+    user_text="secret user question",
+    prompt_context=None,
+    citation_ids=None,
+    policy_context=None,
+):
     citations = [
         {"citation_id": citation_id}
         for citation_id in (citation_ids if citation_ids is not None else ["c-1"])
     ]
+    messages = list(prompt_context or [])
+    messages.append(
+        {
+            "role": "user",
+            "content": "secret prompt message",
+            "additional_kwargs": {"trace": "secret-extra"},
+        }
+    )
     return cache.build_key(
-        provider_id="OpenAI",
-        model="test-model",
+        provider_id=provider_id,
+        model=model,
         chat_id=chat_id,
-        user_text="secret user question",
+        user_text=user_text,
         system_prompt="secret system prompt",
-        prompt_messages=[
-            {
-                "role": "user",
-                "content": "secret prompt message",
-                "additional_kwargs": {"trace": "secret-extra"},
-            }
-        ],
+        prompt_messages=messages,
         retrieval={"citations": citations},
         policy_context=policy_context or {"safety_require_citations_for_rag": True},
     )
@@ -31,6 +43,7 @@ def test_response_cache_is_disabled_by_default():
     key = _build_key(cache)
 
     assert cache.get_status()["enabled"] is False
+    assert cache.get_status()["semantic_enabled"] is False
     assert cache.get(key) is None
     assert cache.set(key, answer_text="answer") is False
     assert cache.get_status()["skipped"] == 2
@@ -58,6 +71,87 @@ def test_response_cache_key_is_context_bound_and_does_not_expose_raw_text():
     assert "secret system prompt" not in serialized
     assert "secret prompt message" not in serialized
     assert "secret-extra" not in serialized
+
+
+def test_response_cache_semantic_disabled_by_default():
+    cache = ResponseCache({"enabled": True})
+    key = _build_key(cache)
+    similar = _build_key(cache, user_text="secret similar question")
+
+    assert cache.set(key, answer_text="answer", query_embedding=[1.0, 0.0]) is True
+    assert cache.get_semantic(similar, [1.0, 0.0]) is None
+
+    status = cache.get_status()
+    assert status["semantic_enabled"] is False
+    assert status["semantic_skipped"] == 1
+
+
+def test_response_cache_semantic_hit_is_context_bound_and_redacted():
+    cache = ResponseCache(
+        {
+            "enabled": True,
+            "semantic_enabled": True,
+            "semantic_similarity_threshold": 0.9,
+        }
+    )
+    prompt_context = [{"role": "system", "content": "stable context"}]
+    key = _build_key(cache, prompt_context=prompt_context)
+    similar = _build_key(
+        cache,
+        user_text="secret user question paraphrase",
+        prompt_context=prompt_context,
+    )
+
+    assert key.key != similar.key
+    assert key.semantic_context_key == similar.semantic_context_key
+    assert cache.set(key, answer_text="answer", query_embedding=[1.0, 0.0]) is True
+
+    hit = cache.get_semantic(similar, [0.96, 0.04])
+
+    assert hit is not None
+    assert hit.answer_text == "answer"
+    assert hit.semantic_similarity >= 0.9
+    status = cache.get_status()
+    assert status["semantic_hits"] == 1
+    serialized = json.dumps(similar.to_dict(), ensure_ascii=False)
+    assert "secret user question paraphrase" not in serialized
+    assert "stable context" not in serialized
+
+
+def test_response_cache_semantic_rejects_different_boundaries():
+    cache = ResponseCache(
+        {
+            "enabled": True,
+            "semantic_enabled": True,
+            "semantic_similarity_threshold": 0.9,
+        }
+    )
+    key = _build_key(
+        cache,
+        prompt_context=[{"role": "assistant", "content": "stable context"}],
+    )
+    assert cache.set(key, answer_text="answer", query_embedding=[1.0, 0.0]) is True
+
+    variants = [
+        _build_key(cache, chat_id="friend:bob"),
+        _build_key(cache, provider_id="qwen"),
+        _build_key(cache, model="other-model"),
+        _build_key(
+            cache,
+            policy_context={"safety_require_citations_for_rag": False},
+        ),
+        _build_key(cache, citation_ids=["c-2"]),
+        _build_key(
+            cache,
+            prompt_context=[{"role": "assistant", "content": "different context"}],
+        ),
+    ]
+
+    for variant in variants:
+        assert variant.semantic_context_key != key.semantic_context_key
+        assert cache.get_semantic(variant, [1.0, 0.0]) is None
+
+    assert cache.get_status()["semantic_misses"] == len(variants)
 
 
 def test_response_cache_ttl_expiry(monkeypatch):
