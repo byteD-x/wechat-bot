@@ -61,6 +61,62 @@ def test_cmd_check_forwards_json_and_cache_flags(monkeypatch):
     }
 
 
+def test_cmd_eval_prints_rag_quality_metrics(monkeypatch, capsys, tmp_path):
+    captured = {}
+
+    def fake_evaluate_dataset(dataset_path: str, *, preset: str) -> dict:
+        captured["dataset_path"] = dataset_path
+        captured["preset"] = preset
+        return {
+            "summary": {
+                "total_cases": 2,
+                "empty_reply_rate": 0.0,
+                "short_reply_rate": 0.0,
+                "retrieval_hit_rate": 1.0,
+                "manual_feedback_hit_rate": 0.0,
+                "runtime_exception_count": 0,
+                "citation_accuracy": 1.0,
+                "citation_eval_cases": 1,
+                "context_recall": 1.0,
+                "context_recall_eval_cases": 1,
+                "faithfulness": 1.0,
+                "faithfulness_eval_cases": 1,
+                "answer_citation_binding": 1.0,
+                "answer_citation_binding_eval_cases": 1,
+                "refusal_accuracy": 1.0,
+                "refusal_eval_cases": 1,
+            },
+            "regressions": [],
+        }
+
+    def fake_write_eval_report(report: dict, report_path: str) -> None:
+        captured["report"] = report
+        captured["report_path"] = report_path
+
+    monkeypatch.setattr("backend.core.eval_runner.evaluate_dataset", fake_evaluate_dataset)
+    monkeypatch.setattr("backend.core.eval_runner.write_eval_report", fake_write_eval_report)
+
+    report_path = tmp_path / "rag-report.json"
+    result = run.cmd_eval(
+        argparse.Namespace(
+            dataset="tests/fixtures/evals/rag_cases.json",
+            preset="rag-smoke",
+            report=str(report_path),
+        )
+    )
+
+    output = capsys.readouterr().out
+    assert result == 0
+    assert captured["dataset_path"] == "tests/fixtures/evals/rag_cases.json"
+    assert captured["preset"] == "rag-smoke"
+    assert captured["report_path"] == str(report_path)
+    assert "citation_accuracy=1.0 (cases=1)" in output
+    assert "context_recall=1.0 (cases=1)" in output
+    assert "faithfulness=1.0 (cases=1)" in output
+    assert "answer_citation_binding=1.0 (cases=1)" in output
+    assert "refusal_accuracy=1.0 (cases=1)" in output
+
+
 def test_cmd_backup_restore_dry_run_json(monkeypatch, capsys):
     class FakeBackupService:
         def build_restore_plan(self, backup_ref: str) -> dict:

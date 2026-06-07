@@ -281,7 +281,8 @@ This phase turns the project from a demo-style assistant into a safer personal p
 - `Offline Eval + CI Gates`
   - `python run.py eval --dataset <path> --preset <name> --report <path>` generates a deterministic JSON report with `summary`, `cases`, `regressions`, `generated_at`, `preset`, and `app_version`.
   - The smoke dataset lives at `tests/fixtures/evals/smoke_cases.json` and currently contains 27 curated cases, including Prompt rollback, controlled tool workflow, Windows first-run readiness, export-RAG style recall, no-hit fallback, and mismatch guard scenarios.
-  - CI now runs scoped `ruff`, targeted Python regressions, Node tests, and the offline eval smoke gate.
+  - The RAG dataset lives at `tests/fixtures/evals/rag_cases.json` and gates citation accuracy, context recall, faithfulness, answer-citation binding, and refusal accuracy.
+  - CI now runs scoped `ruff`, targeted Python regressions, Node tests, plus offline eval smoke and RAG gates.
 - `Prompt Governance + Controlled Tools`
   - Prompt rollback appends a new audited active revision instead of overwriting history.
   - Agent Tool Workflow is deliberately limited to whitelisted local tools and bounded payloads; see [API 契约与治理接口](docs/api.md) for request/response details.
@@ -356,6 +357,9 @@ python -m ruff check backend\\api.py backend\\bot.py backend\\bot_reply_flow.py 
 
 # Offline eval smoke gate
 python run.py eval --dataset tests\\fixtures\\evals\\smoke_cases.json --preset smoke --report data\\evals\\smoke-report.json
+
+# Offline eval RAG gate
+python run.py eval --dataset tests\\fixtures\\evals\\rag_cases.json --preset rag-smoke --report data\\evals\\rag-smoke-report.json
 ```
 
 ## Release

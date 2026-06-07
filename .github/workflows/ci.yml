@@ -60,6 +60,10 @@ jobs:
         shell: pwsh
         run: python run.py eval --dataset tests\fixtures\evals\smoke_cases.json --preset ci-smoke --report data\evals\ci-smoke-report.json
 
+      - name: Run Offline Eval RAG Gate
+        shell: pwsh
+        run: python run.py eval --dataset tests\fixtures\evals\rag_cases.json --preset ci-rag --report data\evals\ci-rag-report.json
+
       - name: Run Node tests
         shell: pwsh
         run: npm test

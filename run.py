@@ -638,7 +638,17 @@ def cmd_eval(args: argparse.Namespace) -> int:
         f"short_reply_rate={summary.get('short_reply_rate', 0)}, "
         f"retrieval_hit_rate={summary.get('retrieval_hit_rate', 0)}, "
         f"manual_feedback_hit_rate={summary.get('manual_feedback_hit_rate', 0)}, "
-        f"runtime_exception_count={summary.get('runtime_exception_count', 0)}"
+        f"runtime_exception_count={summary.get('runtime_exception_count', 0)}, "
+        f"citation_accuracy={summary.get('citation_accuracy', 0)} "
+        f"(cases={summary.get('citation_eval_cases', 0)}), "
+        f"context_recall={summary.get('context_recall', 0)} "
+        f"(cases={summary.get('context_recall_eval_cases', 0)}), "
+        f"faithfulness={summary.get('faithfulness', 0)} "
+        f"(cases={summary.get('faithfulness_eval_cases', 0)}), "
+        f"answer_citation_binding={summary.get('answer_citation_binding', 0)} "
+        f"(cases={summary.get('answer_citation_binding_eval_cases', 0)}), "
+        f"refusal_accuracy={summary.get('refusal_accuracy', 0)} "
+        f"(cases={summary.get('refusal_eval_cases', 0)})"
     )
 
     if regressions:

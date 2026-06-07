@@ -14,6 +14,7 @@
 - Renderer 测试：已覆盖 Prompt 版本治理入口、ApiService 幂等回滚策略、必须先预览差异再执行回滚，以及成功回滚后的设置刷新与反馈。
 - RAG/eval smoke 扩样：`tests/fixtures/evals/smoke_cases.json` 已从 20 条扩到 27 条，新增 Prompt 回滚、工具审计、Windows 首次运行、导出语料 RAG 风格召回、无命中回退和误命中防护场景。
 - RAG/eval 数据集治理：当前 smoke fixture 已确认 UTF-8 可读，并补充导出语料 RAG 的风格召回、无命中回退和误命中防护样例。
+- RAG/eval 专项门禁：`tests/fixtures/evals/rag_cases.json` 已接入 CI 离线评测门禁，`run.py eval` 摘要会展示 citation accuracy、context recall、faithfulness、answer-citation binding 和 refusal accuracy。
 - 知识库治理 API：`GET /api/knowledge_base/status` 与 `POST /api/knowledge_base/dry-run|ingest|rebuild|delete` 已落地，首版只支持请求体 text/Markdown，不读取任意本机文件，预览不返回正文或完整本机路径。
 - 文档入口：`README.md`、`docs/USER_GUIDE.md`、`docs/SYSTEM_CHAINS.md`、`docs/HIGHLIGHTS.md`、`docs/api.md` 和 `docs/interview-playbook.md` 已补充。
 
