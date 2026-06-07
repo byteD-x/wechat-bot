@@ -143,6 +143,15 @@
       - 仪表盘“风险与恢复 / 受控工具流”通过 `src/renderer/js/pages/dashboard/tool-workflow.js` 构造白名单步骤、dry-run 和 `continue_on_error`，再由 `ApiService.runToolWorkflow()` 调用该接口。
       - 前端 trace 只展示工具名、状态、耗时、失败原因和结果摘要；`prompt_preview` 不在界面 trace 中展示完整 Prompt，`eval_latest` 不展示完整 `cases`，`cost_summary` 不展示完整 `review_queue`，维护 dry-run 工具不展示备份候选列表、清理 targets 或完整本机路径。
 
+11. `/api/v1/mcp`
+    - 功能：提供本机只读 MCP JSON-RPC adapter，让外部 MCP host 只能发现和调用安全摘要工具。
+    - 实现：
+      - `backend/api.py::run_readonly_mcp_adapter` 创建 `ReadOnlyMCPAdapter`，复用 `ControlledToolWorkflowService` 的工具注册、schema、permission、timeout 和 trace。
+      - 当前只支持 `initialize`、`tools/list`、`tools/call`，不实现 resources、prompts、shell、文件写入、任意 HTTP 或动态插件。
+      - `tools/list` 只返回模型侧安全工具 `readiness_check`、`eval_latest`、`cost_summary`、`backup_cleanup_dry_run`、`data_controls_dry_run`；`prompt_preview` 和 `config_audit` 不会出现在 MCP 工具列表中。
+      - `tools/call` 每次只调用一个安全工具，响应包含 MCP `content` 与 `structuredContent`，其中 output 继续沿用既有脱敏摘要，不返回完整 Prompt、评测用例、review_queue、targets 或完整本机路径。
+      - MCP adapter 是治理入口，不进入微信消息快回复主链路。
+
 ### 当前接口分组
 
 `backend/api.py` 当前按职责提供这些主要接口：

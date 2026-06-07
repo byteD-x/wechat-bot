@@ -635,6 +635,10 @@ python run.py eval --dataset tests/fixtures/evals/smoke_cases.json --preset smok
   - `plan_reflect_repair` 最多自动 repair 一次，当前仅允许 `data_controls_dry_run` 的空 `scopes` 回落到默认治理范围；未知工具、权限失败、危险 payload、超时或非白名单路径只会返回 blocked reflection，不会被修复成可执行动作。
   - `eval_latest`、`cost_summary`、`backup_cleanup_dry_run` 与 `data_controls_dry_run` 只读取本地评测、成本统计或维护 dry-run 结果，trace 仅返回摘要、计数和筛选条件，不展开完整评测用例、聊天正文、成本复核队列、备份候选列表、清理 targets 或完整本机路径。
   - 未知工具会返回失败 trace 和 `bad_workflow`，不会降级为任意命令、任意文件写入、任意网络请求或动态插件执行。
+- 只读 MCP adapter：`POST /api/v1/mcp`
+  - 这是本机 JSON-RPC adapter，仅支持 `initialize`、`tools/list`、`tools/call`。
+  - `tools/list` 与 `tools/call` 只暴露模型侧安全白名单：`readiness_check`、`eval_latest`、`cost_summary`、`backup_cleanup_dry_run`、`data_controls_dry_run`。
+  - MCP adapter 不暴露 `prompt_preview`、`config_audit`、resources、prompts，也不开放 shell、文件写入、任意 HTTP 或动态插件；调用结果只返回工具摘要、结构化 trace 和已脱敏 output。
 - 模型侧 Tool Calling：
   - 由 `agent.model_tool_calls_enabled` 显式开启，默认关闭。
   - 只适用于 OpenAI-compatible 对话接口；Anthropic native、Vertex、OpenAI Responses、Google Code Assist 等专用传输会跳过模型侧工具执行。
@@ -646,7 +650,7 @@ python run.py eval --dataset tests/fixtures/evals/smoke_cases.json --preset smok
   - 执行结果会在面板内显示逐步 trace；失败步骤会突出展示，并给出恢复建议。
   - `Prompt 预览`只发送示例消息并展示摘要，不在 trace 面板暴露完整 Prompt；最新评测、成本摘要、备份清理预览和数据治理预览同样只展示聚合信息。
   - 该治理路径不改变 `reply_deadline_sec` 快回复、延迟回复或微信发送链路。
-- Electron 主进程只允许转发受控路径：Prompt 列表走固定 endpoint，Prompt diff 与回滚必须匹配数字 revision，Tool Workflow 只走固定 endpoint。
+- Electron 主进程只允许转发受控路径：Prompt 列表走固定 endpoint，Prompt diff 与回滚必须匹配数字 revision，Tool Workflow 和 MCP adapter 只走固定 endpoint。
 - 完整请求体、响应字段和错误码见 [API 契约与治理接口](api.md)。
 
 #### 8.7.5 知识库治理 API

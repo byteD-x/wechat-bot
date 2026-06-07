@@ -2347,6 +2347,136 @@ async def test_api_tool_workflow_rejects_unknown_tool(client):
 
 
 @pytest.mark.asyncio
+async def test_api_mcp_tools_list_exposes_readonly_safe_subset(client):
+    response = await client.post(
+        "/api/v1/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": "tools-1",
+            "method": "tools/list",
+            "params": {},
+        },
+    )
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    names = [item["name"] for item in data["result"]["tools"]]
+    assert names == [
+        "backup_cleanup_dry_run",
+        "cost_summary",
+        "data_controls_dry_run",
+        "eval_latest",
+        "readiness_check",
+    ]
+    assert "prompt_preview" not in names
+    assert "config_audit" not in names
+
+
+@pytest.mark.asyncio
+async def test_api_mcp_tools_call_runs_safe_tool_without_raw_leaks(client):
+    snapshot = _build_snapshot({
+        "api": {"presets": []},
+        "bot": {},
+        "logging": {},
+        "agent": {},
+        "services": {},
+    })
+    data_payload = {
+        "success": True,
+        "dry_run": True,
+        "scopes": ["memory"],
+        "target_count": 3,
+        "existing_target_count": 2,
+        "unsupported_target_count": 1,
+        "reclaimable_bytes": 4096,
+        "targets": [{"path": "C:/secret/chat_memory.db", "relative_path": "chat_memory.db"}],
+        "deleted_targets": [{"path": "E:/private/deleted"}],
+    }
+
+    with (
+        patch.object(api_module.config_service, "get_snapshot", return_value=snapshot),
+        patch.object(api_module.data_control_service, "update_config") as data_update_mock,
+        patch.object(api_module.data_control_service, "clear", return_value=data_payload) as clear_mock,
+    ):
+        response = await client.post(
+            "/api/v1/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "id": "call-1",
+                "method": "tools/call",
+                "params": {
+                    "name": "data_controls_dry_run",
+                    "arguments": {"scopes": ["memory"]},
+                },
+            },
+        )
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["jsonrpc"] == "2.0"
+    assert data["id"] == "call-1"
+    result = data["result"]
+    assert result.get("isError") is None
+    assert result["structuredContent"]["success"] is True
+    assert result["structuredContent"]["output"]["scopes"] == ["memory"]
+    data_update_mock.assert_called_once_with(snapshot.bot)
+    assert clear_mock.call_args.args == (["memory"],)
+    assert clear_mock.call_args.kwargs == {"apply": False}
+
+    response_text = (await response.get_data()).decode("utf-8")
+    for forbidden in ("targets", "deleted_targets", "path", "relative_path", "C:/secret", "E:/private"):
+        assert forbidden not in response_text
+
+
+@pytest.mark.asyncio
+async def test_api_mcp_rejects_prompt_preview_and_invalid_arguments(client):
+    prompt_response = await client.post(
+        "/api/v1/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": "call-prompt",
+            "method": "tools/call",
+            "params": {"name": "prompt_preview", "arguments": {}},
+        },
+    )
+    args_response = await client.post(
+        "/api/v1/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": "bad-args",
+            "method": "tools/call",
+            "params": {"name": "readiness_check", "arguments": ["not-object"]},
+        },
+    )
+
+    prompt_data = await prompt_response.get_json()
+    args_data = await args_response.get_json()
+    assert prompt_response.status_code == 200
+    assert prompt_data["result"]["isError"] is True
+    assert prompt_data["result"]["structuredContent"]["error"]["type"] == "unsupported_tool"
+    assert args_data["error"]["code"] == -32602
+    assert "arguments" in args_data["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_api_mcp_rejects_unknown_method(client):
+    response = await client.post(
+        "/api/v1/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": "resources-1",
+            "method": "resources/list",
+            "params": {},
+        },
+    )
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["error"]["code"] == -32601
+    assert "unsupported MCP method" in data["error"]["message"]
+
+
+@pytest.mark.asyncio
 async def test_api_save_config_triggers_runtime_reload(client, mock_manager):
     test_config = {
         "api": {

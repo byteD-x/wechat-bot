@@ -44,6 +44,7 @@ from backend.core.knowledge_base import (
     parse_knowledge_document_payload,
     redact_knowledge_local_path,
 )
+from backend.core.mcp_adapter import ReadOnlyMCPAdapter
 from backend.core.oauth_support import (
     OAuthSupportError,
     cancel_auth_flow,
@@ -2705,6 +2706,64 @@ async def rollback_prompt_revision(revision: int):
         return _json_internal_error("prompt_rollback_failed", code="prompt_rollback_failed")
 
 
+def _build_controlled_tool_workflow_service() -> ControlledToolWorkflowService:
+    async def _load_readiness_report() -> dict[str, Any]:
+        return await asyncio.to_thread(readiness_service.get_report, force_refresh=False)
+
+    async def _load_latest_eval_report() -> dict[str, Any]:
+        return await asyncio.to_thread(_read_latest_eval_report_payload)
+
+    async def _load_cost_summary(payload: dict[str, Any]) -> dict[str, Any]:
+        snapshot = config_service.get_snapshot()
+        return await cost_service.get_summary(
+            manager.get_memory_manager(),
+            snapshot.config,
+            period=str(payload.get("period") or "30d"),
+            include_estimated=bool(payload.get("include_estimated", True)),
+        )
+
+    async def _load_backup_cleanup_preview(payload: dict[str, Any]) -> dict[str, Any]:
+        snapshot = config_service.get_snapshot()
+        backup_service.update_config(snapshot.bot)
+        keep_quick = (
+            int(payload["keep_quick"])
+            if "keep_quick" in payload
+            else DEFAULT_KEEP_QUICK_BACKUPS
+        )
+        keep_full = (
+            int(payload["keep_full"])
+            if "keep_full" in payload
+            else DEFAULT_KEEP_FULL_BACKUPS
+        )
+        return await asyncio.to_thread(
+            backup_service.cleanup_backups,
+            keep_quick=keep_quick,
+            keep_full=keep_full,
+            protect_restore_anchor=bool(payload.get("protect_restore_anchor", True)),
+            apply=False,
+            list_limit=20,
+        )
+
+    async def _load_data_controls_preview(payload: dict[str, Any]) -> dict[str, Any]:
+        snapshot = config_service.get_snapshot()
+        data_control_service.update_config(snapshot.bot)
+        scopes = payload.get("scopes") if isinstance(payload.get("scopes"), list) else ["memory", "usage", "export_rag"]
+        return await asyncio.to_thread(
+            data_control_service.clear,
+            scopes,
+            apply=False,
+        )
+
+    return ControlledToolWorkflowService(
+        config_loader=config_service.get_snapshot,
+        readiness_loader=_load_readiness_report,
+        eval_report_loader=_load_latest_eval_report,
+        cost_summary_loader=_load_cost_summary,
+        backup_cleanup_loader=_load_backup_cleanup_preview,
+        data_controls_loader=_load_data_controls_preview,
+    )
+
+
 @app.route("/api/v1/agents/tool-workflow", methods=["POST"])
 async def run_agent_tool_workflow():
     """Execute an explicit, whitelisted tool workflow and return per-step trace."""
@@ -2716,61 +2775,7 @@ async def run_agent_tool_workflow():
         dry_run = bool(data.get("dry_run", False))
         workflow_mode = str(data.get("workflow_mode") or "direct").strip() or "direct"
 
-        async def _load_readiness_report() -> dict[str, Any]:
-            return await asyncio.to_thread(readiness_service.get_report, force_refresh=False)
-
-        async def _load_latest_eval_report() -> dict[str, Any]:
-            return await asyncio.to_thread(_read_latest_eval_report_payload)
-
-        async def _load_cost_summary(payload: dict[str, Any]) -> dict[str, Any]:
-            snapshot = config_service.get_snapshot()
-            return await cost_service.get_summary(
-                manager.get_memory_manager(),
-                snapshot.config,
-                period=str(payload.get("period") or "30d"),
-                include_estimated=bool(payload.get("include_estimated", True)),
-            )
-
-        async def _load_backup_cleanup_preview(payload: dict[str, Any]) -> dict[str, Any]:
-            snapshot = config_service.get_snapshot()
-            backup_service.update_config(snapshot.bot)
-            keep_quick = (
-                int(payload["keep_quick"])
-                if "keep_quick" in payload
-                else DEFAULT_KEEP_QUICK_BACKUPS
-            )
-            keep_full = (
-                int(payload["keep_full"])
-                if "keep_full" in payload
-                else DEFAULT_KEEP_FULL_BACKUPS
-            )
-            return await asyncio.to_thread(
-                backup_service.cleanup_backups,
-                keep_quick=keep_quick,
-                keep_full=keep_full,
-                protect_restore_anchor=bool(payload.get("protect_restore_anchor", True)),
-                apply=False,
-                list_limit=20,
-            )
-
-        async def _load_data_controls_preview(payload: dict[str, Any]) -> dict[str, Any]:
-            snapshot = config_service.get_snapshot()
-            data_control_service.update_config(snapshot.bot)
-            scopes = payload.get("scopes") if isinstance(payload.get("scopes"), list) else ["memory", "usage", "export_rag"]
-            return await asyncio.to_thread(
-                data_control_service.clear,
-                scopes,
-                apply=False,
-            )
-
-        service = ControlledToolWorkflowService(
-            config_loader=config_service.get_snapshot,
-            readiness_loader=_load_readiness_report,
-            eval_report_loader=_load_latest_eval_report,
-            cost_summary_loader=_load_cost_summary,
-            backup_cleanup_loader=_load_backup_cleanup_preview,
-            data_controls_loader=_load_data_controls_preview,
-        )
+        service = _build_controlled_tool_workflow_service()
         result = await service.run(steps, dry_run=dry_run, workflow_mode=workflow_mode)
         if result.get("success"):
             return jsonify(result), 200
@@ -2786,6 +2791,20 @@ async def run_agent_tool_workflow():
     except Exception as e:
         logger.error("Tool workflow failed: %s", e)
         return _json_internal_error("tool_workflow_failed", code="tool_workflow_failed")
+
+
+@app.route("/api/v1/mcp", methods=["POST"])
+async def run_readonly_mcp_adapter():
+    """Handle a small read-only MCP JSON-RPC request for safe local tools."""
+    try:
+        data = await request.get_json(silent=True) or {}
+        service = _build_controlled_tool_workflow_service()
+        adapter = ReadOnlyMCPAdapter(service)
+        result = await adapter.handle(data)
+        return jsonify(result), 200
+    except Exception as e:
+        logger.error("MCP adapter failed: %s", e)
+        return _json_internal_error("mcp_adapter_failed", code="mcp_adapter_failed")
 
 
 @app.route("/api/test_connection", methods=["POST"])

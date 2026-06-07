@@ -264,6 +264,91 @@
 - `plan_reflect_repair` 只属于本机治理 API，不接入微信消息快回复主链路。
 - 后续新增工具必须先进入白名单，并补充 API 测试与文档。
 
+## POST `/api/v1/mcp`
+
+用途：提供一个本机只读 MCP JSON-RPC adapter，用于让外部 MCP host 发现并调用安全摘要工具。它复用 `ControlledToolWorkflowService`，不是动态插件市场，也不会启动独立 MCP 进程。
+
+实现入口：
+
+- `backend/api.py::run_readonly_mcp_adapter`
+- `backend/core/mcp_adapter.py::ReadOnlyMCPAdapter`
+- `backend/core/tool_workflow.py::ControlledToolWorkflowService`
+
+支持方法：
+
+- `initialize`: 返回协议版本、工具能力和本机 serverInfo。
+- `tools/list`: 返回 MCP tool 列表。
+- `tools/call`: 调用单个安全工具，返回 `content` 与 `structuredContent`。
+
+请求体示例：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "call-1",
+  "method": "tools/call",
+  "params": {
+    "name": "data_controls_dry_run",
+    "arguments": {
+      "scopes": ["memory"]
+    }
+  }
+}
+```
+
+可见工具：
+
+- `readiness_check`
+- `eval_latest`
+- `cost_summary`
+- `backup_cleanup_dry_run`
+- `data_controls_dry_run`
+
+响应示例：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "call-1",
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "data_controls_dry_run completed: {...}"
+      }
+    ],
+    "structuredContent": {
+      "success": true,
+      "tool": "data_controls_dry_run",
+      "trace": [],
+      "output": {
+        "success": true,
+        "dry_run": true,
+        "scopes": ["memory"],
+        "target_count": 3,
+        "existing_target_count": 2,
+        "unsupported_target_count": 1,
+        "reclaimable_bytes": 4096,
+        "deleted_count": 0
+      }
+    }
+  }
+}
+```
+
+错误边界：
+
+- 非 JSON object、缺少 `jsonrpc: "2.0"` 或未知 method 会返回 JSON-RPC `error`。
+- `tools/call` 的 `params.name` 必填，`params.arguments` 必须是 JSON object。
+- `prompt_preview`、`config_audit`、未知工具和非安全工具会返回 `isError: true` 的工具结果，不会进入执行路径。
+
+产品约束：
+
+- 该 adapter 不实现 resources、prompts、shell、文件写入、任意 HTTP 或动态插件。
+- `tools/list` 和 `tools/call` 只复用模型侧安全白名单，不暴露 `prompt_preview` 或 `config_audit`。
+- 工具调用结果沿用既有脱敏摘要，不返回完整 Prompt、评测用例、聊天正文、成本复核队列、备份候选列表、清理 targets 或完整本机路径。
+- 该 adapter 只属于本机治理 API，不接入微信消息快回复主链路。
+
 ## 知识库治理 API
 
 用途：把现有 `KnowledgeBaseService` 暴露成受控的本机治理接口，用于预览、写入、重建、删除和查看知识库向量 chunk 状态。

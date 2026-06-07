@@ -301,12 +301,13 @@ Provider 分层策略也更清晰：
 
 - Prompt 回滚通过 `POST /api/v1/admin/prompts/{revision}/rollback` 落地，回滚时追加新的 active revision，并在 `data/prompt_revisions.json` 保留 `rollback_from / reason / operator / created_at`。
 - 受控 Agent Tool Workflow 通过 `POST /api/v1/agents/tool-workflow` 落地，当前只允许 `config_audit`、`readiness_check`、`prompt_preview`、`eval_latest`、`cost_summary`、`backup_cleanup_dry_run`、`data_controls_dry_run` 七类注册工具；请求体可选 `workflow_mode="plan_reflect_repair"` 启用受控 Planner / Reflect / Repair。
+- 只读 MCP adapter 通过 `POST /api/v1/mcp` 落地，复用 `ControlledToolWorkflowService` 与模型侧安全白名单，只支持 `initialize`、`tools/list`、`tools/call`，不暴露 `prompt_preview`、`config_audit`、resources、prompts 或动态插件。
 - 模型侧 Tool Calling 通过 `agent.model_tool_calls_enabled` 显式开启，默认关闭；开启后只向 OpenAI-compatible 对话模型暴露 `readiness_check`、`eval_latest`、`cost_summary`、`backup_cleanup_dry_run`、`data_controls_dry_run` 五个安全工具，不暴露 `prompt_preview` 或 `config_audit`。
 - 工具工作流限制最多 `8` 步、单步 payload 最多 `12000` 字符，并在执行前校验注册工具的 payload schema、权限和超时时间；自动 repair 最多一次，且只做 schema-safe 默认值修复。
 - 每步 trace 返回 `index / tool / status / duration_ms / permission / schema_valid / timeout_ms`，方便桌面端展示失败位置、输入校验结果和恢复建议。
 - 模型侧工具调用最多执行一轮，再请求一轮 final 回复；如果 final 继续返回 `tool_calls`，只记录 `model_tool_call_loop_blocked`，不会进入循环；`/api/status.model_tool_call_stats` 仅返回开关、请求、成功、失败和阻断聚合计数。
 - TraceLogger-lite 通过 `/api/status.trace_logger` 暴露最近模型调用摘要，只保留内存 ring buffer；摘要使用 `chat_ref / model_ref / error_hash` 和聚合字段，不保存聊天正文、Prompt、token、工具输出或完整本机路径。
-- Electron 主进程只转发固定治理路径；Prompt 回滚必须匹配数字 revision，Tool Workflow 不支持任意 shell、文件写入、网络请求或动态插件执行，维护 dry-run 只返回聚合摘要，不展示备份候选列表、清理 targets 或完整本机路径，也不影响微信主回复或快回复链路。
+- Electron 主进程只转发固定治理路径；Prompt 回滚必须匹配数字 revision，Tool Workflow 与 MCP adapter 不支持任意 shell、文件写入、网络请求或动态插件执行，维护 dry-run 只返回聚合摘要，不展示备份候选列表、清理 targets 或完整本机路径，也不影响微信主回复或快回复链路。
 - API 测试已覆盖回滚成功、revision 不存在、白名单工具执行、维护 dry-run 输出脱敏、危险 payload 拒绝和未知工具拒绝，离线 smoke 数据集也扩展到 27 条，纳入 Prompt 回滚、工具审计、Windows 首次运行、导出语料 RAG 风格召回、无命中回退和误命中防护场景。
 
 这组能力的重点不是“让 Agent 做更多事”，而是先把可恢复、可审计和可解释的边界立起来。
