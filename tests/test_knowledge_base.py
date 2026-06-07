@@ -94,6 +94,49 @@ async def test_knowledge_base_rebuild_deletes_previous_document_chunks():
 
 
 @pytest.mark.asyncio
+async def test_knowledge_base_rebuild_keeps_previous_chunks_when_embedding_is_incomplete():
+    vector_memory = DummyVectorMemory()
+    vector_memory.upsert_text(
+        "old runbook chunk",
+        {"source": KNOWLEDGE_SOURCE, "doc_id": "runbook"},
+        "old-runbook",
+        [0.9],
+    )
+    ai_client = SimpleNamespace(get_embedding=AsyncMock(side_effect=[[0.1], []]))
+    service = KnowledgeBaseService(vector_memory, chunk_size=140, chunk_overlap=0)
+
+    summary = await service.ingest_document(
+        KnowledgeDocument(
+            content=(
+                "First runbook section has enough detail to become one chunk. "
+                "It covers startup checks and owner confirmation.\n\n"
+                "Second runbook section has enough detail to become another chunk. "
+                "It covers rollback checks and incident notes."
+            ),
+            doc_id="runbook",
+            version="v3",
+        ),
+        ai_client,
+        rebuild=True,
+    )
+
+    assert summary["success"] is False
+    assert summary["reason"] == "incomplete_embeddings"
+    assert summary["deleted_previous"] is False
+    assert summary["indexed_chunks"] == 0
+    assert summary["skipped_chunks"] == 1
+    assert vector_memory.deleted == []
+    assert vector_memory.upserts == [
+        {
+            "text": "old runbook chunk",
+            "metadata": {"source": KNOWLEDGE_SOURCE, "doc_id": "runbook"},
+            "id": "old-runbook",
+            "embedding": [0.9],
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_knowledge_base_skips_when_embedding_is_unavailable():
     vector_memory = DummyVectorMemory()
     ai_client = SimpleNamespace(get_embedding=AsyncMock(return_value=[]))

@@ -89,6 +89,21 @@ class KnowledgeBaseService:
             summary.update({"success": False, "reason": "embedding_unavailable"})
             return summary
 
+        indexed_chunks = []
+        for chunk in chunks:
+            embedding = await self._get_embedding(ai_client, chunk.text, priority=priority)
+            if not embedding:
+                summary["skipped_chunks"] += 1
+                continue
+            indexed_chunks.append((chunk, embedding))
+
+        if not indexed_chunks:
+            summary.update({"success": False, "reason": "no_chunks_indexed"})
+            return summary
+        if rebuild and summary["skipped_chunks"] > 0:
+            summary.update({"success": False, "reason": "incomplete_embeddings"})
+            return summary
+
         if rebuild:
             await asyncio.to_thread(
                 self.vector_memory.delete,
@@ -96,11 +111,7 @@ class KnowledgeBaseService:
             )
             summary["deleted_previous"] = True
 
-        for chunk in chunks:
-            embedding = await self._get_embedding(ai_client, chunk.text, priority=priority)
-            if not embedding:
-                summary["skipped_chunks"] += 1
-                continue
+        for chunk, embedding in indexed_chunks:
             await asyncio.to_thread(
                 self.vector_memory.upsert_text,
                 chunk.text,
@@ -111,8 +122,6 @@ class KnowledgeBaseService:
             summary["indexed_chunks"] += 1
             summary["chunk_ids"].append(chunk.chunk_id)
 
-        if summary["indexed_chunks"] <= 0:
-            summary.update({"success": False, "reason": "no_chunks_indexed"})
         return summary
 
     def build_chunks(self, document: KnowledgeDocument) -> List[KnowledgeChunk]:

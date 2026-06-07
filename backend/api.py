@@ -36,6 +36,11 @@ from backend.core.config_probe import probe_config
 from backend.core.config_service import get_config_service
 from backend.core.cost_analytics import CostAnalyticsService
 from backend.core.data_controls import DataControlService
+from backend.core.knowledge_base import (
+    KNOWLEDGE_SOURCE,
+    KnowledgeBaseService,
+    KnowledgeDocument,
+)
 from backend.core.oauth_support import (
     OAuthSupportError,
     cancel_auth_flow,
@@ -88,6 +93,7 @@ configure_http_access_log_filters()
 MAX_LOG_LINES = 2000
 MAX_SEND_TARGET_CHARS = 256
 MAX_SEND_CONTENT_CHARS = 8000
+MAX_KNOWLEDGE_CONTENT_CHARS = 120000
 IDEMPOTENCY_CACHE_TTL_SEC = 300
 IDEMPOTENCY_CACHE_MAX_ENTRIES = 1024
 IDEMPOTENCY_INFLIGHT_WAIT_SEC = 30
@@ -1006,6 +1012,120 @@ def _parse_bool(value: Any, *, default: bool = False) -> bool:
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _safe_int(value: Any, default: int = 0, *, min_value: int = 0) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = int(default)
+    return max(int(min_value), parsed)
+
+
+def _get_knowledge_vector_memory() -> Any:
+    bot = getattr(manager, "bot", None)
+    if bot is None:
+        return None
+    return vars(bot).get("vector_memory")
+
+
+def _get_knowledge_ai_client() -> Any:
+    bot = getattr(manager, "bot", None)
+    if bot is None:
+        return None
+    return vars(bot).get("ai_client")
+
+
+def _knowledge_vector_available(vector_memory: Any) -> bool:
+    try:
+        return bool(vector_memory)
+    except Exception:
+        return vector_memory is not None
+
+
+def _redact_knowledge_local_path(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    parsed = urlsplit(text)
+    if parsed.scheme.lower() == "file":
+        return _redact_path_value(parsed.path or parsed.netloc or text)
+    normalized = text.replace("\\", "/")
+    if re.match(r"^(?:[A-Za-z]:/|/|~(?:/|$)|//)", normalized):
+        return _redact_path_value(text)
+    return normalized
+
+
+def _parse_knowledge_document_payload(data: dict[str, Any]) -> KnowledgeDocument:
+    if not isinstance(data, dict):
+        raise ValueError("request body must be an object")
+
+    content = str(data.get("content") or "")
+    if not content.strip():
+        raise ValueError("content is required")
+    if len(content) > MAX_KNOWLEDGE_CONTENT_CHARS:
+        raise ValueError(f"content is too long; max {MAX_KNOWLEDGE_CONTENT_CHARS} characters")
+
+    content_type = str(data.get("content_type") or "text").strip().lower()
+    if content_type not in {"text", "plain", "markdown", "text/plain", "text/markdown"}:
+        raise ValueError("content_type must be text or markdown")
+
+    metadata = data.get("metadata")
+    if metadata is None:
+        metadata = {}
+    if not isinstance(metadata, dict):
+        raise ValueError("metadata must be an object")
+    metadata = dict(metadata)
+    if "page" in data and "page" not in metadata:
+        metadata["page"] = data.get("page")
+    for key in ("source_file", "url", "source_url"):
+        if key in metadata:
+            metadata[key] = _redact_knowledge_local_path(metadata.get(key))
+
+    return KnowledgeDocument(
+        content=content,
+        doc_id=_redact_knowledge_local_path(data.get("doc_id")),
+        version=str(data.get("version") or data.get("doc_version") or "v1").strip() or "v1",
+        source_file=_redact_knowledge_local_path(data.get("source_file") or metadata.get("source_file")),
+        url=_redact_knowledge_local_path(data.get("url") or metadata.get("url") or metadata.get("source_url")),
+        metadata=metadata,
+    )
+
+
+def _build_knowledge_chunk_preview(chunks: list[Any]) -> list[dict[str, Any]]:
+    preview: list[dict[str, Any]] = []
+    for chunk in chunks:
+        metadata = dict(getattr(chunk, "metadata", {}) or {})
+        preview.append(
+            {
+                "doc_id": str(getattr(chunk, "doc_id", "") or ""),
+                "doc_version": str(getattr(chunk, "version", "") or ""),
+                "chunk_id": str(getattr(chunk, "chunk_id", "") or ""),
+                "chunk_index": _safe_int(getattr(chunk, "chunk_index", 0), 0),
+                "char_count": len(str(getattr(chunk, "text", "") or "")),
+                "source_file": str(metadata.get("source_file") or ""),
+                "url": str(metadata.get("url") or ""),
+                "page": metadata.get("page", ""),
+            }
+        )
+    return preview
+
+
+def _build_knowledge_dry_run_payload(document: KnowledgeDocument) -> dict[str, Any]:
+    service = KnowledgeBaseService(None)
+    chunks = service.build_chunks(document)
+    doc_id = service._resolve_doc_id(document)
+    version = str(document.version or "v1").strip() or "v1"
+    return {
+        "success": True,
+        "dry_run": True,
+        "doc_id": doc_id,
+        "version": version,
+        "chunk_count": len(chunks),
+        "chunk_ids": [chunk.chunk_id for chunk in chunks],
+        "chunks": _build_knowledge_chunk_preview(chunks),
+        "char_count": len(str(document.content or "")),
+    }
 
 
 def _operation_failed(result: Any) -> bool:
@@ -2079,6 +2199,126 @@ async def clear_data_controls():
     except Exception as e:
         logger.exception("clear data controls failed: %s", e)
         return _json_internal_error("clear_data_controls_failed", code="clear_data_controls_failed")
+
+
+@app.route("/api/knowledge_base/status", methods=["GET"])
+async def get_knowledge_base_status():
+    """Return local knowledge-base vector availability and chunk count."""
+    try:
+        vector_memory = _get_knowledge_vector_memory()
+        available = _knowledge_vector_available(vector_memory)
+        chunk_count = 0
+        if available and hasattr(vector_memory, "count"):
+            chunk_count = await asyncio.to_thread(
+                vector_memory.count,
+                {"source": KNOWLEDGE_SOURCE},
+            )
+        return jsonify(
+            {
+                "success": True,
+                "vector_memory_available": available,
+                "source": KNOWLEDGE_SOURCE,
+                "chunk_count": _safe_int(chunk_count, 0),
+            }
+        )
+    except Exception as e:
+        logger.exception("load knowledge base status failed: %s", e)
+        return _json_internal_error("knowledge_base_status_failed", code="knowledge_base_status_failed")
+
+
+@app.route("/api/knowledge_base/dry-run", methods=["POST"])
+async def preview_knowledge_base_document():
+    """Preview chunking for a text/Markdown knowledge document."""
+    try:
+        raw_data = await request.get_json(silent=True)
+        data = raw_data if raw_data is not None else {}
+        document = _parse_knowledge_document_payload(data)
+        return jsonify(_build_knowledge_dry_run_payload(document))
+    except ValueError as e:
+        return jsonify({"success": False, "message": str(e)}), 400
+    except Exception as e:
+        logger.exception("knowledge base dry-run failed: %s", e)
+        return _json_internal_error("knowledge_base_dry_run_failed", code="knowledge_base_dry_run_failed")
+
+
+@app.route("/api/knowledge_base/ingest", methods=["POST"])
+async def ingest_knowledge_base_document():
+    """Ingest a text/Markdown knowledge document into the runtime vector memory."""
+    return await _run_knowledge_base_ingest(rebuild=False)
+
+
+@app.route("/api/knowledge_base/rebuild", methods=["POST"])
+async def rebuild_knowledge_base_document():
+    """Rebuild a text/Markdown knowledge document by replacing chunks for the same doc_id."""
+    return await _run_knowledge_base_ingest(rebuild=True)
+
+
+async def _run_knowledge_base_ingest(*, rebuild: bool):
+    try:
+        raw_data = await request.get_json(silent=True)
+        data = raw_data if raw_data is not None else {}
+        document = _parse_knowledge_document_payload(data)
+        vector_memory = _get_knowledge_vector_memory()
+        if not _knowledge_vector_available(vector_memory):
+            return jsonify({"success": False, "message": "vector_memory_unavailable"}), 409
+        ai_client = _get_knowledge_ai_client()
+        if ai_client is None or not hasattr(ai_client, "get_embedding"):
+            return jsonify({"success": False, "message": "embedding_unavailable"}), 409
+
+        service = KnowledgeBaseService(vector_memory)
+        payload = await service.ingest_document(
+            document,
+            ai_client,
+            rebuild=rebuild,
+            priority="foreground",
+        )
+        return jsonify(payload), (200 if payload.get("success", False) else 400)
+    except ValueError as e:
+        return jsonify({"success": False, "message": str(e)}), 400
+    except Exception as e:
+        logger.exception("knowledge base ingest failed: %s", e)
+        return _json_internal_error("knowledge_base_ingest_failed", code="knowledge_base_ingest_failed")
+
+
+@app.route("/api/knowledge_base/delete", methods=["POST"])
+async def delete_knowledge_base_document():
+    """Delete knowledge-base chunks for one exact doc_id."""
+    try:
+        raw_data = await request.get_json(silent=True)
+        data = raw_data if raw_data is not None else {}
+        if not isinstance(data, dict):
+            return jsonify({"success": False, "message": "request body must be an object"}), 400
+        doc_id = _redact_knowledge_local_path(data.get("doc_id"))
+        if not doc_id:
+            return jsonify({"success": False, "message": "doc_id is required"}), 400
+
+        vector_memory = _get_knowledge_vector_memory()
+        if not _knowledge_vector_available(vector_memory):
+            return jsonify({"success": False, "message": "vector_memory_unavailable"}), 409
+
+        delete_filter = {"source": KNOWLEDGE_SOURCE, "doc_id": doc_id}
+        before_count = None
+        after_count = None
+        if hasattr(vector_memory, "count"):
+            before_count = await asyncio.to_thread(vector_memory.count, delete_filter)
+        await asyncio.to_thread(vector_memory.delete, delete_filter)
+        if hasattr(vector_memory, "count"):
+            after_count = await asyncio.to_thread(vector_memory.count, delete_filter)
+        deleted_count = None
+        if before_count is not None and after_count is not None:
+            deleted_count = max(0, _safe_int(before_count, 0) - _safe_int(after_count, 0))
+
+        return jsonify(
+            {
+                "success": True,
+                "doc_id": doc_id,
+                "deleted_filter": delete_filter,
+                "deleted_count": deleted_count,
+            }
+        )
+    except Exception as e:
+        logger.exception("knowledge base delete failed: %s", e)
+        return _json_internal_error("knowledge_base_delete_failed", code="knowledge_base_delete_failed")
 
 
 @app.route("/api/evals/latest", methods=["GET"])

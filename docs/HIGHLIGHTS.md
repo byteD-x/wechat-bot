@@ -304,6 +304,13 @@ Provider 分层策略也更清晰：
 
 这组能力的重点不是“让 Agent 做更多事”，而是先把可恢复、可审计和可解释的边界立起来。
 
+## 补充亮点：知识库治理 API 最小闭环
+
+- 知识库治理接口已提供 `status / dry-run / ingest / rebuild / delete` 五个本机 API，复用现有 `KnowledgeBaseService` 和运行时 `vector_memory`，不另起一套索引存储。
+- 首版只接收请求体中的纯文本或 Markdown，不读取任意文件路径、不扫描目录、不开放上传管道；`dry-run` 只返回 chunk 数量、chunk id、字符数和脱敏来源摘要，不回显正文。
+- `ingest / rebuild` 依赖运行中 bot 的 embedding 客户端，写入 `source=knowledge_base`、`doc_id`、`doc_version`、`chunk_id`、`source_file`、`url`、`page` 等 citation metadata，让 RAG 引用能绑定到文档级来源。
+- `delete` 只按精确 `doc_id` 删除知识库来源 chunk，不影响聊天记忆、导出语料 RAG 或其他向量来源；路径形式的 `doc_id/source_file` 会收敛为 `.../<filename>`，避免治理响应泄露完整本机路径。
+
 ## 补充亮点：自动提权与智能恢复
 
 - Windows 桌面端支持自动提权重启：当 readiness 判定缺少管理员权限时，用户可以直接在应用内触发 UAC 重启，而不是依赖手动关闭再重开。

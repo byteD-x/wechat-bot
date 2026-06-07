@@ -218,6 +218,74 @@
 - `prompt_preview`、`eval_latest`、`cost_summary`、`backup_cleanup_dry_run` 和 `data_controls_dry_run` 的 trace 输出只用于本机诊断摘要，不在响应中展开完整 Prompt、评测用例、聊天正文、成本复核队列、备份候选列表、清理 targets 或完整本机路径。
 - 后续新增工具必须先进入白名单，并补充 API 测试与文档。
 
+## 知识库治理 API
+
+用途：把现有 `KnowledgeBaseService` 暴露成受控的本机治理接口，用于预览、写入、重建、删除和查看知识库向量 chunk 状态。
+
+实现入口：
+
+- `backend/api.py::get_knowledge_base_status`
+- `backend/api.py::preview_knowledge_base_document`
+- `backend/api.py::ingest_knowledge_base_document`
+- `backend/api.py::rebuild_knowledge_base_document`
+- `backend/api.py::delete_knowledge_base_document`
+- `backend/core/knowledge_base.py::KnowledgeBaseService`
+
+当前端点：
+
+- `GET /api/knowledge_base/status`
+- `POST /api/knowledge_base/dry-run`
+- `POST /api/knowledge_base/ingest`
+- `POST /api/knowledge_base/rebuild`
+- `POST /api/knowledge_base/delete`
+
+请求体示例：
+
+```json
+{
+  "content": "# Release playbook\n\nQA signs off after smoke tests.",
+  "content_type": "markdown",
+  "doc_id": "release-playbook",
+  "version": "2026-06",
+  "source_file": "docs/release-playbook.md",
+  "url": "https://example.test/release-playbook",
+  "page": 3,
+  "metadata": {
+    "owner": "platform"
+  }
+}
+```
+
+字段说明：
+
+- `content`: `dry-run`、`ingest`、`rebuild` 必填，最多 120000 字符。
+- `content_type`: 可选，支持 `text`、`plain`、`markdown`、`text/plain`、`text/markdown`。
+- `doc_id`: 可选；未提供时会从 `source_file`、`url` 或正文 hash 派生。
+- `version` / `doc_version`: 可选，默认 `v1`。
+- `source_file`、`url`、`page`、`metadata`: 可选，写入 chunk metadata，供 RAG citation 绑定。
+
+响应摘要：
+
+- `dry-run` 只返回 `doc_id`、`version`、`chunk_count`、`chunk_ids`、`char_count` 和每个 chunk 的 `chunk_id/chunk_index/char_count/source_file/url/page` 摘要，不返回 chunk 正文。
+- `status` 返回 `vector_memory_available`、`source=knowledge_base` 和当前知识库 chunk 数。
+- `ingest` 写入新 chunk；`rebuild` 会先完整准备新版本 chunk embedding，再删除同一 `doc_id` 的旧 chunk 并写入新 chunk。
+- `delete` 只按精确 `{"source": "knowledge_base", "doc_id": "<doc_id>"}` 删除，不影响聊天记忆或其他来源。
+
+错误响应：
+
+- `400`: 请求体不是 JSON object，`dry-run / ingest / rebuild` 缺少 `content`，`delete` 缺少 `doc_id`，或字段类型/长度不符合要求。
+- `409 vector_memory_unavailable`: 运行中的 bot 没有可用 `vector_memory`。
+- `409 embedding_unavailable`: `ingest` 或 `rebuild` 时运行中的 bot 没有可用 `ai_client.get_embedding`。
+- `500 knowledge_base_*_failed`: 未预期的服务端错误。
+
+产品约束：
+
+- 首版只接收请求体中的纯文本或 Markdown；不会读取任意本机文件路径、不会扫描目录，也不提供文件上传。
+- `doc_id / source_file / url / source_url` 只用于引用元数据；如果看起来像完整本机路径或 `file://` 本机 URI，响应和删除匹配会收敛为 `.../<filename>`。
+- 预览和治理响应不返回完整正文、chunk text、embedding 或完整本机路径。
+- `ingest`、`rebuild` 依赖运行中的向量库和 embedding 客户端；`rebuild` 会先完整准备新版本 chunk embedding，准备失败时返回 `no_chunks_indexed` 或 `incomplete_embeddings`，并保留旧 chunk。
+- 离线批量导入、后台队列和文件索引属于后续任务。
+
 ## 成熟产品化参考
 
 - Windows 桌面端体验应继续对齐 Microsoft Fluent / Windows 控件模式：清晰的顶层导航、稳定的标题栏与命令区、明确的焦点态和错误恢复路径。

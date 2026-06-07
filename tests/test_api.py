@@ -1,6 +1,7 @@
 import pytest
 import os
 from datetime import datetime
+from types import SimpleNamespace
 from unittest.mock import MagicMock, AsyncMock, patch
 
 pytest.importorskip("quart")
@@ -23,6 +24,43 @@ def _build_snapshot(config):
     snapshot.loaded_at = datetime(2026, 3, 16, 17, 0, 0)
     snapshot.to_dict.return_value = config
     return snapshot
+
+
+class DummyKnowledgeVectorMemory:
+    def __init__(self):
+        self.deleted = []
+        self.upserts = []
+
+    def __bool__(self):
+        return True
+
+    def count(self, where=None):
+        return len(self._filter(where))
+
+    def delete(self, where):
+        self.deleted.append(where)
+        matched = self._filter(where)
+        self.upserts = [item for item in self.upserts if item not in matched]
+
+    def upsert_text(self, text, metadata, item_id, embedding):
+        self.upserts.append(
+            {
+                "text": text,
+                "metadata": metadata,
+                "id": item_id,
+                "embedding": embedding,
+            }
+        )
+
+    def _filter(self, where=None):
+        if not where:
+            return list(self.upserts)
+        return [
+            item
+            for item in self.upserts
+            if all(item["metadata"].get(key) == value for key, value in where.items())
+        ]
+
 
 @pytest.fixture
 def client():
@@ -3358,3 +3396,261 @@ async def test_api_data_controls_apply_rejects_when_runtime_is_running(client, m
     data = await response.get_json()
     assert data["success"] is False
     assert data["running"]["bot"] is True
+
+
+@pytest.mark.asyncio
+async def test_api_knowledge_base_dry_run_returns_chunk_metadata_without_raw_content(client, mock_manager):
+    raw_content = (
+        "Secret launch checklist says QA signoff and rollback drills are mandatory. "
+        "Do not echo this raw sentence in API previews."
+    )
+
+    response = await client.post(
+        "/api/knowledge_base/dry-run",
+        json={
+            "content": raw_content,
+            "content_type": "markdown",
+            "doc_id": "release-playbook",
+            "version": "2026-06",
+            "source_file": "Z:/fixture/private/release-playbook.md",
+            "url": "https://example.test/release-playbook",
+            "page": 3,
+        },
+    )
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["success"] is True
+    assert data["dry_run"] is True
+    assert data["doc_id"] == "release-playbook"
+    assert data["version"] == "2026-06"
+    assert data["chunk_count"] >= 1
+    assert len(data["chunk_ids"]) == data["chunk_count"]
+    assert data["chunks"][0]["doc_id"] == "release-playbook"
+    assert data["chunks"][0]["doc_version"] == "2026-06"
+    assert data["chunks"][0]["chunk_id"].startswith("kb::")
+    assert data["chunks"][0]["source_file"] == ".../release-playbook.md"
+    assert data["chunks"][0]["url"] == "https://example.test/release-playbook"
+    assert data["chunks"][0]["page"] == 3
+    assert data["chunks"][0]["char_count"] > 0
+
+    response_text = (await response.get_data()).decode("utf-8")
+    assert "Secret launch checklist" not in response_text
+    assert "raw sentence" not in response_text
+    assert "Z:/fixture/private" not in response_text
+    assert "release-playbook.md" in response_text
+
+
+@pytest.mark.asyncio
+async def test_api_knowledge_base_dry_run_redacts_file_uri_sources(client, mock_manager):
+    response = await client.post(
+        "/api/knowledge_base/dry-run",
+        json={
+            "content": "A local runbook entry that should not expose file URI directories.",
+            "doc_id": "file:///Z:/fixture/private/doc-id.md",
+            "source_file": "file:///Z:/fixture/private/source.md",
+            "url": "file:///Z:/fixture/private/source-url.md",
+            "metadata": {
+                "source_url": "file:///Z:/fixture/private/metadata-source-url.md",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["doc_id"] == ".../doc-id.md"
+    assert data["chunks"][0]["doc_id"] == ".../doc-id.md"
+    assert data["chunks"][0]["source_file"] == ".../source.md"
+    assert data["chunks"][0]["url"] == ".../source-url.md"
+
+    response_text = (await response.get_data()).decode("utf-8")
+    for forbidden in ("file://", "Z:/fixture/private", "metadata-source-url"):
+        assert forbidden not in response_text
+
+
+@pytest.mark.asyncio
+async def test_api_knowledge_base_rejects_invalid_payload_shapes(client, mock_manager):
+    vector_memory = DummyKnowledgeVectorMemory()
+    mock_manager.bot.vector_memory = vector_memory
+    mock_manager.bot.ai_client = SimpleNamespace(get_embedding=AsyncMock(return_value=[0.1]))
+
+    cases = [
+        ("/api/knowledge_base/dry-run", []),
+        ("/api/knowledge_base/ingest", "not-object"),
+        ("/api/knowledge_base/rebuild", ["not-object"]),
+        ("/api/knowledge_base/delete", []),
+        ("/api/knowledge_base/dry-run", {"content": "  "}),
+        ("/api/knowledge_base/dry-run", {"content": "ok", "content_type": "application/pdf"}),
+        ("/api/knowledge_base/dry-run", {"content": "ok", "metadata": []}),
+        ("/api/knowledge_base/dry-run", {"content": "x" * (api_module.MAX_KNOWLEDGE_CONTENT_CHARS + 1)}),
+    ]
+
+    for path, payload in cases:
+        response = await client.post(path, json=payload)
+        data = await response.get_json()
+        assert response.status_code == 400
+        assert data["success"] is False
+        assert data["message"]
+
+
+@pytest.mark.asyncio
+async def test_api_knowledge_base_status_reports_vector_availability(client, mock_manager):
+    vector_memory = DummyKnowledgeVectorMemory()
+    vector_memory.upsert_text(
+        "A release chunk",
+        {"source": api_module.KNOWLEDGE_SOURCE, "doc_id": "release-playbook"},
+        "kb-release-1",
+        [0.1, 0.2],
+    )
+    vector_memory.upsert_text(
+        "A chat memory chunk",
+        {"source": "chat_memory", "doc_id": "chat-1"},
+        "chat-1",
+        [0.3, 0.4],
+    )
+    mock_manager.bot.vector_memory = vector_memory
+
+    response = await client.get("/api/knowledge_base/status")
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["success"] is True
+    assert data["vector_memory_available"] is True
+    assert data["source"] == api_module.KNOWLEDGE_SOURCE
+    assert data["chunk_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_api_knowledge_base_ingest_and_rebuild_use_runtime_dependencies(client, mock_manager):
+    vector_memory = DummyKnowledgeVectorMemory()
+    vector_memory.upsert_text(
+        "old release chunk",
+        {"source": api_module.KNOWLEDGE_SOURCE, "doc_id": "release-playbook"},
+        "old-release",
+        [0.9],
+    )
+    mock_manager.bot.vector_memory = vector_memory
+    ai_client = SimpleNamespace(get_embedding=AsyncMock(return_value=[0.1, 0.2, 0.3]))
+    mock_manager.bot.ai_client = ai_client
+
+    payload = {
+        "content": (
+            "Release plan section. QA signs off after smoke tests and rollback drills.\n\n"
+            "Operations section. On-call watches latency and retrieval hit rate."
+        ),
+        "doc_id": "release-playbook",
+        "version": "2026-06",
+        "source_file": "docs/release-playbook.md",
+        "url": "https://example.test/release-playbook",
+        "page": 3,
+        "metadata": {"owner": "platform"},
+    }
+
+    ingest_response = await client.post("/api/knowledge_base/ingest", json=payload)
+    rebuild_response = await client.post("/api/knowledge_base/rebuild", json=payload)
+
+    assert ingest_response.status_code == 200
+    ingest_data = await ingest_response.get_json()
+    assert ingest_data["success"] is True
+    assert ingest_data["doc_id"] == "release-playbook"
+    assert ingest_data["version"] == "2026-06"
+    assert ingest_data["indexed_chunks"] == ingest_data["chunk_count"]
+    assert ingest_data["deleted_previous"] is False
+
+    assert rebuild_response.status_code == 200
+    rebuild_data = await rebuild_response.get_json()
+    assert rebuild_data["success"] is True
+    assert rebuild_data["deleted_previous"] is True
+    assert vector_memory.deleted == [{"source": api_module.KNOWLEDGE_SOURCE, "doc_id": "release-playbook"}]
+
+    latest = vector_memory.upserts[-1]
+    metadata = latest["metadata"]
+    assert metadata["source"] == api_module.KNOWLEDGE_SOURCE
+    assert metadata["scope"] == "knowledge"
+    assert metadata["doc_id"] == "release-playbook"
+    assert metadata["doc_version"] == "2026-06"
+    assert metadata["chunk_id"] == latest["id"]
+    assert metadata["source_file"] == "docs/release-playbook.md"
+    assert metadata["url"] == "https://example.test/release-playbook"
+    assert metadata["page"] == 3
+    assert metadata["owner"] == "platform"
+    assert ai_client.get_embedding.await_count >= ingest_data["chunk_count"] + rebuild_data["chunk_count"]
+
+
+@pytest.mark.asyncio
+async def test_api_knowledge_base_ingest_requires_runtime_dependencies(client, mock_manager):
+    payload = {"content": "A short knowledge document.", "doc_id": "runbook"}
+
+    no_vector_response = await client.post("/api/knowledge_base/ingest", json=payload)
+
+    assert no_vector_response.status_code == 409
+    no_vector_data = await no_vector_response.get_json()
+    assert no_vector_data["success"] is False
+    assert no_vector_data["message"] == "vector_memory_unavailable"
+
+    mock_manager.bot.vector_memory = DummyKnowledgeVectorMemory()
+    no_embedding_response = await client.post("/api/knowledge_base/ingest", json=payload)
+
+    assert no_embedding_response.status_code == 409
+    no_embedding_data = await no_embedding_response.get_json()
+    assert no_embedding_data["success"] is False
+    assert no_embedding_data["message"] == "embedding_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_api_knowledge_base_delete_requires_doc_id_and_deletes_exact_document(client, mock_manager):
+    vector_memory = DummyKnowledgeVectorMemory()
+    vector_memory.upsert_text(
+        "release chunk",
+        {"source": api_module.KNOWLEDGE_SOURCE, "doc_id": "release-playbook"},
+        "kb-release",
+        [0.1],
+    )
+    vector_memory.upsert_text(
+        "other chunk",
+        {"source": api_module.KNOWLEDGE_SOURCE, "doc_id": "other-doc"},
+        "kb-other",
+        [0.2],
+    )
+    vector_memory.upsert_text(
+        "local path chunk",
+        {"source": api_module.KNOWLEDGE_SOURCE, "doc_id": ".../local-runbook.md"},
+        "kb-local",
+        [0.3],
+    )
+    mock_manager.bot.vector_memory = vector_memory
+
+    bad_response = await client.post("/api/knowledge_base/delete", json={})
+    delete_response = await client.post(
+        "/api/knowledge_base/delete",
+        json={"doc_id": "release-playbook"},
+    )
+
+    assert bad_response.status_code == 400
+    bad_data = await bad_response.get_json()
+    assert bad_data["success"] is False
+    assert bad_data["message"] == "doc_id is required"
+
+    assert delete_response.status_code == 200
+    data = await delete_response.get_json()
+    assert data["success"] is True
+    assert data["doc_id"] == "release-playbook"
+    assert data["deleted_filter"] == {"source": api_module.KNOWLEDGE_SOURCE, "doc_id": "release-playbook"}
+    assert data["deleted_count"] == 1
+    assert vector_memory.deleted == [{"source": api_module.KNOWLEDGE_SOURCE, "doc_id": "release-playbook"}]
+    assert vector_memory.count({"source": api_module.KNOWLEDGE_SOURCE, "doc_id": "release-playbook"}) == 0
+    assert vector_memory.count({"source": api_module.KNOWLEDGE_SOURCE, "doc_id": "other-doc"}) == 1
+
+    local_path_response = await client.post(
+        "/api/knowledge_base/delete",
+        json={"doc_id": "Z:/fixture/private/local-runbook.md"},
+    )
+
+    assert local_path_response.status_code == 200
+    local_path_data = await local_path_response.get_json()
+    assert local_path_data["doc_id"] == ".../local-runbook.md"
+    assert local_path_data["deleted_filter"] == {
+        "source": api_module.KNOWLEDGE_SOURCE,
+        "doc_id": ".../local-runbook.md",
+    }
+    assert vector_memory.count({"source": api_module.KNOWLEDGE_SOURCE, "doc_id": ".../local-runbook.md"}) == 0
