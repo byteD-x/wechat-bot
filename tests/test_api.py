@@ -1850,6 +1850,7 @@ async def test_api_prompt_revision_diff_returns_404_for_unknown_revision(client,
 
 @pytest.mark.asyncio
 async def test_api_prompt_rollback_appends_audited_revision_and_updates_config(client, mock_manager, tmp_path):
+    api_module.governance_metrics.reset()
     current_config = {
         "api": {"active_preset": "OpenAI", "presets": []},
         "bot": {"system_prompt": "current prompt"},
@@ -1915,10 +1916,17 @@ async def test_api_prompt_rollback_appends_audited_revision_and_updates_config(c
     _, kwargs = save_effective_config.call_args
     assert kwargs["source"] == "api_prompt_rollback"
     mock_manager.reload_runtime_config.assert_awaited_once()
+    metrics = api_module.governance_metrics.get_status()["operations"]["prompt_rollback"]
+    assert metrics["total"] == 1
+    assert metrics["success"] == 1
+    assert metrics["failure"] == 0
+    assert metrics["success_rate"] == 100.0
+    assert metrics["last_duration_ms"] >= 0.0
 
 
 @pytest.mark.asyncio
 async def test_api_prompt_rollback_returns_404_for_unknown_revision(client, tmp_path):
+    api_module.governance_metrics.reset()
     snapshot = _build_snapshot({
         "api": {"presets": []},
         "bot": {"system_prompt": "current prompt"},
@@ -1939,10 +1947,16 @@ async def test_api_prompt_rollback_returns_404_for_unknown_revision(client, tmp_
     data = await response.get_json()
     assert data["success"] is False
     assert data["code"] == "prompt_revision_not_found"
+    metrics = api_module.governance_metrics.get_status()["operations"]["prompt_rollback"]
+    assert metrics["total"] == 1
+    assert metrics["success"] == 0
+    assert metrics["failure"] == 1
+    assert metrics["failure_reasons"] == {"prompt_revision_not_found": 1}
 
 
 @pytest.mark.asyncio
 async def test_api_tool_workflow_runs_whitelisted_steps(client):
+    api_module.governance_metrics.reset()
     snapshot = _build_snapshot({
         "api": {"presets": []},
         "bot": {"system_prompt": "base prompt", "profile_inject_in_prompt": True},
@@ -1977,6 +1991,10 @@ async def test_api_tool_workflow_runs_whitelisted_steps(client):
     assert data["trace"][0]["output"]["active_paths"] >= 1
     assert "base prompt" in data["trace"][1]["output"]["prompt"]
     assert data["trace"][2]["output"]["ready"] is True
+    metrics = api_module.governance_metrics.get_status()["operations"]["tool_workflow"]
+    assert metrics["total"] == 1
+    assert metrics["success"] == 1
+    assert metrics["failure"] == 0
 
 
 @pytest.mark.asyncio
@@ -2332,6 +2350,7 @@ async def test_api_tool_workflow_plan_reflect_repair_does_not_repair_unsafe_payl
 
 @pytest.mark.asyncio
 async def test_api_tool_workflow_rejects_unknown_tool(client):
+    api_module.governance_metrics.reset()
     response = await client.post(
         "/api/v1/agents/tool-workflow",
         json={"steps": [{"tool": "shell_exec", "payload": {"cmd": "dir"}}]},
@@ -2344,6 +2363,11 @@ async def test_api_tool_workflow_rejects_unknown_tool(client):
     assert "unsupported tool" in data["message"]
     assert data["trace"][0]["status"] == "error"
     assert "unsupported tool" in data["trace"][0]["error"]
+    metrics = api_module.governance_metrics.get_status()["operations"]["tool_workflow"]
+    assert metrics["total"] == 1
+    assert metrics["success"] == 0
+    assert metrics["failure"] == 1
+    assert metrics["failure_reasons"] == {"unsupported_tool": 1}
 
 
 @pytest.mark.asyncio

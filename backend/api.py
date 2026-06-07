@@ -45,6 +45,7 @@ from backend.core.knowledge_base import (
     redact_knowledge_local_path,
 )
 from backend.core.mcp_adapter import ReadOnlyMCPAdapter
+from backend.core.governance_metrics import get_governance_metrics
 from backend.core.oauth_support import (
     OAuthSupportError,
     cancel_auth_flow,
@@ -740,6 +741,7 @@ data_control_service = DataControlService()
 wechat_export_service = WechatExportService()
 model_auth_center_service = get_model_auth_center_service()
 prompt_governance_service = get_prompt_governance_service()
+governance_metrics = get_governance_metrics()
 maintenance_lock = asyncio.Lock()
 
 
@@ -2661,9 +2663,15 @@ async def diff_prompt_revision(revision: int):
 @app.route("/api/v1/admin/prompts/<int:revision>/rollback", methods=["POST"])
 async def rollback_prompt_revision(revision: int):
     """Roll back system Prompt to an audited historical revision."""
+    started_at = time.perf_counter()
     try:
         data = await request.get_json(silent=True) or {}
         if not isinstance(data, dict):
+            governance_metrics.record_prompt_rollback(
+                success=False,
+                duration_ms=(time.perf_counter() - started_at) * 1000,
+                failure_reason="bad_request",
+            )
             return jsonify({"success": False, "message": "request body must be a JSON object"}), 400
 
         current_snapshot = config_service.get_snapshot()
@@ -2688,6 +2696,10 @@ async def rollback_prompt_revision(revision: int):
             current_config=current_config,
             snapshot=snapshot,
         )
+        governance_metrics.record_prompt_rollback(
+            success=True,
+            duration_ms=(time.perf_counter() - started_at) * 1000,
+        )
         return jsonify(
             {
                 **result,
@@ -2698,10 +2710,25 @@ async def rollback_prompt_revision(revision: int):
             }
         )
     except LookupError as e:
+        governance_metrics.record_prompt_rollback(
+            success=False,
+            duration_ms=(time.perf_counter() - started_at) * 1000,
+            failure_reason="prompt_revision_not_found",
+        )
         return jsonify({"success": False, "message": str(e), "code": "prompt_revision_not_found"}), 404
     except ValueError as e:
+        governance_metrics.record_prompt_rollback(
+            success=False,
+            duration_ms=(time.perf_counter() - started_at) * 1000,
+            failure_reason="bad_request",
+        )
         return jsonify({"success": False, "message": str(e), "code": "bad_request"}), 400
     except Exception as e:
+        governance_metrics.record_prompt_rollback(
+            success=False,
+            duration_ms=(time.perf_counter() - started_at) * 1000,
+            failure_reason="prompt_rollback_failed",
+        )
         logger.error("Prompt rollback failed: %s", e)
         return _json_internal_error("prompt_rollback_failed", code="prompt_rollback_failed")
 
@@ -2767,9 +2794,15 @@ def _build_controlled_tool_workflow_service() -> ControlledToolWorkflowService:
 @app.route("/api/v1/agents/tool-workflow", methods=["POST"])
 async def run_agent_tool_workflow():
     """Execute an explicit, whitelisted tool workflow and return per-step trace."""
+    started_at = time.perf_counter()
     try:
         data = await request.get_json(silent=True) or {}
         if not isinstance(data, dict):
+            governance_metrics.record_tool_workflow(
+                success=False,
+                duration_ms=(time.perf_counter() - started_at) * 1000,
+                failure_reason="bad_request",
+            )
             return jsonify({"success": False, "message": "request body must be a JSON object"}), 400
         steps = data.get("steps")
         dry_run = bool(data.get("dry_run", False))
@@ -2778,6 +2811,10 @@ async def run_agent_tool_workflow():
         service = _build_controlled_tool_workflow_service()
         result = await service.run(steps, dry_run=dry_run, workflow_mode=workflow_mode)
         if result.get("success"):
+            governance_metrics.record_tool_workflow(
+                success=True,
+                duration_ms=(time.perf_counter() - started_at) * 1000,
+            )
             return jsonify(result), 200
         first_error = next(
             (item for item in result.get("trace", []) if isinstance(item, dict) and item.get("status") == "error"),
@@ -2785,10 +2822,25 @@ async def run_agent_tool_workflow():
         )
         result.setdefault("code", "bad_workflow")
         result.setdefault("message", str(first_error.get("error") or "workflow failed"))
+        governance_metrics.record_tool_workflow(
+            success=False,
+            duration_ms=(time.perf_counter() - started_at) * 1000,
+            failure_reason=str(first_error.get("error_type") or result.get("code") or "bad_workflow"),
+        )
         return jsonify(result), 400
     except ToolWorkflowError as e:
+        governance_metrics.record_tool_workflow(
+            success=False,
+            duration_ms=(time.perf_counter() - started_at) * 1000,
+            failure_reason="bad_workflow",
+        )
         return jsonify({"success": False, "message": str(e), "code": "bad_workflow"}), 400
     except Exception as e:
+        governance_metrics.record_tool_workflow(
+            success=False,
+            duration_ms=(time.perf_counter() - started_at) * 1000,
+            failure_reason="tool_workflow_failed",
+        )
         logger.error("Tool workflow failed: %s", e)
         return _json_internal_error("tool_workflow_failed", code="tool_workflow_failed")
 

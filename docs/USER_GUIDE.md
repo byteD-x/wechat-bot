@@ -263,6 +263,7 @@ Invoke-RestMethod -Headers @{ "Authorization" = "Bearer your_token" } http://127
 - `/api/status.health_checks`
 - `/api/status.system_metrics`
 - `/api/status.reply_quality`
+- `/api/status.governance_metrics`
 - `/api/status.trace_logger`
 - `/api/metrics`
 
@@ -278,6 +279,7 @@ Invoke-RestMethod -Headers @{ "Authorization" = "Bearer your_token" } http://127
 - 现在也会持久化近 `24h / 7d` 的回复质量汇总，仪表盘健康反馈区域会显示当前会话与近 `24h` 的简要摘要。
 - 消息页的“消息详情”弹窗现在支持给助手回复标记“有帮助 / 没帮助”，反馈会写入回复元数据，并计入 `reply_quality` 的会话内与近 `24h / 7d` 汇总。
 - 消息页的列表、筛选摘要和“消息详情”面板会优先显示好友备注名或昵称；系统内部仍使用 `chat_id` / 微信号检索消息与画像，但默认不再把这些内部标识直接展示到 UI。
+- `governance_metrics` 会展示 Prompt 回滚和受控 Tool Workflow 的聚合次数、成功率、失败原因和耗时；它只记录短枚举和数值，不保存完整 Prompt、聊天正文、token、工具输出或完整本机路径。
 
 如果没有回复，优先检查：
 

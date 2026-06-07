@@ -90,8 +90,8 @@
 
 2. `/api/status`
    - 功能：返回结构化运行状态。
-   - 实现：委托 `BotManager.get_status()` 组装启动状态、健康检查、诊断、系统指标、`response_cache_stats`、`safety_stats`、`model_route_stats`、`model_tool_call_stats` 和 `trace_logger`。
-   - 约束：`response_cache_stats` 只暴露默认关闭的响应缓存统计；语义缓存 `semantic_enabled` 默认关闭，开启后也只在同一 provider、model、chat、system prompt、非当前用户 prompt context、RAG citation ids 与安全策略边界内相似命中，不跨会话、模型、引用策略或安全策略复用；缓存不包含原始 prompt、聊天正文、真实联系人标识或 token；`safety_stats` 只记录安全护栏 action/reason 聚合与最近一次脱敏结果，不记录原始请求或回复；`model_route_stats` 只记录当前请求的可解释模型路由决策，不自动切换用户选择的 provider、model 或认证方式；`model_tool_call_stats` 只记录模型侧工具调用开关、请求、成功、失败和阻断计数；`trace_logger` 只保留进程内最近 trace 摘要，通过 hash 引用和聚合字段描述 cache、模型路由、安全护栏、模型工具调用与错误类型，不记录原始 Prompt、聊天正文、token、工具原始输出或完整本机路径。
+   - 实现：委托 `BotManager.get_status()` 组装启动状态、健康检查、诊断、系统指标、`response_cache_stats`、`safety_stats`、`model_route_stats`、`model_tool_call_stats`、`governance_metrics` 和 `trace_logger`。
+   - 约束：`response_cache_stats` 只暴露默认关闭的响应缓存统计；语义缓存 `semantic_enabled` 默认关闭，开启后也只在同一 provider、model、chat、system prompt、非当前用户 prompt context、RAG citation ids 与安全策略边界内相似命中，不跨会话、模型、引用策略或安全策略复用；缓存不包含原始 prompt、聊天正文、真实联系人标识或 token；`safety_stats` 只记录安全护栏 action/reason 聚合与最近一次脱敏结果，不记录原始请求或回复；`model_route_stats` 只记录当前请求的可解释模型路由决策，不自动切换用户选择的 provider、model 或认证方式；`model_tool_call_stats` 只记录模型侧工具调用开关、请求、成功、失败和阻断计数；`governance_metrics` 只记录 Prompt 回滚与 Tool Workflow 的聚合次数、成功率、失败原因短枚举和耗时；`trace_logger` 只保留进程内最近 trace 摘要，通过 hash 引用和聚合字段描述 cache、模型路由、安全护栏、模型工具调用与错误类型，不记录原始 Prompt、聊天正文、token、工具原始输出或完整本机路径。
 
 3. `/api/config`
    - 功能：读取/保存有效配置。

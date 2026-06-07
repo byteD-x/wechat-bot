@@ -85,6 +85,7 @@
 - `/api/status`：启动进度、诊断、健康检查、系统指标、检索统计
 - 本地 API 鉴权兼容 `X-Api-Token` 与 `Authorization: Bearer <token>`，并完善了 `file:///` 与 `IPv6 (::1)` 场景下的来源校验，降低桌面端误报 `forbidden_origin` 的概率
 - `/api/status.reply_quality`：当前会话与近 `24h / 7d` 的回复成功率、空回复、超时补发、检索增强和人工反馈摘要
+- `/api/status.governance_metrics`：Prompt 回滚和受控 Tool Workflow 的聚合次数、成功率、失败原因和耗时，不记录 Prompt、聊天正文、token 或工具输出
 - `/api/metrics`：Prometheus 风格导出
 - 备份能力不再停留在“能创建和恢复”，而是补齐了保留策略与清理闭环：CLI / Web API / 设置页都能先 Dry Run 预览、再正式清理旧备份，并默认保护最近恢复前快照
 - Electron 仪表盘：CPU、内存、任务积压、AI 延迟、RAG 状态、组件健康

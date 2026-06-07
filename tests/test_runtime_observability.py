@@ -156,6 +156,29 @@ def test_bot_manager_export_metrics_includes_core_values(monkeypatch):
             "ai": {"status": "healthy"},
             "wechat": {"status": "degraded"},
         },
+        "governance_metrics": {
+            "operation_count": 2,
+            "operations": {
+                "prompt_rollback": {
+                    "total": 2,
+                    "success": 1,
+                    "failure": 1,
+                    "success_rate": 50.0,
+                    "last_duration_ms": 12.5,
+                    "avg_duration_ms": 10.0,
+                    "failure_reasons": {"prompt_revision_not_found": 1},
+                },
+                "tool_workflow": {
+                    "total": 3,
+                    "success": 2,
+                    "failure": 1,
+                    "success_rate": 66.7,
+                    "last_duration_ms": 8.0,
+                    "avg_duration_ms": 7.5,
+                    "failure_reasons": {"unsupported_tool": 1},
+                },
+            },
+        },
     })
 
     metrics = manager.export_metrics()
@@ -168,6 +191,16 @@ def test_bot_manager_export_metrics_includes_core_values(monkeypatch):
     assert "wechat_bot_retrieval_hit_count 8" in metrics
     assert 'wechat_bot_config_reload_mode{mode="watchdog"} 1' in metrics
     assert 'wechat_bot_health_check{component="wechat",status="degraded"} 1' in metrics
+    assert 'wechat_bot_governance_operation_total{operation="prompt_rollback"} 2' in metrics
+    assert 'wechat_bot_governance_operation_success_rate{operation="tool_workflow"} 66.7' in metrics
+    assert (
+        'wechat_bot_governance_operation_failure_reason_total'
+        '{operation="prompt_rollback",reason="prompt_revision_not_found"} 1'
+    ) in metrics
+    assert (
+        'wechat_bot_governance_operation_failure_reason_total'
+        '{operation="tool_workflow",reason="unsupported_tool"} 1'
+    ) in metrics
 
 
 def test_bot_manager_status_log_message_is_human_readable():

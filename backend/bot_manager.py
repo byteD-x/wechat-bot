@@ -8,12 +8,12 @@
 import asyncio
 import ctypes
 import logging
-import os
 import sys
 import time
 from typing import Any, Dict, Optional, Set
 
 from .core.config_service import get_config_service
+from .core.governance_metrics import get_governance_metrics
 from .growth_manager import get_growth_manager
 from .shared_config import get_app_config_path
 from .wechat_versions import OFFICIAL_SUPPORTED_WECHAT_VERSION
@@ -30,6 +30,10 @@ def _health_level_from_status(status: str) -> str:
     if normalized in {"error", "failed", "offline"}:
         return "error"
     return "warning"
+
+
+def _metric_label(value: Any) -> str:
+    return str(value or "").replace("\\", "\\\\").replace('"', '\\"').replace("\n", "_")
 
 
 class _MemoryStatusEx(ctypes.Structure):
@@ -623,6 +627,7 @@ class BotManager:
                 status.update(self.bot.get_runtime_status())
             except Exception:
                 pass
+        status["governance_metrics"] = get_governance_metrics().get_status()
         status["system_metrics"] = self._collect_system_metrics(status)
         status["health_checks"] = self._build_health_checks(status)
         status["diagnostics"] = self._build_diagnostics(status)
@@ -1037,6 +1042,8 @@ class BotManager:
         health_checks = status.get("health_checks") or {}
         startup = status.get("startup") or {}
         config_reload = status.get("config_reload") or {}
+        governance = status.get("governance_metrics") or {}
+        governance_operations = governance.get("operations") or {}
 
         lines = [
             "# HELP wechat_bot_running Whether the bot is running.",
@@ -1133,8 +1140,57 @@ class BotManager:
         for component, check in health_checks.items():
             status_label = str(check.get("status") or "unknown").lower()
             lines.append(
-                f'wechat_bot_health_check{{component="{component}",status="{status_label}"}} 1'
+                f'wechat_bot_health_check{{component="{_metric_label(component)}",status="{_metric_label(status_label)}"}} 1'
             )
+        if governance_operations:
+            lines.extend([
+                "# HELP wechat_bot_governance_operation_total Governance API calls by operation.",
+                "# TYPE wechat_bot_governance_operation_total counter",
+                "# HELP wechat_bot_governance_operation_success_total Successful governance API calls by operation.",
+                "# TYPE wechat_bot_governance_operation_success_total counter",
+                "# HELP wechat_bot_governance_operation_failure_total Failed governance API calls by operation.",
+                "# TYPE wechat_bot_governance_operation_failure_total counter",
+                "# HELP wechat_bot_governance_operation_success_rate Governance API success rate percent by operation.",
+                "# TYPE wechat_bot_governance_operation_success_rate gauge",
+                "# HELP wechat_bot_governance_operation_last_duration_ms Latest governance API duration in milliseconds.",
+                "# TYPE wechat_bot_governance_operation_last_duration_ms gauge",
+                "# HELP wechat_bot_governance_operation_avg_duration_ms Average governance API duration in milliseconds.",
+                "# TYPE wechat_bot_governance_operation_avg_duration_ms gauge",
+                "# HELP wechat_bot_governance_operation_failure_reason_total Governance API failures by reason.",
+                "# TYPE wechat_bot_governance_operation_failure_reason_total counter",
+            ])
+        for operation, payload in governance_operations.items():
+            operation_label = _metric_label(operation)
+            lines.append(
+                f'wechat_bot_governance_operation_total{{operation="{operation_label}"}} '
+                f'{int(payload.get("total", 0) or 0)}'
+            )
+            lines.append(
+                f'wechat_bot_governance_operation_success_total{{operation="{operation_label}"}} '
+                f'{int(payload.get("success", 0) or 0)}'
+            )
+            lines.append(
+                f'wechat_bot_governance_operation_failure_total{{operation="{operation_label}"}} '
+                f'{int(payload.get("failure", 0) or 0)}'
+            )
+            lines.append(
+                f'wechat_bot_governance_operation_success_rate{{operation="{operation_label}"}} '
+                f'{float(payload.get("success_rate", 0.0) or 0.0)}'
+            )
+            lines.append(
+                f'wechat_bot_governance_operation_last_duration_ms{{operation="{operation_label}"}} '
+                f'{float(payload.get("last_duration_ms", 0.0) or 0.0)}'
+            )
+            lines.append(
+                f'wechat_bot_governance_operation_avg_duration_ms{{operation="{operation_label}"}} '
+                f'{float(payload.get("avg_duration_ms", 0.0) or 0.0)}'
+            )
+            for reason, count in (payload.get("failure_reasons") or {}).items():
+                lines.append(
+                    f'wechat_bot_governance_operation_failure_reason_total'
+                    f'{{operation="{operation_label}",reason="{_metric_label(reason)}"}} '
+                    f'{int(count or 0)}'
+                )
         return "\n".join(lines) + "\n"
 
     def _sample_process_cpu_percent(self) -> float:
