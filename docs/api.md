@@ -136,6 +136,7 @@
 ```json
 {
   "dry_run": false,
+  "workflow_mode": "direct",
   "steps": [
     { "tool": "config_audit", "payload": {} },
     { "tool": "readiness_check", "payload": {} },
@@ -161,6 +162,7 @@
 
 - `steps`: 必填，非空数组，最多 8 步。
 - `dry_run`: 可选，`true` 时只返回跳过 trace，不执行工具。
+- `workflow_mode`: 可选，默认 `direct`；传入 `plan_reflect_repair` 时返回 `planning / reflection / repair` 摘要，并启用一次受控 repair。
 - `step.tool`: 必填，只能是白名单工具。
 - `step.payload`: 可选对象，单步 payload 字符串化后最多 12000 字符。
 - `step.continue_on_error`: 可选，`true` 时单步失败后继续执行下一步。
@@ -172,6 +174,7 @@
 - 当前允许权限集合为 `admin_read`；注册工具权限不匹配时会拒绝执行。
 - 每个工具按注册的 `timeout_sec` 独立限时，超时会返回失败 trace；只有显式声明 `retry_count` 的注册工具会对 handler 超时或临时异常做有限重试。
 - 未知工具、payload schema 不通过、权限不匹配等请求侧错误不会重试。
+- `plan_reflect_repair` 最多自动 repair 一次，当前仅允许 `data_controls_dry_run` 的空 `scopes` 回落到默认治理范围；未知工具、权限失败、危险 payload、超时或非白名单路径只会返回 blocked reflection。
 
 当前白名单工具：
 
@@ -183,7 +186,7 @@
 - `backup_cleanup_dry_run`: 预览备份清理策略与可回收空间，只返回候选数量、保留数量、保护数量和备份总量，不返回备份路径、候选列表或删除目标。
 - `data_controls_dry_run`: 预览数据治理清理范围，只返回 scope、目标数量、现存目标数量、不支持目标数量和可回收空间，不返回本机路径、targets 或 deleted_targets。
 
-成功响应：
+默认成功响应：
 
 ```json
 {
@@ -205,6 +208,48 @@
 }
 ```
 
+`plan_reflect_repair` 成功修复时会额外返回：
+
+```json
+{
+  "planning": {
+    "workflow_mode": "plan_reflect_repair",
+    "step_count": 1,
+    "tools": ["data_controls_dry_run"],
+    "max_repair_attempts": 1,
+    "repair_policy": "schema_safe_defaults_only"
+  },
+  "repair": {
+    "attempted": true,
+    "count": 1,
+    "max_attempts": 1,
+    "items": [
+      {
+        "step_index": 1,
+        "tool": "data_controls_dry_run",
+        "action": "use_default_scopes",
+        "reason": "empty scopes fallback to default data control scopes",
+        "attempt": 1
+      }
+    ]
+  },
+  "reflection": {
+    "status": "resolved",
+    "items": [
+      {
+        "step_index": 1,
+        "tool": "data_controls_dry_run",
+        "status": "resolved",
+        "error_type": "schema_validation",
+        "message": "payload.scopes must contain at least 1 item(s)",
+        "repairable": true,
+        "repair_action": "use_default_scopes"
+      }
+    ]
+  }
+}
+```
+
 错误响应：
 
 - `400 bad_workflow`: steps 缺失、超长、tool 缺失、payload 过大或工作流执行失败。
@@ -216,6 +261,7 @@
 - 不支持任意 shell、文件写入、网络请求或动态插件执行。
 - 所有步骤都返回 `index/tool/status/duration_ms/attempts/retry_count`，注册工具还会返回 `permission/schema_valid/timeout_ms`；失败步骤会返回 `error_type`，例如 `unsupported_tool`、`schema_validation`、`permission_denied`、`timeout`、`invalid_tool_result` 或 `tool_error`，方便桌面端展示进度、失败位置、输入校验结果和恢复建议。
 - `prompt_preview`、`eval_latest`、`cost_summary`、`backup_cleanup_dry_run` 和 `data_controls_dry_run` 的 trace 输出只用于本机诊断摘要，不在响应中展开完整 Prompt、评测用例、聊天正文、成本复核队列、备份候选列表、清理 targets 或完整本机路径。
+- `plan_reflect_repair` 只属于本机治理 API，不接入微信消息快回复主链路。
 - 后续新增工具必须先进入白名单，并补充 API 测试与文档。
 
 ## 知识库治理 API

@@ -139,6 +139,21 @@ async def test_tool_workflow_runs_registered_builtin_tools():
 
 
 @pytest.mark.asyncio
+async def test_tool_workflow_direct_mode_does_not_return_planning_metadata():
+    service = ControlledToolWorkflowService(
+        config_loader=_snapshot,
+        readiness_loader=_readiness,
+    )
+
+    result = await service.run([{"tool": "readiness_check"}])
+
+    assert result["success"] is True
+    assert "planning" not in result
+    assert "reflection" not in result
+    assert "repair" not in result
+
+
+@pytest.mark.asyncio
 async def test_tool_workflow_runs_readonly_observability_tools():
     service = ControlledToolWorkflowService(
         config_loader=_snapshot,
@@ -323,6 +338,82 @@ async def test_tool_workflow_data_controls_dry_run_uses_default_scopes():
 
 
 @pytest.mark.asyncio
+async def test_tool_workflow_plan_reflect_repair_repairs_empty_data_control_scopes_once():
+    observed = []
+
+    async def _loader(payload):
+        observed.append(payload)
+        return await _data_controls_preview(payload)
+
+    service = ControlledToolWorkflowService(
+        config_loader=_snapshot,
+        readiness_loader=_readiness,
+        data_controls_loader=_loader,
+    )
+
+    result = await service.run(
+        [{"tool": "data_controls_dry_run", "payload": {"scopes": []}}],
+        workflow_mode="plan_reflect_repair",
+    )
+
+    assert result["success"] is True
+    assert result["planning"] == {
+        "workflow_mode": "plan_reflect_repair",
+        "step_count": 1,
+        "tools": ["data_controls_dry_run"],
+        "max_repair_attempts": 1,
+        "repair_policy": "schema_safe_defaults_only",
+    }
+    assert result["repair"]["attempted"] is True
+    assert result["repair"]["count"] == 1
+    assert result["repair"]["items"][0]["action"] == "use_default_scopes"
+    assert result["reflection"]["status"] == "resolved"
+    assert result["reflection"]["items"][0]["repairable"] is True
+    assert result["trace"][0]["status"] == "error"
+    assert result["trace"][0]["error_type"] == "schema_validation"
+    assert result["trace"][1]["status"] == "ok"
+    assert result["trace"][1]["repair_attempt"] == 1
+    assert result["trace"][1]["repair_of_index"] == 1
+    assert result["trace"][1]["output"]["scopes"] == ["memory", "usage", "export_rag"]
+    assert observed == [{"scopes": ["memory", "usage", "export_rag"]}]
+
+
+@pytest.mark.asyncio
+async def test_tool_workflow_plan_reflect_repair_never_repairs_more_than_once():
+    observed = []
+
+    async def _loader(payload):
+        observed.append(payload)
+        return await _data_controls_preview(payload)
+
+    service = ControlledToolWorkflowService(
+        config_loader=_snapshot,
+        readiness_loader=_readiness,
+        data_controls_loader=_loader,
+    )
+
+    result = await service.run(
+        [
+            {
+                "tool": "data_controls_dry_run",
+                "payload": {"scopes": []},
+                "continue_on_error": True,
+            },
+            {"tool": "data_controls_dry_run", "payload": {"scopes": []}},
+        ],
+        workflow_mode="plan_reflect_repair",
+    )
+
+    assert result["success"] is False
+    assert result["repair"]["count"] == 1
+    assert len([item for item in result["trace"] if item.get("repair_attempt")]) == 1
+    assert result["reflection"]["status"] == "blocked"
+    assert result["reflection"]["items"][0]["status"] == "resolved"
+    assert result["reflection"]["items"][1]["status"] == "blocked"
+    assert observed == [{"scopes": ["memory", "usage", "export_rag"]}]
+
+
+@pytest.mark.asyncio
 async def test_tool_workflow_rejects_maintenance_dry_run_unsafe_payloads():
     service = ControlledToolWorkflowService(
         config_loader=_snapshot,
@@ -352,6 +443,34 @@ async def test_tool_workflow_rejects_maintenance_dry_run_unsafe_payloads():
     assert unknown_scope_result["success"] is False
     assert unknown_scope_result["trace"][0]["error_type"] == "schema_validation"
     assert "payload.scopes[1] must be one of: memory, usage, export_rag" in unknown_scope_result["trace"][0]["error"]
+
+
+@pytest.mark.asyncio
+async def test_tool_workflow_plan_reflect_repair_does_not_repair_unsafe_payloads():
+    service = ControlledToolWorkflowService(
+        config_loader=_snapshot,
+        readiness_loader=_readiness,
+        backup_cleanup_loader=_backup_cleanup_preview,
+        data_controls_loader=_data_controls_preview,
+    )
+
+    result = await service.run(
+        [
+            {
+                "tool": "backup_cleanup_dry_run",
+                "payload": {"apply": True, "backup_id": "b1"},
+            }
+        ],
+        workflow_mode="plan_reflect_repair",
+    )
+
+    assert result["success"] is False
+    assert result["repair"]["attempted"] is False
+    assert result["repair"]["count"] == 0
+    assert result["reflection"]["status"] == "blocked"
+    assert result["reflection"]["items"][0]["repairable"] is False
+    assert result["trace"][0]["error_type"] == "schema_validation"
+    assert "payload.apply is not allowed" in result["trace"][0]["error"]
 
 
 @pytest.mark.asyncio
@@ -419,6 +538,24 @@ async def test_tool_workflow_rejects_unknown_tool_with_error_trace():
 
 
 @pytest.mark.asyncio
+async def test_tool_workflow_plan_reflect_repair_does_not_repair_unknown_tool():
+    service = ControlledToolWorkflowService(
+        config_loader=_snapshot,
+        readiness_loader=_readiness,
+    )
+
+    result = await service.run(
+        [{"tool": "shell_exec", "payload": {"cmd": "dir"}}],
+        workflow_mode="plan_reflect_repair",
+    )
+
+    assert result["success"] is False
+    assert result["repair"]["attempted"] is False
+    assert result["reflection"]["items"][0]["repairable"] is False
+    assert result["trace"][0]["error_type"] == "unsupported_tool"
+
+
+@pytest.mark.asyncio
 async def test_tool_workflow_enforces_registered_permission():
     async def _handler(payload):
         return {"ok": True}
@@ -447,6 +584,39 @@ async def test_tool_workflow_enforces_registered_permission():
     assert result["trace"][0]["attempts"] == 0
     assert result["trace"][0]["error_type"] == "permission_denied"
     assert "permission denied" in result["trace"][0]["error"]
+
+
+@pytest.mark.asyncio
+async def test_tool_workflow_plan_reflect_repair_does_not_repair_permission_denied():
+    async def _handler(payload):
+        return {"ok": True}
+
+    registry = ToolRegistry()
+    registry.register(
+        ToolDefinition(
+            name="dangerous_tool",
+            payload_schema={"type": "object", "properties": {}, "additionalProperties": False},
+            permission="admin_write",
+            timeout_sec=1.0,
+            handler=_handler,
+        )
+    )
+    service = ControlledToolWorkflowService(
+        config_loader=_snapshot,
+        readiness_loader=_readiness,
+        registry=registry,
+        allowed_permissions={"admin_read"},
+    )
+
+    result = await service.run(
+        [{"tool": "dangerous_tool"}],
+        workflow_mode="plan_reflect_repair",
+    )
+
+    assert result["success"] is False
+    assert result["repair"]["attempted"] is False
+    assert result["reflection"]["items"][0]["repairable"] is False
+    assert result["trace"][0]["error_type"] == "permission_denied"
 
 
 @pytest.mark.asyncio

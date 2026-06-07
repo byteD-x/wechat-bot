@@ -64,7 +64,7 @@
 - `Readiness & Recovery`: `run.py check`、`GET /api/readiness` 与桌面端首次运行引导共用同一套环境检查逻辑；仪表盘会常驻显示“运行准备度”，并支持导出自动脱敏的诊断支持包。
 - `Hot Reload`: 配置热重载优先使用 `watchdog` 事件监听，缺失依赖时自动回退轮询，并带防抖。
 - `Config Snapshot`: 后端已引入中心化配置快照服务，`/api/config/audit` 可返回当前生效配置、已知未消费字段和配置变更影响摘要。
-- `Controlled Agent Tools`: `POST /api/v1/agents/tool-workflow` 只执行白名单工具 `config_audit`、`readiness_check`、`prompt_preview`、`eval_latest`、`cost_summary`、`backup_cleanup_dry_run`、`data_controls_dry_run`，每步返回 trace；维护 dry-run 工具只返回聚合摘要，不暴露备份候选列表、清理 targets 或完整本机路径，明确不支持任意命令或动态插件执行。
+- `Controlled Agent Tools`: `POST /api/v1/agents/tool-workflow` 只执行白名单工具 `config_audit`、`readiness_check`、`prompt_preview`、`eval_latest`、`cost_summary`、`backup_cleanup_dry_run`、`data_controls_dry_run`，每步返回 trace；可通过 `workflow_mode="plan_reflect_repair"` 启用受控 Planner / Reflect / Repair，最多自动 repair 一次且仅限 schema-safe 默认值修复；维护 dry-run 工具只返回聚合摘要，不暴露备份候选列表、清理 targets 或完整本机路径，明确不支持任意命令、文件写入、网络请求或动态插件执行，也不接入微信消息快回复主链路。
 - `Model Tool Calling`: `agent.model_tool_calls_enabled` 默认关闭；开启后仅在 OpenAI-compatible 对话接口中向模型暴露 `readiness_check`、`eval_latest`、`cost_summary`、`backup_cleanup_dry_run`、`data_controls_dry_run` 五个只读/预览工具，并复用 `ControlledToolWorkflowService` 的 schema、权限、超时和 trace 边界，不向模型暴露 `prompt_preview` 或 `config_audit`。
 
 > 知识库 UI 说明：设置页已经提供粘贴式治理入口，支持手动粘贴纯文本或 Markdown 后刷新状态、预览分块，并且只有同一份内容完成 dry-run 后才允许写入；文件上传、目录扫描、rebuild 和 delete 仍未在桌面设置页开放。
@@ -296,7 +296,7 @@ This phase turns the project from a demo-style assistant into a safer personal p
   - CI now runs scoped `ruff`, targeted Python regressions, Node tests, plus offline eval smoke and RAG gates.
 - `Prompt Governance + Controlled Tools`
   - Prompt rollback appends a new audited active revision instead of overwriting history.
-  - Agent Tool Workflow is deliberately limited to whitelisted local tools and bounded payloads; see [API 契约与治理接口](docs/api.md) for request/response details.
+  - Agent Tool Workflow is deliberately limited to whitelisted local tools and bounded payloads; optional `workflow_mode="plan_reflect_repair"` adds one bounded schema-safe repair pass without changing the WeChat quick-reply path. See [API 契约与治理接口](docs/api.md) for request/response details.
   - Model Tool Calling remains opt-in and bounded to the model-visible safe subset; it records aggregate `model_tool_call_stats` without storing raw prompts, chat text, token strings, or full local paths.
   - TraceLogger-lite keeps only a small in-memory ring buffer under `/api/status.trace_logger`; entries use hash refs and aggregate flags instead of chat text, prompts, token strings, tool outputs, or full local paths.
 

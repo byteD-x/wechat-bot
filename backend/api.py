@@ -38,7 +38,7 @@ from backend.core.cost_analytics import CostAnalyticsService
 from backend.core.data_controls import DataControlService
 from backend.core.knowledge_base import (
     KNOWLEDGE_SOURCE,
-    MAX_KNOWLEDGE_CONTENT_CHARS,
+    MAX_KNOWLEDGE_CONTENT_CHARS as MAX_KNOWLEDGE_CONTENT_CHARS,
     KnowledgeBaseService,
     build_knowledge_dry_run_payload,
     parse_knowledge_document_payload,
@@ -2714,6 +2714,7 @@ async def run_agent_tool_workflow():
             return jsonify({"success": False, "message": "request body must be a JSON object"}), 400
         steps = data.get("steps")
         dry_run = bool(data.get("dry_run", False))
+        workflow_mode = str(data.get("workflow_mode") or "direct").strip() or "direct"
 
         async def _load_readiness_report() -> dict[str, Any]:
             return await asyncio.to_thread(readiness_service.get_report, force_refresh=False)
@@ -2770,7 +2771,7 @@ async def run_agent_tool_workflow():
             backup_cleanup_loader=_load_backup_cleanup_preview,
             data_controls_loader=_load_data_controls_preview,
         )
-        result = await service.run(steps, dry_run=dry_run)
+        result = await service.run(steps, dry_run=dry_run, workflow_mode=workflow_mode)
         if result.get("success"):
             return jsonify(result), 200
         first_error = next(

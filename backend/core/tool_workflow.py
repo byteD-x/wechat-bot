@@ -18,6 +18,10 @@ DEFAULT_TOOL_TIMEOUT_SEC = 5.0
 DEFAULT_COST_SUMMARY_TIMEOUT_SEC = 10.0
 DEFAULT_BACKUP_KEEP_QUICK = 5
 DEFAULT_BACKUP_KEEP_FULL = 3
+WORKFLOW_MODE_DIRECT = "direct"
+WORKFLOW_MODE_PLAN_REFLECT_REPAIR = "plan_reflect_repair"
+MAX_REPAIR_ATTEMPTS = 1
+DATA_CONTROL_SCOPES = ("memory", "usage", "export_rag")
 MODEL_VISIBLE_TOOL_NAMES = frozenset(
     {
         "readiness_check",
@@ -376,7 +380,7 @@ class ControlledToolWorkflowService:
                             "minItems": 1,
                             "items": {
                                 "type": "string",
-                                "enum": ["memory", "usage", "export_rag"],
+                                "enum": list(DATA_CONTROL_SCOPES),
                             },
                         },
                     },
@@ -389,72 +393,216 @@ class ControlledToolWorkflowService:
         )
         return registry
 
-    async def run(self, steps: list[dict[str, Any]], *, dry_run: bool = False) -> dict[str, Any]:
+    async def run(
+        self,
+        steps: list[dict[str, Any]],
+        *,
+        dry_run: bool = False,
+        workflow_mode: str = WORKFLOW_MODE_DIRECT,
+    ) -> dict[str, Any]:
         if not isinstance(steps, list) or not steps:
             raise ToolWorkflowError("steps is required")
         if len(steps) > MAX_WORKFLOW_STEPS:
             raise ToolWorkflowError(f"steps cannot exceed {MAX_WORKFLOW_STEPS}")
 
+        mode = str(workflow_mode or WORKFLOW_MODE_DIRECT).strip() or WORKFLOW_MODE_DIRECT
+        if mode not in {WORKFLOW_MODE_DIRECT, WORKFLOW_MODE_PLAN_REFLECT_REPAIR}:
+            raise ToolWorkflowError(f"unsupported workflow_mode: {mode}")
+        if mode == WORKFLOW_MODE_PLAN_REFLECT_REPAIR:
+            return await self._run_plan_reflect_repair(steps, dry_run=dry_run, mode=mode)
+
+        return await self._run_direct(steps, dry_run=dry_run)
+
+    async def _run_direct(self, steps: list[dict[str, Any]], *, dry_run: bool) -> dict[str, Any]:
         trace: list[dict[str, Any]] = []
         success = True
         for index, raw_step in enumerate(steps, start=1):
-            step = raw_step if isinstance(raw_step, dict) else {}
-            tool = str(step.get("tool") or "").strip()
-            payload = step.get("payload") if isinstance(step.get("payload"), dict) else {}
-            if not tool:
-                raise ToolWorkflowError("step.tool is required")
-            if len(str(payload)) > MAX_STEP_PAYLOAD_CHARS:
-                raise ToolWorkflowError("step payload is too large")
-
-            started = time.perf_counter()
-            item = {
-                "index": index,
-                "tool": tool,
-                "status": "ok",
-                "duration_ms": 0.0,
-                "attempts": 0,
-                "retry_count": 0,
-            }
-            tool_call_id = str(step.get("tool_call_id") or "").strip()
-            if tool_call_id:
-                item["tool_call_id"] = tool_call_id
-            try:
-                definition = self._registry.get(tool)
-                item["permission"] = definition.permission
-                item["timeout_ms"] = round(definition.timeout_sec * 1000.0, 3)
-                item["retry_count"] = self._normalize_retry_count(definition.retry_count)
-                self._ensure_permission(definition)
-                schema_errors = validate_payload(definition.payload_schema, payload)
-                item["schema_valid"] = not schema_errors
-                if schema_errors:
-                    raise ToolSchemaValidationError("; ".join(schema_errors))
-                if dry_run:
-                    item["status"] = "skipped"
-                    item["output"] = {"dry_run": True}
-                else:
-                    item["output"] = await self._execute_tool_with_retries(definition, payload, item)
-                    self._validate_tool_result(item["output"])
-            except asyncio.TimeoutError:
+            step = self._normalize_step(raw_step)
+            item = await self._execute_step(index, step, dry_run=dry_run)
+            if item["status"] == "error":
                 success = False
-                item["status"] = "error"
-                item["error_type"] = "timeout"
-                item["error"] = f"tool timed out after {item.get('timeout_ms', 0)} ms"
-            except Exception as exc:
-                success = False
-                item["status"] = "error"
-                item["error_type"] = self._classify_error(exc)
-                item["error"] = str(exc)
-                if isinstance(exc, ToolSchemaValidationError):
-                    item["schema_valid"] = False
-                else:
-                    item.setdefault("schema_valid", item.get("schema_valid", True))
-            finally:
-                item["duration_ms"] = round((time.perf_counter() - started) * 1000.0, 3)
-                trace.append(item)
+            trace.append(item)
             if item["status"] == "error" and step.get("continue_on_error") is not True:
                 break
 
         return {"success": success, "trace": trace}
+
+    async def _run_plan_reflect_repair(
+        self,
+        steps: list[dict[str, Any]],
+        *,
+        dry_run: bool,
+        mode: str,
+    ) -> dict[str, Any]:
+        trace: list[dict[str, Any]] = []
+        reflection_items: list[dict[str, Any]] = []
+        repair_items: list[dict[str, Any]] = []
+        unresolved_error = False
+        repair_attempts = 0
+
+        for index, raw_step in enumerate(steps, start=1):
+            step = self._normalize_step(raw_step)
+            item = await self._execute_step(index, step, dry_run=dry_run)
+            trace.append(item)
+            if item["status"] != "error":
+                continue
+
+            repair_step, repair_meta = self._build_repair_step(step, item)
+            can_repair = repair_step is not None and repair_attempts < MAX_REPAIR_ATTEMPTS
+            reflection = self._build_reflection_item(item, repairable=can_repair)
+            if can_repair and repair_meta is not None:
+                repair_attempts += 1
+                repair_meta["attempt"] = repair_attempts
+                repair_items.append(repair_meta)
+                reflection["repair_action"] = repair_meta["action"]
+                reflection["status"] = "repairing"
+                repair_item = await self._execute_step(index, repair_step, dry_run=dry_run)
+                repair_item["repair_attempt"] = repair_attempts
+                repair_item["repair_of_index"] = index
+                trace.append(repair_item)
+                if repair_item["status"] == "error":
+                    reflection["status"] = "blocked"
+                    unresolved_error = True
+                    if step.get("continue_on_error") is not True:
+                        reflection_items.append(reflection)
+                        break
+                else:
+                    reflection["status"] = "resolved"
+                reflection_items.append(reflection)
+                continue
+
+            reflection_items.append(reflection)
+            unresolved_error = True
+            if step.get("continue_on_error") is not True:
+                break
+
+        result: dict[str, Any] = {
+            "success": not unresolved_error,
+            "trace": trace,
+            "planning": {
+                "workflow_mode": mode,
+                "step_count": len(steps),
+                "tools": [
+                    str(step.get("tool") or "").strip()
+                    for step in (raw if isinstance(raw, dict) else {} for raw in steps)
+                ],
+                "max_repair_attempts": MAX_REPAIR_ATTEMPTS,
+                "repair_policy": "schema_safe_defaults_only",
+            },
+            "repair": {
+                "attempted": bool(repair_items),
+                "count": len(repair_items),
+                "max_attempts": MAX_REPAIR_ATTEMPTS,
+                "items": repair_items,
+            },
+        }
+        if reflection_items:
+            result["reflection"] = {
+                "status": "resolved" if result["success"] else "blocked",
+                "items": reflection_items,
+            }
+        return result
+
+    @staticmethod
+    def _normalize_step(raw_step: Any) -> dict[str, Any]:
+        step = raw_step if isinstance(raw_step, dict) else {}
+        tool = str(step.get("tool") or "").strip()
+        payload = step.get("payload") if isinstance(step.get("payload"), dict) else {}
+        if not tool:
+            raise ToolWorkflowError("step.tool is required")
+        if len(str(payload)) > MAX_STEP_PAYLOAD_CHARS:
+            raise ToolWorkflowError("step payload is too large")
+        return step
+
+    async def _execute_step(
+        self,
+        index: int,
+        step: dict[str, Any],
+        *,
+        dry_run: bool,
+    ) -> dict[str, Any]:
+        tool = str(step.get("tool") or "").strip()
+        payload = step.get("payload") if isinstance(step.get("payload"), dict) else {}
+        started = time.perf_counter()
+        item = {
+            "index": index,
+            "tool": tool,
+            "status": "ok",
+            "duration_ms": 0.0,
+            "attempts": 0,
+            "retry_count": 0,
+        }
+        tool_call_id = str(step.get("tool_call_id") or "").strip()
+        if tool_call_id:
+            item["tool_call_id"] = tool_call_id
+        try:
+            definition = self._registry.get(tool)
+            item["permission"] = definition.permission
+            item["timeout_ms"] = round(definition.timeout_sec * 1000.0, 3)
+            item["retry_count"] = self._normalize_retry_count(definition.retry_count)
+            self._ensure_permission(definition)
+            schema_errors = validate_payload(definition.payload_schema, payload)
+            item["schema_valid"] = not schema_errors
+            if schema_errors:
+                raise ToolSchemaValidationError("; ".join(schema_errors))
+            if dry_run:
+                item["status"] = "skipped"
+                item["output"] = {"dry_run": True}
+            else:
+                item["output"] = await self._execute_tool_with_retries(definition, payload, item)
+                self._validate_tool_result(item["output"])
+        except asyncio.TimeoutError:
+            item["status"] = "error"
+            item["error_type"] = "timeout"
+            item["error"] = f"tool timed out after {item.get('timeout_ms', 0)} ms"
+        except Exception as exc:
+            item["status"] = "error"
+            item["error_type"] = self._classify_error(exc)
+            item["error"] = str(exc)
+            if isinstance(exc, ToolSchemaValidationError):
+                item["schema_valid"] = False
+            else:
+                item.setdefault("schema_valid", item.get("schema_valid", True))
+        finally:
+            item["duration_ms"] = round((time.perf_counter() - started) * 1000.0, 3)
+        return item
+
+    @staticmethod
+    def _build_repair_step(
+        step: dict[str, Any],
+        trace_item: dict[str, Any],
+    ) -> tuple[Optional[dict[str, Any]], Optional[dict[str, Any]]]:
+        payload = step.get("payload") if isinstance(step.get("payload"), dict) else {}
+        if (
+            trace_item.get("tool") != "data_controls_dry_run"
+            or trace_item.get("error_type") != "schema_validation"
+            or payload.get("scopes") != []
+            or set(payload) != {"scopes"}
+        ):
+            return None, None
+        repaired_step = dict(step)
+        repaired_step["payload"] = {}
+        return repaired_step, {
+            "step_index": trace_item.get("index"),
+            "tool": "data_controls_dry_run",
+            "action": "use_default_scopes",
+            "reason": "empty scopes fallback to default data control scopes",
+        }
+
+    @staticmethod
+    def _build_reflection_item(
+        trace_item: dict[str, Any],
+        *,
+        repairable: bool,
+    ) -> dict[str, Any]:
+        return {
+            "step_index": trace_item.get("index"),
+            "tool": trace_item.get("tool"),
+            "status": "repairable" if repairable else "blocked",
+            "error_type": trace_item.get("error_type"),
+            "message": trace_item.get("error"),
+            "repairable": repairable,
+        }
 
     def model_tool_schemas(self) -> list[dict[str, Any]]:
         return build_model_tool_schemas(self._registry)
@@ -635,13 +783,13 @@ class ControlledToolWorkflowService:
     async def _tool_data_controls_dry_run(self, payload: dict[str, Any]) -> dict[str, Any]:
         scopes = payload.get("scopes")
         if scopes is None:
-            scopes = ["memory", "usage", "export_rag"]
+            scopes = list(DATA_CONTROL_SCOPES)
         source = await self._data_controls_loader({"scopes": list(scopes)})
         source_scopes = source.get("scopes") if isinstance(source, dict) and isinstance(source.get("scopes"), list) else scopes
         safe_scopes = [
             str(item)
             for item in source_scopes
-            if str(item) in {"memory", "usage", "export_rag"}
+            if str(item) in DATA_CONTROL_SCOPES
         ]
         return {
             "success": bool(source.get("success", True)) if isinstance(source, dict) else True,

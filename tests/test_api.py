@@ -2186,6 +2186,61 @@ async def test_api_tool_workflow_runs_maintenance_dry_runs_without_raw_leaks(cli
 
 
 @pytest.mark.asyncio
+async def test_api_tool_workflow_plan_reflect_repair_repairs_empty_data_control_scopes(client):
+    snapshot = _build_snapshot({
+        "api": {"presets": []},
+        "bot": {},
+        "logging": {},
+        "agent": {},
+        "services": {},
+    })
+    data_payload = {
+        "success": True,
+        "dry_run": True,
+        "scopes": ["memory", "usage", "export_rag"],
+        "target_count": 3,
+        "existing_target_count": 2,
+        "unsupported_target_count": 1,
+        "reclaimable_bytes": 4096,
+        "targets": [{"path": "C:/secret/chat_memory.db", "relative_path": "chat_memory.db"}],
+    }
+
+    with (
+        patch.object(api_module.config_service, "get_snapshot", return_value=snapshot),
+        patch.object(api_module.data_control_service, "update_config") as data_update_mock,
+        patch.object(api_module.data_control_service, "clear", return_value=data_payload) as clear_mock,
+    ):
+        response = await client.post(
+            "/api/v1/agents/tool-workflow",
+            json={
+                "workflow_mode": "plan_reflect_repair",
+                "steps": [
+                    {
+                        "tool": "data_controls_dry_run",
+                        "payload": {"scopes": []},
+                    }
+                ],
+            },
+        )
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["success"] is True
+    assert data["planning"]["workflow_mode"] == "plan_reflect_repair"
+    assert data["planning"]["tools"] == ["data_controls_dry_run"]
+    assert data["repair"]["count"] == 1
+    assert data["repair"]["items"][0]["action"] == "use_default_scopes"
+    assert data["reflection"]["status"] == "resolved"
+    assert data["trace"][0]["status"] == "error"
+    assert data["trace"][1]["status"] == "ok"
+    assert data["trace"][1]["repair_attempt"] == 1
+    assert data["trace"][1]["output"]["scopes"] == ["memory", "usage", "export_rag"]
+    data_update_mock.assert_called_once_with(snapshot.bot)
+    assert clear_mock.call_args.args == (["memory", "usage", "export_rag"],)
+    assert clear_mock.call_args.kwargs == {"apply": False}
+
+
+@pytest.mark.asyncio
 async def test_api_tool_workflow_rejects_maintenance_dry_run_unsafe_payloads(client):
     backup_response = await client.post(
         "/api/v1/agents/tool-workflow",
@@ -2224,6 +2279,55 @@ async def test_api_tool_workflow_rejects_maintenance_dry_run_unsafe_payloads(cli
     assert data_controls_data["success"] is False
     assert data_controls_data["trace"][0]["error_type"] == "schema_validation"
     assert "payload.scopes[1] must be one of: memory, usage, export_rag" in data_controls_data["trace"][0]["error"]
+
+
+@pytest.mark.asyncio
+async def test_api_tool_workflow_direct_empty_scopes_keeps_legacy_400(client):
+    response = await client.post(
+        "/api/v1/agents/tool-workflow",
+        json={
+            "steps": [
+                {
+                    "tool": "data_controls_dry_run",
+                    "payload": {"scopes": []},
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 400
+    data = await response.get_json()
+    assert data["success"] is False
+    assert data["code"] == "bad_workflow"
+    assert data["trace"][0]["error_type"] == "schema_validation"
+    assert "planning" not in data
+    assert "reflection" not in data
+    assert "repair" not in data
+
+
+@pytest.mark.asyncio
+async def test_api_tool_workflow_plan_reflect_repair_does_not_repair_unsafe_payloads(client):
+    response = await client.post(
+        "/api/v1/agents/tool-workflow",
+        json={
+            "workflow_mode": "plan_reflect_repair",
+            "steps": [
+                {
+                    "tool": "backup_cleanup_dry_run",
+                    "payload": {"apply": True, "backup_id": "b1"},
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 400
+    data = await response.get_json()
+    assert data["success"] is False
+    assert data["code"] == "bad_workflow"
+    assert data["repair"]["attempted"] is False
+    assert data["reflection"]["status"] == "blocked"
+    assert data["reflection"]["items"][0]["repairable"] is False
+    assert data["trace"][0]["error_type"] == "schema_validation"
 
 
 @pytest.mark.asyncio

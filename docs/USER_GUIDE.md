@@ -631,6 +631,8 @@ python run.py eval --dataset tests/fixtures/evals/smoke_cases.json --preset smok
 - 受控 Agent Tool Workflow API：`POST /api/v1/agents/tool-workflow`
   - 当前最多 `8` 步，单步 payload 字符串化后最多 `12000` 字符。
   - 当前白名单只包含 `config_audit`、`readiness_check`、`prompt_preview`、`eval_latest`、`cost_summary`、`backup_cleanup_dry_run`、`data_controls_dry_run`。
+  - 请求体可选 `workflow_mode: "plan_reflect_repair"` 启用受控 Planner / Reflect / Repair；默认 `direct` 保持旧行为，不返回规划、反思或修复元数据。
+  - `plan_reflect_repair` 最多自动 repair 一次，当前仅允许 `data_controls_dry_run` 的空 `scopes` 回落到默认治理范围；未知工具、权限失败、危险 payload、超时或非白名单路径只会返回 blocked reflection，不会被修复成可执行动作。
   - `eval_latest`、`cost_summary`、`backup_cleanup_dry_run` 与 `data_controls_dry_run` 只读取本地评测、成本统计或维护 dry-run 结果，trace 仅返回摘要、计数和筛选条件，不展开完整评测用例、聊天正文、成本复核队列、备份候选列表、清理 targets 或完整本机路径。
   - 未知工具会返回失败 trace 和 `bad_workflow`，不会降级为任意命令、任意文件写入、任意网络请求或动态插件执行。
 - 模型侧 Tool Calling：
@@ -643,6 +645,7 @@ python run.py eval --dataset tests/fixtures/evals/smoke_cases.json --preset smok
   - 建议先执行 `dry-run`，确认步骤顺序后再执行真实工具流。
   - 执行结果会在面板内显示逐步 trace；失败步骤会突出展示，并给出恢复建议。
   - `Prompt 预览`只发送示例消息并展示摘要，不在 trace 面板暴露完整 Prompt；最新评测、成本摘要、备份清理预览和数据治理预览同样只展示聚合信息。
+  - 该治理路径不改变 `reply_deadline_sec` 快回复、延迟回复或微信发送链路。
 - Electron 主进程只允许转发受控路径：Prompt 列表走固定 endpoint，Prompt diff 与回滚必须匹配数字 revision，Tool Workflow 只走固定 endpoint。
 - 完整请求体、响应字段和错误码见 [API 契约与治理接口](api.md)。
 
