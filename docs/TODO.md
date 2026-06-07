@@ -23,6 +23,7 @@
 - 知识库治理 API：`GET /api/knowledge_base/status` 与 `POST /api/knowledge_base/dry-run|ingest|rebuild|delete` 已落地，首版只支持请求体 text/Markdown，不读取任意本机文件，预览不返回正文或完整本机路径。
 - 知识库治理 UI 最小入口：设置页“数据与恢复 / 知识库治理”已支持粘贴纯文本或 Markdown、刷新状态、预览分块，并要求同一份内容 dry-run 后才允许写入；暂不开放文件上传、目录扫描、rebuild 或 delete。
 - 知识库治理 CLI 显式文件入口：`python run.py knowledge-base import-files` 已支持 `.txt/.md` 显式文件列表，默认只 dry-run，拒绝目录和 glob，`--apply` 才调用 loopback 本机 API 写入。
+- Docker/部署切片：`Dockerfile`、`.dockerignore` 与 `requirements-container.txt` 已落地，只覆盖 Web API、`/api/readiness` 和离线 `run.py eval`；容器默认 `WECHAT_BOT_DEPLOYMENT_TARGET=web-api`，readiness 会跳过桌面微信传输检查，不承诺 wcferry 微信桌面能力容器化。
 - 文档入口：`README.md`、`docs/USER_GUIDE.md`、`docs/SYSTEM_CHAINS.md`、`docs/HIGHLIGHTS.md`、`docs/api.md` 和 `docs/interview-playbook.md` 已补充。
 
 ## 下一阶段 P1
@@ -50,5 +51,6 @@
 
 - 当前不承诺微信 `4.x` 支持。
 - 当前不承诺 Linux/macOS 微信自动化。
+- 当前不承诺 Docker 容器内运行微信桌面自动化、WCFerry 注入或微信消息收发。
 - 当前不开放任意 Agent 工具执行。
 - 当前不把 Web API 设计为公网多租户服务。

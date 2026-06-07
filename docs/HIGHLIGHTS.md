@@ -288,12 +288,15 @@ Provider 分层策略也更清晰：
 新增能力：
 
 - `run.py check`、`run.py check --json`、`GET /api/readiness` 与桌面端首次运行引导共用同一套 readiness 检查逻辑
+- `Dockerfile` 与 `requirements-container.txt` 已覆盖 Web API、`/api/readiness` 与离线 `run.py eval` 的容器化切片；镜像默认使用 `WECHAT_BOT_DEPLOYMENT_TARGET=web-api`，readiness 会把桌面微信传输项标为 `skipped`
 - Dashboard 常驻“运行准备度”卡片，持续展示当前还差什么才能启动
 - 首次运行引导只聚焦非技术用户最容易理解的阻塞项：管理员权限、微信是否已启动、版本兼容、可用模型与认证
 - 每个阻塞项都直接绑定动作：`打开微信`、`前往设置`、`重新检查`
 - Electron 主进程支持导出自动脱敏的诊断支持包，统一打包 `/api/status`、`/api/readiness`、`/api/config/audit`、更新器状态和最近日志摘要，并避免写入原始 API Key、token、OAuth/session、聊天正文、联系人真实标识或完整本机路径
 
 这让项目从“功能能跑”进一步变成“知道为什么跑不起来，并能指导用户自救”。
+
+容器化切片的边界是后端治理和评测能力，不包含 Linux 容器内的微信桌面自动化、WCFerry 注入或微信消息收发。
 
 ## 补充亮点：Prompt 治理与受控工具工作流
 

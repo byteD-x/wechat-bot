@@ -84,6 +84,9 @@
      - `before_request` 中限制仅本机访问。
      - 当 `WECHAT_BOT_API_TOKEN` 存在时，普通 API 校验 `X-Api-Token`/`Authorization`；SSE 校验 `ticket`.
      - 输出 JSON 或 SSE。
+   - 部署边界：
+     - `python run.py web --host 0.0.0.0` 这类非回环绑定必须显式设置 `WECHAT_BOT_API_TOKEN`，否则启动会被拒绝。
+     - `Dockerfile` 默认只启动 Web API，并设置 `WECHAT_BOT_DEPLOYMENT_TARGET=web-api`；该目标只覆盖 Web API、readiness 和离线 eval，不覆盖桌面启动链、WCFerry 注入链或微信消息收发链。
 
 2. `/api/status`
    - 功能：返回结构化运行状态。
@@ -580,18 +583,25 @@
    - 功能：导出 Prometheus 风格指标。
    - 实现：输出运行、回复量、CPU、内存、队列、health check 等指标。
 
-5. `event_generator` / `broadcast_event`
+5. `/api/readiness`
+   - 功能：输出启动前准备度和阻塞项。
+   - 实现：
+     - 默认 `deployment_target=desktop`，检查 Python、依赖、管理员权限、微信进程、微信安装、WCFerry 兼容性、传输配置和 API 配置。
+     - 当环境变量 `WECHAT_BOT_DEPLOYMENT_TARGET=web-api` 时，依赖检查不要求 `wcferry`，并把管理员权限、微信进程、微信安装和 WCFerry 兼容性标为 `skipped`。
+     - `web-api` 目标只表示 Web API/readiness/eval 部署边界，不表示微信传输层可用。
+
+6. `event_generator` / `broadcast_event`
    - 功能：把状态和消息广播到前端。
    - 实现：SSE 推送 `status_change`、`message` 等事件。
 
-6. `src/main/diagnostics-snapshot.js`
+7. `src/main/diagnostics-snapshot.js`
    - 功能：导出本机诊断支持包。
    - 实现：
      - 由 Electron 主进程聚合 `/api/status`、`/api/readiness`、`/api/config/audit`、更新器状态和最近日志摘要。
      - 生成本地 JSON 文件，不自动上传。
      - 导出前会脱敏 API Key、token、authorization、OAuth/session、聊天正文、联系人真实标识和完整本机路径。
 
-7. `src/main/ipc.js`
+8. `src/main/ipc.js`
    - 功能：收口桌面端可调用的后端请求和诊断导出入口。
    - 实现：
      - 只允许主渲染入口页调用受控 IPC。

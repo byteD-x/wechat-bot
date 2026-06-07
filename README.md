@@ -127,6 +127,12 @@ flowchart TD
 - 不支持 Linux / macOS 直接运行微信自动化
 - 运行期间需要保持微信客户端已登录且可被自动化访问
 
+容器化边界：
+
+- `Dockerfile` 只覆盖 Web API、`/api/readiness` 与离线 `run.py eval`；镜像默认设置 `WECHAT_BOT_DEPLOYMENT_TARGET=web-api`，readiness 会跳过管理员权限、微信进程、微信安装和 WCFerry 兼容性这些桌面传输检查。
+- 容器镜像使用 `requirements-container.txt`，不安装 `wcferry`，也不承诺在 Linux 容器内连接微信、注入 WCFerry、收发微信消息或运行桌面自动化。
+- 绑定 `0.0.0.0` 时必须显式设置 `WECHAT_BOT_API_TOKEN`；`run.py web` 会拒绝无 token 的非回环地址启动。
+
 ## Quick Start
 
 ```bash
@@ -203,6 +209,15 @@ python run.py web
 ```
 
 适合单独运行后端控制接口或与外部工具集成。
+
+容器化 Web API 示例：
+
+```bash
+docker build -t wechat-ai-assistant-web .
+docker run --rm -p 5000:5000 -e WECHAT_BOT_API_TOKEN=change-me wechat-ai-assistant-web
+```
+
+该镜像默认只用于 Web API、readiness 与离线 eval。`/api/readiness` 返回的 `deployment_target` 会是 `web-api`；微信桌面传输相关检查会显示为 `skipped`，这不是 wcferry 可在容器中运行的承诺。
 
 ## Configuration
 
@@ -457,6 +472,7 @@ npm run build:release
 - `API Key`
 - `WECHAT_BOT_API_TOKEN`（如需手动调试 Web API，请自行设置并妥善保管；`/api/*` 请求可使用 `X-Api-Token` 或 `Authorization: Bearer <token>`；不要写入日志、不要截图外泄）
 - `WECHAT_BOT_SSE_TICKET`（SSE 专用票据；`/api/events` 需携带 `?ticket=<ticket>`，可通过 `/api/events_ticket` 获取）
+- `WECHAT_BOT_DEPLOYMENT_TARGET`（仅支持默认 `desktop` 与容器镜像默认的 `web-api`；`web-api` 只调整 readiness 的桌面检查边界，不开启微信自动化）
 - `python run.py backup restore --apply` 默认会在检测到本地运行服务仍在运行时硬阻断；仅在明确知晓风险时使用 `--allow-running-service`
 - `/api/model_auth/*` 与 `/api/auth/providers*` 返回中的本地路径字段会自动脱敏（仅保留文件名，且不返回 `watch_paths`）
 - `/api/ollama/models` 仅允许本地回环地址（`localhost/127.0.0.1/::1`）作为 `base_url`，避免被误用为外部探测入口

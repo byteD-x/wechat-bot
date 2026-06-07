@@ -46,6 +46,12 @@
 - 不支持 Linux / macOS 直接运行微信自动化
 - 运行时需要保持微信客户端处于可访问状态
 
+容器化切片只覆盖后端治理能力：
+
+- `Dockerfile` 面向 Web API、`/api/readiness` 和离线 `run.py eval`，不覆盖微信桌面传输。
+- 容器默认设置 `WECHAT_BOT_DEPLOYMENT_TARGET=web-api`，readiness 会跳过管理员权限、微信进程、微信安装和 WCFerry 兼容性检查，并通过 `deployment_target` 标明当前目标。
+- 容器不安装 `wcferry`，也不承诺在 Linux 容器里连接微信、注入 WCFerry、收发微信消息或运行桌面自动化。
+
 ## 2. 安装依赖
 
 ### 2.1 克隆仓库
@@ -82,6 +88,8 @@ pip install sentence-transformers
 
 - 该依赖不是默认必需项。
 - 只有配置了本地模型目录时才会启用，不会自动联网下载模型。
+
+容器镜像使用 `requirements-container.txt`。它保留 Web API 运行库和离线 eval 所需依赖，但排除 `wcferry`、打包工具和测试/质量工具；需要微信桌面自动化时仍应使用 Windows 桌面环境和完整 `requirements.txt`。
 
 ### 2.3 安装桌面端依赖
 
@@ -221,6 +229,15 @@ python run.py web
 - 日志接口新增边界：`/api/logs` 单次读取行数存在上限，且日志文件路径必须位于 `data` 目录。
 - `python run.py web` 在本机回环地址（默认 `127.0.0.1`）下若未显式设置 token，会自动生成并注入环境变量，但不会打印到控制台；如需绑定非回环地址（如 `0.0.0.0`），必须先显式设置 `WECHAT_BOT_API_TOKEN`。
 
+容器化 Web API 示例：
+
+```powershell
+docker build -t wechat-ai-assistant-web .
+docker run --rm -p 5000:5000 -e WECHAT_BOT_API_TOKEN=your_token wechat-ai-assistant-web
+```
+
+容器镜像默认执行 `python run.py web --host 0.0.0.0 --port 5000`，并设置 `WECHAT_BOT_DEPLOYMENT_TARGET=web-api`。该目标只用于 Web API、readiness 和离线 eval；微信桌面传输相关 readiness 检查会显示为 `skipped`。
+
 ## 6. 验证是否正常工作
 
 建议按以下顺序验证：
@@ -248,6 +265,12 @@ Invoke-RestMethod -Headers @{ "Authorization" = "Bearer your_token" } http://127
 - `/api/status.reply_quality`
 - `/api/status.trace_logger`
 - `/api/metrics`
+
+容器场景还应确认：
+
+- `/api/readiness.deployment_target` 为 `web-api`
+- `/api/readiness.checks[]` 中 `admin_permission`、`wechat_process`、`wechat_installation` 和 `wechat_compatibility` 为 `skipped`
+- `/api/ping` 可用于轻量存活探测，`run.py eval` 可用于离线质量门禁
 
 补充说明：
 
@@ -806,6 +829,12 @@ python run.py eval --dataset tests/fixtures/evals/smoke_cases.json --preset smok
 2. 用“以管理员身份运行”启动本项目（桌面端或 `python run.py start/web`）。
 3. 确认 `wcferry`、管理员权限和微信版本三者同时满足，再继续排查其余环境问题。
 
+### 9.9 Docker 容器里能否运行微信自动化
+
+不能承诺。当前容器化切片只覆盖 Web API、`/api/readiness` 和离线 `run.py eval`；微信收发仍依赖 Windows 桌面、微信 PC `3.9.12.51`、管理员权限和 `wcferry` 注入。
+
+如果 `/api/readiness` 中 `deployment_target=web-api`，管理员权限、微信进程、微信安装和 WCFerry 兼容性检查显示 `skipped` 是预期结果，表示当前容器只验证 API/eval 边界，不表示微信传输已经可用。
+
 ## 10. 开发与测试
 
 ### 10.1 常用命令
@@ -852,6 +881,11 @@ python -m py_compile backend\core\agent_runtime.py backend\core\prompt_governanc
 
 # 离线评测
 python run.py eval --dataset tests\fixtures\evals\smoke_cases.json --preset smoke --report data\evals\smoke-report.json
+python run.py eval --dataset tests\fixtures\evals\rag_cases.json --preset rag-smoke --report data\evals\rag-smoke-report.json
+
+# 容器/部署切片离线评测
+python run.py eval --dataset tests\fixtures\evals\smoke_cases.json --preset docker-smoke --report data\evals\docker-smoke-report.json
+python run.py eval --dataset tests\fixtures\evals\rag_cases.json --preset docker-rag --report data\evals\docker-rag-report.json
 ```
 
 说明：

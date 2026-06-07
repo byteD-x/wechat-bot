@@ -26,7 +26,11 @@ from backend.transports.wcferry_adapter import (
 )
 from backend.wechat_versions import OFFICIAL_SUPPORTED_WECHAT_VERSION
 
+DEPLOYMENT_TARGET_ENV = "WECHAT_BOT_DEPLOYMENT_TARGET"
+DEPLOYMENT_TARGET_DESKTOP = "desktop"
+DEPLOYMENT_TARGET_WEB_API = "web-api"
 REQUIRED_PACKAGES: Sequence[str] = ("httpx", "openai", "quart", "wcferry")
+WEB_API_REQUIRED_PACKAGES: Sequence[str] = ("httpx", "openai", "quart")
 DEFAULT_READINESS_TTL_SEC = 5.0
 
 
@@ -103,6 +107,30 @@ def _check_dependencies(packages: Iterable[str] = REQUIRED_PACKAGES) -> Dict[str
         passed=True,
         message=f"已安装: {', '.join(installed)}",
         blocking=False,
+    )
+
+
+def _resolve_deployment_target(value: Optional[str] = None) -> str:
+    raw = os.environ.get(DEPLOYMENT_TARGET_ENV, "") if value is None else value
+    normalized = str(raw or "").strip().lower().replace("_", "-")
+    if normalized == DEPLOYMENT_TARGET_WEB_API:
+        return DEPLOYMENT_TARGET_WEB_API
+    return DEPLOYMENT_TARGET_DESKTOP
+
+
+def _skipped_desktop_check(key: str, label: str) -> Dict[str, Any]:
+    return _build_check(
+        key,
+        label,
+        passed=None,
+        message="Web API 部署目标下跳过桌面微信传输检查",
+        blocking=False,
+        action="retry",
+        action_label="重新检查",
+        hint=(
+            f"{DEPLOYMENT_TARGET_ENV}={DEPLOYMENT_TARGET_WEB_API} 仅用于 Web API、"
+            "readiness 和离线 eval，不支持 wcferry 微信桌面收发。"
+        ),
     )
 
 
@@ -410,32 +438,55 @@ def build_readiness_report(
 ) -> Dict[str, Any]:
     now = float((now_provider or time.time)())
     config = _load_current_config(config_loader)
+    deployment_target = _resolve_deployment_target()
 
-    install_check, wechat_path = _check_wechat_installation(wechat_path_getter)
-    checks = [
-        _check_python_version(),
-        _check_dependencies(),
-        _check_admin_permission(admin_checker),
-        _check_wechat_process(process_counter),
-        install_check,
-        _check_wechat_compatibility(
-            wechat_path,
-            version_getter=wechat_version_getter,
-            supported_versions_getter=supported_versions_getter,
-        ),
-        _check_transport_config(config),
-        _check_api_config(config),
-    ]
+    if deployment_target == DEPLOYMENT_TARGET_WEB_API:
+        checks = [
+            _check_python_version(),
+            _check_dependencies(WEB_API_REQUIRED_PACKAGES),
+            _skipped_desktop_check("admin_permission", "管理员权限"),
+            _skipped_desktop_check("wechat_process", "微信进程"),
+            _skipped_desktop_check("wechat_installation", "微信安装"),
+            _skipped_desktop_check("wechat_compatibility", "WCFerry 兼容性"),
+            _check_transport_config(config),
+            _check_api_config(config),
+        ]
+    else:
+        install_check, wechat_path = _check_wechat_installation(wechat_path_getter)
+        checks = [
+            _check_python_version(),
+            _check_dependencies(),
+            _check_admin_permission(admin_checker),
+            _check_wechat_process(process_counter),
+            install_check,
+            _check_wechat_compatibility(
+                wechat_path,
+                version_getter=wechat_version_getter,
+                supported_versions_getter=supported_versions_getter,
+            ),
+            _check_transport_config(config),
+            _check_api_config(config),
+        ]
 
     blocking_count = sum(
         1 for check in checks if check.get("status") == "failed" and check.get("blocking")
     )
     ready = blocking_count == 0
 
-    if ready:
+    if ready and deployment_target == DEPLOYMENT_TARGET_WEB_API:
+        summary = {
+            "title": "Web API 部署准备已完成",
+            "detail": "Web API、readiness 与离线 eval 所需检查已通过；微信桌面传输不在此部署目标内。",
+        }
+    elif ready:
         summary = {
             "title": "运行准备已完成",
             "detail": "环境与配置检查均已通过，可以启动机器人。",
+        }
+    elif deployment_target == DEPLOYMENT_TARGET_WEB_API:
+        summary = {
+            "title": f"Web API 部署还差 {blocking_count} 项准备",
+            "detail": "先处理阻塞项，再启动或对外暴露 Web API 会更稳定。",
         }
     else:
         summary = {
@@ -447,6 +498,7 @@ def build_readiness_report(
         "success": True,
         "ready": ready,
         "blocking_count": blocking_count,
+        "deployment_target": deployment_target,
         "checks": checks,
         "suggested_actions": _build_suggested_actions(checks),
         "summary": summary,

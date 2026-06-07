@@ -64,6 +64,73 @@ def test_readiness_blocks_when_not_admin(monkeypatch):
     assert admin_check['action'] == 'restart_as_admin'
 
 
+def test_readiness_default_dependencies_include_wcferry():
+    assert 'wcferry' in readiness_module.REQUIRED_PACKAGES
+    assert 'wcferry' not in readiness_module.WEB_API_REQUIRED_PACKAGES
+
+
+def test_readiness_web_api_target_skips_desktop_transport_checks(monkeypatch):
+    monkeypatch.setenv(
+        readiness_module.DEPLOYMENT_TARGET_ENV,
+        readiness_module.DEPLOYMENT_TARGET_WEB_API,
+    )
+    monkeypatch.setattr(
+        readiness_module,
+        '_check_python_version',
+        lambda: _passing_check('python_version', 'Python 版本'),
+    )
+    dependency_packages = []
+
+    def fake_check_dependencies(packages=()):
+        dependency_packages.extend(packages)
+        return _passing_check('dependencies', '依赖安装', ','.join(packages))
+
+    monkeypatch.setattr(readiness_module, '_check_dependencies', fake_check_dependencies)
+
+    report = readiness_module.build_readiness_report(
+        config_loader=lambda: _base_config(),
+        admin_checker=lambda: False,
+        process_counter=lambda: 0,
+        wechat_path_getter=lambda: '',
+        wechat_version_getter=lambda _path: '4.0.0.0',
+        supported_versions_getter=lambda: [],
+    )
+
+    checks = {check['key']: check for check in report['checks']}
+    assert report['deployment_target'] == readiness_module.DEPLOYMENT_TARGET_WEB_API
+    assert report['ready'] is True
+    assert report['blocking_count'] == 0
+    assert report['summary']['title'] == 'Web API 部署准备已完成'
+    assert '微信桌面传输不在此部署目标内' in report['summary']['detail']
+    assert dependency_packages == list(readiness_module.WEB_API_REQUIRED_PACKAGES)
+    assert 'wcferry' not in dependency_packages
+    assert checks['admin_permission']['status'] == 'skipped'
+    assert checks['wechat_process']['status'] == 'skipped'
+    assert checks['wechat_installation']['status'] == 'skipped'
+    assert checks['wechat_compatibility']['status'] == 'skipped'
+
+
+def test_readiness_unknown_deployment_target_uses_desktop_checks(monkeypatch):
+    monkeypatch.setenv(readiness_module.DEPLOYMENT_TARGET_ENV, 'unknown')
+    monkeypatch.setattr(
+        readiness_module,
+        '_check_python_version',
+        lambda: _passing_check('python_version', 'Python 版本'),
+    )
+    monkeypatch.setattr(
+        readiness_module,
+        '_check_dependencies',
+        lambda packages=(): _passing_check('dependencies', '依赖安装'),
+    )
+
+    report = _build_report(admin_checker=lambda: False)
+
+    admin_check = next(check for check in report['checks'] if check['key'] == 'admin_permission')
+    assert report['deployment_target'] == readiness_module.DEPLOYMENT_TARGET_DESKTOP
+    assert admin_check['status'] == 'failed'
+    assert admin_check['blocking'] is True
+
+
 def test_readiness_blocks_when_wechat_not_running(monkeypatch):
     monkeypatch.setattr(
         readiness_module,
