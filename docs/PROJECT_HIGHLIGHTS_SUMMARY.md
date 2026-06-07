@@ -190,7 +190,11 @@ RAG 不是"只要检索命中就塞进 Prompt"，而是实现了**两层精排**
 - 回滚时追加新的 active revision，历史 revision 不被覆盖
 - 审计账本默认写入 `data/prompt_revisions.json`
 - 受控 Tool Workflow API：`POST /api/v1/agents/tool-workflow`
-- 当前白名单工具仅包含 `config_audit`、`readiness_check`、`prompt_preview`
+- 当前白名单工具包含 `config_audit`、`readiness_check`、`prompt_preview`、`eval_latest`、`cost_summary`、`backup_cleanup_dry_run`、`data_controls_dry_run`
+- 可选 `workflow_mode="plan_reflect_repair"` 只允许一次 schema-safe 默认值修复
+- 只读 MCP adapter 只暴露模型侧安全工具子集，不开放 resources、prompts、shell、文件写入、任意 HTTP 或动态插件
+- 模型侧 Tool Calling 默认关闭，开启后只向 OpenAI-compatible 对话模型暴露 `readiness_check`、`eval_latest`、`cost_summary`、`backup_cleanup_dry_run`、`data_controls_dry_run`
+- TraceLogger-lite 和默认关闭的 Semantic Cache 已接入运行时状态；二者都不保存原始 Prompt、聊天正文、token、工具输出或完整本机路径
 - 工作流最多 `8` 步，单步 payload 字符串化后最多 `12000` 字符
 - 每一步返回 `index / tool / status / duration_ms` trace，便于定位失败步骤
 
@@ -206,7 +210,23 @@ RAG 不是"只要检索命中就塞进 Prompt"，而是实现了**两层精排**
 - [`backend/core/tool_workflow.py`](backend/core/tool_workflow.py) - 受控工具白名单与 trace
 - [`backend/api.py`](backend/api.py) - Prompt 回滚与 Tool Workflow 路由
 - [`src/main/ipc.js`](src/main/ipc.js) - 桌面端后端请求 allowlist
-- [`tests/test_api.py`](tests/test_api.py) - 回滚、白名单工具和未知工具拒绝测试
+- [`tests/test_api.py`](tests/test_api.py) - 回滚、白名单工具、维护 dry-run 脱敏、MCP adapter 和未知工具拒绝测试
+
+### 2.9 Web API / readiness / eval 容器化切片
+
+**亮点描述：**
+项目没有把微信桌面自动化包装成跨平台能力，而是诚实拆出可容器化的后端治理切片。
+
+**核心能力：**
+- `Dockerfile` 默认执行 `python run.py web --host 0.0.0.0 --port 5000`
+- `requirements-container.txt` 排除 `wcferry`、打包工具和测试工具，保留 Web API 运行库
+- `WECHAT_BOT_DEPLOYMENT_TARGET=web-api` 下 readiness 跳过管理员权限、微信进程、微信安装和 WCFerry 兼容性检查
+- `run.py web` 仍保留非回环绑定必须显式设置 `WECHAT_BOT_API_TOKEN` 的安全门槛
+
+**边界约束：**
+- 不承诺 Linux 容器内微信收发
+- 不承诺 WCFerry 注入
+- 不把 Web API 设计为公网多租户服务
 
 ---
 

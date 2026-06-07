@@ -24,6 +24,7 @@
 
 4. 受控 Agent Tool Workflow
    - Agent 工具流只执行白名单工具，限制步数和 payload，返回逐步 trace；未知工具不会执行。
+   - 现在还包括模型侧 Tool Calling 和只读 MCP adapter：模型只能看到更窄的安全工具子集，MCP 也只允许 `tools/list` 与 `tools/call`。
    - 代码证据：`backend/core/tool_workflow.py`、`POST /api/v1/agents/tool-workflow`。
    - 讲法重点：把 Agent 能力从“模型想调什么就调什么”收敛为“产品允许什么才执行什么”。
 
@@ -43,6 +44,16 @@
    - 用固定 smoke dataset 检查空回复、短回复、RAG 命中率和运行时异常；避免只靠人工主观判断。
    - 代码证据：`backend/core/eval_runner.py`、`tests/fixtures/evals/smoke_cases.json`、`.github/workflows/ci.yml`。
 
+9. 运行时观测与响应缓存
+   - TraceLogger-lite 只保留内存级脱敏摘要，语义响应缓存默认关闭且不跨 chat/provider/model/safety/citation policy 命中。
+   - 代码证据：`backend/core/trace_logger.py`、`backend/core/response_cache.py`、`tests/test_agent_runtime.py`。
+   - 讲法重点：观测和缓存都是边界化能力，不保存原始 Prompt、聊天正文、token 或完整本机路径。
+
+10. 受限容器化部署切片
+   - Docker 只覆盖 Web API、`/api/readiness` 和离线 eval；不承诺 Linux 容器里运行微信桌面自动化或 wcferry 注入。
+   - 代码证据：`Dockerfile`、`requirements-container.txt`、`backend/core/readiness.py`。
+   - 讲法重点：这是把可验证的后端治理能力拆出来，而不是把微信机器人包装成跨平台服务。
+
 ## STAR 讲法示例
 
 Situation：微信自动化项目容易停留在“能回消息”，但真实使用会遇到模型配置混乱、Prompt 被误改、Agent 工具不可控、用户不知道失败原因等问题。
@@ -54,6 +65,7 @@ Action：
 - 收敛配置入口到共享配置快照，桌面端和后端读取同一事实源。
 - 增加 Prompt 回滚账本，回滚追加新版本并保留原因和操作者。
 - 增加受控工具流，限制白名单、步数、payload，并返回逐步 trace。
+- 增加只读 MCP adapter、模型侧 Tool Calling 安全子集、TraceLogger-lite 和默认关闭的语义缓存，把模型可调用能力、观测能力和缓存能力都收在明确边界内。
 - 扩充 API 测试、离线评测样例和文档契约。
 
 Result：
@@ -61,12 +73,14 @@ Result：
 - 当前新增 API 的目标测试已覆盖成功、404、白名单执行和未知工具拒绝。
 - 全量 `tests/test_api.py` 已通过。
 - 离线 smoke dataset 扩展到 27 条，覆盖 Prompt 回滚、工具流审计、Windows 首次运行、导出语料 RAG 风格召回、无命中回退和误命中防护场景。
+- Docker/部署切片已提供 Web API/readiness/eval 镜像入口，`WECHAT_BOT_DEPLOYMENT_TARGET=web-api` 下 readiness 会明确跳过桌面微信传输检查。
 
 ## 不要夸大的点
 
 - 不要说已经支持微信 `4.x` 或跨平台自动化；当前官方支持仍是 Windows + 微信 PC `3.9.12.51`。
 - 不要说已经有线上真实用户指标；当前证据主要来自本地测试、离线评测和代码结构。
 - 不要说 Agent 可以执行任意工具；当前设计故意只允许白名单工具。
-- 不要说 Prompt 治理 UI 已完成；当前落地的是后端回滚 API 和 JSON 审计账本。
+- 不要说模型侧 Tool Calling、MCP adapter 或工具工作流能访问 shell、任意 HTTP、文件写入或动态插件；当前都只允许受控白名单能力。
+- 不要说 Docker 支持微信收发；当前容器化只覆盖 Web API、readiness 和离线 eval。
 - 不要说诊断支持包可以替代完整日志或聊天数据审查；它默认只导出脱敏摘要。
 - 不要说真实 Windows/微信人工手测已完成，除非当场演示并记录结果。

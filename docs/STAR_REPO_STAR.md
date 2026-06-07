@@ -42,9 +42,15 @@
 
 ### 6. Prompt 治理和受控工具流强调可审计边界
 - Prompt 回滚通过 `POST /api/v1/admin/prompts/{revision}/rollback` 追加新的 active revision，并保留 `rollback_from / reason / operator / created_at`。
-- 受控 Agent Tool Workflow 只允许 `config_audit`、`readiness_check`、`prompt_preview` 三类白名单工具。
-- 工作流返回逐步 trace，并限制步骤数量与 payload 大小，避免把本机 Agent 能力扩成任意命令或动态插件执行。
+- 受控 Agent Tool Workflow 只允许 `config_audit`、`readiness_check`、`prompt_preview`、`eval_latest`、`cost_summary`、`backup_cleanup_dry_run`、`data_controls_dry_run` 七类注册工具。
+- `workflow_mode="plan_reflect_repair"` 只做一次 schema-safe 默认值修复；模型侧 Tool Calling 和只读 MCP adapter 只暴露更窄的安全工具子集。
+- 工作流返回逐步 trace，并限制步骤数量与 payload 大小，避免把本机 Agent 能力扩成任意命令、文件写入、任意 HTTP 或动态插件执行。
 - 离线 smoke 数据集扩展到 27 条，覆盖 Prompt 回滚、工具审计、Windows 首次运行、导出语料 RAG 风格召回、无命中回退和误命中防护场景。
+
+### 7. 观测、缓存和部署边界都按“可验证、可回退”设计
+- TraceLogger-lite 只保留内存 ring buffer，使用 hash 引用和聚合字段，不保存聊天正文、Prompt、token、工具输出或完整本机路径。
+- 响应缓存支持 exact cache 与默认关闭的 Semantic Cache；语义命中不跨 chat、provider、model、system prompt、RAG citation ids 或安全策略。
+- Docker/部署切片只覆盖 Web API、`/api/readiness` 和离线 `run.py eval`；`WECHAT_BOT_DEPLOYMENT_TARGET=web-api` 会跳过桌面微信传输检查，但不承诺 wcferry 微信桌面能力容器化。
 
 ## STAR 案例
 
@@ -92,21 +98,34 @@
 - **Task**：在保留自动化能力的同时，建立本机白名单、审计账本、执行 trace 和失败可解释边界。
 - **Action**：
   - 新增 `PromptGovernanceService`，回滚 Prompt 时追加新 revision，而不是覆盖历史。
-  - 新增 `ControlledToolWorkflowService`，只允许 `config_audit`、`readiness_check`、`prompt_preview`。
+  - 新增 `ControlledToolWorkflowService`，只允许配置审计、readiness、Prompt 预览、离线评测摘要、成本摘要、备份清理 dry-run 和数据治理 dry-run 七类注册工具。
+  - 接入只读 MCP adapter 与模型侧 Tool Calling 安全子集，继续复用同一套 ToolRegistry schema、权限、超时和 trace 边界。
   - 在 Electron IPC 层限制可转发路径，Prompt 回滚必须匹配数字 revision。
-  - 为成功回滚、未知 revision、白名单工具和未知工具拒绝补充 API 测试。
-- **Result**：高风险操作从“靠人工记得怎么做”变成“可调用、可审计、可拒绝、可测试”的治理能力，同时保持当前版本不承诺任意工具执行。
+  - 为成功回滚、未知 revision、白名单工具、维护 dry-run 脱敏、MCP 调用、危险 payload 和未知工具拒绝补充 API 测试。
+- **Result**：高风险操作从“靠人工记得怎么做”变成“可调用、可审计、可拒绝、可测试”的治理能力，同时保持当前版本不承诺任意工具执行、shell、文件写入或任意 HTTP。
+
+### 案例 6：把“能部署”和“能微信自动化”拆成两个诚实边界
+- **Situation**：项目有 Web API、readiness 和离线评测这些后端治理能力，但默认微信传输仍依赖 Windows、管理员权限、微信 `3.9.12.51` 和 `wcferry`。
+- **Task**：提供可容器化的后端切片，同时避免误导用户以为 Linux 容器可以运行微信桌面自动化。
+- **Action**：
+  - 新增 `Dockerfile`、`.dockerignore` 和 `requirements-container.txt`，排除 `wcferry`、打包工具和测试工具。
+  - 在 readiness 中增加 `WECHAT_BOT_DEPLOYMENT_TARGET=web-api`，只对 Web API/readiness/eval 跳过桌面传输检查。
+  - 文档明确容器必须设置 `WECHAT_BOT_API_TOKEN`，且不承诺微信收发、WCFerry 注入或公网多租户服务。
+- **Result**：项目可以展示受限但真实的部署能力；桌面主链路与容器 API/eval 链路边界清晰，避免为了包装简历而夸大跨平台能力。
 
 ## 证据索引
 
 | 模块 | 关键文件 | 说明 |
 |------|----------|------|
-| Runtime | `backend/core/agent_runtime.py` | LangGraph 运行时、并发上下文准备、精排与回退、后台任务 |
+| Runtime | `backend/core/agent_runtime.py` | LangGraph 运行时、并发上下文准备、精排与回退、模型侧 Tool Calling、默认关闭的语义缓存、后台任务 |
 | AI Client | `backend/core/ai_client.py` | 共享连接池、引用计数释放 |
 | Memory | `backend/core/memory.py` | SQLite 记忆管理、批量上下文、WAL/mmap 优化 |
 | Config | `backend/core/config_service.py` | 中心化配置快照与运行时发布 |
 | Prompt Governance | `backend/core/prompt_governance.py` | Prompt revision 审计账本与回滚 |
-| Tool Workflow | `backend/core/tool_workflow.py` | 白名单工具流、payload 限制与逐步 trace |
+| Tool Workflow | `backend/core/tool_workflow.py` / `backend/core/mcp_adapter.py` | 白名单工具流、Planner/Reflect/Repair、模型安全工具子集、只读 MCP adapter 与逐步 trace |
+| Observability / Cache | `backend/core/trace_logger.py` / `backend/core/response_cache.py` | 内存级脱敏 trace、exact cache 与默认关闭的 semantic cache |
+| Knowledge Base | `backend/core/knowledge_base.py` / `backend/core/knowledge_base_cli.py` | 知识库治理 API、粘贴式 UI 与显式文件 CLI，不开放任意路径扫描 |
+| Deploy | `Dockerfile` / `requirements-container.txt` / `backend/core/readiness.py` | Web API/readiness/eval 容器切片与 `web-api` readiness 目标 |
 | Transport | `backend/transports/base.py` / `backend/transports/wcferry_adapter.py` | 传输层抽象、微信版本门禁与状态暴露 |
 | Model Auth | `backend/model_auth/` / `src/renderer/js/pages/ModelsPage.js` | Provider/Auth 建模、模型目录、认证状态与动作生成 |
 | Export Center | `backend/core/wechat_export_service.py` / `src/renderer/js/pages/ExportCenterPage.js` | 微信探测、解密、联系人读取、CSV 导出与 RAG 应用 |
@@ -120,6 +139,9 @@
 - 设计并落地分层记忆与可降级 RAG 链路，支持轻量重排和可选本地 `Cross-Encoder` 精排，在不强制联网下载模型的前提下提升召回质量。
 - 补齐中心化配置快照、热重载审计、状态诊断与 Prometheus 风格指标导出，使项目从“能跑 demo”提升到“可长期运行和可排障的工程系统”。
 - 设计 Prompt revision 审计账本和受控工具工作流，把回滚、配置审计、就绪检查和 Prompt 预览收口成白名单 API，避免任意工具执行带来的不可控副作用。
+- 接入模型侧 Tool Calling 与只读 MCP adapter，复用同一套 ToolRegistry 权限、schema、超时和 trace 边界，只向模型暴露安全摘要工具。
+- 建设内存级 TraceLogger-lite 和默认关闭的 Semantic Cache，在不保存原始 Prompt、聊天正文、token 或完整本机路径的前提下补齐观测与缓存能力。
+- 将 Web API、readiness 和离线 eval 拆成可容器化部署切片，同时明确不承诺 wcferry 微信桌面自动化容器化。
 - 建设模型与认证中心，将 Provider 目录、认证方式、本机凭据跟随和运行时投影统一建模，降低多模型供应商接入和排障成本。
 - 打通微信聊天记录导出、导出语料 RAG、成本统计和低质量回复复盘，让“历史风格增强”和“回复质量改进”形成可观察闭环。
 
