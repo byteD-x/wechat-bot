@@ -226,6 +226,8 @@ class AgentConfig(BaseModel):
     langsmith_api_key: Optional[str] = None
     retriever_top_k: int = 3
     retriever_score_threshold: float = 1.0
+    retriever_hybrid_enabled: bool = False
+    retriever_keyword_weight: float = Field(default=0.35, ge=0.0, le=1.0)
     retriever_rerank_mode: Literal['auto', 'lightweight', 'cross_encoder'] = 'lightweight'
     retriever_cross_encoder_model: Optional[str] = None
     retriever_cross_encoder_device: Optional[str] = None

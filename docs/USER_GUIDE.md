@@ -276,6 +276,8 @@ Invoke-RestMethod -Headers @{ "Authorization" = "Bearer your_token" } http://127
     "graph_mode": "state_graph",
     "retriever_top_k": 3,
     "retriever_score_threshold": 1.0,
+    "retriever_hybrid_enabled": False,
+    "retriever_keyword_weight": 0.35,
     "retriever_rerank_mode": "lightweight",
     "retriever_cross_encoder_model": "",
     "retriever_cross_encoder_device": "",
@@ -296,6 +298,8 @@ Invoke-RestMethod -Headers @{ "Authorization" = "Bearer your_token" } http://127
 新增的后台 AI 调度字段说明：
 
 - `llm_foreground_max_concurrency`: 主回复共享的全局 LLM 并发上限，默认 `1`
+- `retriever_hybrid_enabled`: 是否开启 Hybrid Search + Query Rewrite，默认关闭；开启后会在同一 `filter_meta` 范围内融合向量召回与本地关键词召回，不新增外部搜索、不扫描本机文件。
+- `retriever_keyword_weight`: Hybrid 融合时关键词召回的权重，默认 `0.35`，取值范围 `0.0` 到 `1.0`。
 - `model_routing`: 可解释模型路由决策配置。当前只记录 `model_route`/`model_route_stats`，不会自动切换用户选择的 provider 或认证方式。
 - `response_cache`: 精确响应缓存配置，默认 `{}` 等价于关闭。开启后仅缓存最终回复和由 provider/model、chat_id、用户文本、system prompt、prompt messages、RAG citation ids、安全策略生成的 hash key，不保存原始 prompt、聊天正文、真实联系人标识或 token；命中后仍会重新执行安全护栏与引用校验。
 - `background_ai_batch_time`: 后台 AI 任务统一批处理时间，默认每天 `04:00`
@@ -318,7 +322,7 @@ Invoke-RestMethod -Headers @{ "Authorization" = "Bearer your_token" } http://127
 - 当前默认模式为“对话快路径 + 后台成长增强”：同步对话只读取短期上下文和轻量画像摘要，RAG、情绪分析、事实提取、向量写回与导出语料同步都在回复后后台执行。
 - 系统会为活跃联系人后台生成并渐进更新一份“联系人专属 Prompt”；没有导出聊天记录时也会基于近期对话成长，有导出聊天记录时则会额外吸收历史风格特征。
 - 设置页可单独配置“联系人 Prompt 更新频率（每 N 条）”；它独立于“画像更新频率”，用于控制联系人专属 Prompt 的自动增量更新节奏。
-- 性能调优时优先调整 `retriever_top_k`、阈值、精排模式和缓存 TTL；这些参数现在主要影响后台增强链而不是首条回复。
+- 性能调优时优先调整 `retriever_top_k`、阈值、Hybrid 开关、精排模式和缓存 TTL；这些参数现在主要影响后台增强链而不是首条回复。
 - 若日志中出现 `compat_fallback=openai_chat_completions`，表示底层 provider 实际返回了结果，但 LangChain 兼容层给出了异常空内容；系统已自动回退到原生 OpenAI-compatible `/chat/completions` 结果。
 - 开启 LangSmith 前先确认你接受外部 tracing。
 
@@ -337,8 +341,9 @@ Invoke-RestMethod -Headers @{ "Authorization" = "Bearer your_token" } http://127
 
 ### 7.3 运行期精排与本地 Cross-Encoder
 
-运行期 RAG 现在有两层精排能力：
+运行期 RAG 现在有 Hybrid 召回和两层精排能力：
 
+- `retriever_hybrid_enabled`: 关闭时保持原有向量召回；开启后先用规则化 Query Rewrite 生成关键词查询，再把本地关键词候选与向量候选去重融合。
 - `lightweight`: 默认模式，基于向量距离和关键词重合做轻量重排
 - `auto`: 如果检测到本地 `Cross-Encoder` 模型且依赖可用，则启用精排；否则自动回退轻量重排
 - `cross_encoder`: 优先尝试本地 `Cross-Encoder`，若初始化失败仍回退轻量重排
@@ -347,6 +352,8 @@ Invoke-RestMethod -Headers @{ "Authorization" = "Bearer your_token" } http://127
 
 ```python
 "agent": {
+    "retriever_hybrid_enabled": True,
+    "retriever_keyword_weight": 0.35,
     "retriever_rerank_mode": "auto",
     "retriever_cross_encoder_model": "models/bge-reranker-base",
     "retriever_cross_encoder_device": "cpu",
@@ -357,6 +364,7 @@ Invoke-RestMethod -Headers @{ "Authorization" = "Bearer your_token" } http://127
 
 - `retriever_cross_encoder_model` 必须是本地目录
 - 项目不会自动联网下载模型
+- `/api/status` 中的 `retriever_stats.hybrid_enabled`、`keyword_hits` 和 `hybrid_fused_candidates` 可用于确认 Hybrid 是否启用以及是否产生关键词候选。
 - `/api/status` 中的 `retriever_stats.rerank_backend` 可用于确认当前实际启用的是 `cross_encoder` 还是 `lightweight`
 
 ### 7.4 导出语料 RAG
@@ -452,6 +460,8 @@ python -m tools.prompt_gen.generator
 与精排相关的字段：
 
 - `retriever_rerank_mode`
+- `retriever_hybrid_enabled`
+- `retriever_keyword_weight`
 - `retriever_cross_encoder_model`
 - `retriever_cross_encoder_device`
 
@@ -716,6 +726,7 @@ python run.py eval --dataset tests/fixtures/evals/smoke_cases.json --preset smok
 - 导出目录是否存在有效语料
 - `retriever_top_k` 是否过低
 - `retriever_score_threshold` 是否过严
+- `retriever_hybrid_enabled` 是否按预期开启，`/api/status.retriever_stats.keyword_hits` 是否有增长
 - 当前 `retriever_stats.rerank_backend` 是否符合预期
 
 补充说明：

@@ -246,6 +246,11 @@ class AgentRuntime:
         self.retriever_score_threshold = as_float(
             self.agent_cfg.get("retriever_score_threshold", 1.0), 1.0, min_value=0.0
         )
+        self.retriever_hybrid_enabled = bool(self.agent_cfg.get("retriever_hybrid_enabled", False))
+        self.retriever_keyword_weight = min(
+            1.0,
+            as_float(self.agent_cfg.get("retriever_keyword_weight", 0.35), 0.35, min_value=0.0),
+        )
         self.retriever_rerank_mode = str(
             self.agent_cfg.get("retriever_rerank_mode") or "lightweight"
         ).strip().lower() or "lightweight"
@@ -305,6 +310,8 @@ class AgentRuntime:
             "embedding_cache_hits": 0,
             "embedding_cache_misses": 0,
             "retriever_hits": 0,
+            "retriever_keyword_hits": 0,
+            "retriever_hybrid_fused_candidates": 0,
             "retriever_rerank_fallbacks": 0,
             "last_timings": {},
             "growth_mode": "deferred_until_batch",
@@ -2196,6 +2203,10 @@ class AgentRuntime:
                 "fetch_k": self.retriever_fetch_k,
                 "score_threshold": self.retriever_score_threshold,
                 "hits": self._stats["retriever_hits"],
+                "hybrid_enabled": self.retriever_hybrid_enabled,
+                "keyword_weight": self.retriever_keyword_weight,
+                "keyword_hits": self._stats["retriever_keyword_hits"],
+                "hybrid_fused_candidates": self._stats["retriever_hybrid_fused_candidates"],
                 "rerank_mode": self.retriever_rerank_mode,
                 "rerank_backend": self._rerank_backend,
                 "cross_encoder_configured": bool(self.retriever_cross_encoder_model),

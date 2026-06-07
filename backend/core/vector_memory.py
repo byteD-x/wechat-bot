@@ -6,13 +6,78 @@
 - 支持基于语义的上下文检索
 """
 
-import os
 import logging
+import math
+import os
+import re
+from collections import Counter
 from typing import List, Dict, Optional, Any
 from backend.shared_config import ensure_data_root
 from ..utils.runtime_artifacts import chdir_temporarily, CHROMA_DIR, relocate_known_root_artifacts
 
 logger = logging.getLogger(__name__)
+
+_KEYWORD_TOKEN_RE = re.compile(r"[0-9a-zA-Z\u4e00-\u9fff]+")
+
+
+def _tokenize_keyword_text(text: str) -> List[str]:
+    normalized = str(text or "").strip().lower()
+    if not normalized:
+        return []
+    return [token for token in _KEYWORD_TOKEN_RE.findall(normalized) if token]
+
+
+def _keyword_identity(item: Dict[str, Any]) -> str:
+    metadata = dict(item.get("metadata") or {})
+    for value in (
+        item.get("id"),
+        metadata.get("chunk_id"),
+        metadata.get("doc_id"),
+    ):
+        text = str(value or "").strip()
+        if text:
+            return text
+    return str(item.get("text") or "")
+
+
+def _rank_keyword_candidates(query: str, candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    query_terms = _tokenize_keyword_text(query)
+    if not query_terms:
+        return []
+
+    documents: List[List[str]] = []
+    for item in candidates:
+        documents.append(_tokenize_keyword_text(str(item.get("text") or "")))
+
+    doc_count = len(documents)
+    if doc_count <= 0:
+        return []
+
+    document_frequency: Counter[str] = Counter()
+    for tokens in documents:
+        for token in set(tokens):
+            document_frequency[token] += 1
+
+    avg_doc_len = sum(len(tokens) for tokens in documents) / max(1, doc_count)
+    ranked: List[Dict[str, Any]] = []
+    for item, tokens in zip(candidates, documents):
+        if not tokens:
+            continue
+        token_counts = Counter(tokens)
+        score = 0.0
+        for term in query_terms:
+            frequency = token_counts.get(term, 0)
+            if frequency <= 0:
+                continue
+            idf = math.log(1 + (doc_count - document_frequency[term] + 0.5) / (document_frequency[term] + 0.5))
+            denominator = frequency + 1.2 * (1 - 0.75 + 0.75 * (len(tokens) / max(avg_doc_len, 1.0)))
+            score += idf * ((frequency * 2.2) / max(denominator, 0.0001))
+        if score <= 0:
+            continue
+        ranked.append({**item, "keyword_score": round(score, 4)})
+
+    ranked.sort(key=lambda item: (float(item.get("keyword_score") or 0.0), _keyword_identity(item)), reverse=True)
+    return ranked
 
 class VectorMemory:
     def __init__(self, db_path: Optional[str] = None):
@@ -114,6 +179,38 @@ class VectorMemory:
             
         except Exception as e:
             logger.error(f"Vector search failed: {e}")
+            return []
+
+    def keyword_search(
+        self,
+        query: str,
+        n_results: int = 5,
+        filter_meta: Optional[Dict] = None,
+        candidate_limit: int = 200,
+    ) -> List[Dict[str, Any]]:
+        if not self.collection:
+            return []
+
+        try:
+            limit = max(int(n_results or 1), min(max(int(candidate_limit or 1), int(n_results or 1)), 1000))
+            results = self.collection.get(
+                where=filter_meta,
+                include=["documents", "metadatas"],
+                limit=limit,
+            )
+            candidates = []
+            documents = list(results.get("documents") or [])
+            metadatas = list(results.get("metadatas") or [])
+            ids = list(results.get("ids") or [])
+            for index, text in enumerate(documents):
+                candidates.append({
+                    "id": ids[index] if index < len(ids) else "",
+                    "text": text,
+                    "metadata": metadatas[index] if index < len(metadatas) else {},
+                })
+            return _rank_keyword_candidates(query, candidates)[: max(1, int(n_results or 1))]
+        except Exception as e:
+            logger.error(f"Keyword search failed: {e}")
             return []
 
     def delete(self, where: Dict[str, Any]) -> None:

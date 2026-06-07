@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence
 
 from backend.core.knowledge_base import KNOWLEDGE_SOURCE
+from backend.core.query_rewrite import QueryRewriteResult, QueryRewriteService
 
 
 def _clean_text(value: Any, *, limit: int = 600) -> str:
@@ -24,7 +25,7 @@ def _safe_float(value: Any, default: Optional[float] = None) -> Optional[float]:
 
 
 def _score_from_item(item: Dict[str, Any]) -> Optional[float]:
-    for key in ("rerank_score", "cross_encoder_score", "semantic_score", "score"):
+    for key in ("rerank_score", "cross_encoder_score", "fused_score", "semantic_score", "keyword_score", "score"):
         score = _safe_float(item.get(key))
         if score is not None:
             return round(score, 4)
@@ -77,6 +78,7 @@ class RetrievalService:
     def __init__(self, runtime: Any, *, citation_service: Optional[CitationService] = None) -> None:
         self.runtime = runtime
         self.citation_service = citation_service or CitationService()
+        self.query_rewrite_service = QueryRewriteService()
 
     async def retrieve(
         self,
@@ -93,6 +95,16 @@ class RetrievalService:
         trace_snippets: List[str] = []
         runtime_hits = 0
         export_hits = 0
+        hybrid_enabled = bool(getattr(self.runtime, "retriever_hybrid_enabled", False))
+        query_rewrite = self.query_rewrite_service.rewrite(query_text)
+        retrieval_counts = {
+            "runtime_vector_hit_count": 0,
+            "runtime_keyword_hit_count": 0,
+            "runtime_fused_candidate_count": 0,
+            "knowledge_vector_hit_count": 0,
+            "knowledge_keyword_hit_count": 0,
+            "knowledge_fused_candidate_count": 0,
+        }
 
         vector_memory = dependencies.get("vector_memory")
         export_rag = dependencies.get("export_rag")
@@ -104,6 +116,9 @@ class RetrievalService:
                 query_text,
                 vector_memory,
                 query_embedding=query_embedding,
+                query_rewrite=query_rewrite,
+                hybrid_enabled=hybrid_enabled,
+                retrieval_counts=retrieval_counts,
             )
             if runtime_results:
                 runtime_hits = len(runtime_results)
@@ -118,6 +133,9 @@ class RetrievalService:
                 query_text,
                 vector_memory,
                 query_embedding=query_embedding,
+                query_rewrite=query_rewrite,
+                hybrid_enabled=hybrid_enabled,
+                retrieval_counts=retrieval_counts,
             )
             if knowledge_results:
                 messages.append(self._build_knowledge_base_message(knowledge_results))
@@ -163,6 +181,9 @@ class RetrievalService:
             "citation_count": len(citations),
             "citations": citations,
             "trace_snippets": trace_snippets[:8],
+            "retrieval_mode": "hybrid" if hybrid_enabled else "vector",
+            "query_rewrite": query_rewrite.to_trace(enabled=hybrid_enabled),
+            **retrieval_counts,
             "duration_ms": round((time.perf_counter() - started) * 1000.0, 3),
         }
         return RetrievalBundle(messages=messages, metadata=metadata)
@@ -180,17 +201,37 @@ class RetrievalService:
         vector_memory: Any,
         *,
         query_embedding: Optional[List[float]],
+        query_rewrite: QueryRewriteResult,
+        hybrid_enabled: bool,
+        retrieval_counts: Dict[str, int],
     ) -> List[Dict[str, Any]]:
         query = str(query_text or "").strip()
         if not query:
             return []
+        filter_meta = {"chat_id": chat_id, "source": "runtime_chat"}
         results = await asyncio.to_thread(
             vector_memory.search,
             query=query if not query_embedding else None,
             n_results=self.runtime.retriever_fetch_k,
-            filter_meta={"chat_id": chat_id, "source": "runtime_chat"},
+            filter_meta=filter_meta,
             query_embedding=query_embedding,
         )
+        retrieval_counts["runtime_vector_hit_count"] = len(results or [])
+        if hybrid_enabled:
+            keyword_results = await self._retrieve_keyword_candidates(
+                vector_memory,
+                query_rewrite.keyword_query,
+                filter_meta=filter_meta,
+            )
+            retrieval_counts["runtime_keyword_hit_count"] = len(keyword_results)
+            self.runtime._stats["retriever_keyword_hits"] = (
+                self.runtime._stats.get("retriever_keyword_hits", 0) + len(keyword_results)
+            )
+            results = self._fuse_retrieval_results(results, keyword_results)
+            retrieval_counts["runtime_fused_candidate_count"] = len(results)
+            self.runtime._stats["retriever_hybrid_fused_candidates"] = (
+                self.runtime._stats.get("retriever_hybrid_fused_candidates", 0) + len(results)
+            )
         if not results:
             return []
         ranked_results = await self.runtime._rerank_runtime_results(query, list(results))
@@ -205,17 +246,37 @@ class RetrievalService:
         vector_memory: Any,
         *,
         query_embedding: Optional[List[float]],
+        query_rewrite: QueryRewriteResult,
+        hybrid_enabled: bool,
+        retrieval_counts: Dict[str, int],
     ) -> List[Dict[str, Any]]:
         query = str(query_text or "").strip()
         if not query:
             return []
+        filter_meta = {"source": KNOWLEDGE_SOURCE}
         results = await asyncio.to_thread(
             vector_memory.search,
             query=query if not query_embedding else None,
             n_results=self.runtime.retriever_fetch_k,
-            filter_meta={"source": KNOWLEDGE_SOURCE},
+            filter_meta=filter_meta,
             query_embedding=query_embedding,
         )
+        retrieval_counts["knowledge_vector_hit_count"] = len(results or [])
+        if hybrid_enabled:
+            keyword_results = await self._retrieve_keyword_candidates(
+                vector_memory,
+                query_rewrite.keyword_query,
+                filter_meta=filter_meta,
+            )
+            retrieval_counts["knowledge_keyword_hit_count"] = len(keyword_results)
+            self.runtime._stats["retriever_keyword_hits"] = (
+                self.runtime._stats.get("retriever_keyword_hits", 0) + len(keyword_results)
+            )
+            results = self._fuse_retrieval_results(results, keyword_results)
+            retrieval_counts["knowledge_fused_candidate_count"] = len(results)
+            self.runtime._stats["retriever_hybrid_fused_candidates"] = (
+                self.runtime._stats.get("retriever_hybrid_fused_candidates", 0) + len(results)
+            )
         if not results:
             return []
         ranked_results = await self.runtime._rerank_runtime_results(query, list(results))
@@ -223,6 +284,117 @@ class RetrievalService:
         if selected:
             self.runtime._stats["retriever_hits"] += len(selected)
         return selected
+
+    async def _retrieve_keyword_candidates(
+        self,
+        vector_memory: Any,
+        keyword_query: str,
+        *,
+        filter_meta: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        query = str(keyword_query or "").strip()
+        keyword_search = getattr(vector_memory, "keyword_search", None)
+        if not query or not callable(keyword_search):
+            return []
+        return list(
+            await asyncio.to_thread(
+                keyword_search,
+                query,
+                self.runtime.retriever_fetch_k,
+                filter_meta,
+            )
+            or []
+        )
+
+    def _fuse_retrieval_results(
+        self,
+        vector_results: Sequence[Dict[str, Any]],
+        keyword_results: Sequence[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        keyword_weight = _safe_float(getattr(self.runtime, "retriever_keyword_weight", 0.35), 0.35) or 0.35
+        keyword_weight = min(1.0, max(0.0, keyword_weight))
+        vector_weight = 1.0 - keyword_weight
+        merged: Dict[str, Dict[str, Any]] = {}
+
+        for item in vector_results or []:
+            key = self._result_identity(item)
+            semantic_score = self._semantic_score(item)
+            merged[key] = {
+                **item,
+                "semantic_score": round(semantic_score, 4),
+                "_vector_score": semantic_score,
+                "_keyword_raw_score": 0.0,
+                "retrieval_channels": ["vector"],
+            }
+
+        for item in keyword_results or []:
+            key = self._result_identity(item)
+            keyword_score = max(0.0, _safe_float(item.get("keyword_score"), 0.0) or 0.0)
+            if key in merged:
+                channels = list(merged[key].get("retrieval_channels") or [])
+                if "keyword" not in channels:
+                    channels.append("keyword")
+                merged[key].update({
+                    "keyword_score": round(keyword_score, 4),
+                    "_keyword_raw_score": keyword_score,
+                    "retrieval_channels": channels,
+                })
+            else:
+                merged[key] = {
+                    **item,
+                    "keyword_score": round(keyword_score, 4),
+                    "_vector_score": 0.0,
+                    "_keyword_raw_score": keyword_score,
+                    "retrieval_channels": ["keyword"],
+                }
+
+        max_keyword = max((float(item.get("_keyword_raw_score") or 0.0) for item in merged.values()), default=0.0)
+        fused = []
+        for item in merged.values():
+            vector_score = float(item.get("_vector_score") or 0.0)
+            raw_keyword_score = float(item.get("_keyword_raw_score") or 0.0)
+            keyword_score = raw_keyword_score / max_keyword if max_keyword > 0 else 0.0
+            item["keyword_score"] = round(raw_keyword_score, 4)
+            item["fused_score"] = round((vector_score * vector_weight) + (keyword_score * keyword_weight), 4)
+            item.pop("_vector_score", None)
+            item.pop("_keyword_raw_score", None)
+            fused.append(item)
+
+        fused.sort(
+            key=lambda item: (
+                float(item.get("fused_score") or 0.0),
+                float(item.get("semantic_score") or 0.0),
+                float(item.get("keyword_score") or 0.0),
+            ),
+            reverse=True,
+        )
+        return fused
+
+    @staticmethod
+    def _semantic_score(item: Dict[str, Any]) -> float:
+        distance = _safe_float(item.get("distance"))
+        if distance is not None:
+            return max(0.0, 1.0 - distance)
+        for key in ("semantic_score", "score"):
+            value = _safe_float(item.get(key))
+            if value is not None:
+                return max(0.0, value)
+        return 0.0
+
+    @staticmethod
+    def _result_identity(item: Dict[str, Any]) -> str:
+        metadata = dict(item.get("metadata") or {})
+        for value in (
+            item.get("id"),
+            metadata.get("chunk_id"),
+            metadata.get("doc_id"),
+            metadata.get("chat_id"),
+        ):
+            text = str(value or "").strip()
+            if text:
+                return text
+        text = str(item.get("text") or "")
+        return hashlib.sha1(text.encode("utf-8", errors="ignore")).hexdigest()[:16]
 
     def _select_ranked_results(self, ranked_results: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
         selected: List[Dict[str, Any]] = []

@@ -4,11 +4,12 @@ import pytest
 
 from backend.core.rag import CitationService, RetrievalService
 from backend.core.knowledge_base import KNOWLEDGE_SOURCE
+from backend.core.query_rewrite import QueryRewriteService
 from backend.core.safety import SafetyGuard
 
 
 class _FakeRuntime:
-    def __init__(self, *, require_citations=False):
+    def __init__(self, *, require_citations=False, hybrid_enabled=False):
         self.bot_cfg = {
             "rag_enabled": True,
             "export_rag_enabled": True,
@@ -18,6 +19,8 @@ class _FakeRuntime:
         self.retriever_fetch_k = 3
         self.retriever_top_k = 2
         self.retriever_score_threshold = 1.0
+        self.retriever_hybrid_enabled = hybrid_enabled
+        self.retriever_keyword_weight = 0.35
         self._stats = {"retriever_hits": 0}
 
     async def get_embedding(self, text, *, priority="foreground"):
@@ -108,6 +111,60 @@ class _FakeExportRag:
         }
 
 
+class _KeywordOnlyVectorMemory:
+    def __init__(self):
+        self.search_calls = []
+        self.keyword_calls = []
+
+    def search(self, query=None, n_results=5, filter_meta=None, query_embedding=None):
+        self.search_calls.append(
+            {
+                "query": query,
+                "n_results": n_results,
+                "filter_meta": dict(filter_meta or {}),
+                "query_embedding": list(query_embedding or []),
+            }
+        )
+        return []
+
+    def keyword_search(self, query, n_results=5, filter_meta=None):
+        self.keyword_calls.append(
+            {
+                "query": query,
+                "n_results": n_results,
+                "filter_meta": dict(filter_meta or {}),
+            }
+        )
+        if (filter_meta or {}).get("source") != KNOWLEDGE_SOURCE:
+            return []
+        return [
+            {
+                "text": "release plan requires QA signoff",
+                "keyword_score": 2.4,
+                "metadata": {
+                    "source": KNOWLEDGE_SOURCE,
+                    "doc_id": "release-playbook",
+                    "chunk_id": "kb-keyword-1",
+                    "chunk_index": 4,
+                    "source_file": "docs/release-playbook.md",
+                },
+            }
+        ]
+
+
+def test_query_rewrite_service_builds_keyword_query():
+    result = QueryRewriteService().rewrite("what is the release plan?")
+
+    assert result.original_query == "what is the release plan?"
+    assert result.keyword_query == "release plan"
+    assert result.terms == ["release", "plan"]
+    assert result.to_trace(enabled=True) == {
+        "enabled": True,
+        "changed": True,
+        "term_count": 2,
+    }
+
+
 def test_citation_service_builds_chunk_level_metadata():
     citation = CitationService().build(
         {
@@ -174,7 +231,43 @@ async def test_retrieval_service_returns_messages_and_citations():
     assert runtime._stats["retriever_hits"] == 2
     assert vector_memory.calls[0]["filter_meta"] == {"chat_id": "friend:alice", "source": "runtime_chat"}
     assert vector_memory.calls[1]["filter_meta"] == {"source": KNOWLEDGE_SOURCE}
+    assert bundle.metadata["retrieval_mode"] == "vector"
     assert export_rag.search_calls[0]["chat_id_aliases"] == ["friend:Alice"]
+
+
+@pytest.mark.asyncio
+async def test_retrieval_service_hybrid_keyword_search_can_supply_knowledge_citation():
+    runtime = _FakeRuntime(hybrid_enabled=True)
+    vector_memory = _KeywordOnlyVectorMemory()
+
+    bundle = await RetrievalService(runtime).retrieve(
+        chat_id="friend:alice",
+        query_text="what is the release plan?",
+        dependencies={
+            "vector_memory": vector_memory,
+        },
+    )
+
+    assert bundle.metadata["retrieval_mode"] == "hybrid"
+    assert bundle.metadata["query_rewrite"] == {
+        "enabled": True,
+        "changed": True,
+        "term_count": 2,
+    }
+    assert bundle.metadata["runtime_vector_hit_count"] == 0
+    assert bundle.metadata["runtime_keyword_hit_count"] == 0
+    assert bundle.metadata["knowledge_vector_hit_count"] == 0
+    assert bundle.metadata["knowledge_keyword_hit_count"] == 1
+    assert bundle.metadata["knowledge_fused_candidate_count"] == 1
+    assert runtime._stats["retriever_hits"] == 1
+    assert runtime._stats["retriever_keyword_hits"] == 1
+    assert runtime._stats["retriever_hybrid_fused_candidates"] == 1
+    assert vector_memory.search_calls[1]["filter_meta"] == {"source": KNOWLEDGE_SOURCE}
+    assert vector_memory.keyword_calls[1]["query"] == "release plan"
+    citation = bundle.metadata["citations"][0]
+    assert citation["source"] == KNOWLEDGE_SOURCE
+    assert citation["doc_id"] == "release-playbook"
+    assert citation["chunk_id"] == "kb-keyword-1"
 
 
 @pytest.mark.asyncio
