@@ -87,8 +87,8 @@
 
 2. `/api/status`
    - 功能：返回结构化运行状态。
-   - 实现：委托 `BotManager.get_status()` 组装启动状态、健康检查、诊断、系统指标、`response_cache_stats`、`safety_stats`、`model_route_stats` 和 `model_tool_call_stats`。
-   - 约束：`response_cache_stats` 只暴露默认关闭的精确响应缓存统计，不包含原始 prompt、聊天正文、真实联系人标识或 token；`safety_stats` 只记录安全护栏 action/reason 聚合与最近一次脱敏结果，不记录原始请求或回复；`model_route_stats` 只记录当前请求的可解释模型路由决策，不自动切换用户选择的 provider、model 或认证方式；`model_tool_call_stats` 只记录模型侧工具调用开关、请求、成功、失败和阻断计数，不记录原始 Prompt、聊天正文、token、完整本机路径或工具原始敏感输出。
+   - 实现：委托 `BotManager.get_status()` 组装启动状态、健康检查、诊断、系统指标、`response_cache_stats`、`safety_stats`、`model_route_stats`、`model_tool_call_stats` 和 `trace_logger`。
+   - 约束：`response_cache_stats` 只暴露默认关闭的精确响应缓存统计，不包含原始 prompt、聊天正文、真实联系人标识或 token；`safety_stats` 只记录安全护栏 action/reason 聚合与最近一次脱敏结果，不记录原始请求或回复；`model_route_stats` 只记录当前请求的可解释模型路由决策，不自动切换用户选择的 provider、model 或认证方式；`model_tool_call_stats` 只记录模型侧工具调用开关、请求、成功、失败和阻断计数；`trace_logger` 只保留进程内最近 trace 摘要，通过 hash 引用和聚合字段描述 cache、模型路由、安全护栏、模型工具调用与错误类型，不记录原始 Prompt、聊天正文、token、工具原始输出或完整本机路径。
 
 3. `/api/config`
    - 功能：读取/保存有效配置。
@@ -398,6 +398,7 @@
       - `agent.model_tool_calls_enabled` 默认关闭；开启后仅在 OpenAI-compatible 对话接口中向模型暴露 `readiness_check`、`eval_latest`、`cost_summary`、`backup_cleanup_dry_run`、`data_controls_dry_run` 五个安全工具。
       - 模型侧工具调用复用 `ControlledToolWorkflowService` 的注册工具、payload schema、permission、timeout 和 trace，不新增执行器，也不向模型暴露 `prompt_preview` 或 `config_audit`。
       - 运行时最多执行一轮模型工具调用，再请求一轮 final 回复；如果 final 继续返回 `tool_calls`，只记录 `model_tool_call_loop_blocked`，不会进入循环。
+      - 调用完成后写入 `TraceLoggerLite` 的内存级脱敏摘要，覆盖 cache hit、成功、fallback 空响应和异常路径；摘要只进入 `/api/status.trace_logger`，不持久化。
       - 当正文为空时，仅内部任务可回退到推理文本；普通聊天不再发送兜底文案。
 
 5. `finalize_request`
@@ -551,6 +552,7 @@
    - 功能：统一组装状态快照。
    - 实现：
      - 汇总运行状态、startup、transport、AI、统计、观测字段。
+     - 透出 `AgentRuntime.get_status()` 中的 `trace_logger`，用于查看最近模型调用的脱敏摘要。
 
 2. `_build_health_checks`
    - 功能：构建 `ai/wechat/database` 三类健康检查。

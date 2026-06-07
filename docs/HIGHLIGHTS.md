@@ -261,7 +261,8 @@ Provider 分层策略也更清晰：
 
 下面这些文件可以直接作为亮点表述的证据来源：
 
-- `backend/core/agent_runtime.py`：LangGraph 运行时、并发上下文准备、精排与回退、Embedding 缓存、模型侧 Tool Calling、后台任务
+- `backend/core/agent_runtime.py`：LangGraph 运行时、并发上下文准备、精排与回退、Embedding 缓存、模型侧 Tool Calling、内存级脱敏 trace 摘要、后台任务
+- `backend/core/trace_logger.py`：TraceLogger-lite 内存 ring buffer、hash 引用与聚合摘要脱敏
 - `backend/core/ai_client.py`：共享 `httpx.AsyncClient` 连接池、引用计数释放
 - `backend/core/memory.py`：SQLite 记忆层、批量上下文读取、WAL 和 mmap 优化
 - `backend/core/config_service.py`：中心化配置快照与运行时发布
@@ -272,7 +273,8 @@ Provider 分层策略也更清晰：
 - `backend/transports/wcferry_adapter.py`：版本门禁、管理员权限校验、消息接收通道初始化与状态暴露
 - `src/main/diagnostics-snapshot.js`：自动脱敏的本机诊断支持包导出
 - `src/main/ipc.js`：桌面端后端请求 allowlist、Prompt 回滚 revision 路径约束和 Tool Workflow 转发边界
-- `tests/test_agent_runtime.py`：运行时上下文聚合、缓存命中、模型侧 Tool Calling、Cross-Encoder 精排测试
+- `tests/test_agent_runtime.py`：运行时上下文聚合、缓存命中、模型侧 Tool Calling、TraceLogger-lite 状态接入、Cross-Encoder 精排测试
+- `tests/test_trace_logger.py`：trace 摘要容量限制、敏感字段脱敏、工具输出省略和错误 hash 测试
 - `tests/test_optimization_tasks.py`：连接池复用、批量上下文、传输层抽象与重排测试
 - `tests/test_runtime_observability.py`：配置监听、防抖、健康检查与指标导出测试
 - `tests/test_api.py`：Prompt 回滚、Tool Workflow、备份恢复、回复策略等 API 回归
@@ -302,6 +304,7 @@ Provider 分层策略也更清晰：
 - 工具工作流限制最多 `8` 步、单步 payload 最多 `12000` 字符，并在执行前校验注册工具的 payload schema、权限和超时时间。
 - 每步 trace 返回 `index / tool / status / duration_ms / permission / schema_valid / timeout_ms`，方便桌面端展示失败位置、输入校验结果和恢复建议。
 - 模型侧工具调用最多执行一轮，再请求一轮 final 回复；如果 final 继续返回 `tool_calls`，只记录 `model_tool_call_loop_blocked`，不会进入循环；`/api/status.model_tool_call_stats` 仅返回开关、请求、成功、失败和阻断聚合计数。
+- TraceLogger-lite 通过 `/api/status.trace_logger` 暴露最近模型调用摘要，只保留内存 ring buffer；摘要使用 `chat_ref / model_ref / error_hash` 和聚合字段，不保存聊天正文、Prompt、token、工具输出或完整本机路径。
 - Electron 主进程只转发固定治理路径；Prompt 回滚必须匹配数字 revision，Tool Workflow 不支持任意 shell、文件写入、网络请求或动态插件执行，维护 dry-run 只返回聚合摘要，不展示备份候选列表、清理 targets 或完整本机路径。
 - API 测试已覆盖回滚成功、revision 不存在、白名单工具执行、维护 dry-run 输出脱敏、危险 payload 拒绝和未知工具拒绝，离线 smoke 数据集也扩展到 27 条，纳入 Prompt 回滚、工具审计、Windows 首次运行、导出语料 RAG 风格召回、无命中回退和误命中防护场景。
 

@@ -59,7 +59,7 @@
 - `Transport Abstraction`: 传输层统一抽象为 `BaseTransport`，默认走 `wcferry`，并保证“接收消息 → 发送消息 → 完成落盘”的主闭环可独立演进。
 - `Provider Compatibility`: 后端统一标准化请求字段、响应正文、工具调用、错误结构与落盘元数据，避免为单一提供方写定向分支。
 - `Desktop + Web`: Electron 桌面客户端与 Quart Web API 并存。
-- `Observability`: `/api/status` 提供启动进度、诊断、健康检查、系统指标、回复质量、人工反馈与成长链状态，`/api/metrics` 提供 Prometheus 风格导出。
+- `Observability`: `/api/status` 提供启动进度、诊断、健康检查、系统指标、回复质量、人工反馈、成长链状态与内存级脱敏 trace 摘要，`/api/metrics` 提供 Prometheus 风格导出。
 - `Readiness & Recovery`: `run.py check`、`GET /api/readiness` 与桌面端首次运行引导共用同一套环境检查逻辑；仪表盘会常驻显示“运行准备度”，并支持导出自动脱敏的诊断支持包。
 - `Hot Reload`: 配置热重载优先使用 `watchdog` 事件监听，缺失依赖时自动回退轮询，并带防抖。
 - `Config Snapshot`: 后端已引入中心化配置快照服务，`/api/config/audit` 可返回当前生效配置、已知未消费字段和配置变更影响摘要。
@@ -293,6 +293,7 @@ This phase turns the project from a demo-style assistant into a safer personal p
   - Prompt rollback appends a new audited active revision instead of overwriting history.
   - Agent Tool Workflow is deliberately limited to whitelisted local tools and bounded payloads; see [API 契约与治理接口](docs/api.md) for request/response details.
   - Model Tool Calling remains opt-in and bounded to the model-visible safe subset; it records aggregate `model_tool_call_stats` without storing raw prompts, chat text, token strings, or full local paths.
+  - TraceLogger-lite keeps only a small in-memory ring buffer under `/api/status.trace_logger`; entries use hash refs and aggregate flags instead of chat text, prompts, token strings, tool outputs, or full local paths.
 
 Key APIs introduced in this phase:
 

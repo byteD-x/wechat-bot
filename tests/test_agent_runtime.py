@@ -741,6 +741,11 @@ async def test_agent_runtime_response_cache_hit_reuses_answer_and_rechecks_safet
     assert status["hits"] == 1
     assert status["misses"] == 1
     assert status["stores"] == 1
+    trace_status = runtime.get_status()["trace_logger"]
+    assert trace_status["count"] == 2
+    assert [item["status"] for item in trace_status["recent"]] == ["success", "cache_hit"]
+    assert trace_status["last"]["response_cache"]["hit"] is True
+    assert "what is the release plan?" not in json.dumps(trace_status, ensure_ascii=False)
 
 
 @pytest.mark.asyncio
@@ -1136,6 +1141,11 @@ async def test_agent_runtime_model_tool_calls_run_safe_tool_and_final_reply(monk
         "failures": 0,
         "blocked": 0,
     }
+    trace_status = runtime.get_status()["trace_logger"]["last"]
+    assert trace_status["status"] == "success"
+    assert trace_status["model_tool"]["success"] is True
+    assert trace_status["model_tool"]["trace"][0]["tool"] == "cost_summary"
+    assert "hidden" not in json.dumps(trace_status, ensure_ascii=False)
 
 
 @pytest.mark.parametrize(
@@ -1193,6 +1203,12 @@ async def test_agent_runtime_model_tool_calls_reject_invalid_calls_with_trace(
     assert stats["requests"] == 1
     assert stats["blocked"] == 1
     assert stats["successes"] == 0
+    trace_status = runtime.get_status()["trace_logger"]["last"]
+    assert trace_status["status"] == "success"
+    assert trace_status["flags"]["tool_call_only_response"] is True
+    assert trace_status["model_tool"]["error_type"] == "tool_call_rejected"
+    assert trace_status["model_tool"]["trace"][0]["error_type"] == "tool_call_rejected"
+    assert error_match not in json.dumps(trace_status, ensure_ascii=False)
 
 
 @pytest.mark.asyncio
@@ -1243,6 +1259,10 @@ async def test_agent_runtime_model_tool_calls_block_final_tool_call_loop(monkeyp
     assert stats["requests"] == 1
     assert stats["successes"] == 1
     assert stats["blocked"] == 1
+    trace_status = runtime.get_status()["trace_logger"]["last"]
+    assert trace_status["flags"]["model_tool_call_loop_blocked"] is True
+    assert trace_status["flags"]["tool_call_only_response"] is True
+    assert trace_status["model_tool"]["success"] is True
 
 
 @pytest.mark.asyncio
@@ -1351,6 +1371,11 @@ async def test_agent_runtime_invoke_downgrades_fallback_timeout_to_empty_reply(m
     assert reply == ""
     assert prepared.response_metadata["compat_fallback_failed"] is True
     assert prepared.response_metadata["compat_fallback_error"] == "compat timeout"
+    trace_status = runtime.get_status()["trace_logger"]["last"]
+    assert trace_status["status"] == "fallback_empty"
+    assert trace_status["flags"]["compat_fallback_failed"] is True
+    assert trace_status["error_type"] == "RuntimeError"
+    assert "compat timeout" not in json.dumps(trace_status, ensure_ascii=False)
 
 
 @pytest.mark.asyncio

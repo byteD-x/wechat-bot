@@ -54,6 +54,7 @@ from .agent_runtime_prepare import (
 from .model_router import ModelRouter
 from .response_cache import ResponseCache, ResponseCacheKey
 from .safety import SafetyGuard
+from .trace_logger import TraceLoggerLite
 from .tool_workflow import (
     ControlledToolWorkflowService,
     ToolWorkflowError,
@@ -295,6 +296,7 @@ class AgentRuntime:
         self.model_tool_calls_enabled = bool(self.agent_cfg.get("model_tool_calls_enabled", False))
         self.model_router = ModelRouter(self.agent_cfg.get("model_routing"))
         self.response_cache = ResponseCache(self.agent_cfg.get("response_cache"))
+        self.trace_logger = TraceLoggerLite()
 
         self._chat_locks: Dict[str, asyncio.Lock] = {}
         self._embedding_cache: Dict[str, tuple[float, List[float]]] = {}
@@ -1676,6 +1678,30 @@ class AgentRuntime:
     async def invoke(self, prepared: AgentPreparedRequest) -> str:
         return await self._invoke_prepared(prepared, priority="foreground")
 
+    def _record_trace_logger(
+        self,
+        prepared: AgentPreparedRequest,
+        *,
+        status: str,
+        priority: str,
+        event: str = "invoke",
+        error: Optional[BaseException] = None,
+    ) -> None:
+        try:
+            self.trace_logger.record(
+                event=event,
+                status=status,
+                chat_id=str(getattr(prepared, "chat_id", "") or ""),
+                provider_id=self.provider_id,
+                model=self.model,
+                priority=priority,
+                timings=dict(getattr(prepared, "timings", {}) or {}),
+                metadata=dict(getattr(prepared, "response_metadata", {}) or {}),
+                error=error,
+            )
+        except Exception as exc:  # pragma: no cover - trace must not affect replies
+            logger.debug("Trace logger skipped failed record: %s", exc)
+
     async def _invoke_prepared(
         self,
         prepared: AgentPreparedRequest,
@@ -1698,6 +1724,7 @@ class AgentRuntime:
                 prepared.timings["invoke_sec"] = round(time.perf_counter() - started, 4)
                 self._stats["successes"] += 1
                 self._stats["last_timings"] = dict(prepared.timings)
+                self._record_trace_logger(prepared, status="cache_hit", priority=priority)
                 return reply_text
             prepared.response_metadata["response_cache"] = {
                 "hit": False,
@@ -1837,6 +1864,12 @@ class AgentRuntime:
                     prepared.response_metadata["compat_fallback_failed"] = True
                     prepared.timings["invoke_sec"] = round(time.perf_counter() - started, 4)
                     self._stats["last_timings"] = dict(prepared.timings)
+                    self._record_trace_logger(
+                        prepared,
+                        status="fallback_empty",
+                        priority=priority,
+                        error=fallback_error,
+                    )
                     return ""
                 raise RuntimeError("LangChain returned empty content.")
             prepared.timings["invoke_sec"] = round(time.perf_counter() - started, 4)
@@ -1861,9 +1894,11 @@ class AgentRuntime:
                 prepared.response_metadata["response_cache"] = cache_metadata
             self._stats["successes"] += 1
             self._stats["last_timings"] = dict(prepared.timings)
+            self._record_trace_logger(prepared, status="success", priority=priority)
             return reply_text
-        except Exception:
+        except Exception as exc:
             self._stats["failures"] += 1
+            self._record_trace_logger(prepared, status="error", priority=priority, error=exc)
             raise
         finally:
             await self._release_llm_slot(priority)
@@ -2451,6 +2486,7 @@ class AgentRuntime:
                 "failures": self._stats["model_tool_call_failures"],
                 "blocked": self._stats["model_tool_call_blocked"],
             },
+            "trace_logger": self.trace_logger.get_status(),
             "safety_stats": {
                 "action_counts": dict(self._stats["safety_action_counts"]),
                 "reason_counts": dict(self._stats["safety_reason_counts"]),

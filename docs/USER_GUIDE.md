@@ -246,6 +246,7 @@ Invoke-RestMethod -Headers @{ "Authorization" = "Bearer your_token" } http://127
 - `/api/status.health_checks`
 - `/api/status.system_metrics`
 - `/api/status.reply_quality`
+- `/api/status.trace_logger`
 - `/api/metrics`
 
 补充说明：
@@ -475,6 +476,7 @@ python -m tools.prompt_gen.generator
 - 模型侧不暴露 `prompt_preview`、`config_audit`，也不开放 shell、文件写入、任意 HTTP 或动态插件。
 - 运行时最多执行一轮模型工具调用，再请求一轮 final 回复；如果 final 仍返回 `tool_calls`，只记录 `model_tool_call_loop_blocked`，不会继续循环。
 - `/api/status.model_tool_call_stats` 只记录 `enabled / requests / successes / failures / blocked` 聚合计数，不保存原始 Prompt、聊天正文、token、完整本机路径或工具原始敏感输出。
+- `/api/status.trace_logger` 只保留内存级最近 trace 摘要，使用 `chat_ref / model_ref / error_hash` 等 hash 引用和聚合字段，不保存聊天正文、原始 Prompt、token、工具输出或完整本机路径。
 
 ### 8.4 `logging`
 
@@ -522,6 +524,7 @@ python -m tools.prompt_gen.generator
 - `safety_stats`
 - `model_route_stats`
 - `model_tool_call_stats`
+- `trace_logger`
 
 消息页里的“消息详情”面板现在会展示当前联系人的画像摘要和专属 Prompt，并允许直接编辑；人工编辑后的版本会继续作为后台渐进式更新的基础。
 设置页支持“保存本模块”；日志页默认启用自动换行，并会把成长任务、发送链和 API 请求整理成更容易扫描的摘要行；侧边栏底部新增“关于”页面入口，可直接查看作者主页、开源仓库、Issue 反馈入口与赞助说明文档。
