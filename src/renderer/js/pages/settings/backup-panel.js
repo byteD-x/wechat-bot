@@ -153,6 +153,7 @@ export function renderBackupPanel(page) {
     const knowledgeBaseStatusElem = page.$('#settings-knowledge-base-status');
     const knowledgeBaseFeedbackElem = page.$('#settings-knowledge-base-feedback');
     const knowledgeBasePreviewElem = page.$('#settings-knowledge-base-preview');
+    const knowledgeBaseSelectFileBtn = page.$('#btn-knowledge-base-select-file');
     const knowledgeBaseRefreshBtn = page.$('#btn-knowledge-base-refresh');
     const knowledgeBaseDryRunBtn = page.$('#btn-knowledge-base-dry-run');
     const knowledgeBaseIngestBtn = page.$('#btn-knowledge-base-ingest');
@@ -234,6 +235,9 @@ export function renderBackupPanel(page) {
     }
     if (knowledgeBaseRefreshBtn) {
         knowledgeBaseRefreshBtn.disabled = knowledgeBusy;
+    }
+    if (knowledgeBaseSelectFileBtn) {
+        knowledgeBaseSelectFileBtn.disabled = knowledgeBusy;
     }
     if (knowledgeBaseDryRunBtn) {
         knowledgeBaseDryRunBtn.disabled = knowledgeBusy;

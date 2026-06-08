@@ -72,6 +72,7 @@ export function bindSettingsEvents(page, deps = {}) {
     bindOptional('#btn-cleanup-backup-apply', 'click', () => void page._cleanupWorkspaceBackups(false));
     bindOptional('#btn-data-control-dry-run', 'click', () => void page._runDataControls(true));
     bindOptional('#btn-data-control-apply', 'click', () => void page._runDataControls(false));
+    bindOptional('#btn-knowledge-base-select-file', 'click', () => void page._selectKnowledgeBaseFile?.());
     bindOptional('#btn-knowledge-base-refresh', 'click', () => void page._refreshKnowledgeBaseStatus?.({ silent: false }));
     bindOptional('#btn-knowledge-base-dry-run', 'click', () => void page._previewKnowledgeBaseDocument?.());
     bindOptional('#btn-knowledge-base-ingest', 'click', () => void page._ingestKnowledgeBaseDocument?.());

@@ -152,7 +152,7 @@ export function renderSettingsPageShell() {
                                     <strong>粘贴文本，先预览再入库</strong>
                                 </summary>
                                 <h3 class="backup-action-title">把可信文本写入 RAG 知识库</h3>
-                                <p class="backup-action-text">首版只处理手动粘贴的纯文本或 Markdown，不读取本机文件、不扫描目录。</p>
+                                <p class="backup-action-text">支持手动粘贴，或显式选择单个纯文本 / Markdown 文件填入表单；不会扫描目录，也不会自动写入。</p>
                                 <div class="backup-detail-grid">
                                     <div class="detail-item">
                                         <span class="detail-label">当前状态</span>
@@ -191,6 +191,7 @@ export function renderSettingsPageShell() {
                                 <div class="detail-help" id="settings-knowledge-base-feedback">请先粘贴内容并执行预览。</div>
                                 <div class="detail-help" id="settings-knowledge-base-preview">尚未生成 chunk 预览。</div>
                                 <div class="backup-button-row backup-button-row-end">
+                                    <button class="btn btn-secondary btn-sm" id="btn-knowledge-base-select-file" type="button">选择文本文件</button>
                                     <button class="btn btn-secondary btn-sm" id="btn-knowledge-base-refresh" type="button">刷新状态</button>
                                     <button class="btn btn-secondary btn-sm" id="btn-knowledge-base-dry-run" type="button">预览分块</button>
                                     <button class="btn btn-primary btn-sm" id="btn-knowledge-base-ingest" type="button">写入知识库</button>

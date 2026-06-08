@@ -161,8 +161,9 @@
       - `backend/api.py::preview_knowledge_base_document` 和 `KnowledgeBaseService.build_chunks()` 复用同一套分块逻辑；`dry-run` 只返回 chunk id、字符数和脱敏来源摘要，不返回正文、chunk text 或 embedding。
       - `backend/api.py::preview_knowledge_base_documents` 复用单文档 payload 解析和 dry-run 构造，`batch-dry-run` 只聚合请求体中的多份文档预览结果，不写入向量库、不触发 embedding、不读取本机路径。
       - `backend/api.py::ingest_knowledge_base_document`、`ingest_knowledge_base_documents`、`rebuild_knowledge_base_document` 与 `rebuild_knowledge_base_documents` 复用运行中 bot 的 `vector_memory` 和 `ai_client.get_embedding`；`batch-ingest` 只顺序写入请求体文档，不读取本机路径、不删除旧 chunk；`batch-rebuild` 只顺序重建请求体文档，重复 `doc_id` 会在删除前被拒绝，单文档 embedding 准备失败时保留该文档旧 chunk。
-      - 设置页“数据与恢复 / 知识库治理”通过 `SettingsPage`、`backup-panel.js`、`page-shell.js` 和 `ApiService` 只调用固定的 `status / dry-run / ingest / rebuild` 端点；写入或重建都必须先对当前粘贴内容完成 dry-run，内容或元数据变化后会清空签名。
-      - 当前设置页不开放 `batch-dry-run`、`batch-ingest`、`batch-rebuild`、`delete`、文件上传、目录扫描或任意本机路径读取；Web API 也只接收请求体中的纯文本或 Markdown。
+      - 设置页“数据与恢复 / 知识库治理”通过 `SettingsPage`、`backup-panel.js`、`page-shell.js` 和 `ApiService` 只调用固定的 `status / dry-run / ingest / rebuild` 端点；写入或重建都必须先对当前内容完成 dry-run，内容或元数据变化后会清空签名。
+      - 桌面端显式文件选择通过 `src/main/ipc.js` 的固定 `knowledge-base:select-file` IPC 进入主进程，只允许可信 renderer 打开单文件选择对话框，限制 `.txt/.md/.markdown`、普通文件和大小，返回内容与 `.../<filename>` 来源，不向 renderer 暴露完整本机路径。
+      - 除固定单文件选择器外，当前设置页不开放 `batch-dry-run`、`batch-ingest`、`batch-rebuild`、`delete`、文件上传、目录扫描或任意本机路径读取；Web API 也只接收请求体中的纯文本或 Markdown。
 
 ### 当前接口分组
 

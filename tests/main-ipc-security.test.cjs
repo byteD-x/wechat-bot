@@ -13,6 +13,7 @@ function createHarness(options = {}) {
     const handlers = new Map();
     const openedExternal = [];
     const backendCalls = [];
+    const openDialogCalls = [];
     const storeWrites = [];
     const systemMenuCalls = [];
     const hideToTrayCalls = [];
@@ -126,6 +127,13 @@ function createHarness(options = {}) {
         },
         dialog: {
             showSaveDialog: async () => ({ canceled: true }),
+            showOpenDialog: async (win, config) => {
+                openDialogCalls.push({ win, config });
+                if (typeof options.showOpenDialogImpl === 'function') {
+                    return options.showOpenDialogImpl(win, config);
+                }
+                return { canceled: true };
+            },
         },
     });
 
@@ -138,9 +146,11 @@ function createHarness(options = {}) {
         windowGetStateHandler: handlers.get('window:get-state'),
         windowMaximizeHandler: handlers.get('window-maximize'),
         windowShowSystemMenuHandler: handlers.get('window:show-system-menu'),
+        knowledgeBaseSelectFileHandler: handlers.get('knowledge-base:select-file'),
         backendCalls,
         hideToTrayCalls,
         openedExternal,
+        openDialogCalls,
         quitCalls,
         storeWrites,
         systemMenuCalls,
@@ -291,6 +301,148 @@ test('open-wechat protocol launch succeeds after process is detected', async () 
     assert.equal(result.success, true);
     assert.equal(result.message, 'Launched via protocol');
     assert.equal(protocolTriggered, true);
+});
+
+test('knowledge-base file selector reads one explicit text file without leaking full path', async () => {
+    const selectedPath = path.resolve('C:/private/runbooks/release-runbook.md');
+    const harness = createHarness({
+        fsImpl: {
+            statSync(targetPath) {
+                assert.equal(targetPath, selectedPath);
+                return {
+                    size: 32,
+                    isFile: () => true,
+                };
+            },
+            readFileSync(targetPath) {
+                assert.equal(targetPath, selectedPath);
+                return Buffer.from('# Release\ntrusted notes', 'utf8');
+            },
+        },
+        showOpenDialogImpl: async () => ({
+            canceled: false,
+            filePaths: [selectedPath],
+        }),
+    });
+    const event = createTrustedEvent();
+
+    const result = await harness.knowledgeBaseSelectFileHandler(event);
+
+    assert.equal(result.success, true);
+    assert.equal(result.canceled, false);
+    assert.equal(result.name, 'release-runbook.md');
+    assert.equal(result.extension, 'md');
+    assert.equal(result.content_type, 'markdown');
+    assert.equal(result.content, '# Release\ntrusted notes');
+    assert.equal(result.source_file, '.../release-runbook.md');
+    assert.equal(Object.hasOwn(result, 'filePath'), false);
+    assert.equal(Object.hasOwn(result, 'path'), false);
+    assert.equal(JSON.stringify(result).includes('C:'), false);
+    assert.equal(JSON.stringify(result).includes('private'), false);
+    assert.equal(harness.openDialogCalls.length, 1);
+    assert.deepEqual(harness.openDialogCalls[0].config.properties, ['openFile']);
+    assert.deepEqual(harness.openDialogCalls[0].config.filters, [
+        { name: 'Text or Markdown', extensions: ['txt', 'md', 'markdown'] },
+    ]);
+});
+
+test('knowledge-base file selector handles cancel and rejects unsafe files', async () => {
+    const canceledHarness = createHarness();
+    const event = createTrustedEvent();
+
+    const canceled = await canceledHarness.knowledgeBaseSelectFileHandler(event);
+
+    assert.equal(canceled.success, false);
+    assert.equal(canceled.canceled, true);
+    assert.equal(canceled.message, 'file selection canceled');
+
+    const unsupportedPath = path.resolve('C:/private/runbooks/secrets.pdf');
+    const unsupportedHarness = createHarness({
+        showOpenDialogImpl: async () => ({
+            canceled: false,
+            filePaths: [unsupportedPath],
+        }),
+    });
+    const unsupported = await unsupportedHarness.knowledgeBaseSelectFileHandler(event);
+    assert.equal(unsupported.success, false);
+    assert.equal(unsupported.canceled, false);
+    assert.equal(unsupported.message, 'unsupported_file_type');
+
+    const hugePath = path.resolve('C:/private/runbooks/huge.md');
+    const hugeHarness = createHarness({
+        fsImpl: {
+            statSync() {
+                return {
+                    size: 300 * 1024,
+                    isFile: () => true,
+                };
+            },
+            readFileSync() {
+                throw new Error('should not read oversized files');
+            },
+        },
+        showOpenDialogImpl: async () => ({
+            canceled: false,
+            filePaths: [hugePath],
+        }),
+    });
+    const huge = await hugeHarness.knowledgeBaseSelectFileHandler(event);
+    assert.equal(huge.success, false);
+    assert.equal(huge.canceled, false);
+    assert.equal(huge.message, 'file_too_large');
+});
+
+test('knowledge-base file selector logs read failures without full local path', async () => {
+    const selectedPath = path.resolve('C:/private/runbooks/failure.md');
+    const originalWarn = console.warn;
+    const warnCalls = [];
+    console.warn = (...args) => {
+        warnCalls.push(args.map((item) => String(item)));
+    };
+    const harness = createHarness({
+        fsImpl: {
+            statSync() {
+                const error = new Error(`cannot access ${selectedPath}`);
+                error.code = 'EACCES';
+                throw error;
+            },
+        },
+        showOpenDialogImpl: async () => ({
+            canceled: false,
+            filePaths: [selectedPath],
+        }),
+    });
+
+    try {
+        const result = await harness.knowledgeBaseSelectFileHandler(createTrustedEvent());
+
+        assert.equal(result.success, false);
+        assert.equal(result.canceled, false);
+        assert.equal(result.message, 'file_read_failed');
+        assert.deepEqual(warnCalls.at(-1), [
+            '[IPC] Knowledge base file selection failed:',
+            'EACCES',
+        ]);
+        assert.equal(JSON.stringify(warnCalls).includes('C:'), false);
+        assert.equal(JSON.stringify(warnCalls).includes('private'), false);
+    } finally {
+        console.warn = originalWarn;
+    }
+});
+
+test('knowledge-base file selector rejects untrusted renderer sender', () => {
+    const harness = createHarness();
+    const event = {
+        senderFrame: {
+            url: 'https://attacker.example',
+        },
+    };
+
+    assert.throws(
+        () => harness.knowledgeBaseSelectFileHandler(event),
+        /forbidden_sender/,
+    );
+    assert.equal(harness.openDialogCalls.length, 0);
 });
 
 test('backend:request rejects endpoints outside the trusted allowlist', async () => {

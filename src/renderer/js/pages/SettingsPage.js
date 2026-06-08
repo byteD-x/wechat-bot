@@ -756,6 +756,81 @@ export class SettingsPage extends PageController {
         this._renderBackupPanel();
     }
 
+    async _selectKnowledgeBaseFile() {
+        if (this._backupState.knowledgeBaseBusy) {
+            return;
+        }
+        const selectFile = globalThis.window?.electronAPI?.selectKnowledgeBaseFile;
+        if (typeof selectFile !== 'function') {
+            const message = '当前运行环境不支持选择知识库文件';
+            this._backupState.knowledgeBaseFeedback = message;
+            this._renderBackupPanel();
+            toast.info(message);
+            return;
+        }
+
+        this._backupState.knowledgeBaseBusy = true;
+        this._backupState.knowledgeBaseFeedback = '正在选择知识库文本文件...';
+        this._renderBackupPanel();
+        try {
+            const result = await selectFile();
+            if (result?.canceled) {
+                this._backupState.knowledgeBaseFeedback = '已取消选择文本文件。';
+                this._renderBackupPanel();
+                return;
+            }
+            if (!result?.success) {
+                throw new Error(result?.message || '知识库文件读取失败');
+            }
+            const content = String(result.content || '').trim();
+            if (!content) {
+                throw new Error('empty_file');
+            }
+
+            const contentInput = this.$('#settings-knowledge-base-content');
+            const contentTypeInput = this.$('#settings-knowledge-base-content-type');
+            const docIdInput = this.$('#settings-knowledge-base-doc-id');
+            const sourceFileInput = this.$('#settings-knowledge-base-source-file');
+            const urlInput = this.$('#settings-knowledge-base-url');
+            const pageInput = this.$('#settings-knowledge-base-page');
+
+            if (contentInput) {
+                contentInput.value = content;
+            }
+            if (contentTypeInput) {
+                contentTypeInput.value = String(result.content_type || result.extension || '').toLowerCase() === 'text'
+                    ? 'text'
+                    : 'markdown';
+            }
+            if (docIdInput) {
+                docIdInput.value = '';
+            }
+            if (sourceFileInput) {
+                sourceFileInput.value = String(result.source_file || result.name || '').trim();
+            }
+            if (urlInput) {
+                urlInput.value = '';
+            }
+            if (pageInput) {
+                pageInput.value = '';
+            }
+
+            this._backupState.knowledgeBaseDryRunSignature = '';
+            this._backupState.knowledgeBasePreview = null;
+            this._backupState.knowledgeBaseFeedback = `已载入 ${result.name || '文本文件'}，请先预览分块。`;
+            this._renderBackupPanel();
+            toast.success('知识库文本文件已载入');
+        } catch (error) {
+            const message = toast.getErrorMessage(error, '知识库文件读取失败');
+            this._backupState.knowledgeBaseFeedback = message;
+            this._renderBackupPanel();
+            toast.error(message);
+        } finally {
+            this._backupState.knowledgeBaseBusy = false;
+            this._renderBackupPanel();
+        }
+    }
+
     async _refreshKnowledgeBaseStatus(options = {}) {
         this._backupState.knowledgeBaseBusy = true;
         this._backupState.knowledgeBaseFeedback = options?.silent ? this._backupState.knowledgeBaseFeedback : '正在读取知识库状态...';

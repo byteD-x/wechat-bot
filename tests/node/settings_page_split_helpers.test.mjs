@@ -1322,6 +1322,7 @@ test('settings page shell binds events and auto save routing stably', async () =
         'btn-cleanup-backup-apply',
         'btn-data-control-dry-run',
         'btn-data-control-apply',
+        'btn-knowledge-base-select-file',
         'btn-knowledge-base-refresh',
         'btn-knowledge-base-dry-run',
         'btn-knowledge-base-ingest',
@@ -1392,6 +1393,9 @@ test('settings page shell binds events and auto save routing stably', async () =
         _runDataControls(dryRun) {
             this.calls.push(`data-control:${dryRun}`);
         },
+        _selectKnowledgeBaseFile() {
+            this.calls.push('kb-select-file');
+        },
         _refreshKnowledgeBaseStatus(options) {
             this.calls.push(`kb-refresh:${options?.silent}`);
         },
@@ -1432,7 +1436,7 @@ test('settings page shell binds events and auto save routing stably', async () =
         rootElement: root,
     });
 
-    assert.equal(page.bindings.length, 38);
+    assert.equal(page.bindings.length, 39);
     assert.equal(page._eventCleanups.length, 1);
 
     page.bindings.forEach(({ handler }) => handler());
@@ -1460,6 +1464,7 @@ test('settings page shell binds events and auto save routing stably', async () =
         'backup-cleanup:false',
         'data-control:true',
         'data-control:false',
+        'kb-select-file',
         'kb-refresh:false',
         'kb-preview',
         'kb-ingest',
@@ -1972,6 +1977,96 @@ test('settings page knowledge base ingest requires matching dry-run preview', as
         toast.error = originalToastError;
     }
 });
+
+test('settings page knowledge base file selector fills form and requires preview', async () => withDom(async () => {
+    const originalDryRun = apiService.dryRunKnowledgeDocument;
+    const originalIngest = apiService.ingestKnowledgeDocument;
+    const originalRebuild = apiService.rebuildKnowledgeDocument;
+    const originalToastSuccess = toast.success;
+    const originalToastInfo = toast.info;
+    const originalToastError = toast.error;
+    const page = new SettingsPage();
+    const inputs = new Map([
+        ['#settings-knowledge-base-content', { value: 'old content' }],
+        ['#settings-knowledge-base-content-type', { value: 'text' }],
+        ['#settings-knowledge-base-doc-id', { value: 'old-doc' }],
+        ['#settings-knowledge-base-version', { value: 'v7' }],
+        ['#settings-knowledge-base-source-file', { value: 'docs/old.md' }],
+        ['#settings-knowledge-base-url', { value: 'https://example.test/old' }],
+        ['#settings-knowledge-base-page', { value: '9' }],
+    ]);
+    const apiCalls = [];
+    const toastCalls = [];
+    let renderCount = 0;
+    let selectorCalls = 0;
+
+    page.$ = (selector) => inputs.get(selector) || null;
+    page._renderBackupPanel = () => {
+        renderCount += 1;
+    };
+    page._backupState.knowledgeBaseDryRunSignature = '{"old":true}';
+    page._backupState.knowledgeBasePreview = { success: true, chunk_count: 1 };
+    globalThis.window.electronAPI.selectKnowledgeBaseFile = async () => {
+        selectorCalls += 1;
+        return {
+            success: true,
+            canceled: false,
+            name: 'release-runbook.md',
+            extension: 'md',
+            content_type: 'markdown',
+            source_file: '.../release-runbook.md',
+            content: '  # Release\ntrusted notes  ',
+        };
+    };
+    apiService.dryRunKnowledgeDocument = async () => {
+        apiCalls.push('dry-run');
+        return { success: true };
+    };
+    apiService.ingestKnowledgeDocument = async () => {
+        apiCalls.push('ingest');
+        return { success: true };
+    };
+    apiService.rebuildKnowledgeDocument = async () => {
+        apiCalls.push('rebuild');
+        return { success: true };
+    };
+    toast.success = (message) => {
+        toastCalls.push({ type: 'success', message });
+    };
+    toast.info = (message) => {
+        toastCalls.push({ type: 'info', message });
+    };
+    toast.error = (message) => {
+        toastCalls.push({ type: 'error', message });
+    };
+
+    try {
+        await page._selectKnowledgeBaseFile();
+
+        assert.equal(selectorCalls, 1);
+        assert.equal(inputs.get('#settings-knowledge-base-content').value, '# Release\ntrusted notes');
+        assert.equal(inputs.get('#settings-knowledge-base-content-type').value, 'markdown');
+        assert.equal(inputs.get('#settings-knowledge-base-doc-id').value, '');
+        assert.equal(inputs.get('#settings-knowledge-base-version').value, 'v7');
+        assert.equal(inputs.get('#settings-knowledge-base-source-file').value, '.../release-runbook.md');
+        assert.equal(inputs.get('#settings-knowledge-base-url').value, '');
+        assert.equal(inputs.get('#settings-knowledge-base-page').value, '');
+        assert.equal(page._backupState.knowledgeBaseDryRunSignature, '');
+        assert.equal(page._backupState.knowledgeBasePreview, null);
+        assert.match(page._backupState.knowledgeBaseFeedback, /请先预览分块/);
+        assert.deepEqual(apiCalls, []);
+        assert.equal(toastCalls.filter((item) => item.type === 'success').length, 1);
+        assert.equal(toastCalls.filter((item) => item.type === 'error').length, 0);
+        assert.ok(renderCount > 0);
+    } finally {
+        apiService.dryRunKnowledgeDocument = originalDryRun;
+        apiService.ingestKnowledgeDocument = originalIngest;
+        apiService.rebuildKnowledgeDocument = originalRebuild;
+        toast.success = originalToastSuccess;
+        toast.info = originalToastInfo;
+        toast.error = originalToastError;
+    }
+}));
 
 test('settings page knowledge base rebuild requires matching dry-run preview', async () => {
     const originalDryRun = apiService.dryRunKnowledgeDocument;
