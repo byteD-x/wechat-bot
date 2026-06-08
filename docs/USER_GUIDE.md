@@ -710,9 +710,12 @@ python run.py eval --dataset tests/fixtures/evals/smoke_cases.json --preset smok
   - 只按精确 `doc_id` 删除 `source=knowledge_base` 的 chunk，不影响聊天记忆或导出语料 RAG。
 - 知识库状态：`GET /api/knowledge_base/status`
   - 返回运行中向量库是否可用，以及当前知识库 chunk 数。
+- 知识库索引摘要：`GET /api/knowledge_base/index`
+  - 只读取已入库 `source=knowledge_base` chunk 的 metadata，按 `doc_id` 聚合版本、脱敏来源、URL、页码和 chunk 数；不会读取 `source_file` 指向的本机文件，不返回正文、chunk text、embedding 或完整本机路径。
+  - 响应包含 `vector_memory_available`、`supports_index`、`chunk_count`、`indexed_chunk_count`、`document_count`、`documents` 和 `truncated`；如果当前向量库实现不支持 metadata 枚举，会返回 `supports_index=false` 和空文档列表。
 - 首版限制：
-  - Web API 不提供文件上传、目录扫描、任意文件路径读取或后台批量索引。
-  - 桌面设置页当前接入单文档粘贴 / 显式单文件选择后的 dry-run / ingest / rebuild，也接入受控 JSON 批量 dry-run / batch-ingest / batch-rebuild；两条路径都要求当前内容先完成匹配 dry-run。后台队列和文件索引仍未提供。
+  - Web API 不提供文件上传、目录扫描、任意文件路径读取或后台批量索引；`index` 是已入库 metadata 摘要，不是文件系统扫描器。
+  - 桌面设置页当前接入单文档粘贴 / 显式单文件选择后的 dry-run / ingest / rebuild，也接入受控 JSON 批量 dry-run / batch-ingest / batch-rebuild；两条路径都要求当前内容先完成匹配 dry-run。后台队列和自动文件索引仍未提供。
   - `ingest / batch-ingest / rebuild / batch-rebuild` 需要后端已经启动并具备可用 embedding 客户端；缺少运行时依赖时会返回 `409 vector_memory_unavailable` 或 `409 embedding_unavailable`。
   - 如果 `doc_id / source_file / url / source_url` 看起来像完整本机路径或 `file://` 本机 URI，接口响应会收敛为 `.../<filename>`，避免泄露本机目录结构。
 
@@ -734,6 +737,7 @@ python run.py eval --dataset tests/fixtures/evals/smoke_cases.json --preset smok
 - `POST /api/data_controls/clear`
 - `GET /api/evals/latest`
 - `GET /api/knowledge_base/status`
+- `GET /api/knowledge_base/index`
 - `POST /api/knowledge_base/dry-run`
 - `POST /api/knowledge_base/batch-dry-run`
 - `POST /api/knowledge_base/ingest`

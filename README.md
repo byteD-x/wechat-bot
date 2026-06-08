@@ -55,7 +55,7 @@
 - `Contact Prompt Growth`: 每个联系人都可逐步沉淀一份专属 Prompt，支持后台生成、导出聊天增强和 UI 直接编辑。
 - `Prompt Governance`: 系统 Prompt 回滚通过 `POST /api/v1/admin/prompts/{revision}/rollback` 追加新的 active revision，并写入 `data/prompt_revisions.json` 审计账本，不覆盖历史记录。
 - `RAG`: 支持运行期对话向量记忆、导出聊天记录风格召回、可选 Hybrid Search + Query Rewrite，以及可选本地 `Cross-Encoder` 精排；未配置本地模型或缺依赖时自动回退轻量重排。
-- `Knowledge Base Governance`: 本地 Web API 已提供知识库文档 `dry-run / batch-dry-run / ingest / batch-ingest / rebuild / batch-rebuild / delete / status` 最小闭环，首版只接收请求体中的纯文本或 Markdown，不读取任意本机路径，预览响应只返回 chunk 摘要和脱敏来源；`batch-dry-run` 仅做最多 20 份请求体文档的无副作用预览，`batch-ingest` 仅顺序写入请求体文档，`batch-rebuild` 会按顺序重建请求体文档、拒绝重复 `doc_id`，并在单文档 embedding 准备失败时保留该文档旧 chunk；桌面设置页支持单文档手动粘贴、固定 IPC 显式选择单个 `.txt/.md/.markdown` 文件填入表单，以及受控 JSON 批量预览/写入/重建，来源只保留 `.../<filename>`，写入或重建前仍需对当前内容完成对应 dry-run；`python run.py knowledge-base import-files` 提供显式文件列表 CLI，默认只预览，`--apply` 才调用运行中的本机 API 写入。
+- `Knowledge Base Governance`: 本地 Web API 已提供知识库文档 `dry-run / batch-dry-run / ingest / batch-ingest / rebuild / batch-rebuild / delete / status / index` 最小闭环，首版只接收请求体中的纯文本或 Markdown，不读取任意本机路径，预览和索引响应只返回 chunk / 文档 metadata 摘要和脱敏来源；`batch-dry-run` 仅做最多 20 份请求体文档的无副作用预览，`batch-ingest` 仅顺序写入请求体文档，`batch-rebuild` 会按顺序重建请求体文档、拒绝重复 `doc_id`，并在单文档 embedding 准备失败时保留该文档旧 chunk；`index` 仅聚合已入库 `knowledge_base` chunk metadata，不扫描目录、不读取文件正文；桌面设置页支持单文档手动粘贴、固定 IPC 显式选择单个 `.txt/.md/.markdown` 文件填入表单，以及受控 JSON 批量预览/写入/重建，来源只保留 `.../<filename>`，写入或重建前仍需对当前内容完成对应 dry-run；`python run.py knowledge-base import-files` 提供显式文件列表 CLI，默认只预览，`--apply` 才调用运行中的本机 API 写入。
 - `Transport Abstraction`: 传输层统一抽象为 `BaseTransport`，默认走 `wcferry`，并保证“接收消息 → 发送消息 → 完成落盘”的主闭环可独立演进。
 - `Provider Compatibility`: 后端统一标准化请求字段、响应正文、工具调用、错误结构与落盘元数据，避免为单一提供方写定向分支。
 - `Desktop + Web`: Electron 桌面客户端与 Quart Web API 并存。
@@ -334,6 +334,7 @@ Key APIs introduced in this phase:
 - `POST /api/data_controls/clear`
 - `GET /api/evals/latest`
 - `GET /api/knowledge_base/status`
+- `GET /api/knowledge_base/index`
 - `POST /api/knowledge_base/dry-run`
 - `POST /api/knowledge_base/batch-dry-run`
 - `POST /api/knowledge_base/ingest`

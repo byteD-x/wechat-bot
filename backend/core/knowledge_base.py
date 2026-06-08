@@ -186,6 +186,88 @@ def build_knowledge_batch_dry_run_payload(documents: List[KnowledgeDocument]) ->
     }
 
 
+def _append_unique(values: List[Any], value: Any) -> None:
+    if value in ("", None):
+        return
+    if value not in values:
+        values.append(value)
+
+
+def _sort_page_values(values: List[Any]) -> List[Any]:
+    return sorted(values, key=lambda item: (str(type(item)), str(item)))
+
+
+def build_knowledge_index_payload(
+    records: List[Dict[str, Any]],
+    *,
+    chunk_count: int,
+    limit: int,
+) -> Dict[str, Any]:
+    documents: Dict[str, Dict[str, Any]] = {}
+    for record in records:
+        metadata = dict((record or {}).get("metadata") or {})
+        if metadata.get("source") != KNOWLEDGE_SOURCE:
+            continue
+        doc_id = redact_knowledge_local_path(metadata.get("doc_id"))
+        if not doc_id:
+            doc_id = redact_knowledge_local_path(metadata.get("source_file") or metadata.get("url"))
+        if not doc_id:
+            continue
+
+        entry = documents.setdefault(
+            doc_id,
+            {
+                "doc_id": doc_id,
+                "version": "",
+                "versions": [],
+                "source_file": "",
+                "source_files": [],
+                "url": "",
+                "urls": [],
+                "pages": [],
+                "chunk_count": 0,
+            },
+        )
+        entry["chunk_count"] += 1
+
+        version = str(metadata.get("doc_version") or metadata.get("version") or "").strip()
+        source_file = redact_knowledge_local_path(metadata.get("source_file"))
+        url = redact_knowledge_local_path(metadata.get("url") or metadata.get("source_url"))
+        page = metadata.get("page", "")
+
+        _append_unique(entry["versions"], version)
+        _append_unique(entry["source_files"], source_file)
+        _append_unique(entry["urls"], url)
+        _append_unique(entry["pages"], page)
+
+    document_list = []
+    for entry in documents.values():
+        entry["versions"] = sorted(entry["versions"])
+        entry["source_files"] = sorted(entry["source_files"])
+        entry["urls"] = sorted(entry["urls"])
+        entry["pages"] = _sort_page_values(entry["pages"])
+        entry["version"] = entry["versions"][0] if len(entry["versions"]) == 1 else ""
+        entry["source_file"] = entry["source_files"][0] if len(entry["source_files"]) == 1 else ""
+        entry["url"] = entry["urls"][0] if len(entry["urls"]) == 1 else ""
+        document_list.append(entry)
+
+    document_list.sort(key=lambda item: str(item.get("doc_id") or ""))
+    indexed_chunk_count = sum(
+        1
+        for record in records
+        if dict((record or {}).get("metadata") or {}).get("source") == KNOWLEDGE_SOURCE
+    )
+    effective_chunk_count = max(0, int(chunk_count or 0), indexed_chunk_count)
+    return {
+        "source": KNOWLEDGE_SOURCE,
+        "chunk_count": effective_chunk_count,
+        "indexed_chunk_count": indexed_chunk_count,
+        "document_count": len(document_list),
+        "documents": document_list,
+        "truncated": effective_chunk_count > indexed_chunk_count,
+    }
+
+
 class KnowledgeBaseService:
     """Ingest general knowledge documents into the existing vector memory."""
 
@@ -389,6 +471,7 @@ __all__ = [
     "build_knowledge_batch_dry_run_payload",
     "build_knowledge_chunk_preview",
     "build_knowledge_dry_run_payload",
+    "build_knowledge_index_payload",
     "KnowledgeBaseService",
     "KnowledgeChunk",
     "KnowledgeDocument",

@@ -44,6 +44,7 @@ from backend.core.knowledge_base import (
     KnowledgeBaseService,
     build_knowledge_batch_dry_run_payload,
     build_knowledge_dry_run_payload,
+    build_knowledge_index_payload,
     parse_knowledge_batch_payload,
     parse_knowledge_document_payload,
     redact_knowledge_local_path,
@@ -2148,6 +2149,49 @@ async def get_knowledge_base_status():
     except Exception as e:
         logger.exception("load knowledge base status failed: %s", e)
         return _json_internal_error("knowledge_base_status_failed", code="knowledge_base_status_failed")
+
+
+@app.route("/api/knowledge_base/index", methods=["GET"])
+async def get_knowledge_base_index():
+    """Return a read-only document index built from stored knowledge metadata."""
+    try:
+        vector_memory = _get_knowledge_vector_memory()
+        available = _knowledge_vector_available(vector_memory)
+        limit = _safe_int(request.args.get("limit"), 1000, min_value=1)
+        limit = min(limit, 5000)
+        chunk_count = 0
+        if available and hasattr(vector_memory, "count"):
+            chunk_count = await asyncio.to_thread(
+                vector_memory.count,
+                {"source": KNOWLEDGE_SOURCE},
+            )
+
+        supports_index = available and hasattr(vector_memory, "list_metadata")
+        records = []
+        if supports_index:
+            records = await asyncio.to_thread(
+                vector_memory.list_metadata,
+                {"source": KNOWLEDGE_SOURCE},
+                limit,
+            )
+
+        payload = build_knowledge_index_payload(
+            list(records or []),
+            chunk_count=_safe_int(chunk_count, 0),
+            limit=limit,
+        )
+        payload.update(
+            {
+                "success": True,
+                "vector_memory_available": available,
+                "supports_index": bool(supports_index),
+                "limit": limit,
+            }
+        )
+        return jsonify(payload)
+    except Exception as e:
+        logger.exception("load knowledge base index failed: %s", e)
+        return _json_internal_error("knowledge_base_index_failed", code="knowledge_base_index_failed")
 
 
 @app.route("/api/knowledge_base/dry-run", methods=["POST"])

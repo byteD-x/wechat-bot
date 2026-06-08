@@ -61,6 +61,15 @@ class DummyKnowledgeVectorMemory:
             if all(item["metadata"].get(key) == value for key, value in where.items())
         ]
 
+    def list_metadata(self, where=None, limit=1000):
+        return [
+            {
+                "id": item["id"],
+                "metadata": dict(item["metadata"]),
+            }
+            for item in self._filter(where)[: max(1, int(limit or 1))]
+        ]
+
 
 @pytest.fixture
 def client():
@@ -4146,6 +4155,127 @@ async def test_api_knowledge_base_status_reports_vector_availability(client, moc
     assert data["vector_memory_available"] is True
     assert data["source"] == api_module.KNOWLEDGE_SOURCE
     assert data["chunk_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_api_knowledge_base_index_returns_sanitized_document_metadata(client, mock_manager):
+    vector_memory = DummyKnowledgeVectorMemory()
+    vector_memory.upsert_text(
+        "Secret release runbook text must not appear in index responses.",
+        {
+            "source": api_module.KNOWLEDGE_SOURCE,
+            "scope": "knowledge",
+            "doc_id": "release-playbook",
+            "doc_version": "2026-06",
+            "chunk_id": "kb-release-1",
+            "chunk_index": 0,
+            "chunk_count": 2,
+            "source_file": "Z:/fixture/private/release-playbook.md",
+            "url": "file:///Z:/fixture/private/source-url.md",
+            "page": 2,
+        },
+        "kb-release-1",
+        [0.1, 0.2],
+    )
+    vector_memory.upsert_text(
+        "Second secret chunk must also stay out of the response.",
+        {
+            "source": api_module.KNOWLEDGE_SOURCE,
+            "scope": "knowledge",
+            "doc_id": "release-playbook",
+            "doc_version": "2026-06",
+            "chunk_id": "kb-release-2",
+            "chunk_index": 1,
+            "chunk_count": 2,
+            "source_file": "Z:/fixture/private/release-playbook.md",
+            "url": "file:///Z:/fixture/private/source-url.md",
+            "page": 3,
+        },
+        "kb-release-2",
+        [0.2, 0.3],
+    )
+    vector_memory.upsert_text(
+        "Chat memory should not be indexed here.",
+        {"source": "chat_memory", "doc_id": "chat-1"},
+        "chat-1",
+        [0.3, 0.4],
+    )
+    mock_manager.bot.vector_memory = vector_memory
+
+    response = await client.get("/api/knowledge_base/index")
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["success"] is True
+    assert data["vector_memory_available"] is True
+    assert data["supports_index"] is True
+    assert data["source"] == api_module.KNOWLEDGE_SOURCE
+    assert data["chunk_count"] == 2
+    assert data["indexed_chunk_count"] == 2
+    assert data["document_count"] == 1
+    assert data["truncated"] is False
+    document = data["documents"][0]
+    assert document["doc_id"] == "release-playbook"
+    assert document["version"] == "2026-06"
+    assert document["source_file"] == ".../release-playbook.md"
+    assert document["url"] == ".../source-url.md"
+    assert document["pages"] == [2, 3]
+    assert document["chunk_count"] == 2
+
+    response_text = (await response.get_data()).decode("utf-8")
+    for forbidden in (
+        "Secret release runbook",
+        "Second secret chunk",
+        "Chat memory",
+        "file://",
+        "Z:/fixture/private",
+    ):
+        assert forbidden not in response_text
+
+
+@pytest.mark.asyncio
+async def test_api_knowledge_base_index_reports_unsupported_metadata_listing(client, mock_manager):
+    class CountOnlyVectorMemory:
+        def __bool__(self):
+            return True
+
+        def count(self, where=None):
+            if where == {"source": api_module.KNOWLEDGE_SOURCE}:
+                return 2
+            return 0
+
+    mock_manager.bot.vector_memory = CountOnlyVectorMemory()
+
+    response = await client.get("/api/knowledge_base/index")
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["success"] is True
+    assert data["vector_memory_available"] is True
+    assert data["supports_index"] is False
+    assert data["chunk_count"] == 2
+    assert data["indexed_chunk_count"] == 0
+    assert data["document_count"] == 0
+    assert data["documents"] == []
+    assert data["truncated"] is True
+
+
+@pytest.mark.asyncio
+async def test_api_knowledge_base_index_handles_unavailable_vector_memory(client, mock_manager):
+    mock_manager.bot.vector_memory = None
+
+    response = await client.get("/api/knowledge_base/index")
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["success"] is True
+    assert data["vector_memory_available"] is False
+    assert data["supports_index"] is False
+    assert data["chunk_count"] == 0
+    assert data["indexed_chunk_count"] == 0
+    assert data["document_count"] == 0
+    assert data["documents"] == []
+    assert data["truncated"] is False
 
 
 @pytest.mark.asyncio

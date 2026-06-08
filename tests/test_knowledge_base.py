@@ -3,7 +3,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from backend.core.knowledge_base import KNOWLEDGE_SOURCE, KnowledgeBaseService, KnowledgeDocument
+from backend.core.knowledge_base import (
+    KNOWLEDGE_SOURCE,
+    KnowledgeBaseService,
+    KnowledgeDocument,
+    build_knowledge_index_payload,
+)
 
 
 class DummyVectorMemory:
@@ -167,3 +172,82 @@ async def test_knowledge_base_rejects_empty_document_without_embedding_call():
     assert summary["chunk_count"] == 0
     assert vector_memory.upserts == []
     ai_client.get_embedding.assert_not_awaited()
+
+
+def test_knowledge_base_index_payload_groups_metadata_without_raw_content():
+    payload = build_knowledge_index_payload(
+        [
+            {
+                "id": "kb-1",
+                "metadata": {
+                    "source": KNOWLEDGE_SOURCE,
+                    "doc_id": "release-playbook",
+                    "doc_version": "2026-06",
+                    "source_file": "Z:/fixture/private/release-playbook.md",
+                    "url": "file:///Z:/fixture/private/source-url.md",
+                    "page": 2,
+                },
+            },
+            {
+                "id": "kb-2",
+                "metadata": {
+                    "source": KNOWLEDGE_SOURCE,
+                    "doc_id": "release-playbook",
+                    "doc_version": "2026-06",
+                    "source_file": "Z:/fixture/private/release-playbook.md",
+                    "url": "file:///Z:/fixture/private/source-url.md",
+                    "page": 3,
+                },
+            },
+            {
+                "id": "chat-1",
+                "metadata": {
+                    "source": "chat_memory",
+                    "doc_id": "release-playbook",
+                    "source_file": "Z:/fixture/private/chat.md",
+                },
+            },
+        ],
+        chunk_count=2,
+        limit=1000,
+    )
+
+    assert payload["source"] == KNOWLEDGE_SOURCE
+    assert payload["chunk_count"] == 2
+    assert payload["indexed_chunk_count"] == 2
+    assert payload["document_count"] == 1
+    assert payload["truncated"] is False
+    document = payload["documents"][0]
+    assert document["doc_id"] == "release-playbook"
+    assert document["version"] == "2026-06"
+    assert document["versions"] == ["2026-06"]
+    assert document["source_file"] == ".../release-playbook.md"
+    assert document["source_files"] == [".../release-playbook.md"]
+    assert document["url"] == ".../source-url.md"
+    assert document["urls"] == [".../source-url.md"]
+    assert document["pages"] == [2, 3]
+    assert document["chunk_count"] == 2
+    assert "text" not in str(payload)
+    assert "Z:/fixture/private" not in str(payload)
+
+
+def test_knowledge_base_index_payload_marks_truncated_metadata_listing():
+    payload = build_knowledge_index_payload(
+        [
+            {
+                "id": "kb-1",
+                "metadata": {
+                    "source": KNOWLEDGE_SOURCE,
+                    "doc_id": "runbook",
+                    "doc_version": "v1",
+                },
+            },
+        ],
+        chunk_count=3,
+        limit=1,
+    )
+
+    assert payload["indexed_chunk_count"] == 1
+    assert payload["chunk_count"] == 3
+    assert payload["document_count"] == 1
+    assert payload["truncated"] is True

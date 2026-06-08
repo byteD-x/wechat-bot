@@ -357,11 +357,12 @@
 
 ## 知识库治理 API
 
-用途：把现有 `KnowledgeBaseService` 暴露成受控的本机治理接口，用于单/批量预览、单/批量写入、单/批量重建、删除和查看知识库向量 chunk 状态。
+用途：把现有 `KnowledgeBaseService` 暴露成受控的本机治理接口，用于单/批量预览、单/批量写入、单/批量重建、删除、查看知识库向量 chunk 状态，以及只读查看已入库文档索引摘要。
 
 实现入口：
 
 - `backend/api.py::get_knowledge_base_status`
+- `backend/api.py::get_knowledge_base_index`
 - `backend/api.py::preview_knowledge_base_document`
 - `backend/api.py::preview_knowledge_base_documents`
 - `backend/api.py::ingest_knowledge_base_document`
@@ -375,6 +376,7 @@
 当前端点：
 
 - `GET /api/knowledge_base/status`
+- `GET /api/knowledge_base/index`
 - `POST /api/knowledge_base/dry-run`
 - `POST /api/knowledge_base/batch-dry-run`
 - `POST /api/knowledge_base/ingest`
@@ -432,6 +434,7 @@
 - `dry-run` 只返回 `doc_id`、`version`、`chunk_count`、`chunk_ids`、`char_count` 和每个 chunk 的 `chunk_id/chunk_index/char_count/source_file/url/page` 摘要，不返回 chunk 正文。
 - `batch-dry-run` 返回 `document_count`、聚合 `chunk_count/char_count` 和每份文档的 dry-run 摘要；它只做分块预览，不写入、重建或删除向量库内容。
 - `status` 返回 `vector_memory_available`、`source=knowledge_base` 和当前知识库 chunk 数。
+- `index` 只读返回已入库 `source=knowledge_base` chunk 的文档级 metadata 摘要，包括 `supports_index`、`chunk_count`、`indexed_chunk_count`、`document_count`、`documents` 和 `truncated`；`documents` 按 `doc_id` 聚合版本、脱敏来源、URL、页码和 chunk 数。
 - `ingest` 写入新 chunk；`rebuild` 会先完整准备新版本 chunk embedding，再删除同一 `doc_id` 的旧 chunk 并写入新 chunk。
 - `batch-ingest` 按请求体顺序写入多份文档，返回 `document_count`、`succeeded_documents`、`failed_documents`、聚合 `indexed_chunks/skipped_chunks` 和逐文档摘要；它不做批量重建，也不会删除旧 chunk。
 - `batch-rebuild` 按请求体顺序重建多份文档，返回 `mode=rebuild`、`deleted_previous_documents`、逐文档 `deleted_previous` 和索引摘要；同一请求内重复 `doc_id` 会在任何删除前被拒绝。
@@ -451,12 +454,13 @@
 - `batch-dry-run` 仅预览请求体中的多份文档，不读取本机路径、不上传文件、不写入向量库。
 - `batch-ingest` 仅顺序写入请求体中的多份文档，不读取本机路径、不上传文件、不删除旧 chunk；它不是原子事务，若后续文档失败，响应会保留前序成功文档的逐项摘要。
 - `batch-rebuild` 仅顺序重建请求体中的多份文档，不读取本机路径、不上传文件、不扫描目录；它不是原子事务，若后续文档失败，前序成功重建可能已经生效。单个文档在新版本 embedding 准备失败时不会删除该文档旧 chunk；同一请求内重复 `doc_id` 会直接返回 `400`，不会进入删除流程。
+- `index` 仅聚合已入库 chunk metadata，不读取 `source_file` 指向的文件，不扫描目录，不返回正文、chunk text、embedding 或完整本机路径；当当前向量库实现不支持 metadata 枚举时返回 `supports_index=false` 和空 `documents`。
 - 设置页单文档入口只调用固定的 `status / dry-run / ingest / rebuild` 端点；可手动粘贴内容，或通过固定桌面 IPC 显式选择单个 `.txt/.md/.markdown` 文件填入表单，来源只保留 `.../<filename>`；写入或重建同文档前必须先对当前内容完成一次 dry-run，内容或元数据变化后需要重新预览。
 - 设置页批量入口只接收文本框中的 `{"documents":[...]}` JSON，并调用固定的 `batch-dry-run / batch-ingest / batch-rebuild` 端点；批量写入或重建前必须先对当前 JSON 完成一次批量 dry-run，JSON 变化后需要重新预览。
 - `doc_id / source_file / url / source_url` 只用于引用元数据；如果看起来像完整本机路径或 `file://` 本机 URI，响应和删除匹配会收敛为 `.../<filename>`。
 - 预览和治理响应不返回完整正文、chunk text、embedding 或完整本机路径。
 - `ingest`、`batch-ingest`、`rebuild`、`batch-rebuild` 依赖运行中的向量库和 embedding 客户端；重建类接口会先完整准备新版本 chunk embedding，准备失败时返回 `no_chunks_indexed` 或 `incomplete_embeddings`，并保留旧 chunk。
-- 后台队列和文件索引属于后续任务。
+- 后台队列和自动文件索引属于后续任务。
 
 ## 成熟产品化参考
 

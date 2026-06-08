@@ -213,6 +213,30 @@ class VectorMemory:
             logger.error(f"Keyword search failed: {e}")
             return []
 
+    def list_metadata(self, where: Optional[Dict[str, Any]] = None, limit: int = 1000) -> List[Dict[str, Any]]:
+        if not self.collection:
+            return []
+
+        try:
+            safe_limit = max(1, min(int(limit or 1000), 5000))
+            results = self.collection.get(
+                where=where,
+                include=["metadatas"],
+                limit=safe_limit,
+            )
+            ids = list(results.get("ids") or [])
+            metadatas = list(results.get("metadatas") or [])
+            items = []
+            for index, item_id in enumerate(ids):
+                items.append({
+                    "id": item_id,
+                    "metadata": metadatas[index] if index < len(metadatas) else {},
+                })
+            return items
+        except Exception as e:
+            logger.error(f"Vector metadata listing failed: {e}")
+            return []
+
     def delete(self, where: Dict[str, Any]) -> None:
         """删除记录"""
         if not self.collection:
