@@ -706,17 +706,23 @@ python run.py eval --dataset tests/fixtures/evals/smoke_cases.json --preset smok
   - 请求体同样使用 `{"documents": [...]}`，按顺序重建多份请求体文档；不读取本机路径、不上传文件、不扫描目录。
   - 同一请求内重复 `doc_id` 会在任何删除前返回 `400`；单个文档的新版本 embedding 准备失败时，会保留该文档旧 chunk。
   - 响应返回 `mode=rebuild`、`deleted_previous_documents`、逐文档 `deleted_previous` 和索引摘要；该接口不是原子事务，后续文档失败时前序成功重建可能已经生效。
+- 知识库后台队列：`POST /api/knowledge_base/jobs` 与 `GET /api/knowledge_base/jobs/<job_id>`
+  - `POST` 只接收请求体中的单文档字段或 `{"documents": [...]}`，`mode` 可选 `ingest` 或 `rebuild`，默认 `ingest`；不读取 `source_file` 指向的文件，不扫描目录，不展开 glob。
+  - 队列是进程内内存级串行执行队列，复用运行中 bot 的 `vector_memory` 和 `ai_client.get_embedding`；进程重启后不会恢复未完成或历史任务。
+  - 入队成功返回 `202` 和脱敏 job 摘要；`GET` 返回 `queued/running/succeeded/failed` 状态、逐文档脱敏摘要和聚合结果，不返回正文、chunk text、embedding 或完整本机路径。
+  - `mode=rebuild` 会在入队前拒绝同一请求内重复 `doc_id`；文档级失败会把 job 标记为 `failed`，但响应只记录短 reason，不暴露原始异常正文。
 - 知识库删除：`POST /api/knowledge_base/delete`
   - 只按精确 `doc_id` 删除 `source=knowledge_base` 的 chunk，不影响聊天记忆或导出语料 RAG。
 - 知识库状态：`GET /api/knowledge_base/status`
-  - 返回运行中向量库是否可用，以及当前知识库 chunk 数。
+  - 返回运行中向量库是否可用、当前知识库 chunk 数，以及 `queue` 摘要。
+  - `queue` 包含 `enabled`、`max_jobs`、`total`、按状态聚合计数和最近任务脱敏摘要；这是内存状态，不代表持久化任务历史。
 - 知识库索引摘要：`GET /api/knowledge_base/index`
   - 只读取已入库 `source=knowledge_base` chunk 的 metadata，按 `doc_id` 聚合版本、脱敏来源、URL、页码和 chunk 数；不会读取 `source_file` 指向的本机文件，不返回正文、chunk text、embedding 或完整本机路径。
   - 响应包含 `vector_memory_available`、`supports_index`、`chunk_count`、`indexed_chunk_count`、`document_count`、`documents` 和 `truncated`；如果当前向量库实现不支持 metadata 枚举，会返回 `supports_index=false` 和空文档列表。
 - 首版限制：
-  - Web API 不提供文件上传、目录扫描、任意文件路径读取或后台批量索引；`index` 是已入库 metadata 摘要，不是文件系统扫描器。
-  - 桌面设置页当前接入单文档粘贴 / 显式单文件选择后的 dry-run / ingest / rebuild，也接入受控 JSON 批量 dry-run / batch-ingest / batch-rebuild；两条路径都要求当前内容先完成匹配 dry-run。后台队列和自动文件索引仍未提供。
-  - `ingest / batch-ingest / rebuild / batch-rebuild` 需要后端已经启动并具备可用 embedding 客户端；缺少运行时依赖时会返回 `409 vector_memory_unavailable` 或 `409 embedding_unavailable`。
+  - Web API 不提供文件上传、目录扫描、任意文件路径读取或自动文件索引；`index` 是已入库 metadata 摘要，不是文件系统扫描器。
+  - 桌面设置页当前接入单文档粘贴 / 显式单文件选择后的 dry-run / ingest / rebuild，也接入受控 JSON 批量 dry-run / batch-ingest / batch-rebuild；两条路径都要求当前内容先完成匹配 dry-run。后台队列暂未接入桌面设置页，自动文件索引仍未提供。
+  - `ingest / batch-ingest / rebuild / batch-rebuild / jobs` 需要后端已经启动并具备可用 embedding 客户端；缺少运行时依赖时会返回 `409 vector_memory_unavailable` 或 `409 embedding_unavailable`。
   - 如果 `doc_id / source_file / url / source_url` 看起来像完整本机路径或 `file://` 本机 URI，接口响应会收敛为 `.../<filename>`，避免泄露本机目录结构。
 
 #### 8.7.6 新增接口总览
@@ -744,6 +750,8 @@ python run.py eval --dataset tests/fixtures/evals/smoke_cases.json --preset smok
 - `POST /api/knowledge_base/batch-ingest`
 - `POST /api/knowledge_base/rebuild`
 - `POST /api/knowledge_base/batch-rebuild`
+- `POST /api/knowledge_base/jobs`
+- `GET /api/knowledge_base/jobs/<job_id>`
 - `POST /api/knowledge_base/delete`
 - `POST /api/message_feedback`
 - `GET /api/usage`

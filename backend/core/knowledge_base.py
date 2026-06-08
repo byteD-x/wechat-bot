@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import re
+import secrets
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlsplit
@@ -12,6 +14,9 @@ KNOWLEDGE_SOURCE = "knowledge_base"
 MAX_KNOWLEDGE_CONTENT_CHARS = 120000
 MAX_KNOWLEDGE_BATCH_DOCUMENTS = 20
 MAX_KNOWLEDGE_BATCH_CONTENT_CHARS = 300000
+KNOWLEDGE_JOB_MODE_INGEST = "ingest"
+KNOWLEDGE_JOB_MODE_REBUILD = "rebuild"
+DEFAULT_KNOWLEDGE_JOB_MAX_ITEMS = 50
 
 
 def _normalize_text(value: Any) -> str:
@@ -23,6 +28,13 @@ def _normalize_text(value: Any) -> str:
 
 def _stable_hash(value: str, *, length: int = 20) -> str:
     return hashlib.sha1(value.encode("utf-8", errors="ignore")).hexdigest()[:length]
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return max(0, int(value or default))
+    except (TypeError, ValueError):
+        return max(0, int(default))
 
 
 def _redact_path_value(value: Any) -> str:
@@ -268,6 +280,269 @@ def build_knowledge_index_payload(
     }
 
 
+def build_knowledge_batch_write_payload(results: List[Dict[str, Any]], *, mode: str) -> Dict[str, Any]:
+    documents = []
+    succeeded_documents = 0
+    total_chunks = 0
+    indexed_chunks = 0
+    skipped_chunks = 0
+    deleted_previous_documents = 0
+
+    for index, result in enumerate(results):
+        success = bool(result.get("success", False))
+        deleted_previous = bool(result.get("deleted_previous", False))
+        if success:
+            succeeded_documents += 1
+        if deleted_previous:
+            deleted_previous_documents += 1
+        total_chunks += _safe_int(result.get("chunk_count"), 0)
+        indexed_chunks += _safe_int(result.get("indexed_chunks"), 0)
+        skipped_chunks += _safe_int(result.get("skipped_chunks"), 0)
+        documents.append(
+            {
+                "index": index,
+                "success": success,
+                "reason": str(result.get("reason") or ""),
+                "doc_id": redact_knowledge_local_path(result.get("doc_id")),
+                "version": str(result.get("version") or ""),
+                "chunk_count": _safe_int(result.get("chunk_count"), 0),
+                "indexed_chunks": _safe_int(result.get("indexed_chunks"), 0),
+                "skipped_chunks": _safe_int(result.get("skipped_chunks"), 0),
+                "deleted_previous": deleted_previous,
+                "chunk_ids": list(result.get("chunk_ids") or []),
+            }
+        )
+
+    failed_documents = max(0, len(documents) - succeeded_documents)
+    payload = {
+        "success": failed_documents == 0,
+        "batch": True,
+        "dry_run": False,
+        "mode": mode,
+        "document_count": len(documents),
+        "succeeded_documents": succeeded_documents,
+        "failed_documents": failed_documents,
+        "chunk_count": total_chunks,
+        "indexed_chunks": indexed_chunks,
+        "skipped_chunks": skipped_chunks,
+        "documents": documents,
+    }
+    if mode == KNOWLEDGE_JOB_MODE_REBUILD:
+        payload["deleted_previous_documents"] = deleted_previous_documents
+    return payload
+
+
+class KnowledgeBaseJobQueue:
+    """Small in-memory queue for controlled knowledge-base write jobs."""
+
+    def __init__(self, *, max_jobs: int = DEFAULT_KNOWLEDGE_JOB_MAX_ITEMS) -> None:
+        self.max_jobs = max(1, int(max_jobs or DEFAULT_KNOWLEDGE_JOB_MAX_ITEMS))
+        self._jobs: Dict[str, Dict[str, Any]] = {}
+        self._lock = asyncio.Lock()
+        self._worker: Optional[asyncio.Task[Any]] = None
+
+    async def enqueue(
+        self,
+        *,
+        mode: str,
+        documents: List[KnowledgeDocument],
+        vector_memory: Any,
+        ai_client: Any,
+    ) -> Dict[str, Any]:
+        normalized_mode = self._normalize_mode(mode)
+        if not documents:
+            raise ValueError("documents is required")
+        job_id = f"kbjob_{int(time.time() * 1000)}_{secrets.token_hex(4)}"
+        job = {
+            "job_id": job_id,
+            "success": True,
+            "status": "queued",
+            "stage": "queued",
+            "message": "knowledge base job queued",
+            "mode": normalized_mode,
+            "source": KNOWLEDGE_SOURCE,
+            "document_count": len(documents),
+            "documents": self._summarize_documents(documents),
+            "created_at": time.time(),
+            "started_at": None,
+            "finished_at": None,
+            "result": None,
+            "error": "",
+            "error_type": "",
+            "_documents": list(documents),
+            "_vector_memory": vector_memory,
+            "_ai_client": ai_client,
+        }
+
+        async with self._lock:
+            self._jobs[job_id] = job
+            self._trim_locked()
+            if self._worker is None or self._worker.done():
+                self._worker = asyncio.create_task(self._run_pending())
+            return self._public_job(job)
+
+    async def get_job(self, job_id: str) -> Dict[str, Any]:
+        normalized_job_id = str(job_id or "").strip()
+        if not normalized_job_id:
+            raise ValueError("job_id is required")
+        async with self._lock:
+            job = self._jobs.get(normalized_job_id)
+            if not job:
+                return {"success": False, "message": "knowledge base job not found", "job_id": normalized_job_id}
+            return self._public_job(job)
+
+    async def get_status(self) -> Dict[str, Any]:
+        async with self._lock:
+            jobs = [self._public_job(item) for item in self._jobs.values()]
+        by_status: Dict[str, int] = {}
+        for item in jobs:
+            status = str(item.get("status") or "unknown")
+            by_status[status] = by_status.get(status, 0) + 1
+        return {
+            "enabled": True,
+            "max_jobs": self.max_jobs,
+            "total": len(jobs),
+            "by_status": by_status,
+            "queued": by_status.get("queued", 0),
+            "running": by_status.get("running", 0),
+            "succeeded": by_status.get("succeeded", 0),
+            "failed": by_status.get("failed", 0),
+            "recent": jobs[-8:],
+        }
+
+    async def _run_pending(self) -> None:
+        while True:
+            async with self._lock:
+                job = next(
+                    (item for item in self._jobs.values() if item.get("status") == "queued"),
+                    None,
+                )
+                if job is None:
+                    return
+                job["status"] = "running"
+                job["stage"] = "indexing"
+                job["message"] = "indexing knowledge documents"
+                job["started_at"] = time.time()
+
+            try:
+                result = await self._execute_job(job)
+                success = bool(result.get("success", False))
+                await self._update_job(
+                    str(job["job_id"]),
+                    success=success,
+                    status="succeeded" if success else "failed",
+                    stage="completed" if success else "failed",
+                    message="knowledge base job completed" if success else "knowledge base job failed",
+                    result=result,
+                    finished_at=time.time(),
+                    error="" if success else self._first_failure_reason(result),
+                )
+            except Exception as exc:
+                await self._update_job(
+                    str(job["job_id"]),
+                    success=False,
+                    status="failed",
+                    stage="failed",
+                    message="knowledge base job failed",
+                    error="job_failed",
+                    error_type=exc.__class__.__name__,
+                    finished_at=time.time(),
+                )
+
+    async def _execute_job(self, job: Dict[str, Any]) -> Dict[str, Any]:
+        service = KnowledgeBaseService(job.get("_vector_memory"))
+        ai_client = job.get("_ai_client")
+        rebuild = str(job.get("mode") or "") == KNOWLEDGE_JOB_MODE_REBUILD
+        results = []
+        for document in job.get("_documents") or []:
+            results.append(
+                await service.ingest_document(
+                    document,
+                    ai_client,
+                    rebuild=rebuild,
+                    priority="background",
+                )
+            )
+        return build_knowledge_batch_write_payload(results, mode=str(job.get("mode") or ""))
+
+    async def _update_job(self, job_id: str, **changes: Any) -> None:
+        async with self._lock:
+            job = self._jobs.get(job_id)
+            if not job:
+                return
+            job.update(changes)
+
+    def _trim_locked(self) -> None:
+        while len(self._jobs) > self.max_jobs:
+            oldest_id = next(
+                (
+                    job_id
+                    for job_id, item in self._jobs.items()
+                    if item.get("status") not in {"queued", "running"}
+                ),
+                "",
+            )
+            if not oldest_id:
+                break
+            self._jobs.pop(oldest_id, None)
+
+    @staticmethod
+    def _normalize_mode(mode: str) -> str:
+        normalized = str(mode or KNOWLEDGE_JOB_MODE_INGEST).strip().lower() or KNOWLEDGE_JOB_MODE_INGEST
+        if normalized not in {KNOWLEDGE_JOB_MODE_INGEST, KNOWLEDGE_JOB_MODE_REBUILD}:
+            raise ValueError("mode must be ingest or rebuild")
+        return normalized
+
+    @staticmethod
+    def _summarize_documents(documents: List[KnowledgeDocument]) -> List[Dict[str, Any]]:
+        service = KnowledgeBaseService(None)
+        summaries = []
+        for index, document in enumerate(documents):
+            metadata = dict(document.metadata or {})
+            summaries.append(
+                {
+                    "index": index,
+                    "doc_id": redact_knowledge_local_path(service._resolve_doc_id(document)),
+                    "version": str(document.version or "v1").strip() or "v1",
+                    "source_file": redact_knowledge_local_path(document.source_file),
+                    "url": redact_knowledge_local_path(document.url),
+                    "page": metadata.get("page", ""),
+                    "chunk_count": len(service.build_chunks(document)),
+                }
+            )
+        return summaries
+
+    @staticmethod
+    def _first_failure_reason(result: Dict[str, Any]) -> str:
+        for item in result.get("documents") or []:
+            if isinstance(item, dict) and not item.get("success"):
+                return str(item.get("reason") or "document_failed")
+        return ""
+
+    @staticmethod
+    def _public_job(job: Dict[str, Any]) -> Dict[str, Any]:
+        payload = {
+            "job_id": str(job.get("job_id") or ""),
+            "success": bool(job.get("success", False)),
+            "status": str(job.get("status") or ""),
+            "stage": str(job.get("stage") or ""),
+            "message": str(job.get("message") or ""),
+            "mode": str(job.get("mode") or ""),
+            "source": KNOWLEDGE_SOURCE,
+            "document_count": _safe_int(job.get("document_count"), 0),
+            "documents": [dict(item) for item in job.get("documents") or [] if isinstance(item, dict)],
+            "created_at": job.get("created_at"),
+            "started_at": job.get("started_at"),
+            "finished_at": job.get("finished_at"),
+            "error": str(job.get("error") or ""),
+            "error_type": str(job.get("error_type") or ""),
+        }
+        result = job.get("result")
+        if isinstance(result, dict):
+            payload["result"] = dict(result)
+        return payload
+
+
 class KnowledgeBaseService:
     """Ingest general knowledge documents into the existing vector memory."""
 
@@ -415,7 +690,7 @@ class KnowledgeBaseService:
         for value in (document.doc_id, document.source_file, document.url):
             text = str(value or "").strip()
             if text:
-                return text
+                return redact_knowledge_local_path(text)
         digest = _stable_hash(_normalize_text(document.content))
         return f"doc::{digest}"
 
@@ -440,8 +715,10 @@ class KnowledgeBaseService:
                 "doc_version": version,
                 "chunk_index": chunk_index,
                 "chunk_count": chunk_count,
-                "source_file": str(document.source_file or metadata.get("source_file") or ""),
-                "url": str(document.url or metadata.get("url") or metadata.get("source_url") or ""),
+                "source_file": redact_knowledge_local_path(document.source_file or metadata.get("source_file")),
+                "url": redact_knowledge_local_path(
+                    document.url or metadata.get("url") or metadata.get("source_url")
+                ),
                 "page": page if page is not None else "",
             }
         )
@@ -468,7 +745,11 @@ __all__ = [
     "MAX_KNOWLEDGE_BATCH_CONTENT_CHARS",
     "MAX_KNOWLEDGE_BATCH_DOCUMENTS",
     "MAX_KNOWLEDGE_CONTENT_CHARS",
+    "KNOWLEDGE_JOB_MODE_INGEST",
+    "KNOWLEDGE_JOB_MODE_REBUILD",
+    "KnowledgeBaseJobQueue",
     "build_knowledge_batch_dry_run_payload",
+    "build_knowledge_batch_write_payload",
     "build_knowledge_chunk_preview",
     "build_knowledge_dry_run_payload",
     "build_knowledge_index_payload",

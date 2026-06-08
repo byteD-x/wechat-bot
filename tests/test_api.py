@@ -1,8 +1,10 @@
-import pytest
+import asyncio
 import os
 from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock, AsyncMock, patch
+
+import pytest
 
 pytest.importorskip("quart")
 
@@ -224,6 +226,8 @@ def mock_manager():
 
 @pytest.fixture(autouse=True)
 def reset_api_runtime_state():
+    original_queue = api_module.knowledge_base_job_queue
+    api_module.knowledge_base_job_queue = api_module.KnowledgeBaseJobQueue()
     api_module._IDEMPOTENCY_CACHE.clear()
     api_module._IDEMPOTENCY_INFLIGHT.clear()
     api_module._API_METRICS_COUNTERS.clear()
@@ -232,6 +236,7 @@ def reset_api_runtime_state():
     api_module._API_AUTH_FAILURE_COUNTERS.clear()
     api_module._API_METRIC_TRACKED_PATHS.clear()
     yield
+    api_module.knowledge_base_job_queue = original_queue
     api_module._IDEMPOTENCY_CACHE.clear()
     api_module._IDEMPOTENCY_INFLIGHT.clear()
     api_module._API_METRICS_COUNTERS.clear()
@@ -4075,6 +4080,7 @@ async def test_api_knowledge_base_rejects_invalid_payload_shapes(client, mock_ma
     cases = [
         ("/api/knowledge_base/dry-run", []),
         ("/api/knowledge_base/batch-dry-run", []),
+        ("/api/knowledge_base/jobs", []),
         ("/api/knowledge_base/batch-ingest", []),
         ("/api/knowledge_base/batch-rebuild", []),
         ("/api/knowledge_base/ingest", "not-object"),
@@ -4082,15 +4088,19 @@ async def test_api_knowledge_base_rejects_invalid_payload_shapes(client, mock_ma
         ("/api/knowledge_base/delete", []),
         ("/api/knowledge_base/dry-run", {"content": "  "}),
         ("/api/knowledge_base/batch-dry-run", {}),
+        ("/api/knowledge_base/jobs", {}),
         ("/api/knowledge_base/batch-ingest", {}),
         ("/api/knowledge_base/batch-rebuild", {}),
         ("/api/knowledge_base/batch-dry-run", {"documents": "not-array"}),
+        ("/api/knowledge_base/jobs", {"documents": "not-array"}),
         ("/api/knowledge_base/batch-ingest", {"documents": "not-array"}),
         ("/api/knowledge_base/batch-rebuild", {"documents": "not-array"}),
         ("/api/knowledge_base/batch-dry-run", {"documents": []}),
+        ("/api/knowledge_base/jobs", {"documents": []}),
         ("/api/knowledge_base/batch-ingest", {"documents": []}),
         ("/api/knowledge_base/batch-rebuild", {"documents": []}),
         ("/api/knowledge_base/batch-dry-run", {"documents": ["not-object"]}),
+        ("/api/knowledge_base/jobs", {"documents": ["not-object"]}),
         ("/api/knowledge_base/batch-ingest", {"documents": ["not-object"]}),
         ("/api/knowledge_base/batch-rebuild", {"documents": ["not-object"]}),
         (
@@ -4099,6 +4109,10 @@ async def test_api_knowledge_base_rejects_invalid_payload_shapes(client, mock_ma
         ),
         (
             "/api/knowledge_base/batch-ingest",
+            {"documents": [{"content": "ok"}] * (api_module.MAX_KNOWLEDGE_BATCH_DOCUMENTS + 1)},
+        ),
+        (
+            "/api/knowledge_base/jobs",
             {"documents": [{"content": "ok"}] * (api_module.MAX_KNOWLEDGE_BATCH_DOCUMENTS + 1)},
         ),
         (
@@ -4111,6 +4125,10 @@ async def test_api_knowledge_base_rejects_invalid_payload_shapes(client, mock_ma
         ),
         (
             "/api/knowledge_base/batch-ingest",
+            {"documents": [{"content": "x" * 100001}, {"content": "y" * 100001}, {"content": "z" * 100001}]},
+        ),
+        (
+            "/api/knowledge_base/jobs",
             {"documents": [{"content": "x" * 100001}, {"content": "y" * 100001}, {"content": "z" * 100001}]},
         ),
         (
@@ -4155,6 +4173,123 @@ async def test_api_knowledge_base_status_reports_vector_availability(client, moc
     assert data["vector_memory_available"] is True
     assert data["source"] == api_module.KNOWLEDGE_SOURCE
     assert data["chunk_count"] == 1
+    assert data["queue"]["enabled"] is True
+    assert data["queue"]["total"] == 0
+    assert data["queue"]["recent"] == []
+
+
+@pytest.mark.asyncio
+async def test_api_knowledge_base_job_queues_single_document_without_raw_content(client, mock_manager):
+    vector_memory = DummyKnowledgeVectorMemory()
+    mock_manager.bot.vector_memory = vector_memory
+    mock_manager.bot.ai_client = SimpleNamespace(get_embedding=AsyncMock(return_value=[0.1, 0.2]))
+    raw_content = "Private queued job runbook text must stay out of API responses."
+
+    response = await client.post(
+        "/api/knowledge_base/jobs",
+        json={
+            "content": raw_content,
+            "content_type": "markdown",
+            "doc_id": "queued-api-runbook",
+            "version": "2026-06",
+            "source_file": "Z:/fixture/private/queued-api-runbook.md",
+            "url": "file:///Z:/fixture/private/source-url.md",
+            "page": 8,
+        },
+    )
+
+    assert response.status_code == 202
+    queued = await response.get_json()
+    assert queued["success"] is True
+    assert queued["status"] in {"queued", "running", "succeeded"}
+    assert queued["mode"] == "ingest"
+    assert queued["document_count"] == 1
+    assert queued["documents"][0]["doc_id"] == "queued-api-runbook"
+    assert queued["documents"][0]["source_file"] == ".../queued-api-runbook.md"
+    assert queued["documents"][0]["url"] == ".../source-url.md"
+    assert queued["documents"][0]["chunk_count"] >= 1
+
+    completed = await _wait_for_api_knowledge_job(client, queued["job_id"])
+    assert completed["status"] == "succeeded"
+    assert completed["result"]["success"] is True
+    assert completed["result"]["indexed_chunks"] == len(vector_memory.upserts)
+    assert completed["result"]["documents"][0]["doc_id"] == "queued-api-runbook"
+    assert vector_memory.upserts[0]["metadata"]["source_file"] == ".../queued-api-runbook.md"
+
+    response_text = (await response.get_data()).decode("utf-8") + str(completed)
+    for forbidden in (raw_content, "Private queued job", "file://", "Z:/fixture/private"):
+        assert forbidden not in response_text
+
+
+@pytest.mark.asyncio
+async def test_api_knowledge_base_job_rebuild_rejects_duplicate_doc_id_before_enqueue(client, mock_manager):
+    vector_memory = DummyKnowledgeVectorMemory()
+    vector_memory.upsert_text(
+        "old duplicate chunk",
+        {"source": api_module.KNOWLEDGE_SOURCE, "doc_id": "duplicate-job"},
+        "old-duplicate-job",
+        [0.9],
+    )
+    mock_manager.bot.vector_memory = vector_memory
+    mock_manager.bot.ai_client = SimpleNamespace(get_embedding=AsyncMock(return_value=[0.1]))
+
+    response = await client.post(
+        "/api/knowledge_base/jobs",
+        json={
+            "mode": "rebuild",
+            "documents": [
+                {"content": "First duplicate queued document.", "doc_id": "duplicate-job"},
+                {"content": "Second duplicate queued document.", "doc_id": "duplicate-job"},
+            ],
+        },
+    )
+
+    assert response.status_code == 400
+    data = await response.get_json()
+    assert data["success"] is False
+    assert data["message"] == "duplicate doc_id in documents: duplicate-job"
+    assert vector_memory.deleted == []
+    status = await api_module.knowledge_base_job_queue.get_status()
+    assert status["total"] == 0
+
+
+@pytest.mark.asyncio
+async def test_api_knowledge_base_job_requires_runtime_dependencies(client, mock_manager):
+    payload = {"content": "A short queued knowledge document.", "doc_id": "queued-runbook"}
+
+    no_vector_response = await client.post("/api/knowledge_base/jobs", json=payload)
+    assert no_vector_response.status_code == 409
+    no_vector_data = await no_vector_response.get_json()
+    assert no_vector_data["success"] is False
+    assert no_vector_data["message"] == "vector_memory_unavailable"
+
+    mock_manager.bot.vector_memory = DummyKnowledgeVectorMemory()
+    no_embedding_response = await client.post("/api/knowledge_base/jobs", json=payload)
+    assert no_embedding_response.status_code == 409
+    no_embedding_data = await no_embedding_response.get_json()
+    assert no_embedding_data["success"] is False
+    assert no_embedding_data["message"] == "embedding_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_api_knowledge_base_job_not_found(client, mock_manager):
+    response = await client.get("/api/knowledge_base/jobs/missing-job")
+
+    assert response.status_code == 404
+    data = await response.get_json()
+    assert data["success"] is False
+    assert data["message"] == "knowledge base job not found"
+
+
+async def _wait_for_api_knowledge_job(client, job_id):
+    for _ in range(50):
+        response = await client.get(f"/api/knowledge_base/jobs/{job_id}")
+        assert response.status_code == 200
+        payload = await response.get_json()
+        if payload.get("status") not in {"queued", "running"}:
+            return payload
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"knowledge job did not finish: {job_id}")
 
 
 @pytest.mark.asyncio

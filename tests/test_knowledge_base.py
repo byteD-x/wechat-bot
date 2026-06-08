@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -5,6 +6,7 @@ import pytest
 
 from backend.core.knowledge_base import (
     KNOWLEDGE_SOURCE,
+    KnowledgeBaseJobQueue,
     KnowledgeBaseService,
     KnowledgeDocument,
     build_knowledge_index_payload,
@@ -251,3 +253,75 @@ def test_knowledge_base_index_payload_marks_truncated_metadata_listing():
     assert payload["chunk_count"] == 3
     assert payload["document_count"] == 1
     assert payload["truncated"] is True
+
+
+@pytest.mark.asyncio
+async def test_knowledge_base_job_queue_runs_documents_without_raw_content():
+    vector_memory = DummyVectorMemory()
+    ai_client = SimpleNamespace(get_embedding=AsyncMock(return_value=[0.1, 0.2]))
+    queue = KnowledgeBaseJobQueue(max_jobs=4)
+    raw_content = "Secret queued runbook text must not appear in job status."
+
+    queued = await queue.enqueue(
+        mode="ingest",
+        documents=[
+            KnowledgeDocument(
+                content=raw_content,
+                doc_id="queued-runbook",
+                version="2026-06",
+                source_file="Z:/fixture/private/queued-runbook.md",
+                url="file:///Z:/fixture/private/source-url.md",
+                metadata={"page": 7},
+            )
+        ],
+        vector_memory=vector_memory,
+        ai_client=ai_client,
+    )
+
+    assert queued["status"] == "queued"
+    assert queued["documents"][0]["doc_id"] == "queued-runbook"
+    assert queued["documents"][0]["source_file"] == ".../queued-runbook.md"
+    assert queued["documents"][0]["url"] == ".../source-url.md"
+
+    completed = await _wait_for_knowledge_job(queue, queued["job_id"])
+    assert completed["status"] == "succeeded"
+    assert completed["result"]["success"] is True
+    assert completed["result"]["indexed_chunks"] == len(vector_memory.upserts)
+    assert completed["result"]["documents"][0]["doc_id"] == "queued-runbook"
+    assert vector_memory.upserts[0]["metadata"]["source_file"] == ".../queued-runbook.md"
+
+    status_text = str(completed)
+    assert "Secret queued runbook" not in status_text
+    assert "Z:/fixture/private" not in status_text
+    assert "file://" not in status_text
+
+
+@pytest.mark.asyncio
+async def test_knowledge_base_job_queue_marks_document_failures():
+    vector_memory = DummyVectorMemory()
+    ai_client = SimpleNamespace(get_embedding=AsyncMock(return_value=[]))
+    queue = KnowledgeBaseJobQueue(max_jobs=4)
+
+    queued = await queue.enqueue(
+        mode="rebuild",
+        documents=[KnowledgeDocument(content="A document with no embedding.", doc_id="no-embedding")],
+        vector_memory=vector_memory,
+        ai_client=ai_client,
+    )
+
+    completed = await _wait_for_knowledge_job(queue, queued["job_id"])
+    assert completed["status"] == "failed"
+    assert completed["success"] is False
+    assert completed["error"] == "no_chunks_indexed"
+    assert completed["result"]["success"] is False
+    assert completed["result"]["documents"][0]["reason"] == "no_chunks_indexed"
+    assert vector_memory.upserts == []
+
+
+async def _wait_for_knowledge_job(queue, job_id):
+    for _ in range(50):
+        payload = await queue.get_job(job_id)
+        if payload.get("status") not in {"queued", "running"}:
+            return payload
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"knowledge job did not finish: {job_id}")
