@@ -3792,6 +3792,110 @@ async def test_api_knowledge_base_batch_dry_run_returns_sanitized_document_summa
 
 
 @pytest.mark.asyncio
+async def test_api_knowledge_base_batch_ingest_writes_documents_without_raw_response(client, mock_manager):
+    vector_memory = DummyKnowledgeVectorMemory()
+    mock_manager.bot.vector_memory = vector_memory
+    ai_client = SimpleNamespace(get_embedding=AsyncMock(return_value=[0.1, 0.2, 0.3]))
+    mock_manager.bot.ai_client = ai_client
+    first_content = (
+        "Private batch ingest runbook says operator credentials must remain out of API responses."
+    )
+    second_content = "Second batch ingest FAQ entry for retrieval citations."
+
+    response = await client.post(
+        "/api/knowledge_base/batch-ingest",
+        json={
+            "documents": [
+                {
+                    "content": first_content,
+                    "content_type": "markdown",
+                    "doc_id": "batch-runbook",
+                    "version": "2026-06",
+                    "source_file": "Z:/fixture/private/batch-runbook.md",
+                    "url": "file:///Z:/fixture/private/source-url.md",
+                    "page": 5,
+                },
+                {
+                    "content": second_content,
+                    "content_type": "text",
+                    "doc_id": "batch-faq",
+                    "source_file": "docs/faq.md",
+                    "url": "https://example.test/faq",
+                },
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["success"] is True
+    assert data["batch"] is True
+    assert data["dry_run"] is False
+    assert data["mode"] == "ingest"
+    assert data["document_count"] == 2
+    assert data["succeeded_documents"] == 2
+    assert data["failed_documents"] == 0
+    assert data["indexed_chunks"] == len(vector_memory.upserts)
+    assert data["chunk_count"] == data["indexed_chunks"]
+    assert len(data["documents"]) == 2
+    assert data["documents"][0]["index"] == 0
+    assert data["documents"][0]["doc_id"] == "batch-runbook"
+    assert data["documents"][0]["version"] == "2026-06"
+    assert data["documents"][0]["success"] is True
+    assert data["documents"][1]["index"] == 1
+    assert data["documents"][1]["doc_id"] == "batch-faq"
+
+    metadata = vector_memory.upserts[0]["metadata"]
+    assert metadata["source"] == api_module.KNOWLEDGE_SOURCE
+    assert metadata["scope"] == "knowledge"
+    assert metadata["doc_id"] == "batch-runbook"
+    assert metadata["doc_version"] == "2026-06"
+    assert metadata["source_file"] == ".../batch-runbook.md"
+    assert metadata["url"] == ".../source-url.md"
+    assert metadata["page"] == 5
+    assert vector_memory.deleted == []
+
+    response_text = (await response.get_data()).decode("utf-8")
+    for forbidden in (
+        "Private batch ingest runbook",
+        "operator credentials",
+        "file://",
+        "Z:/fixture/private",
+    ):
+        assert forbidden not in response_text
+
+
+@pytest.mark.asyncio
+async def test_api_knowledge_base_batch_ingest_reports_document_failures(client, mock_manager):
+    vector_memory = DummyKnowledgeVectorMemory()
+    mock_manager.bot.vector_memory = vector_memory
+    ai_client = SimpleNamespace(get_embedding=AsyncMock(side_effect=[[0.1], []]))
+    mock_manager.bot.ai_client = ai_client
+
+    response = await client.post(
+        "/api/knowledge_base/batch-ingest",
+        json={
+            "documents": [
+                {"content": "First batch document can be indexed.", "doc_id": "batch-ok"},
+                {"content": "Second batch document has no embedding.", "doc_id": "batch-failed"},
+            ],
+        },
+    )
+
+    assert response.status_code == 400
+    data = await response.get_json()
+    assert data["success"] is False
+    assert data["succeeded_documents"] == 1
+    assert data["failed_documents"] == 1
+    assert data["indexed_chunks"] == 1
+    assert data["documents"][0]["success"] is True
+    assert data["documents"][1]["success"] is False
+    assert data["documents"][1]["reason"] == "no_chunks_indexed"
+    assert len(vector_memory.upserts) == 1
+    assert vector_memory.deleted == []
+
+
+@pytest.mark.asyncio
 async def test_api_knowledge_base_rejects_invalid_payload_shapes(client, mock_manager):
     vector_memory = DummyKnowledgeVectorMemory()
     mock_manager.bot.vector_memory = vector_memory
@@ -3800,20 +3904,33 @@ async def test_api_knowledge_base_rejects_invalid_payload_shapes(client, mock_ma
     cases = [
         ("/api/knowledge_base/dry-run", []),
         ("/api/knowledge_base/batch-dry-run", []),
+        ("/api/knowledge_base/batch-ingest", []),
         ("/api/knowledge_base/ingest", "not-object"),
         ("/api/knowledge_base/rebuild", ["not-object"]),
         ("/api/knowledge_base/delete", []),
         ("/api/knowledge_base/dry-run", {"content": "  "}),
         ("/api/knowledge_base/batch-dry-run", {}),
+        ("/api/knowledge_base/batch-ingest", {}),
         ("/api/knowledge_base/batch-dry-run", {"documents": "not-array"}),
+        ("/api/knowledge_base/batch-ingest", {"documents": "not-array"}),
         ("/api/knowledge_base/batch-dry-run", {"documents": []}),
+        ("/api/knowledge_base/batch-ingest", {"documents": []}),
         ("/api/knowledge_base/batch-dry-run", {"documents": ["not-object"]}),
+        ("/api/knowledge_base/batch-ingest", {"documents": ["not-object"]}),
         (
             "/api/knowledge_base/batch-dry-run",
             {"documents": [{"content": "ok"}] * (api_module.MAX_KNOWLEDGE_BATCH_DOCUMENTS + 1)},
         ),
         (
+            "/api/knowledge_base/batch-ingest",
+            {"documents": [{"content": "ok"}] * (api_module.MAX_KNOWLEDGE_BATCH_DOCUMENTS + 1)},
+        ),
+        (
             "/api/knowledge_base/batch-dry-run",
+            {"documents": [{"content": "x" * 100001}, {"content": "y" * 100001}, {"content": "z" * 100001}]},
+        ),
+        (
+            "/api/knowledge_base/batch-ingest",
             {"documents": [{"content": "x" * 100001}, {"content": "y" * 100001}, {"content": "z" * 100001}]},
         ),
         ("/api/knowledge_base/dry-run", {"content": "ok", "content_type": "application/pdf"}),
@@ -3916,21 +4033,32 @@ async def test_api_knowledge_base_ingest_and_rebuild_use_runtime_dependencies(cl
 @pytest.mark.asyncio
 async def test_api_knowledge_base_ingest_requires_runtime_dependencies(client, mock_manager):
     payload = {"content": "A short knowledge document.", "doc_id": "runbook"}
+    batch_payload = {"documents": [payload]}
 
     no_vector_response = await client.post("/api/knowledge_base/ingest", json=payload)
+    no_vector_batch_response = await client.post("/api/knowledge_base/batch-ingest", json=batch_payload)
 
     assert no_vector_response.status_code == 409
     no_vector_data = await no_vector_response.get_json()
     assert no_vector_data["success"] is False
     assert no_vector_data["message"] == "vector_memory_unavailable"
+    assert no_vector_batch_response.status_code == 409
+    no_vector_batch_data = await no_vector_batch_response.get_json()
+    assert no_vector_batch_data["success"] is False
+    assert no_vector_batch_data["message"] == "vector_memory_unavailable"
 
     mock_manager.bot.vector_memory = DummyKnowledgeVectorMemory()
     no_embedding_response = await client.post("/api/knowledge_base/ingest", json=payload)
+    no_embedding_batch_response = await client.post("/api/knowledge_base/batch-ingest", json=batch_payload)
 
     assert no_embedding_response.status_code == 409
     no_embedding_data = await no_embedding_response.get_json()
     assert no_embedding_data["success"] is False
     assert no_embedding_data["message"] == "embedding_unavailable"
+    assert no_embedding_batch_response.status_code == 409
+    no_embedding_batch_data = await no_embedding_batch_response.get_json()
+    assert no_embedding_batch_data["success"] is False
+    assert no_embedding_batch_data["message"] == "embedding_unavailable"
 
 
 @pytest.mark.asyncio

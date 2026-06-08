@@ -156,13 +156,13 @@
       - MCP adapter 是治理入口，不进入微信消息快回复主链路。
 
 12. `/api/knowledge_base/*`
-    - 功能：提供本机知识库治理闭环，支持查看状态、单文档/多文档预览分块、写入、重建同文档和按 `doc_id` 删除。
+    - 功能：提供本机知识库治理闭环，支持查看状态、单文档/多文档预览分块、单文档/多文档写入、重建同文档和按 `doc_id` 删除。
     - 实现：
       - `backend/api.py::preview_knowledge_base_document` 和 `KnowledgeBaseService.build_chunks()` 复用同一套分块逻辑；`dry-run` 只返回 chunk id、字符数和脱敏来源摘要，不返回正文、chunk text 或 embedding。
       - `backend/api.py::preview_knowledge_base_documents` 复用单文档 payload 解析和 dry-run 构造，`batch-dry-run` 只聚合请求体中的多份文档预览结果，不写入向量库、不触发 embedding、不读取本机路径。
-      - `backend/api.py::ingest_knowledge_base_document` 与 `rebuild_knowledge_base_document` 复用运行中 bot 的 `vector_memory` 和 `ai_client.get_embedding`；`rebuild` 会先准备新版本 embedding，再删除同一 `doc_id` 的旧 chunk。
+      - `backend/api.py::ingest_knowledge_base_document`、`ingest_knowledge_base_documents` 与 `rebuild_knowledge_base_document` 复用运行中 bot 的 `vector_memory` 和 `ai_client.get_embedding`；`batch-ingest` 只顺序写入请求体文档，不读取本机路径、不批量重建、不删除旧 chunk；`rebuild` 会先准备新版本 embedding，再删除同一 `doc_id` 的旧 chunk。
       - 设置页“数据与恢复 / 知识库治理”通过 `SettingsPage`、`backup-panel.js`、`page-shell.js` 和 `ApiService` 只调用固定的 `status / dry-run / ingest / rebuild` 端点；写入或重建都必须先对当前粘贴内容完成 dry-run，内容或元数据变化后会清空签名。
-      - 当前设置页不开放 `batch-dry-run`、`delete`、文件上传、目录扫描或任意本机路径读取；Web API 也只接收请求体中的纯文本或 Markdown。
+      - 当前设置页不开放 `batch-dry-run`、`batch-ingest`、`delete`、文件上传、目录扫描或任意本机路径读取；Web API 也只接收请求体中的纯文本或 Markdown。
 
 ### 当前接口分组
 
@@ -178,7 +178,7 @@
 - 成本：`/api/usage`、`/api/pricing`、`/api/pricing/refresh`、`/api/costs/summary`、`/api/costs/sessions`、`/api/costs/session_details`、`/api/costs/review_queue_export`
 - 模型与认证：`/api/model_catalog`、`/api/model_auth/overview`、`/api/model_auth/action`、兼容壳层 `/api/auth/providers*`、本地模型探测 `/api/ollama/models`
 - 配置与诊断：`/api/config`、`/api/config/audit`、`/api/test_connection`、`/api/preview_prompt`、`/api/logs`、`/api/logs/clear`
-- 知识库治理：`/api/knowledge_base/status`、`/api/knowledge_base/dry-run`、`/api/knowledge_base/batch-dry-run`、`/api/knowledge_base/ingest`、`/api/knowledge_base/rebuild`、`/api/knowledge_base/delete`
+- 知识库治理：`/api/knowledge_base/status`、`/api/knowledge_base/dry-run`、`/api/knowledge_base/batch-dry-run`、`/api/knowledge_base/ingest`、`/api/knowledge_base/batch-ingest`、`/api/knowledge_base/rebuild`、`/api/knowledge_base/delete`
 - Prompt 与工具治理：`/api/v1/admin/prompts/revisions`、`/api/v1/admin/prompts/<revision>/diff`、`/api/v1/admin/prompts/<revision>/rollback`、`/api/v1/agents/tool-workflow`
 
 ## 4. 启动与生命周期链路

@@ -2180,6 +2180,41 @@ async def preview_knowledge_base_documents():
         return _json_internal_error("knowledge_base_batch_dry_run_failed", code="knowledge_base_batch_dry_run_failed")
 
 
+@app.route("/api/knowledge_base/batch-ingest", methods=["POST"])
+async def ingest_knowledge_base_documents():
+    """Ingest multiple text/Markdown knowledge documents without rebuilding old chunks."""
+    try:
+        raw_data = await request.get_json(silent=True)
+        data = raw_data if raw_data is not None else {}
+        documents = parse_knowledge_batch_payload(data)
+        vector_memory = _get_knowledge_vector_memory()
+        if not _knowledge_vector_available(vector_memory):
+            return jsonify({"success": False, "message": "vector_memory_unavailable"}), 409
+        ai_client = _get_knowledge_ai_client()
+        if ai_client is None or not hasattr(ai_client, "get_embedding"):
+            return jsonify({"success": False, "message": "embedding_unavailable"}), 409
+
+        service = KnowledgeBaseService(vector_memory)
+        results = []
+        for document in documents:
+            results.append(
+                await service.ingest_document(
+                    document,
+                    ai_client,
+                    rebuild=False,
+                    priority="foreground",
+                )
+            )
+
+        payload = _build_knowledge_batch_ingest_payload(results)
+        return jsonify(payload), (200 if payload.get("success", False) else 400)
+    except ValueError as e:
+        return jsonify({"success": False, "message": str(e)}), 400
+    except Exception as e:
+        logger.exception("knowledge base batch ingest failed: %s", e)
+        return _json_internal_error("knowledge_base_batch_ingest_failed", code="knowledge_base_batch_ingest_failed")
+
+
 @app.route("/api/knowledge_base/ingest", methods=["POST"])
 async def ingest_knowledge_base_document():
     """Ingest a text/Markdown knowledge document into the runtime vector memory."""
@@ -2217,6 +2252,50 @@ async def _run_knowledge_base_ingest(*, rebuild: bool):
     except Exception as e:
         logger.exception("knowledge base ingest failed: %s", e)
         return _json_internal_error("knowledge_base_ingest_failed", code="knowledge_base_ingest_failed")
+
+
+def _build_knowledge_batch_ingest_payload(results: list[dict[str, Any]]) -> dict[str, Any]:
+    documents = []
+    succeeded_documents = 0
+    total_chunks = 0
+    indexed_chunks = 0
+    skipped_chunks = 0
+
+    for index, result in enumerate(results):
+        success = bool(result.get("success", False))
+        if success:
+            succeeded_documents += 1
+        total_chunks += _safe_int(result.get("chunk_count"), 0)
+        indexed_chunks += _safe_int(result.get("indexed_chunks"), 0)
+        skipped_chunks += _safe_int(result.get("skipped_chunks"), 0)
+        documents.append(
+            {
+                "index": index,
+                "success": success,
+                "reason": str(result.get("reason") or ""),
+                "doc_id": str(result.get("doc_id") or ""),
+                "version": str(result.get("version") or ""),
+                "chunk_count": _safe_int(result.get("chunk_count"), 0),
+                "indexed_chunks": _safe_int(result.get("indexed_chunks"), 0),
+                "skipped_chunks": _safe_int(result.get("skipped_chunks"), 0),
+                "chunk_ids": list(result.get("chunk_ids") or []),
+            }
+        )
+
+    failed_documents = max(0, len(documents) - succeeded_documents)
+    return {
+        "success": failed_documents == 0,
+        "batch": True,
+        "dry_run": False,
+        "mode": "ingest",
+        "document_count": len(documents),
+        "succeeded_documents": succeeded_documents,
+        "failed_documents": failed_documents,
+        "chunk_count": total_chunks,
+        "indexed_chunks": indexed_chunks,
+        "skipped_chunks": skipped_chunks,
+        "documents": documents,
+    }
 
 
 @app.route("/api/knowledge_base/delete", methods=["POST"])

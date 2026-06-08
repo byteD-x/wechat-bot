@@ -681,7 +681,7 @@ python run.py eval --dataset tests/fixtures/evals/smoke_cases.json --preset smok
 #### 8.7.5 知识库治理 API
 
 - 设置页“数据与恢复 / 知识库治理”已经提供最小 UI 入口：手动粘贴纯文本或 Markdown，先执行“预览分块”，确认 chunk 摘要后才允许“写入知识库”或“重建同文档”。内容或元数据变更后，界面会清空上一次 dry-run 签名并要求重新预览。
-- 当前设置页入口不提供文件上传、目录扫描、任意本机文件读取、批量重建或删除；`delete` 仍仅作为受控 API 能力存在，后续如接入 UI 需要继续保持显式预览和固定端点白名单。
+- 当前设置页入口不提供文件上传、目录扫描、任意本机文件读取、批量预览、批量写入、批量重建或删除；`batch-dry-run`、`batch-ingest` 和 `delete` 仍仅作为受控 API 能力存在，后续如接入 UI 需要继续保持显式预览和固定端点白名单。
 - 本机 CLI 提供显式文件列表入口，适合把已经确认可信的 `.txt/.md` 文档先预览再写入运行中的本机 Web API：
   - `python run.py knowledge-base import-files --file docs/runbook.md --json`
   - `python run.py knowledge-base import-files docs/runbook.md docs/faq.txt --json`
@@ -696,6 +696,9 @@ python run.py eval --dataset tests/fixtures/evals/smoke_cases.json --preset smok
 - 知识库写入：`POST /api/knowledge_base/ingest`
   - 复用运行中 bot 的 `vector_memory` 和 `ai_client.get_embedding`，将文本切分后写入 `source=knowledge_base` 的 chunk。
   - `source_file / url / page / metadata` 会进入 chunk metadata，供 RAG citation 绑定。
+- 知识库批量写入：`POST /api/knowledge_base/batch-ingest`
+  - 请求体同样使用 `{"documents": [...]}`，按顺序写入多份请求体文档；不读取本机路径、不上传文件、不做批量重建，也不会删除旧 chunk。
+  - 响应返回 `succeeded_documents / failed_documents`、聚合 `indexed_chunks/skipped_chunks` 和逐文档摘要；该接口不是原子事务，后续文档失败时前序成功文档可能已经写入。
 - 知识库重建：`POST /api/knowledge_base/rebuild`
   - 先完整准备新版本 chunk embedding，再删除同一 `doc_id` 的旧 chunk 并写入新版本；如果新版本 embedding 准备失败，会保留旧 chunk。
   - 设置页的“重建同文档”按钮复用该端点，但必须先对当前粘贴内容完成一次 dry-run；成功响应只展示 `doc_id`、版本、索引 chunk 数和是否删除旧 chunk 的摘要。
@@ -705,8 +708,8 @@ python run.py eval --dataset tests/fixtures/evals/smoke_cases.json --preset smok
   - 返回运行中向量库是否可用，以及当前知识库 chunk 数。
 - 首版限制：
   - 不提供文件上传、目录扫描、任意文件读取或后台批量索引。
-  - 桌面设置页当前只接入单文档粘贴式 dry-run / ingest / rebuild；`batch-dry-run` 是 Web API 预览能力，未接入桌面批量 UI。
-  - `ingest / rebuild` 需要后端已经启动并具备可用 embedding 客户端；缺少运行时依赖时会返回 `409 vector_memory_unavailable` 或 `409 embedding_unavailable`。
+  - 桌面设置页当前只接入单文档粘贴式 dry-run / ingest / rebuild；`batch-dry-run` 和 `batch-ingest` 是 Web API 能力，未接入桌面批量 UI。
+  - `ingest / batch-ingest / rebuild` 需要后端已经启动并具备可用 embedding 客户端；缺少运行时依赖时会返回 `409 vector_memory_unavailable` 或 `409 embedding_unavailable`。
   - 如果 `doc_id / source_file / url / source_url` 看起来像完整本机路径或 `file://` 本机 URI，接口响应会收敛为 `.../<filename>`，避免泄露本机目录结构。
 
 #### 8.7.6 新增接口总览
@@ -730,6 +733,7 @@ python run.py eval --dataset tests/fixtures/evals/smoke_cases.json --preset smok
 - `POST /api/knowledge_base/dry-run`
 - `POST /api/knowledge_base/batch-dry-run`
 - `POST /api/knowledge_base/ingest`
+- `POST /api/knowledge_base/batch-ingest`
 - `POST /api/knowledge_base/rebuild`
 - `POST /api/knowledge_base/delete`
 - `POST /api/message_feedback`
