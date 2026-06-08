@@ -82,6 +82,13 @@ function formatKnowledgeBasePreview(preview) {
     if (!preview.success) {
         return preview.message || 'chunk 预览失败';
     }
+    if (preview.batch) {
+        return [
+            `文档 ${Number(preview.document_count || 0)} 份`,
+            `预计 ${Number(preview.chunk_count || 0)} 个 chunk`,
+            `正文 ${Number(preview.char_count || 0)} 字符`,
+        ].join(' / ');
+    }
     return [
         `文档 ${preview.doc_id || '--'}`,
         `版本 ${preview.version || '--'}`,
@@ -153,11 +160,16 @@ export function renderBackupPanel(page) {
     const knowledgeBaseStatusElem = page.$('#settings-knowledge-base-status');
     const knowledgeBaseFeedbackElem = page.$('#settings-knowledge-base-feedback');
     const knowledgeBasePreviewElem = page.$('#settings-knowledge-base-preview');
+    const knowledgeBaseBatchFeedbackElem = page.$('#settings-knowledge-base-batch-feedback');
+    const knowledgeBaseBatchPreviewElem = page.$('#settings-knowledge-base-batch-preview');
     const knowledgeBaseSelectFileBtn = page.$('#btn-knowledge-base-select-file');
     const knowledgeBaseRefreshBtn = page.$('#btn-knowledge-base-refresh');
     const knowledgeBaseDryRunBtn = page.$('#btn-knowledge-base-dry-run');
     const knowledgeBaseIngestBtn = page.$('#btn-knowledge-base-ingest');
     const knowledgeBaseRebuildBtn = page.$('#btn-knowledge-base-rebuild');
+    const knowledgeBaseBatchDryRunBtn = page.$('#btn-knowledge-base-batch-dry-run');
+    const knowledgeBaseBatchIngestBtn = page.$('#btn-knowledge-base-batch-ingest');
+    const knowledgeBaseBatchRebuildBtn = page.$('#btn-knowledge-base-batch-rebuild');
     const listElem = page.$('#settings-backup-list');
     if (!summaryElem || !evalElem || !selectElem || !feedbackElem || !listElem) {
         return;
@@ -196,6 +208,12 @@ export function renderBackupPanel(page) {
     }
     if (knowledgeBasePreviewElem) {
         knowledgeBasePreviewElem.textContent = formatKnowledgeBasePreview(state.knowledgeBasePreview || null);
+    }
+    if (knowledgeBaseBatchFeedbackElem) {
+        knowledgeBaseBatchFeedbackElem.textContent = state.knowledgeBaseBatchFeedback || '批量入口尚未预览。';
+    }
+    if (knowledgeBaseBatchPreviewElem) {
+        knowledgeBaseBatchPreviewElem.textContent = formatKnowledgeBasePreview(state.knowledgeBaseBatchPreview || null);
     }
 
     const backupBusy = !!state.backupBusy;
@@ -247,6 +265,15 @@ export function renderBackupPanel(page) {
     }
     if (knowledgeBaseRebuildBtn) {
         knowledgeBaseRebuildBtn.disabled = knowledgeBusy || !state.knowledgeBaseDryRunSignature;
+    }
+    if (knowledgeBaseBatchDryRunBtn) {
+        knowledgeBaseBatchDryRunBtn.disabled = knowledgeBusy;
+    }
+    if (knowledgeBaseBatchIngestBtn) {
+        knowledgeBaseBatchIngestBtn.disabled = knowledgeBusy || !state.knowledgeBaseBatchDryRunSignature;
+    }
+    if (knowledgeBaseBatchRebuildBtn) {
+        knowledgeBaseBatchRebuildBtn.disabled = knowledgeBusy || !state.knowledgeBaseBatchDryRunSignature;
     }
 
     populateBackupSelect(selectElem, backups);

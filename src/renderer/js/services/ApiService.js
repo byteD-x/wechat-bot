@@ -749,6 +749,14 @@ class ApiService {
         }, 0);
     }
 
+    async dryRunKnowledgeDocuments(payload = {}) {
+        return this.request('/api/knowledge_base/batch-dry-run', {
+            method: 'POST',
+            body: payload,
+            timeoutMs: 20000,
+        }, 0);
+    }
+
     async ingestKnowledgeDocument(payload = {}) {
         return this.request('/api/knowledge_base/ingest', {
             method: 'POST',
@@ -757,8 +765,24 @@ class ApiService {
         }, 0);
     }
 
+    async ingestKnowledgeDocuments(payload = {}) {
+        return this.request('/api/knowledge_base/batch-ingest', {
+            method: 'POST',
+            body: payload,
+            timeoutMs: 60000,
+        }, 0);
+    }
+
     async rebuildKnowledgeDocument(payload = {}) {
         return this.request('/api/knowledge_base/rebuild', {
+            method: 'POST',
+            body: payload,
+            timeoutMs: 60000,
+        }, 0);
+    }
+
+    async rebuildKnowledgeDocuments(payload = {}) {
+        return this.request('/api/knowledge_base/batch-rebuild', {
             method: 'POST',
             body: payload,
             timeoutMs: 60000,

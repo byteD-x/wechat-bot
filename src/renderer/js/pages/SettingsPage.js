@@ -164,6 +164,9 @@ export class SettingsPage extends PageController {
             knowledgeBasePreview: null,
             knowledgeBaseFeedback: '',
             knowledgeBaseDryRunSignature: '',
+            knowledgeBaseBatchPreview: null,
+            knowledgeBaseBatchFeedback: '',
+            knowledgeBaseBatchDryRunSignature: '',
             knowledgeBaseBusy: false,
         };
         this._backupPromise = null;
@@ -444,6 +447,9 @@ export class SettingsPage extends PageController {
                     knowledgeBasePreview: this._backupState.knowledgeBasePreview || null,
                     knowledgeBaseFeedback: this._backupState.knowledgeBaseFeedback || '',
                     knowledgeBaseDryRunSignature: this._backupState.knowledgeBaseDryRunSignature || '',
+                    knowledgeBaseBatchPreview: this._backupState.knowledgeBaseBatchPreview || null,
+                    knowledgeBaseBatchFeedback: this._backupState.knowledgeBaseBatchFeedback || '',
+                    knowledgeBaseBatchDryRunSignature: this._backupState.knowledgeBaseBatchDryRunSignature || '',
                     knowledgeBaseBusy: !!this._backupState.knowledgeBaseBusy,
                 };
                 this._syncDataControlScopeOptions(supportedDataControlScopes);
@@ -467,6 +473,9 @@ export class SettingsPage extends PageController {
                     knowledgeBasePreview: this._backupState.knowledgeBasePreview || null,
                     knowledgeBaseFeedback: this._backupState.knowledgeBaseFeedback || '',
                     knowledgeBaseDryRunSignature: this._backupState.knowledgeBaseDryRunSignature || '',
+                    knowledgeBaseBatchPreview: this._backupState.knowledgeBaseBatchPreview || null,
+                    knowledgeBaseBatchFeedback: this._backupState.knowledgeBaseBatchFeedback || '',
+                    knowledgeBaseBatchDryRunSignature: this._backupState.knowledgeBaseBatchDryRunSignature || '',
                     knowledgeBaseBusy: !!this._backupState.knowledgeBaseBusy,
                 };
                 this._syncDataControlScopeOptions(this._backupState.supportedDataControlScopes || []);
@@ -756,6 +765,36 @@ export class SettingsPage extends PageController {
         this._renderBackupPanel();
     }
 
+    _buildKnowledgeBaseBatchPayload() {
+        const rawJson = String(this.$('#settings-knowledge-base-batch-json')?.value || '').trim();
+        if (!rawJson) {
+            throw new Error('请先粘贴批量知识库 JSON');
+        }
+        let payload;
+        try {
+            payload = JSON.parse(rawJson);
+        } catch (_) {
+            throw new Error('批量知识库 JSON 格式不正确');
+        }
+        if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+            throw new Error('批量知识库 JSON 必须是对象');
+        }
+        if (!Array.isArray(payload.documents) || payload.documents.length <= 0) {
+            throw new Error('批量知识库 JSON 必须包含 documents 数组');
+        }
+        return payload;
+    }
+
+    _resetKnowledgeBaseBatchPreview() {
+        if (!this._backupState.knowledgeBaseBatchDryRunSignature && !this._backupState.knowledgeBaseBatchPreview) {
+            return;
+        }
+        this._backupState.knowledgeBaseBatchDryRunSignature = '';
+        this._backupState.knowledgeBaseBatchPreview = null;
+        this._backupState.knowledgeBaseBatchFeedback = '批量内容已变更，请重新预览。';
+        this._renderBackupPanel();
+    }
+
     async _selectKnowledgeBaseFile() {
         if (this._backupState.knowledgeBaseBusy) {
             return;
@@ -823,6 +862,149 @@ export class SettingsPage extends PageController {
         } catch (error) {
             const message = toast.getErrorMessage(error, '知识库文件读取失败');
             this._backupState.knowledgeBaseFeedback = message;
+            this._renderBackupPanel();
+            toast.error(message);
+        } finally {
+            this._backupState.knowledgeBaseBusy = false;
+            this._renderBackupPanel();
+        }
+    }
+
+    async _previewKnowledgeBaseDocuments() {
+        if (this._backupState.knowledgeBaseBusy) {
+            return;
+        }
+        let payload;
+        try {
+            payload = this._buildKnowledgeBaseBatchPayload();
+        } catch (error) {
+            const message = toast.getErrorMessage(error, '知识库批量预览失败');
+            this._backupState.knowledgeBaseBatchFeedback = message;
+            this._backupState.knowledgeBaseBatchDryRunSignature = '';
+            this._backupState.knowledgeBaseBatchPreview = null;
+            this._renderBackupPanel();
+            toast.info(message);
+            return;
+        }
+
+        this._backupState.knowledgeBaseBusy = true;
+        this._backupState.knowledgeBaseBatchFeedback = '正在批量预览知识库分块...';
+        this._renderBackupPanel();
+        try {
+            const result = await apiService.dryRunKnowledgeDocuments(payload);
+            if (!result?.success) {
+                throw new Error(result?.message || '知识库批量预览失败');
+            }
+            this._backupState.knowledgeBaseBatchPreview = result;
+            this._backupState.knowledgeBaseBatchDryRunSignature = this._buildKnowledgeBasePayloadSignature(payload);
+            this._backupState.knowledgeBaseBatchFeedback = `批量预览完成：${Number(result.document_count || 0)} 份文档，预计生成 ${Number(result.chunk_count || 0)} 个 chunk。`;
+            this._renderBackupPanel();
+            toast.success('知识库批量预览完成');
+        } catch (error) {
+            const message = toast.getErrorMessage(error, '知识库批量预览失败');
+            this._backupState.knowledgeBaseBatchFeedback = message;
+            this._backupState.knowledgeBaseBatchDryRunSignature = '';
+            this._backupState.knowledgeBaseBatchPreview = null;
+            this._renderBackupPanel();
+            toast.error(message);
+        } finally {
+            this._backupState.knowledgeBaseBusy = false;
+            this._renderBackupPanel();
+        }
+    }
+
+    async _ingestKnowledgeBaseDocuments() {
+        if (this._backupState.knowledgeBaseBusy) {
+            return;
+        }
+        let payload;
+        try {
+            payload = this._buildKnowledgeBaseBatchPayload();
+        } catch (error) {
+            const message = toast.getErrorMessage(error, '知识库批量写入失败');
+            this._backupState.knowledgeBaseBatchFeedback = message;
+            this._renderBackupPanel();
+            toast.info(message);
+            return;
+        }
+
+        const signature = this._buildKnowledgeBasePayloadSignature(payload);
+        if (!this._backupState.knowledgeBaseBatchDryRunSignature || this._backupState.knowledgeBaseBatchDryRunSignature !== signature) {
+            const message = '请先对当前批量 JSON 执行一次预览，再批量写入知识库';
+            this._backupState.knowledgeBaseBatchFeedback = message;
+            this._backupState.knowledgeBaseBatchDryRunSignature = '';
+            this._renderBackupPanel();
+            toast.info(message);
+            return;
+        }
+
+        this._backupState.knowledgeBaseBusy = true;
+        this._backupState.knowledgeBaseBatchFeedback = '正在批量写入知识库...';
+        this._renderBackupPanel();
+        try {
+            const result = await apiService.ingestKnowledgeDocuments(payload);
+            if (!result?.success) {
+                throw new Error(result?.message || result?.reason || '知识库批量写入失败');
+            }
+            this._backupState.knowledgeBaseBatchFeedback = `批量写入完成：成功 ${Number(result.succeeded_documents || 0)} 份，已索引 ${Number(result.indexed_chunks || 0)} 个 chunk。`;
+            this._backupState.knowledgeBaseBatchDryRunSignature = '';
+            this._backupState.knowledgeBaseBatchPreview = null;
+            await this._refreshKnowledgeBaseStatus({ silent: true });
+            toast.success('知识库批量写入完成');
+        } catch (error) {
+            const message = toast.getErrorMessage(error, '知识库批量写入失败');
+            this._backupState.knowledgeBaseBatchFeedback = message;
+            this._renderBackupPanel();
+            toast.error(message);
+        } finally {
+            this._backupState.knowledgeBaseBusy = false;
+            this._renderBackupPanel();
+        }
+    }
+
+    async _rebuildKnowledgeBaseDocuments() {
+        if (this._backupState.knowledgeBaseBusy) {
+            return;
+        }
+        let payload;
+        try {
+            payload = this._buildKnowledgeBaseBatchPayload();
+        } catch (error) {
+            const message = toast.getErrorMessage(error, '知识库批量重建失败');
+            this._backupState.knowledgeBaseBatchFeedback = message;
+            this._renderBackupPanel();
+            toast.info(message);
+            return;
+        }
+
+        const signature = this._buildKnowledgeBasePayloadSignature(payload);
+        if (!this._backupState.knowledgeBaseBatchDryRunSignature || this._backupState.knowledgeBaseBatchDryRunSignature !== signature) {
+            const message = '请先对当前批量 JSON 执行一次预览，再批量重建知识库文档';
+            this._backupState.knowledgeBaseBatchFeedback = message;
+            this._backupState.knowledgeBaseBatchDryRunSignature = '';
+            this._renderBackupPanel();
+            toast.info(message);
+            return;
+        }
+
+        this._backupState.knowledgeBaseBusy = true;
+        this._backupState.knowledgeBaseBatchFeedback = '正在批量重建知识库文档...';
+        this._renderBackupPanel();
+        try {
+            const result = await apiService.rebuildKnowledgeDocuments(payload);
+            if (!result?.success) {
+                throw new Error(result?.message || result?.reason || '知识库批量重建失败');
+            }
+            const deletedCount = Number(result.deleted_previous_documents || 0);
+            const deletedText = deletedCount > 0 ? `已重建 ${deletedCount} 份旧文档，` : '';
+            this._backupState.knowledgeBaseBatchFeedback = `批量重建完成：成功 ${Number(result.succeeded_documents || 0)} 份，${deletedText}已索引 ${Number(result.indexed_chunks || 0)} 个 chunk。`;
+            this._backupState.knowledgeBaseBatchDryRunSignature = '';
+            this._backupState.knowledgeBaseBatchPreview = null;
+            await this._refreshKnowledgeBaseStatus({ silent: true });
+            toast.success('知识库批量重建完成');
+        } catch (error) {
+            const message = toast.getErrorMessage(error, '知识库批量重建失败');
+            this._backupState.knowledgeBaseBatchFeedback = message;
             this._renderBackupPanel();
             toast.error(message);
         } finally {

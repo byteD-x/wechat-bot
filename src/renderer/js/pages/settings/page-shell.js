@@ -77,6 +77,9 @@ export function bindSettingsEvents(page, deps = {}) {
     bindOptional('#btn-knowledge-base-dry-run', 'click', () => void page._previewKnowledgeBaseDocument?.());
     bindOptional('#btn-knowledge-base-ingest', 'click', () => void page._ingestKnowledgeBaseDocument?.());
     bindOptional('#btn-knowledge-base-rebuild', 'click', () => void page._rebuildKnowledgeBaseDocument?.());
+    bindOptional('#btn-knowledge-base-batch-dry-run', 'click', () => void page._previewKnowledgeBaseDocuments?.());
+    bindOptional('#btn-knowledge-base-batch-ingest', 'click', () => void page._ingestKnowledgeBaseDocuments?.());
+    bindOptional('#btn-knowledge-base-batch-rebuild', 'click', () => void page._rebuildKnowledgeBaseDocuments?.());
     bindOptional('#btn-check-updates', 'click', () => void page._checkUpdates?.());
     bindOptional('#btn-open-update-download', 'click', () => void page._openUpdateDownload?.());
     bindOptional('#btn-open-models', 'click', () => page.emit(Events.PAGE_CHANGE, 'models'));
@@ -94,6 +97,8 @@ export function bindSettingsEvents(page, deps = {}) {
         bindOptional(selector, 'input', () => page._resetKnowledgeBasePreview?.());
         bindOptional(selector, 'change', () => page._resetKnowledgeBasePreview?.());
     });
+    bindOptional('#settings-knowledge-base-batch-json', 'input', () => page._resetKnowledgeBaseBatchPreview?.());
+    bindOptional('#settings-knowledge-base-batch-json', 'change', () => page._resetKnowledgeBaseBatchPreview?.());
     bindOptional('#settings-section-nav', 'click', (event) => {
         const button = event?.target?.closest?.('[data-settings-section]');
         if (!button) {

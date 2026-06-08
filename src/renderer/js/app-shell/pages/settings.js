@@ -197,6 +197,15 @@ export function renderSettingsPageShell() {
                                     <button class="btn btn-primary btn-sm" id="btn-knowledge-base-ingest" type="button">写入知识库</button>
                                     <button class="btn btn-secondary btn-sm" id="btn-knowledge-base-rebuild" type="button">重建同文档</button>
                                 </div>
+                                <label class="detail-label" for="settings-knowledge-base-batch-json">批量文档 JSON</label>
+                                <textarea class="form-input" id="settings-knowledge-base-batch-json" rows="5" maxlength="300000" placeholder='{"documents":[{"content":"...","doc_id":"runbook","content_type":"markdown"}]}'></textarea>
+                                <div class="detail-help" id="settings-knowledge-base-batch-feedback">批量入口尚未预览。</div>
+                                <div class="detail-help" id="settings-knowledge-base-batch-preview">尚未生成批量 chunk 预览。</div>
+                                <div class="backup-button-row backup-button-row-end">
+                                    <button class="btn btn-secondary btn-sm" id="btn-knowledge-base-batch-dry-run" type="button">批量预览</button>
+                                    <button class="btn btn-primary btn-sm" id="btn-knowledge-base-batch-ingest" type="button">批量写入</button>
+                                    <button class="btn btn-secondary btn-sm" id="btn-knowledge-base-batch-rebuild" type="button">批量重建</button>
+                                </div>
                             </details>
 
                             <div class="dashboard-subsection backup-list-section">

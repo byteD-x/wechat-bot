@@ -473,15 +473,30 @@ test('backend:request allows fixed knowledge base governance endpoints only', as
         endpoint: '/api/knowledge_base/dry-run',
         payload: { content: 'release notes', content_type: 'markdown' },
     });
+    const batchDryRunResult = await harness.backendRequestHandler(event, {
+        method: 'POST',
+        endpoint: '/api/knowledge_base/batch-dry-run',
+        payload: { documents: [{ content: 'release notes' }] },
+    });
     const ingestResult = await harness.backendRequestHandler(event, {
         method: 'POST',
         endpoint: '/api/knowledge_base/ingest',
         payload: { content: 'release notes', doc_id: 'release' },
     });
+    const batchIngestResult = await harness.backendRequestHandler(event, {
+        method: 'POST',
+        endpoint: '/api/knowledge_base/batch-ingest',
+        payload: { documents: [{ content: 'release notes', doc_id: 'release' }] },
+    });
     const rebuildResult = await harness.backendRequestHandler(event, {
         method: 'POST',
         endpoint: '/api/knowledge_base/rebuild',
         payload: { content: 'release notes', doc_id: 'release' },
+    });
+    const batchRebuildResult = await harness.backendRequestHandler(event, {
+        method: 'POST',
+        endpoint: '/api/knowledge_base/batch-rebuild',
+        payload: { documents: [{ content: 'release notes', doc_id: 'release' }] },
     });
     const deleteBlocked = await harness.backendRequestHandler(event, {
         method: 'POST',
@@ -491,8 +506,11 @@ test('backend:request allows fixed knowledge base governance endpoints only', as
 
     assert.equal(statusResult.ok, true);
     assert.equal(dryRunResult.ok, true);
+    assert.equal(batchDryRunResult.ok, true);
     assert.equal(ingestResult.ok, true);
+    assert.equal(batchIngestResult.ok, true);
     assert.equal(rebuildResult.ok, true);
+    assert.equal(batchRebuildResult.ok, true);
     assert.equal(deleteBlocked.ok, false);
     assert.equal(deleteBlocked.error?.message, 'endpoint_not_allowed');
     assert.deepEqual(harness.backendCalls, [
@@ -504,13 +522,28 @@ test('backend:request allows fixed knowledge base governance endpoints only', as
         },
         {
             method: 'POST',
+            endpoint: '/api/knowledge_base/batch-dry-run',
+            payload: { documents: [{ content: 'release notes' }] },
+        },
+        {
+            method: 'POST',
             endpoint: '/api/knowledge_base/ingest',
             payload: { content: 'release notes', doc_id: 'release' },
         },
         {
             method: 'POST',
+            endpoint: '/api/knowledge_base/batch-ingest',
+            payload: { documents: [{ content: 'release notes', doc_id: 'release' }] },
+        },
+        {
+            method: 'POST',
             endpoint: '/api/knowledge_base/rebuild',
             payload: { content: 'release notes', doc_id: 'release' },
+        },
+        {
+            method: 'POST',
+            endpoint: '/api/knowledge_base/batch-rebuild',
+            payload: { documents: [{ content: 'release notes', doc_id: 'release' }] },
         },
     ]);
 });

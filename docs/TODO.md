@@ -23,7 +23,7 @@
 - 运行时治理指标：`/api/status.governance_metrics` 与 `/api/metrics` 已暴露 Prompt 回滚和 API Tool Workflow 的聚合次数、成功率、失败原因与耗时；指标只记录短枚举和数值，不记录完整 Prompt、聊天正文、token、工具输出或完整本机路径。
 - 统一 API 路由索引生成：`scripts/generate_api_route_index.py` 已可从 `backend/api.py` 的 `@app.route` 装饰器静态生成 `docs/API_ROUTE_INDEX.md`；测试会校验生成文档与当前路由保持一致，减少人工维护的接口清单漂移。
 - 知识库治理 API：`GET /api/knowledge_base/status` 与 `POST /api/knowledge_base/dry-run|batch-dry-run|ingest|batch-ingest|rebuild|batch-rebuild|delete` 已落地，首版只支持请求体 text/Markdown，不读取任意本机文件，预览不返回正文或完整本机路径；`batch-dry-run` 仅做最多 20 份请求体文档的无副作用分块预览，`batch-ingest` 仅按顺序写入请求体文档且不删除旧 chunk，`batch-rebuild` 按顺序重建请求体文档、拒绝重复 `doc_id`，并在单文档 embedding 准备失败时保留该文档旧 chunk。
-- 知识库治理 UI 最小入口：设置页“数据与恢复 / 知识库治理”已支持粘贴纯文本或 Markdown，也可显式选择单个 `.txt/.md/.markdown` 文件填入表单；文件选择不返回完整本机路径、不自动写入，仍要求同一份内容 dry-run 后才允许写入或重建同文档；暂不开放文件上传、目录扫描、批量 UI 或 delete。
+- 知识库治理 UI 最小入口：设置页“数据与恢复 / 知识库治理”已支持粘贴纯文本或 Markdown，也可显式选择单个 `.txt/.md/.markdown` 文件填入表单；同时支持受控 `{"documents":[...]}` JSON 批量预览、批量写入和批量重建。文件选择不返回完整本机路径、不自动写入；单文档和批量入口仍要求当前内容 dry-run 后才允许写入或重建；暂不开放文件上传、目录扫描或 delete。
 - 知识库治理 CLI 显式文件入口：`python run.py knowledge-base import-files` 已支持 `.txt/.md` 显式文件列表，默认只 dry-run，拒绝目录和 glob，`--apply` 才调用 loopback 本机 API 写入。
 - Docker/部署切片：`Dockerfile`、`.dockerignore` 与 `requirements-container.txt` 已落地，只覆盖 Web API、`/api/readiness` 和离线 `run.py eval`；容器默认 `WECHAT_BOT_DEPLOYMENT_TARGET=web-api`，readiness 会跳过桌面微信传输检查，不承诺 wcferry 微信桌面能力容器化。
 - 文档入口：`README.md`、`docs/USER_GUIDE.md`、`docs/SYSTEM_CHAINS.md`、`docs/HIGHLIGHTS.md`、`docs/api.md` 和 `docs/interview-playbook.md` 已补充。
@@ -31,7 +31,7 @@
 ## 下一阶段 P1
 
 - RAG 知识库治理增强
-  - 在当前粘贴 / 显式单文件选择 UI、受控同文档重建、显式文件 CLI、Web API 批量预览、批量写入和批量重建之上，继续评估后台队列、批量治理 UI 和文件索引；继续保持不开放任意路径扫描。
+  - 在当前粘贴 / 显式单文件选择 UI、受控同文档重建、受控批量治理 UI、显式文件 CLI、Web API 批量预览、批量写入和批量重建之上，继续评估后台队列和文件索引；继续保持不开放任意路径扫描。
 
 - Windows 真实环境手测
   - 在 Windows 10/11、管理员权限、微信 PC `3.9.12.51` 下跑一次完整首启、连接、发消息、诊断导出和停止流程。

@@ -1327,6 +1327,9 @@ test('settings page shell binds events and auto save routing stably', async () =
         'btn-knowledge-base-dry-run',
         'btn-knowledge-base-ingest',
         'btn-knowledge-base-rebuild',
+        'btn-knowledge-base-batch-dry-run',
+        'btn-knowledge-base-batch-ingest',
+        'btn-knowledge-base-batch-rebuild',
         'btn-check-updates',
         'btn-open-update-download',
         'settings-data-control-scope',
@@ -1337,6 +1340,7 @@ test('settings page shell binds events and auto save routing stably', async () =
         'settings-knowledge-base-source-file',
         'settings-knowledge-base-url',
         'settings-knowledge-base-page',
+        'settings-knowledge-base-batch-json',
     ].forEach((id) => {
         controls.set(`#${id}`, registerElement(id, document.createElement('button')));
     });
@@ -1408,8 +1412,20 @@ test('settings page shell binds events and auto save routing stably', async () =
         _rebuildKnowledgeBaseDocument() {
             this.calls.push('kb-rebuild');
         },
+        _previewKnowledgeBaseDocuments() {
+            this.calls.push('kb-batch-preview');
+        },
+        _ingestKnowledgeBaseDocuments() {
+            this.calls.push('kb-batch-ingest');
+        },
+        _rebuildKnowledgeBaseDocuments() {
+            this.calls.push('kb-batch-rebuild');
+        },
         _resetKnowledgeBasePreview() {
             this.calls.push('kb-reset');
+        },
+        _resetKnowledgeBaseBatchPreview() {
+            this.calls.push('kb-batch-reset');
         },
         _checkUpdates() {
             this.calls.push('check-updates');
@@ -1436,7 +1452,7 @@ test('settings page shell binds events and auto save routing stably', async () =
         rootElement: root,
     });
 
-    assert.equal(page.bindings.length, 39);
+    assert.equal(page.bindings.length, 44);
     assert.equal(page._eventCleanups.length, 1);
 
     page.bindings.forEach(({ handler }) => handler());
@@ -1469,6 +1485,9 @@ test('settings page shell binds events and auto save routing stably', async () =
         'kb-preview',
         'kb-ingest',
         'kb-rebuild',
+        'kb-batch-preview',
+        'kb-batch-ingest',
+        'kb-batch-rebuild',
         'check-updates',
         'open-update-download',
         'kb-reset',
@@ -1485,6 +1504,8 @@ test('settings page shell binds events and auto save routing stably', async () =
         'kb-reset',
         'kb-reset',
         'kb-reset',
+        'kb-batch-reset',
+        'kb-batch-reset',
         'autosave:false',
         'autosave:true',
         'autosave:true',
@@ -2068,6 +2089,168 @@ test('settings page knowledge base file selector fills form and requires preview
     }
 }));
 
+test('settings page knowledge base batch actions require matching preview', async () => {
+    const originalDryRunBatch = apiService.dryRunKnowledgeDocuments;
+    const originalIngestBatch = apiService.ingestKnowledgeDocuments;
+    const originalRebuildBatch = apiService.rebuildKnowledgeDocuments;
+    const originalDryRunSingle = apiService.dryRunKnowledgeDocument;
+    const originalIngestSingle = apiService.ingestKnowledgeDocument;
+    const originalRebuildSingle = apiService.rebuildKnowledgeDocument;
+    const originalStatus = apiService.getKnowledgeBaseStatus;
+    const originalToastInfo = toast.info;
+    const originalToastSuccess = toast.success;
+    const originalToastError = toast.error;
+    const page = new SettingsPage();
+    const batchOne = {
+        documents: [
+            { content: '# Release\ncontent', doc_id: 'release', content_type: 'markdown' },
+            { content: 'FAQ content', doc_id: 'faq', content_type: 'text' },
+        ],
+    };
+    const batchTwo = {
+        documents: [
+            { content: '# Release v2\ncontent', doc_id: 'release', version: 'v2' },
+        ],
+    };
+    const batchThree = {
+        documents: [
+            { content: '# Release v3\ncontent', doc_id: 'release', version: 'v3' },
+        ],
+    };
+    const inputs = new Map([
+        ['#settings-knowledge-base-batch-json', { value: JSON.stringify(batchOne) }],
+    ]);
+    const dryRunPayloads = [];
+    const ingestPayloads = [];
+    const rebuildPayloads = [];
+    const singleCalls = [];
+    const toastCalls = [];
+    let statusCalls = 0;
+    let renderCount = 0;
+
+    page.$ = (selector) => inputs.get(selector) || null;
+    page._renderBackupPanel = () => {
+        renderCount += 1;
+    };
+    apiService.dryRunKnowledgeDocuments = async (payload) => {
+        dryRunPayloads.push(payload);
+        return {
+            success: true,
+            batch: true,
+            document_count: payload.documents.length,
+            chunk_count: payload.documents.length + 1,
+            char_count: JSON.stringify(payload).length,
+            documents: payload.documents.map((item, index) => ({
+                index,
+                success: true,
+                doc_id: item.doc_id,
+                chunk_count: 1,
+            })),
+        };
+    };
+    apiService.ingestKnowledgeDocuments = async (payload) => {
+        ingestPayloads.push(payload);
+        return {
+            success: true,
+            document_count: payload.documents.length,
+            succeeded_documents: payload.documents.length,
+            indexed_chunks: payload.documents.length + 2,
+        };
+    };
+    apiService.rebuildKnowledgeDocuments = async (payload) => {
+        rebuildPayloads.push(payload);
+        return {
+            success: true,
+            document_count: payload.documents.length,
+            succeeded_documents: payload.documents.length,
+            indexed_chunks: payload.documents.length + 3,
+            deleted_previous_documents: payload.documents.length,
+        };
+    };
+    apiService.dryRunKnowledgeDocument = async () => {
+        singleCalls.push('dry-run');
+        return { success: true };
+    };
+    apiService.ingestKnowledgeDocument = async () => {
+        singleCalls.push('ingest');
+        return { success: true };
+    };
+    apiService.rebuildKnowledgeDocument = async () => {
+        singleCalls.push('rebuild');
+        return { success: true };
+    };
+    apiService.getKnowledgeBaseStatus = async () => {
+        statusCalls += 1;
+        return {
+            success: true,
+            vector_memory_available: true,
+            chunk_count: 6,
+        };
+    };
+    toast.info = (message) => {
+        toastCalls.push({ type: 'info', message });
+    };
+    toast.success = (message) => {
+        toastCalls.push({ type: 'success', message });
+    };
+    toast.error = (message) => {
+        toastCalls.push({ type: 'error', message });
+    };
+
+    try {
+        await page._ingestKnowledgeBaseDocuments();
+        assert.deepEqual(ingestPayloads, []);
+        assert.equal(page._backupState.knowledgeBaseBatchDryRunSignature, '');
+
+        await page._previewKnowledgeBaseDocuments();
+        assert.deepEqual(dryRunPayloads, [batchOne]);
+        assert.equal(page._backupState.knowledgeBaseBatchDryRunSignature, JSON.stringify(batchOne));
+        assert.equal(page._backupState.knowledgeBaseBatchPreview?.batch, true);
+
+        await page._ingestKnowledgeBaseDocuments();
+        assert.deepEqual(ingestPayloads, [batchOne]);
+        assert.equal(page._backupState.knowledgeBaseBatchDryRunSignature, '');
+        assert.equal(page._backupState.knowledgeBaseBatchPreview, null);
+
+        inputs.get('#settings-knowledge-base-batch-json').value = JSON.stringify(batchTwo);
+        await page._previewKnowledgeBaseDocuments();
+        assert.deepEqual(dryRunPayloads, [batchOne, batchTwo]);
+        assert.equal(page._backupState.knowledgeBaseBatchDryRunSignature, JSON.stringify(batchTwo));
+
+        inputs.get('#settings-knowledge-base-batch-json').value = JSON.stringify(batchThree);
+        page._resetKnowledgeBaseBatchPreview();
+        assert.equal(page._backupState.knowledgeBaseBatchDryRunSignature, '');
+        assert.equal(page._backupState.knowledgeBaseBatchPreview, null);
+
+        await page._rebuildKnowledgeBaseDocuments();
+        assert.deepEqual(rebuildPayloads, []);
+
+        await page._previewKnowledgeBaseDocuments();
+        await page._rebuildKnowledgeBaseDocuments();
+        assert.deepEqual(dryRunPayloads, [batchOne, batchTwo, batchThree]);
+        assert.deepEqual(rebuildPayloads, [batchThree]);
+        assert.equal(statusCalls, 2);
+        assert.deepEqual(singleCalls, []);
+        assert.equal(page._backupState.knowledgeBaseBatchDryRunSignature, '');
+        assert.equal(page._backupState.knowledgeBaseBatchPreview, null);
+        assert.equal(page._backupState.knowledgeBaseStatus?.chunk_count, 6);
+        assert.match(page._backupState.knowledgeBaseBatchFeedback, /批量重建完成/);
+        assert.equal(toastCalls.filter((item) => item.type === 'error').length, 0);
+        assert.ok(renderCount > 0);
+    } finally {
+        apiService.dryRunKnowledgeDocuments = originalDryRunBatch;
+        apiService.ingestKnowledgeDocuments = originalIngestBatch;
+        apiService.rebuildKnowledgeDocuments = originalRebuildBatch;
+        apiService.dryRunKnowledgeDocument = originalDryRunSingle;
+        apiService.ingestKnowledgeDocument = originalIngestSingle;
+        apiService.rebuildKnowledgeDocument = originalRebuildSingle;
+        apiService.getKnowledgeBaseStatus = originalStatus;
+        toast.info = originalToastInfo;
+        toast.success = originalToastSuccess;
+        toast.error = originalToastError;
+    }
+});
+
 test('settings page knowledge base rebuild requires matching dry-run preview', async () => {
     const originalDryRun = apiService.dryRunKnowledgeDocument;
     const originalRebuild = apiService.rebuildKnowledgeDocument;
@@ -2192,6 +2375,8 @@ test('settings shell keeps dangerous and disabled settings behind clear explanat
     assert.equal(markup.includes('<details class="backup-action-card settings-disclosure settings-disclosure-danger">'), true);
     assert.equal(markup.includes('按范围 dry-run 后再清理'), true);
     assert.equal(markup.includes('id="btn-knowledge-base-rebuild"'), true);
+    assert.equal(markup.includes('id="settings-knowledge-base-batch-json"'), true);
+    assert.equal(markup.includes('id="btn-knowledge-base-batch-rebuild"'), true);
     assert.equal(markup.includes('settings-disabled-reason'), true);
     assert.equal(markup.includes('不可在设置中心直接编辑'), true);
     assert.equal(markup.includes('关于与更新'), true);

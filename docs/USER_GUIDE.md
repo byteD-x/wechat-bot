@@ -680,8 +680,8 @@ python run.py eval --dataset tests/fixtures/evals/smoke_cases.json --preset smok
 
 #### 8.7.5 知识库治理 API
 
-- 设置页“数据与恢复 / 知识库治理”已经提供最小 UI 入口：可手动粘贴纯文本或 Markdown，也可显式选择单个 `.txt/.md/.markdown` 文件把内容填入表单；无论来源如何，都必须先执行“预览分块”，确认 chunk 摘要后才允许“写入知识库”或“重建同文档”。内容或元数据变更后，界面会清空上一次 dry-run 签名并要求重新预览。
-- 当前设置页入口不提供文件上传、目录扫描、任意路径读取、批量预览、批量写入、批量重建或删除；文件选择只通过固定桌面 IPC 打开单文件选择对话框，读取前限制扩展名和大小，界面只接收内容与 `.../<filename>` 形式的脱敏来源。`batch-dry-run`、`batch-ingest`、`batch-rebuild` 和 `delete` 仍仅作为受控 API 能力存在，后续如接入 UI 需要继续保持显式预览和固定端点白名单。
+- 设置页“数据与恢复 / 知识库治理”已经提供最小 UI 入口：可手动粘贴纯文本或 Markdown，也可显式选择单个 `.txt/.md/.markdown` 文件把内容填入表单；还可粘贴 `{"documents":[...]}` 受控 JSON 执行批量预览、批量写入或批量重建。无论单文档还是批量入口，都必须先执行对应“预览分块”，确认 chunk 摘要后才允许写入或重建；内容或元数据变更后，界面会清空上一次 dry-run 签名并要求重新预览。
+- 当前设置页入口不提供文件上传、目录扫描、任意路径读取或删除；文件选择只通过固定桌面 IPC 打开单文件选择对话框，读取前限制扩展名和大小，界面只接收内容与 `.../<filename>` 形式的脱敏来源。批量入口只接收文本框中的 `documents` JSON，并且只调用固定 `batch-dry-run / batch-ingest / batch-rebuild` 端点；`delete` 仍仅作为受控 API 能力存在，未接入桌面 UI。
 - 本机 CLI 提供显式文件列表入口，适合把已经确认可信的 `.txt/.md` 文档先预览再写入运行中的本机 Web API：
   - `python run.py knowledge-base import-files --file docs/runbook.md --json`
   - `python run.py knowledge-base import-files docs/runbook.md docs/faq.txt --json`
@@ -712,7 +712,7 @@ python run.py eval --dataset tests/fixtures/evals/smoke_cases.json --preset smok
   - 返回运行中向量库是否可用，以及当前知识库 chunk 数。
 - 首版限制：
   - Web API 不提供文件上传、目录扫描、任意文件路径读取或后台批量索引。
-  - 桌面设置页当前只接入单文档粘贴 / 显式单文件选择后的 dry-run / ingest / rebuild；`batch-dry-run`、`batch-ingest` 和 `batch-rebuild` 是 Web API 能力，未接入桌面批量 UI。
+  - 桌面设置页当前接入单文档粘贴 / 显式单文件选择后的 dry-run / ingest / rebuild，也接入受控 JSON 批量 dry-run / batch-ingest / batch-rebuild；两条路径都要求当前内容先完成匹配 dry-run。后台队列和文件索引仍未提供。
   - `ingest / batch-ingest / rebuild / batch-rebuild` 需要后端已经启动并具备可用 embedding 客户端；缺少运行时依赖时会返回 `409 vector_memory_unavailable` 或 `409 embedding_unavailable`。
   - 如果 `doc_id / source_file / url / source_url` 看起来像完整本机路径或 `file://` 本机 URI，接口响应会收敛为 `.../<filename>`，避免泄露本机目录结构。
 

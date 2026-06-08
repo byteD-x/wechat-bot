@@ -452,10 +452,11 @@
 - `batch-ingest` 仅顺序写入请求体中的多份文档，不读取本机路径、不上传文件、不删除旧 chunk；它不是原子事务，若后续文档失败，响应会保留前序成功文档的逐项摘要。
 - `batch-rebuild` 仅顺序重建请求体中的多份文档，不读取本机路径、不上传文件、不扫描目录；它不是原子事务，若后续文档失败，前序成功重建可能已经生效。单个文档在新版本 embedding 准备失败时不会删除该文档旧 chunk；同一请求内重复 `doc_id` 会直接返回 `400`，不会进入删除流程。
 - 设置页单文档入口只调用固定的 `status / dry-run / ingest / rebuild` 端点；可手动粘贴内容，或通过固定桌面 IPC 显式选择单个 `.txt/.md/.markdown` 文件填入表单，来源只保留 `.../<filename>`；写入或重建同文档前必须先对当前内容完成一次 dry-run，内容或元数据变化后需要重新预览。
+- 设置页批量入口只接收文本框中的 `{"documents":[...]}` JSON，并调用固定的 `batch-dry-run / batch-ingest / batch-rebuild` 端点；批量写入或重建前必须先对当前 JSON 完成一次批量 dry-run，JSON 变化后需要重新预览。
 - `doc_id / source_file / url / source_url` 只用于引用元数据；如果看起来像完整本机路径或 `file://` 本机 URI，响应和删除匹配会收敛为 `.../<filename>`。
 - 预览和治理响应不返回完整正文、chunk text、embedding 或完整本机路径。
 - `ingest`、`batch-ingest`、`rebuild`、`batch-rebuild` 依赖运行中的向量库和 embedding 客户端；重建类接口会先完整准备新版本 chunk embedding，准备失败时返回 `no_chunks_indexed` 或 `incomplete_embeddings`，并保留旧 chunk。
-- 后台队列、批量治理 UI 和文件索引属于后续任务。
+- 后台队列和文件索引属于后续任务。
 
 ## 成熟产品化参考
 

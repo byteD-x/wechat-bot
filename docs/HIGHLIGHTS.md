@@ -323,7 +323,7 @@ Provider 分层策略也更清晰：
 - `batch-dry-run` 支持最多 20 份请求体文档的无副作用分块预览，返回聚合 chunk/字符数和逐文档摘要，不写入向量库、不触发 embedding。
 - `batch-ingest` 支持最多 20 份请求体文档按顺序写入，返回成功/失败文档数、聚合索引 chunk 数和逐文档摘要；它不读取本机路径、不上传文件、不删除旧 chunk。
 - `batch-rebuild` 支持最多 20 份请求体文档按顺序重建，重复 `doc_id` 会在任何删除前被拒绝；单文档 embedding 准备失败时会保留该文档旧 chunk，批量本身不做全局事务回滚。
-- 设置页单文档入口已支持刷新状态、预览分块、写入知识库和重建同文档；可手动粘贴纯文本 / Markdown，或通过固定桌面 IPC 显式选择单个 `.txt/.md/.markdown` 文件填入表单，来源只保留 `.../<filename>`；写入或重建前都必须先对当前内容完成 dry-run，内容或元数据变化后会强制重新预览。
+- 设置页已支持刷新状态、单文档预览/写入/重建，以及受控 `{"documents":[...]}` JSON 批量预览/写入/重建；单文档可手动粘贴纯文本 / Markdown，或通过固定桌面 IPC 显式选择单个 `.txt/.md/.markdown` 文件填入表单，来源只保留 `.../<filename>`；写入或重建前都必须先对当前内容完成对应 dry-run，内容或元数据变化后会强制重新预览。
 - 本机 CLI `python run.py knowledge-base import-files` 已提供显式 `.txt/.md` 文件列表入口，默认只预览分块；拒绝目录和 glob，`--apply` 才调用 loopback 本机 API 写入。
 - `ingest / rebuild` 依赖运行中 bot 的 embedding 客户端，写入 `source=knowledge_base`、`doc_id`、`doc_version`、`chunk_id`、`source_file`、`url`、`page` 等 citation metadata，让 RAG 引用能绑定到文档级来源。
 - `delete` 只按精确 `doc_id` 删除知识库来源 chunk，不影响聊天记忆、导出语料 RAG 或其他向量来源；路径形式的 `doc_id/source_file` 会收敛为 `.../<filename>`，避免治理响应泄露完整本机路径。
