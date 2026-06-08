@@ -2206,13 +2206,55 @@ async def ingest_knowledge_base_documents():
                 )
             )
 
-        payload = _build_knowledge_batch_ingest_payload(results)
+        payload = _build_knowledge_batch_write_payload(results, mode="ingest")
         return jsonify(payload), (200 if payload.get("success", False) else 400)
     except ValueError as e:
         return jsonify({"success": False, "message": str(e)}), 400
     except Exception as e:
         logger.exception("knowledge base batch ingest failed: %s", e)
         return _json_internal_error("knowledge_base_batch_ingest_failed", code="knowledge_base_batch_ingest_failed")
+
+
+@app.route("/api/knowledge_base/batch-rebuild", methods=["POST"])
+async def rebuild_knowledge_base_documents():
+    """Rebuild multiple text/Markdown knowledge documents by replacing same-doc chunks."""
+    try:
+        raw_data = await request.get_json(silent=True)
+        data = raw_data if raw_data is not None else {}
+        documents = parse_knowledge_batch_payload(data)
+        duplicate_doc_id = _find_duplicate_knowledge_doc_id(documents)
+        if duplicate_doc_id:
+            return (
+                jsonify({"success": False, "message": f"duplicate doc_id in documents: {duplicate_doc_id}"}),
+                400,
+            )
+
+        vector_memory = _get_knowledge_vector_memory()
+        if not _knowledge_vector_available(vector_memory):
+            return jsonify({"success": False, "message": "vector_memory_unavailable"}), 409
+        ai_client = _get_knowledge_ai_client()
+        if ai_client is None or not hasattr(ai_client, "get_embedding"):
+            return jsonify({"success": False, "message": "embedding_unavailable"}), 409
+
+        service = KnowledgeBaseService(vector_memory)
+        results = []
+        for document in documents:
+            results.append(
+                await service.ingest_document(
+                    document,
+                    ai_client,
+                    rebuild=True,
+                    priority="foreground",
+                )
+            )
+
+        payload = _build_knowledge_batch_write_payload(results, mode="rebuild")
+        return jsonify(payload), (200 if payload.get("success", False) else 400)
+    except ValueError as e:
+        return jsonify({"success": False, "message": str(e)}), 400
+    except Exception as e:
+        logger.exception("knowledge base batch rebuild failed: %s", e)
+        return _json_internal_error("knowledge_base_batch_rebuild_failed", code="knowledge_base_batch_rebuild_failed")
 
 
 @app.route("/api/knowledge_base/ingest", methods=["POST"])
@@ -2254,17 +2296,32 @@ async def _run_knowledge_base_ingest(*, rebuild: bool):
         return _json_internal_error("knowledge_base_ingest_failed", code="knowledge_base_ingest_failed")
 
 
-def _build_knowledge_batch_ingest_payload(results: list[dict[str, Any]]) -> dict[str, Any]:
+def _find_duplicate_knowledge_doc_id(documents: list[Any]) -> str:
+    service = KnowledgeBaseService(None)
+    seen = set()
+    for document in documents:
+        doc_id = service._resolve_doc_id(document)
+        if doc_id in seen:
+            return doc_id
+        seen.add(doc_id)
+    return ""
+
+
+def _build_knowledge_batch_write_payload(results: list[dict[str, Any]], *, mode: str) -> dict[str, Any]:
     documents = []
     succeeded_documents = 0
     total_chunks = 0
     indexed_chunks = 0
     skipped_chunks = 0
+    deleted_previous_documents = 0
 
     for index, result in enumerate(results):
         success = bool(result.get("success", False))
+        deleted_previous = bool(result.get("deleted_previous", False))
         if success:
             succeeded_documents += 1
+        if deleted_previous:
+            deleted_previous_documents += 1
         total_chunks += _safe_int(result.get("chunk_count"), 0)
         indexed_chunks += _safe_int(result.get("indexed_chunks"), 0)
         skipped_chunks += _safe_int(result.get("skipped_chunks"), 0)
@@ -2278,16 +2335,17 @@ def _build_knowledge_batch_ingest_payload(results: list[dict[str, Any]]) -> dict
                 "chunk_count": _safe_int(result.get("chunk_count"), 0),
                 "indexed_chunks": _safe_int(result.get("indexed_chunks"), 0),
                 "skipped_chunks": _safe_int(result.get("skipped_chunks"), 0),
+                "deleted_previous": deleted_previous,
                 "chunk_ids": list(result.get("chunk_ids") or []),
             }
         )
 
     failed_documents = max(0, len(documents) - succeeded_documents)
-    return {
+    payload = {
         "success": failed_documents == 0,
         "batch": True,
         "dry_run": False,
-        "mode": "ingest",
+        "mode": mode,
         "document_count": len(documents),
         "succeeded_documents": succeeded_documents,
         "failed_documents": failed_documents,
@@ -2296,6 +2354,9 @@ def _build_knowledge_batch_ingest_payload(results: list[dict[str, Any]]) -> dict
         "skipped_chunks": skipped_chunks,
         "documents": documents,
     }
+    if mode == "rebuild":
+        payload["deleted_previous_documents"] = deleted_previous_documents
+    return payload
 
 
 @app.route("/api/knowledge_base/delete", methods=["POST"])
