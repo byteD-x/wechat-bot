@@ -3671,6 +3671,55 @@ async def test_api_data_controls_apply_rejects_when_runtime_is_running(client, m
 
 
 @pytest.mark.asyncio
+async def test_api_knowledge_base_auto_index_preview_uses_fixed_inbox_without_raw_content(
+    client,
+    mock_manager,
+    tmp_path,
+    monkeypatch,
+):
+    data_root = tmp_path / "data"
+    inbox = data_root / "knowledge_base" / "inbox"
+    inbox.mkdir(parents=True)
+    raw_content = "Secret API inbox runbook text must not appear in preview responses."
+    (inbox / "runbook.md").write_text(raw_content, encoding="utf-8")
+    (inbox / "notes.pdf").write_text("Unsupported local PDF text.", encoding="utf-8")
+    monkeypatch.setenv("WECHAT_BOT_DATA_DIR", str(data_root))
+    mock_manager.bot.vector_memory = None
+    mock_manager.bot.ai_client = None
+
+    response = await client.get("/api/knowledge_base/auto-index/preview")
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["success"] is True
+    assert data["dry_run"] is True
+    assert data["auto_index"] is True
+    assert data["fixed_inbox"] is True
+    assert data["source"] == api_module.KNOWLEDGE_SOURCE
+    assert data["inbox"] == ".../inbox"
+    assert data["exists"] is True
+    assert data["document_count"] == 1
+    assert data["skipped_count"] == 1
+    assert data["chunk_count"] == data["documents"][0]["chunk_count"]
+    assert data["char_count"] == len(raw_content)
+
+    document = data["documents"][0]
+    assert document["name"] == "runbook.md"
+    assert document["doc_id"] == ".../runbook.md"
+    assert document["source_file"] == ".../runbook.md"
+    assert document["content_type"] == "markdown"
+    assert document["chunk_ids"]
+    assert document["chunks"][0]["source_file"] == ".../runbook.md"
+    assert data["skipped"][0]["name"] == "notes.pdf"
+    assert data["skipped"][0]["reason"] == "unsupported_extension"
+
+    response_text = (await response.get_data()).decode("utf-8")
+    assert "Secret API inbox" not in response_text
+    assert "Unsupported local PDF" not in response_text
+    assert str(tmp_path) not in response_text
+
+
+@pytest.mark.asyncio
 async def test_api_knowledge_base_dry_run_returns_chunk_metadata_without_raw_content(client, mock_manager):
     raw_content = (
         "Secret launch checklist says QA signoff and rollback drills are mandatory. "

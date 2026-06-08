@@ -22,7 +22,7 @@
 - Semantic Cache：`agent.response_cache.semantic_enabled` 已作为默认关闭的响应缓存扩展落地；开启后仅在同一 provider、model、chat、system prompt、非当前用户 prompt context、RAG citation ids 与安全策略边界内相似命中，命中后仍重新执行安全护栏。
 - 运行时治理指标：`/api/status.governance_metrics` 与 `/api/metrics` 已暴露 Prompt 回滚和 API Tool Workflow 的聚合次数、成功率、失败原因与耗时；指标只记录短枚举和数值，不记录完整 Prompt、聊天正文、token、工具输出或完整本机路径。
 - 统一 API 路由索引生成：`scripts/generate_api_route_index.py` 已可从 `backend/api.py` 的 `@app.route` 装饰器静态生成 `docs/API_ROUTE_INDEX.md`；测试会校验生成文档与当前路由保持一致，减少人工维护的接口清单漂移。
-- 知识库治理 API：`GET /api/knowledge_base/status|index|jobs/<job_id>` 与 `POST /api/knowledge_base/dry-run|batch-dry-run|ingest|batch-ingest|rebuild|batch-rebuild|jobs|delete` 已落地，首版只支持请求体 text/Markdown，不读取任意本机文件，预览、队列和索引摘要不返回正文或完整本机路径；`index` 只聚合已入库 `knowledge_base` chunk metadata，不扫描目录或读取来源文件；`batch-dry-run` 仅做最多 20 份请求体文档的无副作用分块预览，`batch-ingest` 仅按顺序写入请求体文档且不删除旧 chunk，`batch-rebuild` 按顺序重建请求体文档、拒绝重复 `doc_id`，并在单文档 embedding 准备失败时保留该文档旧 chunk；`jobs` 是进程内内存级串行后台队列，只处理请求体单文档或 `documents` 批量文档，支持异步 `ingest/rebuild`，通过 `status.queue` 和 job 查询返回脱敏状态，进程重启不恢复。
+- 知识库治理 API：`GET /api/knowledge_base/status|index|auto-index/preview|jobs/<job_id>` 与 `POST /api/knowledge_base/dry-run|batch-dry-run|ingest|batch-ingest|rebuild|batch-rebuild|jobs|delete` 已落地，写入类端点只支持请求体 text/Markdown，不读取任意本机文件，预览、队列和索引摘要不返回正文或完整本机路径；`auto-index/preview` 只扫描固定 `data/knowledge_base/inbox` 一层目录中的 `.txt/.md/.markdown` 文本并返回 dry-run 摘要，不写入、不入队、不递归、不展开 glob、不接受任意路径；`index` 只聚合已入库 `knowledge_base` chunk metadata，不扫描目录或读取来源文件；`batch-dry-run` 仅做最多 20 份请求体文档的无副作用分块预览，`batch-ingest` 仅按顺序写入请求体文档且不删除旧 chunk，`batch-rebuild` 按顺序重建请求体文档、拒绝重复 `doc_id`，并在单文档 embedding 准备失败时保留该文档旧 chunk；`jobs` 是进程内内存级串行后台队列，只处理请求体单文档或 `documents` 批量文档，支持异步 `ingest/rebuild`，通过 `status.queue` 和 job 查询返回脱敏状态，进程重启不恢复。
 - 知识库治理 UI 最小入口：设置页“数据与恢复 / 知识库治理”已支持粘贴纯文本或 Markdown，也可显式选择单个 `.txt/.md/.markdown` 文件填入表单；同时支持受控 `{"documents":[...]}` JSON 批量预览、批量写入和批量重建。文件选择不返回完整本机路径、不自动写入；单文档和批量入口仍要求当前内容 dry-run 后才允许写入或重建；暂不开放文件上传、目录扫描或 delete。
 - 知识库治理 CLI 显式文件入口：`python run.py knowledge-base import-files` 已支持 `.txt/.md` 显式文件列表，默认只 dry-run，拒绝目录和 glob，`--apply` 才调用 loopback 本机 API 写入。
 - Docker/部署切片：`Dockerfile`、`.dockerignore` 与 `requirements-container.txt` 已落地，只覆盖 Web API、`/api/readiness` 和离线 `run.py eval`；容器默认 `WECHAT_BOT_DEPLOYMENT_TARGET=web-api`，readiness 会跳过桌面微信传输检查，不承诺 wcferry 微信桌面能力容器化。
@@ -31,7 +31,7 @@
 ## 下一阶段 P1
 
 - RAG 知识库治理增强
-  - 在当前粘贴 / 显式单文件选择 UI、受控同文档重建、受控批量治理 UI、显式文件 CLI、已入库索引摘要、Web API 批量预览、批量写入、批量重建和请求体后台队列之上，继续评估自动文件索引；继续保持不开放任意路径扫描。
+  - 在当前粘贴 / 显式单文件选择 UI、受控同文档重建、受控批量治理 UI、显式文件 CLI、固定 inbox 只读预览、已入库索引摘要、Web API 批量预览、批量写入、批量重建和请求体后台队列之上，继续评估是否把固定 inbox 预览结果受控入队或写入；继续保持不开放任意路径扫描。
 
 - Windows 真实环境手测
   - 在 Windows 10/11、管理员权限、微信 PC `3.9.12.51` 下跑一次完整首启、连接、发消息、诊断导出和停止流程。

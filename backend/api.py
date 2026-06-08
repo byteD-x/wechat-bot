@@ -38,6 +38,7 @@ from backend.core.cost_analytics import CostAnalyticsService
 from backend.core.data_controls import DataControlService
 from backend.core.knowledge_base import (
     KNOWLEDGE_SOURCE,
+    KNOWLEDGE_AUTO_INDEX_INBOX_DIRNAME,
     KNOWLEDGE_JOB_MODE_INGEST,
     KNOWLEDGE_JOB_MODE_REBUILD,
     MAX_KNOWLEDGE_BATCH_CONTENT_CHARS as MAX_KNOWLEDGE_BATCH_CONTENT_CHARS,
@@ -45,6 +46,7 @@ from backend.core.knowledge_base import (
     MAX_KNOWLEDGE_CONTENT_CHARS as MAX_KNOWLEDGE_CONTENT_CHARS,
     KnowledgeBaseJobQueue,
     KnowledgeBaseService,
+    build_knowledge_auto_index_preview_payload,
     build_knowledge_batch_dry_run_payload,
     build_knowledge_batch_write_payload,
     build_knowledge_dry_run_payload,
@@ -2200,6 +2202,20 @@ async def get_knowledge_base_index():
     except Exception as e:
         logger.exception("load knowledge base index failed: %s", e)
         return _json_internal_error("knowledge_base_index_failed", code="knowledge_base_index_failed")
+
+
+@app.route("/api/knowledge_base/auto-index/preview", methods=["GET"])
+async def preview_knowledge_base_auto_index():
+    """Preview the fixed local knowledge-base inbox without writing vectors."""
+    try:
+        inbox_dir = ensure_data_root() / KNOWLEDGE_AUTO_INDEX_INBOX_DIRNAME
+        return jsonify(build_knowledge_auto_index_preview_payload(inbox_dir))
+    except Exception as e:
+        logger.exception("knowledge base auto-index preview failed: %s", e)
+        return _json_internal_error(
+            "knowledge_base_auto_index_preview_failed",
+            code="knowledge_base_auto_index_preview_failed",
+        )
 
 
 @app.route("/api/knowledge_base/dry-run", methods=["POST"])

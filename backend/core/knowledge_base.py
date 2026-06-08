@@ -6,7 +6,8 @@ import re
 import secrets
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
 from urllib.parse import urlsplit
 
 
@@ -14,6 +15,11 @@ KNOWLEDGE_SOURCE = "knowledge_base"
 MAX_KNOWLEDGE_CONTENT_CHARS = 120000
 MAX_KNOWLEDGE_BATCH_DOCUMENTS = 20
 MAX_KNOWLEDGE_BATCH_CONTENT_CHARS = 300000
+KNOWLEDGE_AUTO_INDEX_INBOX_DIRNAME = "knowledge_base/inbox"
+KNOWLEDGE_AUTO_INDEX_MAX_FILES = MAX_KNOWLEDGE_BATCH_DOCUMENTS
+KNOWLEDGE_AUTO_INDEX_MAX_FILE_CHARS = MAX_KNOWLEDGE_CONTENT_CHARS
+KNOWLEDGE_AUTO_INDEX_MAX_TOTAL_CHARS = MAX_KNOWLEDGE_BATCH_CONTENT_CHARS
+KNOWLEDGE_AUTO_INDEX_EXTENSIONS = {".txt", ".text", ".md", ".markdown", ".mdown", ".mkd"}
 KNOWLEDGE_JOB_MODE_INGEST = "ingest"
 KNOWLEDGE_JOB_MODE_REBUILD = "rebuild"
 DEFAULT_KNOWLEDGE_JOB_MAX_ITEMS = 50
@@ -196,6 +202,134 @@ def build_knowledge_batch_dry_run_payload(documents: List[KnowledgeDocument]) ->
         "char_count": total_chars,
         "documents": document_payloads,
     }
+
+
+def _infer_auto_index_content_type(path: Path) -> str:
+    return "markdown" if path.suffix.lower() in {".md", ".markdown", ".mdown", ".mkd"} else "text"
+
+
+def _build_auto_index_skipped_file(path: Path, reason: str) -> Dict[str, Any]:
+    return {
+        "name": path.name,
+        "source_file": redact_knowledge_local_path(str(path)),
+        "reason": reason,
+    }
+
+
+def build_knowledge_auto_index_preview_payload(
+    inbox_dir: Union[Path, str],
+    *,
+    max_files: int = KNOWLEDGE_AUTO_INDEX_MAX_FILES,
+    max_file_chars: int = KNOWLEDGE_AUTO_INDEX_MAX_FILE_CHARS,
+    max_total_chars: int = KNOWLEDGE_AUTO_INDEX_MAX_TOTAL_CHARS,
+) -> Dict[str, Any]:
+    """Build a read-only dry-run plan for the fixed knowledge-base inbox."""
+
+    inbox_path = Path(inbox_dir)
+    inbox_exists = inbox_path.is_dir() and not inbox_path.is_symlink()
+    payload: Dict[str, Any] = {
+        "success": True,
+        "dry_run": True,
+        "auto_index": True,
+        "mode": "preview",
+        "source": KNOWLEDGE_SOURCE,
+        "fixed_inbox": True,
+        "inbox": redact_knowledge_local_path(str(inbox_path)),
+        "exists": inbox_exists,
+        "document_count": 0,
+        "skipped_count": 0,
+        "chunk_count": 0,
+        "char_count": 0,
+        "max_files": max(0, int(max_files or 0)),
+        "max_file_chars": max(0, int(max_file_chars or 0)),
+        "max_total_chars": max(0, int(max_total_chars or 0)),
+        "documents": [],
+        "skipped": [],
+    }
+    if not payload["exists"]:
+        return payload
+
+    documents: List[Dict[str, Any]] = []
+    skipped: List[Dict[str, Any]] = []
+    total_chars = 0
+    total_chunks = 0
+    accepted_files = 0
+    max_files_value = int(payload["max_files"])
+    max_file_chars_value = int(payload["max_file_chars"])
+    max_total_chars_value = int(payload["max_total_chars"])
+
+    for path in sorted(inbox_path.iterdir(), key=lambda item: item.name.lower()):
+        if path.is_symlink():
+            skipped.append(_build_auto_index_skipped_file(path, "symlink_ignored"))
+            continue
+        if path.is_dir():
+            skipped.append(_build_auto_index_skipped_file(path, "directory_ignored"))
+            continue
+        if not path.is_file():
+            skipped.append(_build_auto_index_skipped_file(path, "not_regular_file"))
+            continue
+        if path.suffix.lower() not in KNOWLEDGE_AUTO_INDEX_EXTENSIONS:
+            skipped.append(_build_auto_index_skipped_file(path, "unsupported_extension"))
+            continue
+        if accepted_files >= max_files_value:
+            skipped.append(_build_auto_index_skipped_file(path, "max_files_exceeded"))
+            continue
+
+        try:
+            content = path.read_text(encoding="utf-8-sig")
+        except UnicodeDecodeError:
+            skipped.append(_build_auto_index_skipped_file(path, "unsupported_encoding"))
+            continue
+        except OSError:
+            skipped.append(_build_auto_index_skipped_file(path, "file_read_failed"))
+            continue
+
+        if not content.strip():
+            skipped.append(_build_auto_index_skipped_file(path, "empty_file"))
+            continue
+        if len(content) > max_file_chars_value:
+            skipped.append(_build_auto_index_skipped_file(path, "file_too_large"))
+            continue
+        if total_chars + len(content) > max_total_chars_value:
+            skipped.append(_build_auto_index_skipped_file(path, "total_content_too_large"))
+            continue
+
+        redacted_path = redact_knowledge_local_path(str(path))
+        document = KnowledgeDocument(
+            content=content,
+            doc_id=redacted_path,
+            source_file=redacted_path,
+            metadata={"content_type": _infer_auto_index_content_type(path)},
+        )
+        preview = build_knowledge_dry_run_payload(document)
+        item = {
+            "index": len(documents),
+            "name": path.name,
+            "source_file": redacted_path,
+            "content_type": _infer_auto_index_content_type(path),
+            "doc_id": str(preview.get("doc_id") or ""),
+            "version": str(preview.get("version") or "v1"),
+            "chunk_count": _safe_int(preview.get("chunk_count"), 0),
+            "chunk_ids": list(preview.get("chunk_ids") or []),
+            "chunks": list(preview.get("chunks") or []),
+            "char_count": len(content),
+        }
+        documents.append(item)
+        accepted_files += 1
+        total_chars += len(content)
+        total_chunks += int(item["chunk_count"])
+
+    payload.update(
+        {
+            "document_count": len(documents),
+            "skipped_count": len(skipped),
+            "chunk_count": total_chunks,
+            "char_count": total_chars,
+            "documents": documents,
+            "skipped": skipped,
+        }
+    )
+    return payload
 
 
 def _append_unique(values: List[Any], value: Any) -> None:
@@ -742,12 +876,18 @@ class KnowledgeBaseService:
 
 __all__ = [
     "KNOWLEDGE_SOURCE",
+    "KNOWLEDGE_AUTO_INDEX_EXTENSIONS",
+    "KNOWLEDGE_AUTO_INDEX_INBOX_DIRNAME",
+    "KNOWLEDGE_AUTO_INDEX_MAX_FILE_CHARS",
+    "KNOWLEDGE_AUTO_INDEX_MAX_FILES",
+    "KNOWLEDGE_AUTO_INDEX_MAX_TOTAL_CHARS",
     "MAX_KNOWLEDGE_BATCH_CONTENT_CHARS",
     "MAX_KNOWLEDGE_BATCH_DOCUMENTS",
     "MAX_KNOWLEDGE_CONTENT_CHARS",
     "KNOWLEDGE_JOB_MODE_INGEST",
     "KNOWLEDGE_JOB_MODE_REBUILD",
     "KnowledgeBaseJobQueue",
+    "build_knowledge_auto_index_preview_payload",
     "build_knowledge_batch_dry_run_payload",
     "build_knowledge_batch_write_payload",
     "build_knowledge_chunk_preview",

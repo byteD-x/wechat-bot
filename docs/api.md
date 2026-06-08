@@ -357,12 +357,13 @@
 
 ## 知识库治理 API
 
-用途：把现有 `KnowledgeBaseService` 暴露成受控的本机治理接口，用于单/批量预览、单/批量写入、单/批量重建、请求体文档后台队列、删除、查看知识库向量 chunk 状态，以及只读查看已入库文档索引摘要。
+用途：把现有 `KnowledgeBaseService` 暴露成受控的本机治理接口，用于单/批量预览、单/批量写入、单/批量重建、请求体文档后台队列、固定 inbox 只读预览、删除、查看知识库向量 chunk 状态，以及只读查看已入库文档索引摘要。
 
 实现入口：
 
 - `backend/api.py::get_knowledge_base_status`
 - `backend/api.py::get_knowledge_base_index`
+- `backend/api.py::preview_knowledge_base_auto_index`
 - `backend/api.py::preview_knowledge_base_document`
 - `backend/api.py::preview_knowledge_base_documents`
 - `backend/api.py::ingest_knowledge_base_document`
@@ -380,6 +381,7 @@
 
 - `GET /api/knowledge_base/status`
 - `GET /api/knowledge_base/index`
+- `GET /api/knowledge_base/auto-index/preview`
 - `POST /api/knowledge_base/dry-run`
 - `POST /api/knowledge_base/batch-dry-run`
 - `POST /api/knowledge_base/ingest`
@@ -438,6 +440,7 @@
 响应摘要：
 
 - `dry-run` 只返回 `doc_id`、`version`、`chunk_count`、`chunk_ids`、`char_count` 和每个 chunk 的 `chunk_id/chunk_index/char_count/source_file/url/page` 摘要，不返回 chunk 正文。
+- `auto-index/preview` 固定读取 `data/knowledge_base/inbox` 一层目录中的 `.txt/.md/.markdown` 文本，返回 `auto_index=true`、`fixed_inbox=true`、脱敏 `inbox`、`exists`、`document_count`、`skipped_count`、聚合 `chunk_count/char_count`、逐文件 dry-run 摘要和 `skipped` 原因；该端点不写入、不入队、不递归、不展开 glob、不接受任意路径参数，也不返回正文、chunk text、embedding 或完整本机路径。
 - `batch-dry-run` 返回 `document_count`、聚合 `chunk_count/char_count` 和每份文档的 dry-run 摘要；它只做分块预览，不写入、重建或删除向量库内容。
 - `status` 返回 `vector_memory_available`、`source=knowledge_base`、当前知识库 chunk 数和 `queue` 摘要；`queue` 包含内存队列容量、总数、按状态计数和最近任务脱敏摘要。
 - `index` 只读返回已入库 `source=knowledge_base` chunk 的文档级 metadata 摘要，包括 `supports_index`、`chunk_count`、`indexed_chunk_count`、`document_count`、`documents` 和 `truncated`；`documents` 按 `doc_id` 聚合版本、脱敏来源、URL、页码和 chunk 数。
@@ -457,7 +460,8 @@
 
 产品约束：
 
-- Web API 首版只接收请求体中的纯文本或 Markdown；不会读取任意本机文件路径、不会扫描目录，也不提供文件上传。
+- Web API 写入类端点只接收请求体中的纯文本或 Markdown；不会读取任意本机文件路径，也不提供文件上传。
+- `GET /api/knowledge_base/auto-index/preview` 是唯一文件系统预览入口，只读取固定 `data/knowledge_base/inbox` 一层目录；它跳过目录、符号链接、非文本文件、非法编码、空文件或超限文件，不递归扫描、不展开 glob、不接受任意路径、不自动写入向量库，也不把结果放入后台队列。
 - 本机 CLI `python run.py knowledge-base import-files` 是独立的显式文件列表入口：只读取用户逐个传入的 `.txt/.md` 文件，拒绝目录和 glob，默认 dry-run；`--apply` 才调用 loopback 本机 API 写入，不改变 Web API “不读取文件路径”的约束。
 - `batch-dry-run` 仅预览请求体中的多份文档，不读取本机路径、不上传文件、不写入向量库。
 - `batch-ingest` 仅顺序写入请求体中的多份文档，不读取本机路径、不上传文件、不删除旧 chunk；它不是原子事务，若后续文档失败，响应会保留前序成功文档的逐项摘要。
@@ -469,7 +473,7 @@
 - `doc_id / source_file / url / source_url` 只用于引用元数据；如果看起来像完整本机路径或 `file://` 本机 URI，响应和删除匹配会收敛为 `.../<filename>`。
 - 预览和治理响应不返回完整正文、chunk text、embedding 或完整本机路径。
 - `ingest`、`batch-ingest`、`rebuild`、`batch-rebuild` 和 `jobs` 依赖运行中的向量库和 embedding 客户端；重建类接口会先完整准备新版本 chunk embedding，准备失败时返回 `no_chunks_indexed` 或 `incomplete_embeddings`，并保留旧 chunk。
-- 自动文件索引属于后续任务；当前后台队列只负责受控请求体文档。
+- 自动写入式文件索引属于后续任务；当前固定 inbox 只提供只读预览，后台队列只负责受控请求体文档。
 
 ## 成熟产品化参考
 

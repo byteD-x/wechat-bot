@@ -156,17 +156,18 @@
       - MCP adapter 是治理入口，不进入微信消息快回复主链路。
 
 12. `/api/knowledge_base/*`
-    - 功能：提供本机知识库治理闭环，支持查看状态、已入库索引摘要、单文档/多文档预览分块、单文档/多文档写入、单文档/多文档重建、请求体文档后台队列和按 `doc_id` 删除。
+    - 功能：提供本机知识库治理闭环，支持查看状态、已入库索引摘要、固定 inbox 只读预览、单文档/多文档预览分块、单文档/多文档写入、单文档/多文档重建、请求体文档后台队列和按 `doc_id` 删除。
     - 实现：
       - `backend/api.py::preview_knowledge_base_document` 和 `KnowledgeBaseService.build_chunks()` 复用同一套分块逻辑；`dry-run` 只返回 chunk id、字符数和脱敏来源摘要，不返回正文、chunk text 或 embedding。
       - `backend/api.py::preview_knowledge_base_documents` 复用单文档 payload 解析和 dry-run 构造，`batch-dry-run` 只聚合请求体中的多份文档预览结果，不写入向量库、不触发 embedding、不读取本机路径。
+      - `backend/api.py::preview_knowledge_base_auto_index` 固定读取 `data/knowledge_base/inbox` 一层目录，调用 `build_knowledge_auto_index_preview_payload()` 生成只读 dry-run 摘要；它只接受 `.txt/.md/.markdown` 文本文件，不递归、不展开 glob、不接收任意路径参数、不写入向量库、不入后台队列，并跳过目录、符号链接、非文本、非法编码、空文件或超限文件。
       - `backend/api.py::ingest_knowledge_base_document`、`ingest_knowledge_base_documents`、`rebuild_knowledge_base_document` 与 `rebuild_knowledge_base_documents` 复用运行中 bot 的 `vector_memory` 和 `ai_client.get_embedding`；`batch-ingest` 只顺序写入请求体文档，不读取本机路径、不删除旧 chunk；`batch-rebuild` 只顺序重建请求体文档，重复 `doc_id` 会在删除前被拒绝，单文档 embedding 准备失败时保留该文档旧 chunk。
       - `backend/api.py::create_knowledge_base_job` 和 `get_knowledge_base_job` 复用 `KnowledgeBaseJobQueue`，只把请求体单文档或 `documents` 批量文档放入进程内内存级串行队列；支持 `mode=ingest|rebuild`，不读取 `source_file`、不扫描目录、不持久化任务，进程重启后不会恢复。
       - `backend/api.py::get_knowledge_base_status` 会返回 `queue` 摘要，包含内存队列开关、容量、按状态计数和最近任务脱敏摘要；job 查询响应不返回正文、chunk text、embedding、完整异常文本或完整本机路径。
       - `backend/api.py::get_knowledge_base_index` 只从已入库 `knowledge_base` chunk metadata 聚合文档索引摘要，返回 `doc_id`、版本、脱敏来源、URL、页码和 chunk 数；不读取文件系统、不返回正文、chunk text、embedding 或完整本机路径。
       - 设置页“数据与恢复 / 知识库治理”通过 `SettingsPage`、`backup-panel.js`、`page-shell.js` 和 `ApiService` 只调用固定的 `status / dry-run / batch-dry-run / ingest / batch-ingest / rebuild / batch-rebuild` 端点；单文档和批量写入或重建都必须先对当前内容完成对应 dry-run，内容或元数据变化后会清空签名。
       - 桌面端显式文件选择通过 `src/main/ipc.js` 的固定 `knowledge-base:select-file` IPC 进入主进程，只允许可信 renderer 打开单文件选择对话框，限制 `.txt/.md/.markdown`、普通文件和大小，返回内容与 `.../<filename>` 来源，不向 renderer 暴露完整本机路径。
-      - 除固定单文件选择器和受控 `{"documents":[...]}` 批量 JSON 文本框外，当前设置页不开放 `delete`、文件上传、目录扫描或任意本机路径读取；Web API 也只接收请求体中的纯文本或 Markdown。
+      - 除固定单文件选择器和受控 `{"documents":[...]}` 批量 JSON 文本框外，当前设置页不开放 `delete`、文件上传、目录扫描或任意本机路径读取；Web API 写入类端点只接收请求体中的纯文本或 Markdown，固定 inbox 预览仍仅是只读摘要能力。
 
 ### 当前接口分组
 
@@ -182,7 +183,7 @@
 - 成本：`/api/usage`、`/api/pricing`、`/api/pricing/refresh`、`/api/costs/summary`、`/api/costs/sessions`、`/api/costs/session_details`、`/api/costs/review_queue_export`
 - 模型与认证：`/api/model_catalog`、`/api/model_auth/overview`、`/api/model_auth/action`、兼容壳层 `/api/auth/providers*`、本地模型探测 `/api/ollama/models`
 - 配置与诊断：`/api/config`、`/api/config/audit`、`/api/test_connection`、`/api/preview_prompt`、`/api/logs`、`/api/logs/clear`
-- 知识库治理：`/api/knowledge_base/status`、`/api/knowledge_base/index`、`/api/knowledge_base/dry-run`、`/api/knowledge_base/batch-dry-run`、`/api/knowledge_base/ingest`、`/api/knowledge_base/batch-ingest`、`/api/knowledge_base/rebuild`、`/api/knowledge_base/batch-rebuild`、`/api/knowledge_base/jobs`、`/api/knowledge_base/jobs/<job_id>`、`/api/knowledge_base/delete`
+- 知识库治理：`/api/knowledge_base/status`、`/api/knowledge_base/index`、`/api/knowledge_base/auto-index/preview`、`/api/knowledge_base/dry-run`、`/api/knowledge_base/batch-dry-run`、`/api/knowledge_base/ingest`、`/api/knowledge_base/batch-ingest`、`/api/knowledge_base/rebuild`、`/api/knowledge_base/batch-rebuild`、`/api/knowledge_base/jobs`、`/api/knowledge_base/jobs/<job_id>`、`/api/knowledge_base/delete`
 - Prompt 与工具治理：`/api/v1/admin/prompts/revisions`、`/api/v1/admin/prompts/<revision>/diff`、`/api/v1/admin/prompts/<revision>/rollback`、`/api/v1/agents/tool-workflow`
 
 ## 4. 启动与生命周期链路

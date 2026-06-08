@@ -55,7 +55,7 @@
 - `Contact Prompt Growth`: 每个联系人都可逐步沉淀一份专属 Prompt，支持后台生成、导出聊天增强和 UI 直接编辑。
 - `Prompt Governance`: 系统 Prompt 回滚通过 `POST /api/v1/admin/prompts/{revision}/rollback` 追加新的 active revision，并写入 `data/prompt_revisions.json` 审计账本，不覆盖历史记录。
 - `RAG`: 支持运行期对话向量记忆、导出聊天记录风格召回、可选 Hybrid Search + Query Rewrite，以及可选本地 `Cross-Encoder` 精排；未配置本地模型或缺依赖时自动回退轻量重排。
-- `Knowledge Base Governance`: 本地 Web API 已提供知识库文档 `dry-run / batch-dry-run / ingest / batch-ingest / rebuild / batch-rebuild / jobs / delete / status / index` 最小闭环，首版只接收请求体中的纯文本或 Markdown，不读取任意本机路径，预览、队列和索引响应只返回 chunk / 文档 metadata 摘要和脱敏来源；`batch-dry-run` 仅做最多 20 份请求体文档的无副作用预览，`batch-ingest` 仅顺序写入请求体文档，`batch-rebuild` 会按顺序重建请求体文档、拒绝重复 `doc_id`，并在单文档 embedding 准备失败时保留该文档旧 chunk；`jobs` 是进程内内存级串行后台队列，支持请求体单文档或 `documents` 批量文档异步 `ingest/rebuild`，可通过 `status.queue` 和 `GET /api/knowledge_base/jobs/{job_id}` 查询脱敏状态，进程重启不恢复；`index` 仅聚合已入库 `knowledge_base` chunk metadata，不扫描目录、不读取文件正文；桌面设置页支持单文档手动粘贴、固定 IPC 显式选择单个 `.txt/.md/.markdown` 文件填入表单，以及受控 JSON 批量预览/写入/重建，来源只保留 `.../<filename>`，写入或重建前仍需对当前内容完成对应 dry-run；`python run.py knowledge-base import-files` 提供显式文件列表 CLI，默认只预览，`--apply` 才调用运行中的本机 API 写入。
+- `Knowledge Base Governance`: 本地 Web API 已提供知识库文档 `dry-run / batch-dry-run / ingest / batch-ingest / rebuild / batch-rebuild / jobs / delete / status / index / auto-index preview` 最小闭环；写入、重建和队列仍只接收请求体中的纯文本或 Markdown，不读取任意本机路径；`GET /api/knowledge_base/auto-index/preview` 只扫描固定 `data/knowledge_base/inbox` 一层目录中的 `.txt/.md/.markdown` 文本并返回 dry-run 摘要，不写入、不入队、不递归、不展开 glob；预览、队列和索引响应只返回 chunk / 文档 metadata 摘要和脱敏来源；`batch-dry-run` 仅做最多 20 份请求体文档的无副作用预览，`batch-ingest` 仅顺序写入请求体文档，`batch-rebuild` 会按顺序重建请求体文档、拒绝重复 `doc_id`，并在单文档 embedding 准备失败时保留该文档旧 chunk；`jobs` 是进程内内存级串行后台队列，支持请求体单文档或 `documents` 批量文档异步 `ingest/rebuild`，可通过 `status.queue` 和 `GET /api/knowledge_base/jobs/{job_id}` 查询脱敏状态，进程重启不恢复；`index` 仅聚合已入库 `knowledge_base` chunk metadata，不扫描目录、不读取文件正文；桌面设置页支持单文档手动粘贴、固定 IPC 显式选择单个 `.txt/.md/.markdown` 文件填入表单，以及受控 JSON 批量预览/写入/重建，来源只保留 `.../<filename>`，写入或重建前仍需对当前内容完成对应 dry-run；`python run.py knowledge-base import-files` 提供显式文件列表 CLI，默认只预览，`--apply` 才调用运行中的本机 API 写入。
 - `Transport Abstraction`: 传输层统一抽象为 `BaseTransport`，默认走 `wcferry`，并保证“接收消息 → 发送消息 → 完成落盘”的主闭环可独立演进。
 - `Provider Compatibility`: 后端统一标准化请求字段、响应正文、工具调用、错误结构与落盘元数据，避免为单一提供方写定向分支。
 - `Desktop + Web`: Electron 桌面客户端与 Quart Web API 并存。
@@ -68,7 +68,7 @@
 - `Read-only MCP Adapter`: `POST /api/v1/mcp` 提供本机 JSON-RPC adapter，仅支持 `initialize`、`tools/list`、`tools/call`，并且只暴露模型侧安全工具 `readiness_check`、`eval_latest`、`cost_summary`、`backup_cleanup_dry_run`、`data_controls_dry_run`。
 - `Model Tool Calling`: `agent.model_tool_calls_enabled` 默认关闭；开启后仅在 OpenAI-compatible 对话接口中向模型暴露 `readiness_check`、`eval_latest`、`cost_summary`、`backup_cleanup_dry_run`、`data_controls_dry_run` 五个只读/预览工具，并复用 `ControlledToolWorkflowService` 的 schema、权限、超时和 trace 边界，不向模型暴露 `prompt_preview` 或 `config_audit`。
 
-> 知识库 UI 说明：设置页已经提供单文档治理入口，支持手动粘贴纯文本 / Markdown，或显式选择单个 `.txt/.md/.markdown` 文件把内容填入表单；也提供 `{"documents":[...]}` 受控 JSON 批量入口。选择文件不会上传、不会扫描目录、不会返回完整本机路径，也不会自动写入或重建；单文档与批量写入/重建都必须先对当前内容完成对应 dry-run；delete 仍未在桌面设置页开放。
+> 知识库 UI 说明：设置页已经提供单文档治理入口，支持手动粘贴纯文本 / Markdown，或显式选择单个 `.txt/.md/.markdown` 文件把内容填入表单；也提供 `{"documents":[...]}` 受控 JSON 批量入口。选择文件不会上传、不会扫描目录、不会返回完整本机路径，也不会自动写入或重建；固定 inbox 预览目前仅是 Web API 只读能力，尚未接入桌面设置页；单文档与批量写入/重建都必须先对当前内容完成对应 dry-run；delete 仍未在桌面设置页开放。
 
 ## Architecture
 

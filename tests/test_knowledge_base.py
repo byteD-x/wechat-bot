@@ -9,6 +9,7 @@ from backend.core.knowledge_base import (
     KnowledgeBaseJobQueue,
     KnowledgeBaseService,
     KnowledgeDocument,
+    build_knowledge_auto_index_preview_payload,
     build_knowledge_index_payload,
 )
 
@@ -253,6 +254,65 @@ def test_knowledge_base_index_payload_marks_truncated_metadata_listing():
     assert payload["chunk_count"] == 3
     assert payload["document_count"] == 1
     assert payload["truncated"] is True
+
+
+def test_knowledge_base_auto_index_preview_uses_fixed_inbox_without_raw_content(tmp_path):
+    inbox = tmp_path / "data" / "knowledge_base" / "inbox"
+    inbox.mkdir(parents=True)
+    (inbox / "runbook.md").write_text("Secret inbox runbook text must stay out of previews.", encoding="utf-8")
+    (inbox / "faq.txt").write_text("Short FAQ entry for chunk preview.", encoding="utf-8")
+    (inbox / "unsupported.pdf").write_text("PDF body should not be read.", encoding="utf-8")
+    (inbox / "nested").mkdir()
+    (inbox / "bad.md").write_bytes(b"\xff\xfe\x00")
+    (inbox / "large.txt").write_text("x" * 41, encoding="utf-8")
+
+    payload = build_knowledge_auto_index_preview_payload(inbox, max_file_chars=40)
+
+    assert payload["success"] is True
+    assert payload["dry_run"] is True
+    assert payload["auto_index"] is True
+    assert payload["fixed_inbox"] is True
+    assert payload["source"] == KNOWLEDGE_SOURCE
+    assert payload["exists"] is True
+    assert payload["inbox"] == ".../inbox"
+    assert payload["document_count"] == 1
+    assert payload["skipped_count"] == 5
+    assert payload["chunk_count"] == payload["documents"][0]["chunk_count"]
+    assert payload["char_count"] == len("Short FAQ entry for chunk preview.")
+
+    document = payload["documents"][0]
+    assert document["name"] == "faq.txt"
+    assert document["source_file"] == ".../faq.txt"
+    assert document["doc_id"] == ".../faq.txt"
+    assert document["content_type"] == "text"
+    assert document["chunk_ids"]
+    assert document["chunks"][0]["source_file"] == ".../faq.txt"
+
+    skipped = {item["name"]: item["reason"] for item in payload["skipped"]}
+    assert skipped == {
+        "bad.md": "unsupported_encoding",
+        "large.txt": "file_too_large",
+        "nested": "directory_ignored",
+        "runbook.md": "file_too_large",
+        "unsupported.pdf": "unsupported_extension",
+    }
+    payload_text = str(payload)
+    assert "Secret inbox runbook" not in payload_text
+    assert "Short FAQ entry" not in payload_text
+    assert "PDF body" not in payload_text
+    assert str(tmp_path) not in payload_text
+
+
+def test_knowledge_base_auto_index_preview_reports_missing_inbox_without_creating_it(tmp_path):
+    inbox = tmp_path / "data" / "knowledge_base" / "inbox"
+
+    payload = build_knowledge_auto_index_preview_payload(inbox)
+
+    assert payload["success"] is True
+    assert payload["exists"] is False
+    assert payload["document_count"] == 0
+    assert payload["skipped_count"] == 0
+    assert not inbox.exists()
 
 
 @pytest.mark.asyncio
