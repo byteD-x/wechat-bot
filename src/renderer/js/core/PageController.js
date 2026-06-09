@@ -139,17 +139,21 @@ export class PageController {
      * 清理所有事件绑定和状态订阅
      */
     cleanup() {
-        // 清理事件绑定
-        for (const cleanup of this._eventCleanups) {
-            cleanup();
-        }
+        this._runCleanupGroup(this._eventCleanups, 'event');
         this._eventCleanups = [];
 
-        // 清理状态订阅
-        for (const cleanup of this._stateCleanups) {
-            cleanup();
-        }
+        this._runCleanupGroup(this._stateCleanups, 'state');
         this._stateCleanups = [];
+    }
+
+    _runCleanupGroup(cleanups, type) {
+        for (const cleanup of cleanups || []) {
+            try {
+                cleanup();
+            } catch (error) {
+                console.warn(`[${this.name}] ${type} cleanup failed:`, error);
+            }
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════

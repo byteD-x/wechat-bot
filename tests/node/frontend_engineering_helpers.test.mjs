@@ -47,6 +47,7 @@ import {
 import { setupGlobalButtonFeedback } from '../../src/renderer/js/app/button-feedback.js';
 import { renderAppFrame } from '../../src/renderer/js/app-shell/frame.js';
 import { App } from '../../src/renderer/js/app.module.js';
+import { PageController } from '../../src/renderer/js/core/PageController.js';
 import { eventBus, Events } from '../../src/renderer/js/core/EventBus.js';
 import { stateManager } from '../../src/renderer/js/core/StateManager.js';
 import { apiService } from '../../src/renderer/js/services/ApiService.js';
@@ -1391,6 +1392,40 @@ test('app queues forced status refresh behind an active polling refresh', async 
         });
     }
 }));
+
+test('page controller cleanup continues after individual cleanup failures', () => {
+    const previousWarn = console.warn;
+    const warnings = [];
+    const calls = [];
+    try {
+        console.warn = (...args) => warnings.push(args);
+        const page = new PageController('HarnessPage', 'page-harness');
+        page._eventCleanups = [
+            () => calls.push('event-a'),
+            () => {
+                throw new Error('event cleanup failed');
+            },
+            () => calls.push('event-b'),
+        ];
+        page._stateCleanups = [
+            () => {
+                throw new Error('state cleanup failed');
+            },
+            () => calls.push('state-a'),
+        ];
+
+        page.cleanup();
+
+        assert.deepEqual(calls, ['event-a', 'event-b', 'state-a']);
+        assert.deepEqual(page._eventCleanups, []);
+        assert.deepEqual(page._stateCleanups, []);
+        assert.equal(warnings.length, 2);
+        assert.match(String(warnings[0][0]), /HarnessPage.*event cleanup failed/);
+        assert.match(String(warnings[1][0]), /HarnessPage.*state cleanup failed/);
+    } finally {
+        console.warn = previousWarn;
+    }
+});
 
 test('app dispose clears global listeners, timers and page resources', async () => withDomAsync(async ({ document }) => {
     const previousWindow = globalThis.window;
