@@ -110,7 +110,7 @@ class App {
 
         notificationService.init();
         if (typeof document !== 'undefined') {
-            setupGlobalButtonFeedback(document);
+            this._addCleanup(setupGlobalButtonFeedback(document));
         }
         await this._runInitStep('apiService.init', () => apiService.init());
         await this._runInitStep('_setupRuntimeIdleState', () => this._setupRuntimeIdleState());

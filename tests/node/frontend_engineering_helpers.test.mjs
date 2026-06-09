@@ -44,6 +44,7 @@ import {
     getRecoveryButtonModel,
     pickSuggestedSelfHealAction,
 } from '../../src/renderer/js/app/self-heal.js';
+import { setupGlobalButtonFeedback } from '../../src/renderer/js/app/button-feedback.js';
 import { renderAppFrame } from '../../src/renderer/js/app-shell/frame.js';
 import { App } from '../../src/renderer/js/app.module.js';
 import { eventBus, Events } from '../../src/renderer/js/core/EventBus.js';
@@ -1461,10 +1462,14 @@ test('app dispose clears global listeners, timers and page resources', async () 
         App.prototype._bindDomEvent.call(app, statusBadge, 'click', () => {});
         App.prototype._bindDomEvent.call(app, document, 'visibilitychange', () => {});
         App.prototype._bindWindowEvent.call(app, 'keydown', () => {});
+        App.prototype._addCleanup.call(app, setupGlobalButtonFeedback(document));
         App.prototype._addCleanup.call(app, eventBus.on(Events.PAGE_CHANGE, () => {}));
         assert.equal(eventBus.getHandlerCount(Events.PAGE_CHANGE), 1);
         assert.equal(statusBadge._listeners.get('click')?.length, 1);
         assert.equal(document._listeners.get('visibilitychange')?.length, 1);
+        assert.equal(document._listeners.get('pointerdown')?.length, 1);
+        assert.equal(document._listeners.get('keydown')?.length, 1);
+        assert.equal(document._listeners.get('click')?.length, 1);
         assert.equal(windowListeners.get('keydown')?.length, 1);
 
         await App.prototype.dispose.call(app);
@@ -1476,6 +1481,9 @@ test('app dispose clears global listeners, timers and page resources', async () 
         assert.equal(eventBus.getHandlerCount(Events.PAGE_CHANGE), 0);
         assert.equal(statusBadge._listeners.get('click')?.length, 0);
         assert.equal(document._listeners.get('visibilitychange')?.length, 0);
+        assert.equal(document._listeners.get('pointerdown')?.length, 0);
+        assert.equal(document._listeners.get('keydown')?.length, 0);
+        assert.equal(document._listeners.get('click')?.length, 0);
         assert.equal(windowListeners.get('keydown')?.length, 0);
         assert.equal(app._cleanupCallbacks.length, 0);
         assert.equal(app._restartFollowupTimers.size, 0);
