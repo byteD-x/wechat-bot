@@ -1468,6 +1468,7 @@ test('app dispose clears global listeners, timers and page resources', async () 
         assert.equal(windowListeners.get('keydown')?.length, 1);
 
         await App.prototype.dispose.call(app);
+        await App.prototype.dispose.call(app);
 
         assert.deepEqual(removers, ['update', 'idle', 'backend-issue', 'window-state', 'tray']);
         assert.deepEqual(closed, ['sse']);
@@ -1494,6 +1495,61 @@ test('app dispose clears global listeners, timers and page resources', async () 
         }
     }
 }));
+
+test('app binds pagehide to dispose renderer resources once', async () => {
+    const previousWindow = globalThis.window;
+    try {
+        const listeners = new Map();
+        globalThis.window = {
+            addEventListener(type, handler) {
+                const key = String(type || '');
+                if (!listeners.has(key)) {
+                    listeners.set(key, []);
+                }
+                listeners.get(key).push(handler);
+            },
+            removeEventListener(type, handler) {
+                const key = String(type || '');
+                listeners.set(
+                    key,
+                    (listeners.get(key) || []).filter((item) => item !== handler),
+                );
+            },
+        };
+
+        const destroyedPages = [];
+        const app = Object.create(App.prototype);
+        app.pages = {
+            dashboard: {
+                async onDestroy() {
+                    destroyedPages.push('dashboard');
+                },
+            },
+        };
+        app._cleanupCallbacks = [];
+        app._restartFollowupTimers = new Set();
+        app._scheduleNextStatusRefresh = () => {};
+        app._clearSSEReconnectTimer = () => {};
+        app._closeSSE = () => {};
+
+        App.prototype._setupLifecycleDisposal.call(app);
+        assert.equal(listeners.get('pagehide')?.length, 1);
+
+        const pagehideHandler = listeners.get('pagehide')[0];
+        await pagehideHandler({});
+        await pagehideHandler({});
+
+        assert.deepEqual(destroyedPages, ['dashboard']);
+        assert.equal(app._disposed, true);
+        assert.equal(listeners.get('pagehide')?.length, 0);
+    } finally {
+        if (previousWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = previousWindow;
+        }
+    }
+});
 
 test('app switchPage ignores stale transitions that finish late', async () => withDomAsync(async ({ document, registerElement }) => {
     document.querySelectorAll = (selector) => document.body.querySelectorAll(selector);

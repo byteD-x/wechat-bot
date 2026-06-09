@@ -102,6 +102,7 @@ class App {
         this._lastRestartAt = 0;
         this._restartFollowupTimers = new Set();
         this._cleanupCallbacks = [];
+        this._disposed = false;
     }
 
     async init() {
@@ -128,6 +129,7 @@ class App {
         }
         this._bindGlobalEvents();
         this._bindKeyboardShortcuts();
+        this._setupLifecycleDisposal();
 
         await this._runInitStep('_ensureLightweightBackend', () => this._ensureLightweightBackend());
         await this._runInitStep('_checkBackendConnection', () => this._checkBackendConnection());
@@ -175,6 +177,10 @@ class App {
     }
 
     async dispose() {
+        if (this._disposed) {
+            return;
+        }
+        this._disposed = true;
         this._scheduleNextStatusRefresh(null);
         this._clearSSEReconnectTimer();
         this._closeSSE();
@@ -203,7 +209,7 @@ class App {
             cleanup();
         }
 
-        if (window.appConfirm) {
+        if (typeof window !== 'undefined' && window.appConfirm) {
             window.appConfirm = null;
         }
 
@@ -212,6 +218,12 @@ class App {
                 await page.onDestroy();
             }
         }
+    }
+
+    _setupLifecycleDisposal() {
+        this._bindWindowEvent('pagehide', () => {
+            return this.dispose();
+        });
     }
 
     async _setupVersion() {
