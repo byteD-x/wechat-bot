@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -36,12 +37,20 @@ FORBIDDEN_SUFFIXES = (
     ".msi",
 )
 
+SETUP_BLOCKMAP_RE = re.compile(r"^wechat-ai-assistant-setup-\d+\.\d+\.\d+\.exe\.blockmap$")
+
 
 def normalize_path(value: Path) -> str:
     return value.as_posix().lower()
 
 
-def scan_path(root: Path) -> list[str]:
+def is_allowed_release_update_metadata(item: Path, normalized: str) -> bool:
+    if "/" in normalized:
+        return False
+    return normalized == "latest.yml" or bool(SETUP_BLOCKMAP_RE.fullmatch(item.name.lower()))
+
+
+def scan_path(root: Path, *, allow_release_update_metadata: bool = False) -> list[str]:
     issues: list[str] = []
     for item in root.rglob("*"):
         normalized = normalize_path(item.relative_to(root))
@@ -49,6 +58,9 @@ def scan_path(root: Path) -> list[str]:
 
         if segments & FORBIDDEN_SEGMENTS:
             issues.append(f"{root}: forbidden runtime path -> {normalized}")
+            continue
+
+        if allow_release_update_metadata and item.is_file() and is_allowed_release_update_metadata(item, normalized):
             continue
 
         if item.name.lower() in FORBIDDEN_NAMES:
@@ -63,6 +75,11 @@ def scan_path(root: Path) -> list[str]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Audit packaged artifacts for forbidden runtime data.")
+    parser.add_argument(
+        "--allow-release-update-metadata",
+        action="store_true",
+        help="Allow top-level latest.yml and setup .blockmap files when scanning the final release directory.",
+    )
     parser.add_argument("paths", nargs="+", help="Artifact directories to scan")
     args = parser.parse_args(argv)
 
@@ -72,7 +89,7 @@ def main(argv: list[str] | None = None) -> int:
         if not path.exists():
             issues.append(f"missing artifact path -> {path}")
             continue
-        issues.extend(scan_path(path))
+        issues.extend(scan_path(path, allow_release_update_metadata=bool(args.allow_release_update_metadata)))
 
     if issues:
         print("Artifact audit failed:")

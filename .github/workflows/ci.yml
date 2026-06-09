@@ -50,11 +50,11 @@ jobs:
 
       - name: Run Ruff
         shell: pwsh
-        run: python -m ruff check backend\api.py backend\bot.py backend\bot_reply_flow.py backend\config_schemas.py backend\core\memory.py backend\core\reply_policy.py backend\core\workspace_backup.py backend\core\eval_runner.py run.py tests\test_api.py tests\test_reply_policy.py tests\test_backup_service.py tests\test_eval_runner.py
+        run: python -m ruff check backend\api.py backend\bot.py backend\bot_reply_flow.py backend\config_schemas.py backend\core\memory.py backend\core\reply_policy.py backend\core\workspace_backup.py backend\core\eval_runner.py run.py scripts\sync_github_release_assets.py tests\test_api.py tests\test_reply_policy.py tests\test_backup_service.py tests\test_eval_runner.py tests\test_github_release_assets.py
 
       - name: Run Python regression tests
         shell: pwsh
-        run: python -m pytest tests\test_smoke.py tests\test_api.py tests\test_runtime_observability.py tests\test_agent_runtime.py tests\test_optimization_tasks.py tests\test_reply_policy.py tests\test_backup_service.py tests\test_eval_runner.py -q
+        run: python -m pytest tests\test_smoke.py tests\test_api.py tests\test_runtime_observability.py tests\test_agent_runtime.py tests\test_optimization_tasks.py tests\test_reply_policy.py tests\test_backup_service.py tests\test_eval_runner.py tests\test_github_release_assets.py -q
 
       - name: Run Offline Eval Smoke Gate
         shell: pwsh

@@ -1120,9 +1120,12 @@ def _redact_sensitive_text(value: Any) -> str:
     return sanitized
 
 
-def _sanitize_model_auth_overview_payload(value: Any) -> Any:
+def _sanitize_model_auth_overview_payload(value: Any, *, _schema_mode: bool = False) -> Any:
     if isinstance(value, list):
-        return [_sanitize_model_auth_overview_payload(item) for item in value]
+        return [
+            _sanitize_model_auth_overview_payload(item, _schema_mode=_schema_mode)
+            for item in value
+        ]
     if isinstance(value, dict):
         sanitized: dict[str, Any] = {}
         for key, item in value.items():
@@ -1134,10 +1137,13 @@ def _sanitize_model_auth_overview_payload(value: Any) -> Any:
             if key_lower in _MODEL_AUTH_SENSITIVE_PATH_KEYS or key_lower.endswith("_path"):
                 sanitized[key_text] = _redact_path_value(item)
                 continue
-            if any(keyword in key_lower for keyword in _MODEL_AUTH_SENSITIVE_KEYWORDS):
+            if key_lower == "payload_schema" and isinstance(item, dict):
+                sanitized[key_text] = _sanitize_model_auth_overview_payload(item, _schema_mode=True)
+                continue
+            if not _schema_mode and any(keyword in key_lower for keyword in _MODEL_AUTH_SENSITIVE_KEYWORDS):
                 sanitized[key_text] = "[REDACTED]"
                 continue
-            sanitized[key_text] = _sanitize_model_auth_overview_payload(item)
+            sanitized[key_text] = _sanitize_model_auth_overview_payload(item, _schema_mode=_schema_mode)
         return sanitized
     if isinstance(value, str):
         return _redact_sensitive_text(value)

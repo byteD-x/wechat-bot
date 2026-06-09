@@ -292,6 +292,11 @@ test('createSharedConfigService.patch persists config and broadcasts changes', a
 
     assert.equal(result.success, true);
     assert.deepEqual(result.changed_paths, ['bot.keep_field', 'bot.memory_context_limit']);
+    assert.equal(result.apply_mode, 'stopped');
+    assert.equal(result.runtime_apply, null);
+    assert.equal(Array.isArray(result.reload_plan), true);
+    assert.equal(result.reload_plan.some((item) => item.component === 'bot_runtime'), true);
+    assert.match(result.default_config_sync_message, /Python 服务未运行/);
     assert.equal(result.modelCatalog.providers[0].id, 'openai');
     assert.equal(broadcasts.length, 1);
     assert.equal(broadcasts[0].channel, 'config:changed');
@@ -300,6 +305,151 @@ test('createSharedConfigService.patch persists config and broadcasts changes', a
     const persisted = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     assert.equal(persisted.bot.keep_field, 'after');
     assert.equal(persisted.bot.memory_context_limit, 8);
+
+    fs.unwatchFile(configPath);
+});
+
+test('createSharedConfigService.patch includes immediate runtime apply feedback when backend is ready', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wechat-shared-config-live-'));
+    const configPath = path.join(root, 'app_config.json');
+    const catalogPath = path.join(root, 'model_catalog.json');
+    fs.writeFileSync(configPath, JSON.stringify({
+        api: { active_preset: 'OpenAI', presets: [] },
+        bot: {},
+        agent: {},
+    }), 'utf8');
+    fs.writeFileSync(catalogPath, JSON.stringify({ providers: [] }), 'utf8');
+
+    const backendCalls = [];
+    const service = createSharedConfigService({
+        ConfigCli: {
+            async ensureMigrated() {
+                return {};
+            },
+            async validate(patch) {
+                return {
+                    api: { active_preset: patch.api.active_preset, presets: [] },
+                    bot: {},
+                    agent: {},
+                };
+            },
+        },
+        getSharedConfigPath: () => configPath,
+        getSharedModelCatalogPath: () => catalogPath,
+        ensureDir: (dirPath) => {
+            fs.mkdirSync(dirPath, { recursive: true });
+            return dirPath;
+        },
+        listWindows: () => [],
+        backendCheckServer: async () => true,
+        backendRequestJson: async (method, endpoint, payload, timeoutMs) => {
+            backendCalls.push({ method, endpoint, payload, timeoutMs });
+            return {
+                success: true,
+                changed_paths: ['api.active_preset'],
+                reload_plan: [
+                    {
+                        mode: 'reinit',
+                        component: 'ai_client',
+                        note: '需要重建 AI 客户端',
+                        paths: ['api.active_preset'],
+                    },
+                ],
+                runtime_apply: {
+                    success: true,
+                    message: '运行中的 AI 已立即切换到 DeepSeek',
+                    runtime_preset: 'DeepSeek',
+                },
+                default_config_synced: true,
+                default_config_sync_message: 'default config synced; sensitive values remain in secure sources',
+            };
+        },
+    });
+
+    const result = await service.patch({
+        api: {
+            active_preset: 'DeepSeek',
+        },
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(result.apply_mode, 'immediate');
+    assert.deepEqual(result.changed_paths, ['api.active_preset']);
+    assert.equal(result.reload_plan[0].component, 'ai_client');
+    assert.equal(result.runtime_apply.message, '运行中的 AI 已立即切换到 DeepSeek');
+    assert.equal(result.default_config_synced, true);
+    assert.equal(backendCalls.length, 1);
+    assert.deepEqual(backendCalls[0], {
+        method: 'POST',
+        endpoint: '/api/config',
+        payload: { api: { active_preset: 'DeepSeek' } },
+        timeoutMs: 30000,
+    });
+
+    fs.unwatchFile(configPath);
+});
+
+test('createSharedConfigService.patch keeps saved config when runtime apply confirmation fails', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wechat-shared-config-fallback-'));
+    const configPath = path.join(root, 'app_config.json');
+    const catalogPath = path.join(root, 'model_catalog.json');
+    fs.writeFileSync(configPath, JSON.stringify({
+        api: { presets: [] },
+        bot: { reply_min_interval_sec: 1 },
+        agent: {},
+    }), 'utf8');
+    fs.writeFileSync(catalogPath, JSON.stringify({ providers: [] }), 'utf8');
+
+    const warnings = [];
+    const service = createSharedConfigService({
+        ConfigCli: {
+            async ensureMigrated() {
+                return {};
+            },
+            async validate(patch) {
+                return {
+                    api: { presets: [] },
+                    bot: { reply_min_interval_sec: patch.bot.reply_min_interval_sec },
+                    agent: {},
+                };
+            },
+        },
+        getSharedConfigPath: () => configPath,
+        getSharedModelCatalogPath: () => catalogPath,
+        ensureDir: (dirPath) => {
+            fs.mkdirSync(dirPath, { recursive: true });
+            return dirPath;
+        },
+        listWindows: () => [],
+        backendCheckServer: async () => true,
+        backendRequestJson: async () => {
+            throw new Error('backend timeout while applying runtime config');
+        },
+        consoleImpl: {
+            warn(...args) {
+                warnings.push(args.join(' '));
+            },
+            error() {},
+        },
+    });
+
+    const result = await service.patch({
+        bot: {
+            reply_min_interval_sec: 3,
+        },
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(result.apply_mode, 'watcher');
+    assert.deepEqual(result.changed_paths, ['bot.reply_min_interval_sec']);
+    assert.equal(result.runtime_apply.success, false);
+    assert.match(result.runtime_apply.message, /热应用确认失败/);
+    assert.match(result.default_config_sync_message, /配置监听器/);
+    assert.equal(result.reload_plan[0].component, 'bot_runtime');
+    assert.equal(warnings.length, 1);
+
+    const persisted = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    assert.equal(persisted.bot.reply_min_interval_sec, 3);
 
     fs.unwatchFile(configPath);
 });
@@ -349,6 +499,14 @@ test('buildDiagnosticsSnapshot keeps masked fields and strips secrets', () => {
             downloadedInstallerPath: 'C:\\Users\\Alice\\Downloads\\installer.exe',
         },
         collectionErrors: ['backend unavailable'],
+        backendProcessIssue: {
+            type: 'unexpected_exit',
+            reason: 'process_exit',
+            code: 2,
+            signal: 'SIGTERM',
+            happenedAt: '2026-06-09T10:20:30.000Z',
+            error: `secret ${hiddenMarker}`,
+        },
     });
 
     assert.equal(snapshot.runtime.status.token, undefined);
@@ -364,6 +522,14 @@ test('buildDiagnosticsSnapshot keeps masked fields and strips secrets', () => {
     assert.equal(snapshot.logs.some((line) => line.includes('不要导出的聊天正文')), false);
     assert.equal(snapshot.logs.some((line) => line.includes('wxid_private_contact')), false);
     assert.equal(snapshot.logs.some((line) => line.includes('Alice')), false);
+    assert.deepEqual(snapshot.runtime.backend_process_issue, {
+        type: 'unexpected_exit',
+        reason: 'process_exit',
+        code: 2,
+        signal: 'SIGTERM',
+        happened_at: '2026-06-09T10:20:30.000Z',
+    });
+    assert.equal(JSON.stringify(snapshot).includes(hiddenMarker), false);
 });
 
 test('buildDiagnosticsSupportPackage adds manifest and support template without private data', () => {

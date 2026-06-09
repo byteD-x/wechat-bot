@@ -59,16 +59,22 @@
 
 当前发布策略：
 - 正式发布走 GitHub Actions，不再在本地直接上传 Release 附件
+- 默认 official signed release 必须使用受信任代码签名证书完成 Authenticode 签名
+- 个人开发者可选择 unsigned community release；该通道保留 `SHA256SUMS.txt`、`latest.yml`、setup `.blockmap` 和 GitHub Release 资产标识，但安装时会触发 Windows SmartScreen 或未签名发布者提示
 - 默认只构建 `portable + NSIS setup`
 - `MSI` 仅保留为按需手工构建产物
-- `setup.exe` 安装版支持应用内自动更新，客户端会读取 GitHub Releases API 获取最新版信息、Release 正文和安装包地址
-- `portable.exe` 仍保留手动更新模式，客户端仅提供打开 GitHub Releases 的入口
+- `electron-builder` 已配置 GitHub provider，用于生成 `electron-updater` 需要的 `latest.yml` 与 setup `.blockmap` 元数据；本地 `build:release` 仍使用 `--publish never`，只构建不上传
+- `setup.exe` 安装版支持应用内自动更新，当前运行时仍由现有 `UpdateManager` 读取 GitHub Releases API 获取最新版信息、Release 正文和安装包地址
+- `portable.exe` 仍保留手动更新模式，客户端会检查 GitHub 最新 Release 并提示新版本，但只提供打开 GitHub Releases 的入口，不自动下载或安装
 
 ## 默认构建产物
 
 执行 `npm run build:release` 或 `.\build.bat` 后，默认会在 `release/` 目录生成：
 - `wechat-ai-assistant-portable-<version>-x64.exe`
 - `wechat-ai-assistant-setup-<version>.exe`
+- `SHA256SUMS.txt`
+- `latest.yml`
+- `wechat-ai-assistant-setup-<version>.exe.blockmap`
 
 按需构建：
 - `npm run build:msi`
@@ -76,6 +82,8 @@
 说明：
 - `portable` 适合免安装分发
 - `setup` 是默认安装包，同时也是安装版应用内升级时下载与执行的产物
+- `SHA256SUMS.txt` 由构建脚本在 exe 生成后刷新，用于现有运行时更新兜底和发布同步校验
+- `latest.yml` 与 setup `.blockmap` 是本批新增的 `electron-updater` 元数据通道资产；当前运行时仍保留现有 GitHub Releases API 全量下载兜底
 - `MSI` 适合企业或特殊分发场景，但不进入日常发版链路
 
 ## 2026-03-27 模型中心冷启动与认证体验优化
@@ -178,7 +186,7 @@
 
 - GitHub Release 需继续稳定上传 `wechat-ai-assistant-setup-<version>.exe`
 - GitHub Release 正文会直接作为客户端展示的更新说明来源
-- `portable.exe` 不参与应用内自动升级，仍通过手动下载替换
+- `portable.exe` 不参与应用内自动升级；客户端可提示新版本并打开发布页，仍通过手动下载替换
 
 ## 发布说明生成规则
 
@@ -211,27 +219,49 @@ npm run build:release
 - 推送 `v*` tag
 - 或在 Actions 中手动触发 `release` workflow，并指定已有 tag
 
+默认 official signed release 发布前必须在 GitHub 仓库 Secrets 中配置 Windows 代码签名证书：
+
+- `WINDOWS_SIGNING_CERTIFICATE_BASE64`：受信任代码签名 `.pfx` 文件的 Base64 内容。
+- `WINDOWS_SIGNING_CERTIFICATE_PASSWORD`：该 `.pfx` 的密码。
+
+本地可用下面的脚本上传 Secrets：
+
+```powershell
+$pfxPassphrase = Read-Host "PFX password" -AsSecureString
+.\scripts\setup_windows_signing_secrets.ps1 -CertificatePath C:\path\to\codesign.pfx -Repository byteD-x/wechat-bot -Password $pfxPassphrase
+```
+
+工作流会把证书写入 runner 临时目录，并通过 `CSC_LINK` / `CSC_KEY_PASSWORD` 交给 `electron-builder` 签名。缺少证书或密码时，official signed release 会在构建前失败，不会发布未签名安装包。
+
+unsigned community release 是个人开发者例外通道，不等同于 official signed release。该通道的 Windows release readiness gate 应显式使用 `--allow-unsigned-community`，其余版本、checksum、`latest.yml`、`.blockmap` 和 GitHub Release 资产完整性校验保持不变。
+
 工作流固定步骤：
 1. 解析当前 tag
 2. 校验 tag、`package.json` 版本号和 `docs/release_notes/<tag>.md` 结构
-3. 定位上一个正式 tag
-4. 构建 Python 后端
-5. 构建 Electron 默认安装产物
-6. 生成 Release Notes
-7. 上传附件到 GitHub Release
+3. 准备 Windows 代码签名证书，或显式记录 unsigned community release 例外
+4. 定位上一个正式 tag
+5. 构建 Python 后端
+6. 构建 Electron 默认安装产物
+7. 运行 Windows release readiness gate，确认签名或社区未签名例外、checksum 和自动更新元数据均通过
+8. 生成 Release Notes
+9. 上传附件到 GitHub Release
 
 默认上传附件：
 - `setup.exe`
 - `portable.exe`
+- `latest.yml`
+- `setup.exe.blockmap`
 - `SHA256SUMS.txt`
 
 ## 构建与发布验证
 
-1. 执行 `npm run build:release`，确认 `release/` 下仅生成 `setup` 和 `portable`。
-2. 执行 `npm run build:msi`，确认仍可单独生成 `msi`。
-3. 确认产物中不包含 `data/chat_exports`、日志、数据库、`api_keys.py`、`config_override.json` 等运行数据。
-4. 推送新 tag 后，确认 GitHub Actions 成功创建或更新 Release。
-5. 确认 Release 正文来自 `docs/release_notes/<tag>.md`，并且只包含规范内的分类和条目。
+1. 执行 `npm run build:release`，确认 `release/` 下生成 `setup`、`portable`、`latest.yml` 和 setup `.blockmap`，且不保留 `win-unpacked`、`builder-debug.yml`、`app-update.yml`、`msi` 等非默认发布内容。
+2. official signed release 执行 `python scripts/check_windows_release_readiness.py --release-dir release --version <version>`；unsigned community release 执行同一命令并追加 `--allow-unsigned-community`。
+3. 执行 `npm run build:msi`，确认仍可单独生成 `msi`。
+4. 确认产物中不包含 `data/chat_exports`、日志、数据库、`api_keys.py`、`config_override.json` 等运行数据。
+5. 推送新 tag 后，确认 GitHub Actions 成功创建或更新 Release。
+6. 确认 Release 正文来自 `docs/release_notes/<tag>.md`，并且只包含规范内的分类和条目。
+7. 运行 `node --test tests\update-manager.test.cjs tests\main-ipc-security.test.cjs tests\main-backend-manager.test.cjs`，确认 metadata 通道配置未改变现有运行时更新兜底。
 
 ## 2026-03-15 优化计划落地
 

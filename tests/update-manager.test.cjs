@@ -122,6 +122,7 @@ function createManager(options = {}) {
             requestJsonImpl: options.requestJsonImpl,
             requestTextImpl: options.requestTextImpl,
             downloadToFileImpl: options.downloadToFileImpl,
+            spawnImpl: options.spawnImpl,
         }),
     };
 }
@@ -169,6 +170,26 @@ test('parseGitHubRepository supports https and ssh repository URLs', () => {
     );
 });
 
+test('selectSetupAsset prefers the exact release version', () => {
+    const assets = [
+        {
+            name: 'wechat-ai-assistant-setup-1.1.0.exe',
+            browser_download_url: 'https://example.com/old.exe',
+        },
+        {
+            name: 'wechat-ai-assistant-setup-1.2.0.pretest.bak.exe',
+            browser_download_url: 'https://example.com/bak.exe',
+        },
+        {
+            name: 'wechat-ai-assistant-setup-1.2.0.exe',
+            browser_download_url: 'https://example.com/current.exe',
+        },
+    ];
+
+    assert.equal(_testUtils.selectSetupAsset(assets, '1.2.0')?.browser_download_url, 'https://example.com/current.exe');
+    assert.equal(_testUtils.selectSetupAsset(assets, '1.3.0'), null);
+});
+
 test('checkForUpdates loads checksum metadata and clears outdated skipped version', async () => {
     const store = new FakeStore({
         update: {
@@ -194,6 +215,58 @@ test('checkForUpdates loads checksum metadata and clears outdated skipped versio
     assert.equal(manager.getState().checksumAssetUrl, 'https://example.com/SHA256SUMS.txt');
     assert.equal(manager.getState().checksumExpected, expectedChecksum);
     assert.equal(manager.getState().skippedVersion, '');
+});
+
+test('checkForUpdates keeps portable builds on manual update path', async () => {
+    const previousPortableExecutableFile = process.env.PORTABLE_EXECUTABLE_FILE;
+    let checksumFetchCalls = 0;
+    let downloadCalls = 0;
+    process.env.PORTABLE_EXECUTABLE_FILE = path.join(os.tmpdir(), 'wechat-ai-assistant-portable.exe');
+
+    try {
+        const { manager } = createManager({
+            currentVersion: '1.0.0',
+            requestJsonImpl: async () => buildReleasePayload(),
+            requestTextImpl: async () => {
+                checksumFetchCalls += 1;
+                return `${sha256Of('installer')}  wechat-ai-assistant-setup-1.2.0.exe\n`;
+            },
+            downloadToFileImpl: async () => {
+                downloadCalls += 1;
+            },
+        });
+
+        assert.equal(manager.getState().enabled, false);
+        assert.equal(manager.getState().manualUpdate, true);
+        assert.equal(manager.getState().error, '');
+
+        const result = await manager.checkForUpdates();
+
+        assert.equal(result.success, true);
+        assert.equal(result.updateAvailable, true);
+        assert.equal(manager.getState().enabled, false);
+        assert.equal(manager.getState().manualUpdate, true);
+        assert.equal(manager.getState().available, true);
+        assert.equal(manager.getState().latestVersion, '1.2.0');
+        assert.equal(manager.getState().releasePageUrl, 'https://github.com/byteD-x/wechat-bot/releases/tag/v1.2.0');
+        assert.equal(manager.getState().downloadUrl, '');
+        assert.equal(manager.getState().checksumAssetUrl, '');
+        assert.equal(manager.getState().checksumExpected, '');
+        assert.equal(manager.getState().readyToInstall, false);
+        assert.equal(manager.getState().error, '');
+        assert.equal(checksumFetchCalls, 0);
+
+        const downloadResult = await manager.downloadUpdate();
+        assert.equal(downloadResult.success, false);
+        assert.match(String(downloadResult.error || ''), /Manual update/i);
+        assert.equal(downloadCalls, 0);
+    } finally {
+        if (previousPortableExecutableFile === undefined) {
+            delete process.env.PORTABLE_EXECUTABLE_FILE;
+        } else {
+            process.env.PORTABLE_EXECUTABLE_FILE = previousPortableExecutableFile;
+        }
+    }
 });
 
 test('checkForUpdates forwards metadata timeout options to request helpers', async () => {
@@ -379,6 +452,37 @@ test('prepareInstall succeeds only when installer is verified', async () => {
     await manager.downloadUpdate();
     const result = manager.prepareInstall();
     assert.equal(result.success, true);
+});
+
+test('launchPreparedInstaller waits before starting setup', async () => {
+    const installerContent = 'fake-installer';
+    const expectedChecksum = sha256Of(installerContent);
+    const spawnCalls = [];
+    const { manager } = createManager({
+        currentVersion: '1.0.0',
+        requestJsonImpl: async () => buildReleasePayload(),
+        requestTextImpl: async () => `${expectedChecksum}  wechat-ai-assistant-setup-1.2.0.exe\n`,
+        downloadToFileImpl: async (_url, destinationPath) => {
+            fs.writeFileSync(destinationPath, installerContent, 'utf8');
+        },
+        spawnImpl: (command, args, options) => {
+            spawnCalls.push({ command, args, options });
+            return { unref: () => spawnCalls.push({ unref: true }) };
+        },
+    });
+
+    await manager.checkForUpdates();
+    await manager.downloadUpdate();
+    assert.equal(manager.prepareInstall().success, true);
+
+    const result = manager.launchPreparedInstaller();
+
+    assert.equal(result.success, true);
+    assert.equal(spawnCalls[0].command, 'powershell.exe');
+    assert.equal(spawnCalls[0].args.includes('-WindowStyle'), true);
+    assert.equal(spawnCalls[0].args.join(' ').includes('Start-Sleep -Seconds 6'), true);
+    assert.equal(spawnCalls[0].options.detached, true);
+    assert.deepEqual(spawnCalls.at(-1), { unref: true });
 });
 
 test('prepareInstall rejects tampered installer even when store flag is verified', async () => {

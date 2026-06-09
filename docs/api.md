@@ -15,6 +15,107 @@
 - 该索引只记录路由、方法、处理函数和源码行号，用于发现接口清单漂移；请求体、响应字段、错误码和安全边界仍以本文的详细契约为准。
 - 更新命令：`.\.venv\Scripts\python.exe scripts\generate_api_route_index.py`
 
+## 模型中心 API
+
+用途：为桌面端“模型”页提供 Provider/Auth 总览、后端动作契约、认证保存、连接测试、模型发现和当前回复模型切换。模型中心是设置页旧 `api.presets` 的主入口替代；旧 `/api/auth/providers*` 只保留兼容壳层。
+
+实现入口：
+
+- `backend/api.py::get_model_catalog_api`
+- `backend/api.py::get_model_auth_overview`
+- `backend/api.py::post_model_auth_action`
+- `backend/model_auth/services/center.py::ModelAuthCenterService`
+- `backend/core/model_discovery.py`
+
+### GET `/api/model_catalog`
+
+成功响应包含：
+
+- `success`: 固定为 `true`。
+- `providers`: Provider 目录，包含 `id`、`label`、`models`、`default_model`、`base_url`、能力标签和认证方法元数据。
+
+产品约束：
+
+- 该接口返回内置与共享配置合并后的模型目录，用于前端展示推荐项，不返回真实凭据。
+
+### GET `/api/model_auth/overview`
+
+成功响应包含：
+
+- `success`: 固定为 `true`。
+- `overview.cards`: Provider 卡片数组，包含 `provider`、`state`、`auth_states`、`metadata`、`actions`、`selected_profile_id`、`selected_method_id` 等摘要。
+- `overview.active_provider_id`: 当前用于回复链路的 Provider。
+- `overview.actions_schema`: 后端可执行动作的字段契约。字段元数据中的 `sensitive=true` 只表示该字段是敏感输入，不是真实密钥。
+
+脱敏边界：
+
+- API 输出会脱敏 `api_key`、token、OAuth/session、完整本机路径和本机 watch paths。
+- `actions_schema.payload_schema.properties.api_key` 是 schema 字段说明，不会被误替换成 `[REDACTED]`。
+
+### POST `/api/model_auth/action`
+
+通用请求体：
+
+```json
+{
+  "action": "discover_models",
+  "payload": {
+    "provider_id": "openai",
+    "base_url": "https://proxy.example/v1",
+    "profile_id": "openai-profile-work"
+  }
+}
+```
+
+字段说明：
+
+- `action`: 后端动作 ID，必须存在于 `overview.actions_schema`。
+- `payload`: 动作参数对象；若未提供 `payload`，兼容读取请求体同级字段。
+
+常见动作：
+
+- `save_api_key`: 保存或更新 API Key 认证档案。
+- `bind_local_auth`: 绑定并跟随本机认证来源。
+- `test_profile`: 测试指定认证档案的运行时连接。
+- `set_active_provider`: 将已具备运行时能力的 Provider 设为当前回复模型。
+- `discover_models`: 从 OpenAI-compatible 中转站读取 `/models` 并返回可选模型列表。
+
+#### `discover_models`
+
+请求字段：
+
+- `provider_id`: 必填或可由 `base_url` 推断；Provider ID 会经过规范化。
+- `base_url`: 可选；可填写中转站根地址，也可填写带 `/chat/completions`、`/responses`、`/embeddings` 或 `/models` 的地址，后端会规范化为 `<base_url>/models`。
+- `profile_id`: 可选；指定已保存的认证档案，从该档案读取 API Key 与默认 base URL。
+- `api_key`: 可选敏感字段；用于一次性模型发现，不应写入日志或文档。
+
+成功响应包含：
+
+- `success`: `true`。
+- `provider_id`: 规范化后的 Provider。
+- `source`: 固定为 `openai_compatible_models`。
+- `base_url`: 规范化后的 OpenAI-compatible base URL。
+- `models`: 去重后的模型 ID 列表，最多 200 项。
+- `message`: 例如 `已获取 2 个模型。`。
+
+失败响应包含：
+
+- `success`: `false`。
+- `models`: 空数组。
+- `code`: `model_discovery_auth_failed`、`model_discovery_not_found`、`model_discovery_rate_limited`、`model_discovery_upstream_failed`、`model_discovery_network_failed`、`model_discovery_invalid_json` 或 `model_discovery_empty`。
+- `message`: 面向用户的失败原因，不包含真实 API Key 或完整异常正文。
+
+产品约束：
+
+- newapi、sub2api 等中转站按 OpenAI-compatible Provider 接入，只要提供兼容 `/models` 即可被发现。
+- 模型发现只更新前端候选项，便于用户选择；不会自动保存配置、不会自动写入默认模型，也不会创建新认证档案。
+- 当前 `agent.model_routing` 只记录可解释路由决策，不会自动切换 Provider、认证方式或 fallback 路由；未实现的环境变量式路由配置不属于当前 API 契约。
+
+错误响应：
+
+- `400`: 动作参数缺失、Provider 不存在、认证方式不支持、base URL 不合法或动作被拒绝。
+- `500 model_auth_action_failed`: 未预期的服务端错误。
+
 ## GET `/api/v1/admin/prompts/revisions`
 
 用途：只读列出系统 Prompt 审计账本中的 revision 元数据，用于桌面端展示版本历史，不直接返回完整 Prompt 正文。

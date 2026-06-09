@@ -213,9 +213,20 @@ backend/model_auth/
 当前对外接口：
 
 - `GET /api/model_catalog`：返回内置模型目录，供模型页填充推荐模型、Provider 元数据和能力标签。
-- `GET /api/model_auth/overview`：返回 Provider/Auth 总览、当前激活状态、动作列表与运行时就绪度。
-- `POST /api/model_auth/action`：执行配置 API Key、本机同步、OAuth / Session 流程收口、测试连接、设为默认认证等动作。
+- `GET /api/model_auth/overview`：返回 Provider/Auth 总览、当前激活状态、动作列表、运行时就绪度，以及 `overview.actions_schema` 后端可执行动作字段契约。
+- `POST /api/model_auth/action`：执行配置 API Key、本机同步、OAuth / Session 流程收口、测试连接、设为默认认证等动作；其中 `discover_models` 会从 OpenAI-compatible 中转站读取 `/models` 并返回可选模型。
 - `/api/auth/providers*`：保留为 legacy 兼容壳层，不再作为设置页或模型页主流程入口。
+
+### 模型发现与中转站接入
+
+newapi、sub2api 等中转站只要提供 OpenAI-compatible `base_url` 和 `/models` 响应，就按普通 OpenAI-compatible Provider 接入模型中心：
+
+1. 在“模型”页选择对应 Provider，填写中转站 `base_url`，必要时先保存或选择一组 API Key 认证。
+2. 点击“获取模型”，前端会调用 `POST /api/model_auth/action`，动作名为 `discover_models`，并携带 `provider_id`、当前 `base_url` 和可用的 `profile_id`。
+3. 后端会规范化 `base_url`，自动剥离 `/chat/completions`、`/responses`、`/embeddings` 或 `/models` 这类已知尾缀，再请求 `<base_url>/models`。
+4. 返回的模型 ID 只进入当前页面的候选模型列表，方便用户选择；保存默认模型仍需要用户明确提交，不会因为发现模型而自动写入配置。
+
+该能力不等同于自动多模型路由。当前 `agent.model_routing` 只记录可解释路由决策和统计，不会自动切换 Provider、认证方式或 fallback 路由。
 
 这意味着像 Qwen 这样的 Provider 可以在同一张卡片里同时看到：
 

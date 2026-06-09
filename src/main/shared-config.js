@@ -288,6 +288,117 @@ function diffConfigPaths(before = {}, after = {}) {
     return [...keys].filter((key) => JSON.stringify(left[key]) !== JSON.stringify(right[key])).sort();
 }
 
+function buildFallbackReloadPlan(changedPaths = []) {
+    const groups = new Map();
+    const resolveEffect = (changedPath) => {
+        if (changedPath.startsWith('api.') || changedPath.startsWith('agent.')) {
+            return ['reinit', 'ai_client', '后端运行后会重建 AI 客户端'];
+        }
+        if (changedPath.startsWith('logging.')) {
+            return ['live', 'logging', '后端运行后会重新应用日志配置'];
+        }
+        if (changedPath.startsWith('services.')) {
+            return ['reinit', 'services', '相关服务会在后端运行后重新读取配置'];
+        }
+        if (changedPath.startsWith('bot.')) {
+            return ['live', 'bot_runtime', '机器人运行后会应用新的运行参数'];
+        }
+        return ['unknown', 'unknown', '未定义明确生效策略，建议结合状态页确认'];
+    };
+
+    changedPaths.forEach((changedPath) => {
+        const [mode, component, note] = resolveEffect(String(changedPath || ''));
+        const key = `${mode}:${component}:${note}`;
+        if (!groups.has(key)) {
+            groups.set(key, { mode, component, note, paths: [] });
+        }
+        groups.get(key).paths.push(changedPath);
+    });
+
+    return Array.from(groups.values()).map((item) => ({
+        ...item,
+        paths: item.paths.sort(),
+    }));
+}
+
+function sanitizeApplyError(error) {
+    const rawMessage = String(error?.message || error || 'runtime apply failed').trim();
+    return rawMessage.length > 180 ? `${rawMessage.slice(0, 177)}...` : rawMessage;
+}
+
+async function applyRuntimeConfigFeedback({
+    backendCheckServer,
+    backendRequestJson,
+    patch,
+    changedPaths,
+    fallbackReloadPlan,
+    consoleImpl,
+}) {
+    if (!changedPaths.length) {
+        return {
+            apply_mode: 'none',
+            reload_plan: [],
+            runtime_apply: null,
+            default_config_synced: true,
+            default_config_sync_message: '共享配置文件 app_config.json 已更新',
+        };
+    }
+
+    let backendAvailable = false;
+    try {
+        backendAvailable = await backendCheckServer();
+    } catch (error) {
+        consoleImpl.warn('[SharedConfigService] backend availability check failed:', error);
+    }
+
+    if (!backendAvailable) {
+        return {
+            apply_mode: 'stopped',
+            reload_plan: fallbackReloadPlan,
+            runtime_apply: null,
+            default_config_synced: true,
+            default_config_sync_message: '共享配置文件 app_config.json 已更新；Python 服务未运行，启动后将读取新配置',
+        };
+    }
+
+    try {
+        const result = await backendRequestJson('POST', '/api/config', patch, 30000);
+        const backendChangedPaths = Array.isArray(result?.changed_paths) ? result.changed_paths : changedPaths;
+        const backendReloadPlan = Array.isArray(result?.reload_plan) && result.reload_plan.length
+            ? result.reload_plan
+            : fallbackReloadPlan;
+        const runtimeApply = result?.runtime_apply || null;
+        let applyMode = 'stopped';
+        if (runtimeApply) {
+            applyMode = runtimeApply.success === false ? 'failed' : 'immediate';
+        } else if (!backendChangedPaths.length) {
+            applyMode = 'none';
+        }
+
+        return {
+            apply_mode: applyMode,
+            changed_paths: backendChangedPaths,
+            reload_plan: backendReloadPlan,
+            runtime_apply: runtimeApply,
+            default_config_synced: result?.default_config_synced !== false,
+            default_config_sync_message: result?.default_config_sync_message
+                || (runtimeApply ? '后端已确认运行时应用结果' : '配置已保存；机器人未运行时会在下次启动生效'),
+        };
+    } catch (error) {
+        consoleImpl.warn('[SharedConfigService] runtime config apply failed:', error);
+        return {
+            apply_mode: 'watcher',
+            reload_plan: fallbackReloadPlan,
+            runtime_apply: {
+                success: false,
+                message: `配置已保存，但运行时热应用确认失败：${sanitizeApplyError(error)}`,
+            },
+            default_config_synced: true,
+            default_config_sync_message: '共享配置文件 app_config.json 已更新；运行中实例将通过配置监听器尝试感知变更',
+        };
+    }
+}
+
 function inferProviderId(preset = {}) {
     const existing = canonicalizeProviderId(preset.provider_id);
     if (existing) {
@@ -601,13 +712,27 @@ function createSharedConfigService({
                 const previous = JSON.parse(JSON.stringify(await this.ensureLoaded()));
                 const nextConfig = await ConfigCli.validate(patch);
                 const changedPaths = diffConfigPathsImpl(previous, nextConfig);
+                const fallbackReloadPlan = buildFallbackReloadPlan(changedPaths);
                 const configPath = getSharedConfigPath();
                 ensureDir(require('path').dirname(configPath));
                 atomicWriteJsonImpl(configPath, nextConfig);
                 this._cache = nextConfig;
+                const runtimeFeedback = await applyRuntimeConfigFeedback({
+                    backendCheckServer,
+                    backendRequestJson,
+                    patch,
+                    changedPaths,
+                    fallbackReloadPlan,
+                    consoleImpl,
+                });
                 response = {
                     ...this.buildPayload(nextConfig),
                     changed_paths: changedPaths,
+                    reload_plan: Array.isArray(runtimeFeedback.reload_plan) ? runtimeFeedback.reload_plan : fallbackReloadPlan,
+                    runtime_apply: runtimeFeedback.runtime_apply || null,
+                    apply_mode: runtimeFeedback.apply_mode || 'unknown',
+                    default_config_synced: runtimeFeedback.default_config_synced !== false,
+                    default_config_sync_message: runtimeFeedback.default_config_sync_message || '共享配置文件 app_config.json 已更新',
                     message: changedPaths.length ? '配置已保存' : '未检测到配置变更',
                     save_state: 'saved',
                 };

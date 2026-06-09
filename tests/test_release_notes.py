@@ -1,9 +1,18 @@
+import pytest
+
 from scripts.generate_release_notes import (
-    CommitEntry,
     build_compare_url,
     classify_commit,
-    render_release_notes,
+    load_release_notes,
 )
+from scripts.validate_release_metadata import validate_release_notes
+
+
+def _write_release_notes(project_root, tag: str, text: str):
+    notes_path = project_root / "docs" / "release_notes" / f"{tag}.md"
+    notes_path.parent.mkdir(parents=True)
+    notes_path.write_text(text.strip() + "\n", encoding="utf-8")
+    return notes_path
 
 
 def test_classify_commit_supports_conventional_commits():
@@ -27,42 +36,48 @@ def test_build_compare_url_uses_previous_and_current_tag():
     )
 
 
-def test_render_release_notes_groups_commits_and_lists_raw_history():
-    commits = [
-        CommitEntry(full_sha="a" * 40, short_sha="aaaaaaa", subject="feat(build): switch release to GitHub Actions"),
-        CommitEntry(full_sha="b" * 40, short_sha="bbbbbbb", subject="fix(build): exclude runtime data from package"),
-        CommitEntry(full_sha="c" * 40, short_sha="ccccccc", subject="Update release docs"),
-    ]
+def test_manual_release_notes_are_loaded_and_match_metadata_rules(tmp_path):
+    notes = """# v1.2.0 更新内容
 
-    notes = render_release_notes(
-        current_tag="v1.2.0",
-        previous_tag="v1.1.0",
-        repository_url="https://github.com/byteD-x/wechat-bot",
-        commits=commits,
-    )
+## Features
 
-    assert "# v1.2.0 更新说明" in notes
-    assert "`v1.1.0...v1.2.0`" in notes
-    assert "### 功能新增" in notes
-    assert "### 问题修复" in notes
-    assert "### 其他变更" in notes
-    assert "- switch release to GitHub Actions (`aaaaaaa`)" in notes
-    assert "- exclude runtime data from package (`bbbbbbb`)" in notes
-    assert "- Update release docs (`ccccccc`)" in notes
-    assert "## 原始提交列表" in notes
+- 新增 Windows 安装包发布入口，用户可以从 GitHub Release 下载 setup 和 portable 产物。
+
+## Fixes
+
+- 修复发布说明读取手工 notes 时的路径校验，避免生成旧的提交历史正文。
+"""
+    _write_release_notes(tmp_path, "v1.2.0", notes)
+
+    assert load_release_notes(tmp_path, "v1.2.0") == notes.strip()
+    validate_release_notes(tmp_path, "v1.2.0")
 
 
-def test_render_release_notes_handles_first_release():
-    commits = [
-        CommitEntry(full_sha="a" * 40, short_sha="aaaaaaa", subject="feat: initial release"),
-    ]
+def test_release_metadata_rejects_legacy_rendered_notes(tmp_path):
+    legacy_notes = """# v1.2.0 更新说明
 
-    notes = render_release_notes(
-        current_tag="v1.0.0",
-        previous_tag="",
-        repository_url="https://github.com/byteD-x/wechat-bot",
-        commits=commits,
-    )
+Compare 链接: [`v1.1.0...v1.2.0`](https://github.com/byteD-x/wechat-bot/compare/v1.1.0...v1.2.0)
 
-    assert "这是首个正式版本" in notes
-    assert "Compare 链接" not in notes
+### 功能新增
+- switch release to GitHub Actions (`aaaaaaa`)
+
+## 原始提交列表
+- `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` feat(build): switch release to GitHub Actions
+"""
+    _write_release_notes(tmp_path, "v1.2.0", legacy_notes)
+
+    with pytest.raises(SystemExit, match="Release notes title"):
+        validate_release_notes(tmp_path, "v1.2.0")
+
+
+def test_release_metadata_rejects_commit_hashes(tmp_path):
+    notes = """# v1.2.0 更新内容
+
+## Fixes
+
+- 修复发布说明中泄露提交记录的问题，相关提交为 aaaaaaa。
+"""
+    _write_release_notes(tmp_path, "v1.2.0", notes)
+
+    with pytest.raises(SystemExit, match="commit hashes"):
+        validate_release_notes(tmp_path, "v1.2.0")

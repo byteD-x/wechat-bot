@@ -11,6 +11,10 @@ const SAFE_DESKTOP_NOTIFICATIONS = Object.freeze({
         title: '微信 AI 助手',
         body: '应用仍在后台运行。可从任务栏托盘恢复窗口或退出应用。',
     }),
+    'backend-process-issue': Object.freeze({
+        title: '微信 AI 助手',
+        body: '后端服务已停止。打开主窗口后可重新启动助手或查看诊断。',
+    }),
 });
 const KNOWLEDGE_BASE_FILE_EXTENSIONS = new Set(['.txt', '.md', '.markdown']);
 const KNOWLEDGE_BASE_FILE_MAX_BYTES = 256 * 1024;
@@ -620,6 +624,7 @@ function registerIpcHandlers({
 
     handleTrusted('get-update-state', () => GLOBAL_STATE.updateManager?.getState() || {
         enabled: false,
+        manualUpdate: false,
         checking: false,
         available: false,
         currentVersion: app.getVersion(),
@@ -711,6 +716,7 @@ function registerIpcHandlers({
             updateState: GLOBAL_STATE.updateManager?.getState() || {},
             backupSummary: backupsResult?.summary || null,
             idleState: getRuntimeIdleState(),
+            backendProcessIssue: GLOBAL_STATE.lastBackendProcessIssue || null,
             platform: {
                 process_platform: process.platform,
                 process_arch: process.arch,

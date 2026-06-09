@@ -27,10 +27,15 @@ const {
     buildSafeDesktopNotificationOptions,
     registerIpcHandlers,
 } = require('./ipc');
-const { stopBackendAndQuit } = require('./app-lifecycle');
+const {
+    createRendererCrashRecovery,
+    installPreparedUpdateAndQuit,
+    stopBackendAndQuit,
+} = require('./app-lifecycle');
 
 const APP_TITLE = '微信 AI 助手';
 const BACKGROUND_NOTIFICATION_ID = 'background-running';
+const RENDERER_CRASH_RECOVERY = createRendererCrashRecovery();
 
 // Electron on Windows can be launched without a valid stdout/stderr (or the pipe can be closed),
 // which makes console.* throw synchronously with EPIPE and crash the main process.
@@ -257,6 +262,22 @@ function hideMainWindowToTray({ notify = true } = {}) {
     return { success: true, action: 'minimize', state: getMainWindowState() };
 }
 
+function handleBackendProcessIssue(issue = {}) {
+    const payload = {
+        type: String(issue.type || 'backend_process_issue'),
+        reason: String(issue.reason || 'process_exit'),
+        code: Number.isFinite(Number(issue.code)) ? Number(issue.code) : null,
+        signal: issue.signal ? String(issue.signal) : null,
+        happenedAt: new Date().toISOString(),
+    };
+    GLOBAL_STATE.lastBackendProcessIssue = payload;
+    broadcastToRenderer('backend-process-issue', payload);
+    if (!getMainWindowVisible()) {
+        showSafeDesktopNotification('backend-process-issue');
+    }
+    return payload;
+}
+
 async function quitAppGracefully(reason = 'quit') {
     return stopBackendAndQuit({
         GLOBAL_STATE,
@@ -442,11 +463,13 @@ const RUNTIME_IDLE_CONTROLLER = new BackendIdleController({
 const BackendManager = createBackendManager({
     http,
     spawn,
+    execFile,
     GLOBAL_STATE,
     getBackendCommand,
     getMainWindowVisible,
     updateSplashStatus,
     runtimeIdleController: RUNTIME_IDLE_CONTROLLER,
+    onBackendProcessIssue: handleBackendProcessIssue,
 });
 
 function getRuntimeIdleState() {
@@ -586,32 +609,12 @@ async function requestAppClose(options = {}) {
 }
 
 async function installDownloadedUpdateAndQuit() {
-    const prepareResult = GLOBAL_STATE.updateManager?.prepareInstall() || {
-        success: false,
-        error: 'update manager unavailable'
-    };
-    if (!prepareResult.success) {
-        return prepareResult;
-    }
-
-    const launchResult = GLOBAL_STATE.updateManager?.launchPreparedInstaller() || {
-        success: false,
-        error: 'installer launch unavailable',
-    };
-    if (!launchResult.success) {
-        return launchResult;
-    }
-
-    GLOBAL_STATE.installingUpdate = true;
-    setTimeout(async () => {
-        try {
-            await quitAppGracefully('install-update');
-        } catch (error) {
-            console.warn('[Update] stop backend before install failed:', error?.message || error);
-        }
-    }, 150);
-
-    return { success: true };
+    return installPreparedUpdateAndQuit({
+        GLOBAL_STATE,
+        BackendManager,
+        app,
+        updateManager: GLOBAL_STATE.updateManager,
+    });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -801,15 +804,7 @@ const WindowManager = {
             if (GLOBAL_STATE.isQuitting) {
                 return;
             }
-            try {
-                setTimeout(() => {
-                    if (win && !win.isDestroyed()) {
-                        win.reload();
-                    }
-                }, 800);
-            } catch (e) {
-                // ignore
-            }
+            RENDERER_CRASH_RECOVERY.handleGone(win, details);
         });
 
         // 关键：原生级平滑启动

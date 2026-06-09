@@ -937,7 +937,7 @@ python run.py eval --dataset tests\fixtures\evals\rag_cases.json --preset docker
 - 检查到新版本时会弹窗显示最新版本号、发布日期和更新说明，并提供“跳过此版本”和“下载更新”两个操作
 - 选择“跳过此版本”后，该版本只会在当前机器上被忽略；当后续发布更高版本时会重新提示
 - 下载完成后可直接执行“立即安装并重启”，应用会退出并启动最新 `setup.exe` 完成覆盖升级
-- `portable.exe` 仍为手动更新模式，桌面端会保留打开 GitHub Releases 的入口
+- `portable.exe` 仍为手动更新模式：桌面端可检查 GitHub 最新 Release 并提示新版本，但不会自动下载或安装；需要打开 GitHub Releases 手动下载并替换
 - 正式 Release 通过 GitHub Actions 构建并上传，不再依赖本地手工上传大文件
 
 Release Notes 规则：
@@ -1147,6 +1147,7 @@ Release Notes 规则：
 - `GET /api/model_auth/overview`
 - `POST /api/model_auth/action`
 - `GET /api/model_catalog`
+- `GET /api/model_auth/overview` 的 `overview.actions_schema` 会返回后端可执行动作的字段契约；`POST /api/model_auth/action` 支持 `discover_models`，可从 OpenAI-compatible 中转站读取 `/models` 并把结果交给前端选择。
 - 旧的 `/api/auth/providers/*` 接口现在只剩兼容壳层；设置页、旧预设 modal 与模型页主流程都已经切到模型中心接口，不再直接调用这组旧入口。
 
 ### 12.6 新版模型中心

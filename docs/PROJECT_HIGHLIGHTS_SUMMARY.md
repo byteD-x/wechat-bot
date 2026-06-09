@@ -212,7 +212,26 @@ RAG 不是"只要检索命中就塞进 Prompt"，而是实现了**两层精排**
 - [`src/main/ipc.js`](src/main/ipc.js) - 桌面端后端请求 allowlist
 - [`tests/test_api.py`](tests/test_api.py) - 回滚、白名单工具、维护 dry-run 脱敏、MCP adapter 和未知工具拒绝测试
 
-### 2.9 Web API / readiness / eval 容器化切片
+### 2.9 模型接入与中转站发现闭环
+
+**亮点描述：**
+项目不是只维护一组静态模型下拉框，而是把 Provider/Auth、OpenAI-compatible 中转站、前端候选模型选择和运行时配置投影收敛到同一个模型中心。
+
+**核心能力：**
+- 模型中心统一管理 `api_key / oauth / local_import / web_session` 多种认证方式，并返回 `overview.actions_schema` 作为前后端动作契约。
+- newapi、sub2api 等中转站按 OpenAI-compatible Provider 接入，`discover_models` 会规范化 `base_url` 并读取 `<base_url>/models`。
+- 模型发现结果只进入前端候选列表，不会自动保存配置或密钥；用户明确提交后才写入默认模型。
+- API 输出会脱敏 API Key、OAuth/session、token 和完整本机路径；schema 中的 `sensitive=true` 只作为字段元数据保留。
+- `agent.model_routing` 当前只记录可解释路由决策和统计，不会自动切换 Provider、认证方式或 fallback 路由。
+
+**证据文件：**
+- [`backend/core/model_discovery.py`](backend/core/model_discovery.py) - OpenAI-compatible `/models` 发现、base URL 规范化和错误码
+- [`backend/model_auth/services/center.py`](backend/model_auth/services/center.py) - `actions_schema`、认证档案和 `discover_models` 动作
+- [`src/renderer/js/pages/ModelsPage.js`](src/renderer/js/pages/ModelsPage.js) - 模型页动作调用和候选模型缓存
+- [`tests/test_model_auth_api.py`](tests/test_model_auth_api.py) - 模型发现与脱敏 API 测试
+- [`tests/node/models_page_connection_button.test.mjs`](tests/node/models_page_connection_button.test.mjs) - 前端模型发现不自动保存配置的回归测试
+
+### 2.10 Web API / readiness / eval 容器化切片
 
 **亮点描述：**
 项目没有把微信桌面自动化包装成跨平台能力，而是诚实拆出可容器化的后端治理切片。
@@ -356,6 +375,8 @@ def _enable_receiving_msg_robust(self):
 ### 5.1 核心代码文件
 - [`backend/core/agent_runtime.py`](backend/core/agent_runtime.py) - LangGraph 运行时、并发上下文、精排与回退、Embedding 缓存、后台任务
 - [`backend/core/ai_client.py`](backend/core/ai_client.py) - 共享 `httpx.AsyncClient` 连接池、引用计数释放
+- [`backend/core/model_discovery.py`](backend/core/model_discovery.py) - OpenAI-compatible 中转站 `/models` 发现
+- [`backend/model_auth/services/center.py`](backend/model_auth/services/center.py) - 模型认证中心动作契约、认证档案和配置投影
 - [`backend/core/memory.py`](backend/core/memory.py) - SQLite 记忆层、批量上下文读取、WAL 和 mmap 优化
 - [`backend/core/config_service.py`](backend/core/config_service.py) - 中心化配置快照与运行时发布
 - [`backend/core/prompt_governance.py`](backend/core/prompt_governance.py) - Prompt revision 审计账本与回滚
@@ -364,11 +385,13 @@ def _enable_receiving_msg_robust(self):
 - [`backend/transports/wcferry_adapter.py`](backend/transports/wcferry_adapter.py) - 版本门禁、权限校验、消息通道初始化
 
 ### 5.2 API 接口
-- [`backend/api.py`](backend/api.py) - `/api/status`、`/api/metrics`、配置接口、Prompt 回滚、Tool Workflow
+- [`backend/api.py`](backend/api.py) - `/api/status`、`/api/metrics`、`/api/model_auth/*`、配置接口、Prompt 回滚、Tool Workflow
 - [`backend/bot_manager.py`](backend/bot_manager.py) - 生命周期管理、状态组装
 
 ### 5.3 测试文件
 - [`tests/test_agent_runtime.py`](tests/test_agent_runtime.py) - 运行时上下文聚合、缓存命中、Cross-Encoder 精排测试
+- [`tests/test_model_auth_api.py`](tests/test_model_auth_api.py) - 模型发现、脱敏 schema 和模型中心 API 测试
+- [`tests/node/models_page_connection_button.test.mjs`](tests/node/models_page_connection_button.test.mjs) - 模型页连接测试、模型发现和前端候选项回归
 - [`tests/test_optimization_tasks.py`](tests/test_optimization_tasks.py) - 连接池复用、批量上下文、传输层抽象测试
 - [`tests/test_runtime_observability.py`](tests/test_runtime_observability.py) - 配置监听、防抖、健康检查与指标导出测试
 - [`tests/test_api.py`](tests/test_api.py) - Prompt 回滚、Tool Workflow、回复策略和备份恢复接口测试

@@ -23,6 +23,7 @@ import {
     updateLogMeta,
 } from '../../src/renderer/js/pages/logs/renderers.js';
 import {
+    buildBackendProcessIssueDiagnostics,
     buildDisconnectedStatus,
     buildUpdateBadgeState,
     buildUpdateExperience,
@@ -45,6 +46,7 @@ import {
 } from '../../src/renderer/js/app/self-heal.js';
 import { renderAppFrame } from '../../src/renderer/js/app-shell/frame.js';
 import { App } from '../../src/renderer/js/app.module.js';
+import { eventBus, Events } from '../../src/renderer/js/core/EventBus.js';
 import { stateManager } from '../../src/renderer/js/core/StateManager.js';
 import { apiService } from '../../src/renderer/js/services/ApiService.js';
 import { notificationService } from '../../src/renderer/js/services/NotificationService.js';
@@ -85,6 +87,16 @@ function resetReadinessState() {
         'readiness.firstRunGuideDismissed': false,
         'currentPage': 'dashboard',
     });
+}
+
+function createDeferred() {
+    let resolve;
+    let reject;
+    const promise = new Promise((promiseResolve, promiseReject) => {
+        resolve = promiseResolve;
+        reject = promiseReject;
+    });
+    return { promise, resolve, reject };
 }
 
 test('app frame titlebar controls expose explicit aria labels', () => {
@@ -416,6 +428,15 @@ test('app ui helpers keep updater and connection states deterministic', () => wi
         }),
         'v1.0.0 · 可更新到 v1.1.0'
     );
+    assert.equal(
+        buildVersionText({
+            currentVersion: '1.0.0',
+            manualUpdate: true,
+            available: true,
+            latestVersion: '1.1.0',
+        }),
+        'v1.0.0 · 可手动更新到 v1.1.0'
+    );
 
     assert.deepEqual(
         buildUpdateBadgeState({
@@ -432,6 +453,21 @@ test('app ui helpers keep updater and connection states deterministic', () => wi
             disabled: true,
         }
     );
+    assert.deepEqual(
+        buildUpdateBadgeState({
+            manualUpdate: true,
+            readyToInstall: false,
+            downloading: false,
+            available: true,
+            latestVersion: '1.1.0',
+            checking: false,
+        }),
+        {
+            hidden: false,
+            text: '手动更新 v1.1.0',
+            disabled: false,
+        }
+    );
 
     const disconnected = buildDisconnectedStatus(
         { startup: { stage: 'booting' } },
@@ -440,6 +476,19 @@ test('app ui helpers keep updater and connection states deterministic', () => wi
     );
     assert.equal(disconnected.running, false);
     assert.equal(disconnected.startup.message, '后端已休眠');
+
+    const processIssueDiagnostics = buildBackendProcessIssueDiagnostics({
+        type: 'unexpected_exit',
+        reason: 'process_exit',
+        code: 2,
+        signal: 'SIGTERM',
+        error: 'secret backend path C:\\Users\\Alice\\bot.py',
+    });
+    assert.equal(processIssueDiagnostics.level, 'warning');
+    assert.equal(processIssueDiagnostics.code, 'backend_process_unexpected_exit');
+    assert.match(processIssueDiagnostics.detail, /退出码：2/);
+    assert.equal(JSON.stringify(processIssueDiagnostics).includes('Alice'), false);
+    assert.equal(JSON.stringify(processIssueDiagnostics).includes('secret backend path'), false);
 
     const view = getConnectionStatusView({
         connected: false,
@@ -463,6 +512,20 @@ test('app ui helpers keep updater and connection states deterministic', () => wi
     assert.equal(checksumBlocked.actionText, '打开发布页');
     assert.equal(checksumBlocked.actionDisabled, false);
     assert.equal(checksumBlocked.skipVisible, true);
+
+    const manualUpdate = buildUpdateExperience({
+        enabled: false,
+        manualUpdate: true,
+        currentVersion: '1.0.0',
+        latestVersion: '1.1.0',
+        available: true,
+        notes: ['修复若干稳定性问题'],
+    });
+    assert.match(manualUpdate.statusText, /手动下载更新包/);
+    assert.equal(manualUpdate.actionText, '打开发布页');
+    assert.equal(manualUpdate.actionDisabled, false);
+    assert.equal(manualUpdate.skipVisible, true);
+    assert.match(manualUpdate.noteItems.join('\n'), /便携版不会/);
 
     const statusText = document.createElement('div');
     const meta = document.createElement('div');
@@ -501,6 +564,77 @@ test('app ui helpers keep updater and connection states deterministic', () => wi
     assert.equal(progress.hidden, false);
     assert.equal(progressFill.style.width, '60%');
     assert.equal(btnAction.disabled, true);
+}));
+
+test('app update modal opens release page for manual update state', async () => withDomAsync(async ({ document, registerElement }) => {
+    const previousWindow = globalThis.window;
+    try {
+        globalThis.window = {
+            addEventListener() {},
+            electronAPI: {},
+        };
+
+        const modal = registerElement('update-modal', document.createElement('div'));
+        const btnClose = registerElement('btn-close-update-modal', document.createElement('button'));
+        const btnSkip = registerElement('btn-update-modal-skip', document.createElement('button'));
+        const btnAction = registerElement('btn-update-modal-action', document.createElement('button'));
+        registerElement('update-modal-status', document.createElement('div'));
+        registerElement('update-modal-meta', document.createElement('div'));
+        registerElement('update-modal-notes', document.createElement('ul'));
+        registerElement('update-modal-progress', document.createElement('div'));
+        registerElement('update-modal-progress-fill', document.createElement('div'));
+        registerElement('update-modal-progress-text', document.createElement('div'));
+        document.body.appendChild(modal);
+        document.body.appendChild(btnClose);
+        document.body.appendChild(btnSkip);
+        document.body.appendChild(btnAction);
+
+        const calls = [];
+        const app = Object.create(App.prototype);
+        app._openUpdateDownload = async () => {
+            calls.push('open-release');
+        };
+        app._downloadUpdate = async () => {
+            calls.push('download');
+        };
+        app._installDownloadedUpdate = async () => {
+            calls.push('install');
+        };
+
+        stateManager.batchUpdate({
+            'updater.currentVersion': '1.0.0',
+            'updater.latestVersion': '1.1.0',
+            'updater.available': true,
+            'updater.enabled': false,
+            'updater.manualUpdate': true,
+            'updater.readyToInstall': false,
+            'updater.downloading': false,
+            'updater.downloadProgress': 0,
+            'updater.notes': [],
+            'updater.error': '',
+        });
+
+        app._setupUpdateModal();
+        await btnAction._listeners.get('click')[0]({ target: btnAction });
+
+        assert.deepEqual(calls, ['open-release']);
+        assert.equal(btnAction.disabled, false);
+    } finally {
+        stateManager.batchUpdate({
+            'updater.available': false,
+            'updater.enabled': false,
+            'updater.manualUpdate': false,
+            'updater.readyToInstall': false,
+            'updater.latestVersion': '',
+            'updater.notes': [],
+            'updater.error': '',
+        });
+        if (previousWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = previousWindow;
+        }
+    }
 }));
 
 test('settings render helpers keep hero, preset list and feedback rendering stable', () => withDom(({ document }) => {
@@ -1049,6 +1183,318 @@ test('app init respects the page selected before startup finishes', async () => 
     }
 });
 
+test('app handles backend process issue with disconnected state and fixed toast', async () => withDomAsync(async ({ document }) => {
+    const previousWindow = globalThis.window;
+    const originalWarning = notificationService.warning;
+    const toastCalls = [];
+    try {
+        globalThis.window = {
+            electronAPI: {},
+            addEventListener() {},
+        };
+        notificationService.warning = (message, duration) => {
+            toastCalls.push({ message, duration });
+        };
+        document.hidden = false;
+
+        stateManager.batchUpdate({
+            'bot.connected': true,
+            'bot.running': true,
+            'bot.paused': false,
+            'bot.status': {
+                running: true,
+                startup: { active: false },
+            },
+            'backend.idle': {
+                state: 'active',
+                delayMs: 900000,
+                remainingMs: 900000,
+                reason: '',
+                updatedAt: 0,
+            },
+        });
+
+        const closeCalls = [];
+        const app = Object.create(App.prototype);
+        app._sseReconnectTimer = { id: 1 };
+        app._eventSource = {
+            close: () => closeCalls.push('closed'),
+        };
+        app._syncRuntimeReadonlyPages = () => {};
+        app._updateConnectionStatus = () => {};
+        app._scheduleNextStatusRefresh = (delayMs) => {
+            app._scheduledDelay = delayMs;
+        };
+
+        App.prototype._handleBackendProcessIssue.call(app, {
+            type: 'unexpected_exit',
+            reason: 'process_exit',
+            code: 2,
+        });
+
+        assert.equal(stateManager.get('bot.connected'), false);
+        assert.equal(stateManager.get('bot.running'), false);
+        assert.equal(stateManager.get('bot.status.diagnostics.code'), 'backend_process_unexpected_exit');
+        assert.match(stateManager.get('bot.status.diagnostics.detail'), /退出码：2/);
+        assert.deepEqual(closeCalls, ['closed']);
+        assert.equal(app._sseReconnectTimer, null);
+        assert.equal(app._eventSource, null);
+        assert.equal(app._scheduledDelay, 0);
+        assert.deepEqual(toastCalls, [
+            {
+                message: '后端服务已停止，可点击左上角状态重新启动。',
+                duration: 5000,
+            },
+        ]);
+    } finally {
+        notificationService.warning = originalWarning;
+        stateManager.batchUpdate({
+            'bot.connected': false,
+            'bot.running': false,
+            'bot.paused': false,
+            'bot.status': null,
+        });
+        if (previousWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = previousWindow;
+        }
+    }
+}));
+
+test('app ignores in-flight status refresh after backend process issue', async () => withDomAsync(async ({ document }) => {
+    const previousGetStatus = apiService.getStatus;
+    const originalWarning = notificationService.warning;
+    try {
+        document.hidden = false;
+        notificationService.warning = () => {};
+        const pendingStatus = createDeferred();
+        apiService.getStatus = async () => pendingStatus.promise;
+
+        stateManager.batchUpdate({
+            'bot.connected': true,
+            'bot.running': true,
+            'bot.paused': false,
+            'bot.status': {
+                running: true,
+                startup: { active: false },
+            },
+        });
+
+        const appliedStatuses = [];
+        const scheduledDelays = [];
+        const app = Object.create(App.prototype);
+        app._statusRefreshing = false;
+        app._statusRefreshQueued = false;
+        app._statusRefreshQueuedOptions = null;
+        app._statusRefreshEpoch = 0;
+        app._statusFailureCount = 0;
+        app._isIdleStopped = () => false;
+        app._getRuntimeIdleState = () => ({ state: 'active' });
+        app._reportRuntimeStatus = async () => {};
+        app._refreshReadiness = async () => {};
+        app._getNextStatusIntervalMs = () => 5000;
+        app._scheduleNextStatusRefresh = (delayMs) => {
+            scheduledDelays.push(delayMs);
+        };
+        app._clearSSEReconnectTimer = () => {};
+        app._closeSSE = () => {};
+        app._syncRuntimeReadonlyPages = () => {};
+        app._updateConnectionStatus = () => {};
+        app._connectSSE = () => {};
+        app._applyStatus = (status) => {
+            appliedStatuses.push(status);
+            App.prototype._applyStatus.call(app, status, { connected: true });
+        };
+
+        const refreshPromise = App.prototype._refreshStatus.call(app);
+        await Promise.resolve();
+
+        App.prototype._handleBackendProcessIssue.call(app, {
+            type: 'unexpected_exit',
+            reason: 'process_exit',
+            code: 2,
+        });
+
+        pendingStatus.resolve({ running: true, is_paused: false, stale: true });
+        await refreshPromise;
+
+        assert.deepEqual(appliedStatuses, []);
+        assert.equal(stateManager.get('bot.connected'), false);
+        assert.equal(stateManager.get('bot.status.diagnostics.code'), 'backend_process_unexpected_exit');
+        assert.deepEqual(scheduledDelays, [0, 0]);
+    } finally {
+        apiService.getStatus = previousGetStatus;
+        notificationService.warning = originalWarning;
+        stateManager.batchUpdate({
+            'bot.connected': false,
+            'bot.running': false,
+            'bot.paused': false,
+            'bot.status': null,
+        });
+    }
+}));
+
+test('app queues forced status refresh behind an active polling refresh', async () => withDomAsync(async ({ document }) => {
+    const previousGetStatus = apiService.getStatus;
+    try {
+        document.hidden = false;
+        const firstStatus = createDeferred();
+        const statuses = [
+            firstStatus.promise,
+            Promise.resolve({ running: false, is_paused: false, queued: true }),
+        ];
+        apiService.getStatus = async () => statuses.shift();
+
+        const appliedStatuses = [];
+        const scheduled = [];
+        const app = Object.create(App.prototype);
+        app._statusRefreshing = false;
+        app._statusRefreshQueued = false;
+        app._statusRefreshQueuedOptions = null;
+        app._statusRefreshEpoch = 0;
+        app._statusFailureCount = 0;
+        app._isIdleStopped = () => false;
+        app._reportRuntimeStatus = async () => {};
+        app._refreshReadiness = async () => {};
+        app._getNextStatusIntervalMs = () => 5000;
+        app._closeSSE = () => {};
+        app._syncRuntimeReadonlyPages = () => {};
+        app._updateConnectionStatus = () => {};
+        app._connectSSE = () => {};
+        app._applyStatus = (status) => {
+            appliedStatuses.push(status);
+        };
+        app._scheduleNextStatusRefresh = (delayMs, options = {}) => {
+            scheduled.push({ delayMs, options });
+        };
+
+        const firstRefresh = App.prototype._refreshStatus.call(app, { refreshReadiness: false });
+        await Promise.resolve();
+        await App.prototype._refreshStatus.call(app, { force: true, refreshReadiness: true });
+
+        firstStatus.resolve({ running: true, is_paused: false, stale: false });
+        await firstRefresh;
+
+        assert.deepEqual(appliedStatuses, [{ running: true, is_paused: false, stale: false }]);
+        assert.deepEqual(scheduled, [
+            { delayMs: 0, options: { force: true, refreshReadiness: true } },
+        ]);
+    } finally {
+        apiService.getStatus = previousGetStatus;
+        stateManager.batchUpdate({
+            'bot.connected': false,
+            'bot.running': false,
+            'bot.paused': false,
+            'bot.status': null,
+        });
+    }
+}));
+
+test('app dispose clears global listeners, timers and page resources', async () => withDomAsync(async ({ document }) => {
+    const previousWindow = globalThis.window;
+    const previousSetTimeout = globalThis.setTimeout;
+    const previousClearTimeout = globalThis.clearTimeout;
+    try {
+        const windowListeners = new Map();
+        const removers = [];
+        globalThis.window = {
+            appConfirm: () => true,
+            addEventListener(type, handler) {
+                const key = String(type || '');
+                if (!windowListeners.has(key)) {
+                    windowListeners.set(key, []);
+                }
+                windowListeners.get(key).push(handler);
+            },
+            removeEventListener(type, handler) {
+                const key = String(type || '');
+                windowListeners.set(
+                    key,
+                    (windowListeners.get(key) || []).filter((item) => item !== handler),
+                );
+            },
+        };
+
+        const statusBadge = document.createElement('button');
+        const navItem = document.createElement('button');
+        navItem.className = 'nav-item';
+        navItem.dataset.page = 'dashboard';
+        document.body.appendChild(navItem);
+        document._registerById('status-badge', statusBadge);
+        document.body.appendChild(statusBadge);
+
+        const clearedTimers = [];
+        globalThis.setTimeout = (handler, delay) => ({ handler, delay, timerId: clearedTimers.length + 1 });
+        globalThis.clearTimeout = (timer) => {
+            clearedTimers.push(timer);
+        };
+
+        const closed = [];
+        const destroyedPages = [];
+        const app = Object.create(App.prototype);
+        app.pages = {
+            dashboard: {
+                async onDestroy() {
+                    destroyedPages.push('dashboard');
+                },
+            },
+            logs: {
+                async onDestroy() {
+                    destroyedPages.push('logs');
+                },
+            },
+        };
+        app._cleanupCallbacks = [];
+        app._restartFollowupTimers = new Set([{ name: 'restart-followup' }]);
+        app._statusTimer = { name: 'status-timer' };
+        app._sseReconnectTimer = { name: 'sse-reconnect' };
+        app._eventSource = {
+            close: () => closed.push('sse'),
+        };
+        app._removeUpdateListener = () => removers.push('update');
+        app._removeRuntimeIdleListener = () => removers.push('idle');
+        app._removeBackendProcessIssueListener = () => removers.push('backend-issue');
+        app._removeWindowStateListener = () => removers.push('window-state');
+        app._removeTrayActionListener = () => removers.push('tray');
+
+        App.prototype._bindDomEvent.call(app, statusBadge, 'click', () => {});
+        App.prototype._bindDomEvent.call(app, document, 'visibilitychange', () => {});
+        App.prototype._bindWindowEvent.call(app, 'keydown', () => {});
+        App.prototype._addCleanup.call(app, eventBus.on(Events.PAGE_CHANGE, () => {}));
+        assert.equal(eventBus.getHandlerCount(Events.PAGE_CHANGE), 1);
+        assert.equal(statusBadge._listeners.get('click')?.length, 1);
+        assert.equal(document._listeners.get('visibilitychange')?.length, 1);
+        assert.equal(windowListeners.get('keydown')?.length, 1);
+
+        await App.prototype.dispose.call(app);
+
+        assert.deepEqual(removers, ['update', 'idle', 'backend-issue', 'window-state', 'tray']);
+        assert.deepEqual(closed, ['sse']);
+        assert.deepEqual(destroyedPages, ['dashboard', 'logs']);
+        assert.equal(eventBus.getHandlerCount(Events.PAGE_CHANGE), 0);
+        assert.equal(statusBadge._listeners.get('click')?.length, 0);
+        assert.equal(document._listeners.get('visibilitychange')?.length, 0);
+        assert.equal(windowListeners.get('keydown')?.length, 0);
+        assert.equal(app._cleanupCallbacks.length, 0);
+        assert.equal(app._restartFollowupTimers.size, 0);
+        assert.equal(app._statusTimer, null);
+        assert.equal(app._sseReconnectTimer, null);
+        assert.equal(app._eventSource, null);
+        assert.equal(globalThis.window.appConfirm, null);
+        assert.ok(clearedTimers.length >= 3);
+    } finally {
+        eventBus.off(Events.PAGE_CHANGE);
+        globalThis.setTimeout = previousSetTimeout;
+        globalThis.clearTimeout = previousClearTimeout;
+        if (previousWindow === undefined) {
+            delete globalThis.window;
+        } else {
+            globalThis.window = previousWindow;
+        }
+    }
+}));
+
 test('app switchPage ignores stale transitions that finish late', async () => withDomAsync(async ({ document, registerElement }) => {
     document.querySelectorAll = (selector) => document.body.querySelectorAll(selector);
     const navDashboard = document.createElement('button');
@@ -1141,9 +1587,10 @@ test('about page wires updater state and renders update panel on enter', async (
     await page.onEnter();
 
     assert.equal(bindings.length, 3);
-    assert.equal(watchPaths.length, 14);
+    assert.equal(watchPaths.length, 15);
     assert.deepEqual(watchPaths.map((item) => item.path), [
         'updater.enabled',
+        'updater.manualUpdate',
         'updater.checking',
         'updater.available',
         'updater.currentVersion',

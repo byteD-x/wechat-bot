@@ -48,8 +48,12 @@ export function buildVersionText(state) {
         suffix = ` · 下载中 ${state.downloadProgress}%`;
     } else if (state.readyToInstall) {
         suffix = ` · 已下载 v${state.latestVersion || currentVersion}`;
+    } else if (state.manualUpdate && state.available && state.latestVersion) {
+        suffix = ` · 可手动更新到 v${state.latestVersion}`;
     } else if (state.available && state.latestVersion) {
         suffix = ` · 可更新到 v${state.latestVersion}`;
+    } else if (state.manualUpdate) {
+        suffix = ' · 手动更新模式';
     } else if (state.enabled) {
         suffix = ' · 已启用更新检查';
     }
@@ -62,6 +66,9 @@ export function buildUpdateBadgeState(state) {
     }
     if (state.downloading) {
         return { hidden: false, text: `下载 ${state.downloadProgress}%`, disabled: true };
+    }
+    if (state.manualUpdate && state.available && state.latestVersion) {
+        return { hidden: false, text: `手动更新 v${state.latestVersion}`, disabled: false };
     }
     if (state.available && state.latestVersion) {
         return { hidden: false, text: `新版本 v${state.latestVersion}`, disabled: false };
@@ -83,6 +90,7 @@ export function buildUpdateExperience(state = {}) {
     const downloadProgress = Math.min(100, Math.max(0, Number(state.downloadProgress || 0)));
     const available = !!state.available;
     const enabled = state.enabled !== false;
+    const manualUpdate = !!state.manualUpdate;
     const skippedVersion = state.skippedVersion || '';
     const noteItems = Array.isArray(state.notes) ? state.notes.filter(Boolean) : [];
     const metaItems = [
@@ -92,6 +100,32 @@ export function buildUpdateExperience(state = {}) {
         checkedAt ? `最近检查：${formatAppDateTime(checkedAt)}` : '',
         skippedVersion && skippedVersion === latestVersion ? `已跳过：v${latestVersion}` : '',
     ].filter(Boolean);
+
+    if (manualUpdate) {
+        return {
+            statusText: available && latestVersion
+                ? `发现新版本 v${latestVersion}，请手动下载更新包`
+                : '当前为手动更新模式',
+            metaItems,
+            noteItems: available && latestVersion
+                ? [
+                    ...noteItems,
+                    '便携版不会在应用内自动下载或安装更新。',
+                    '打开 GitHub Releases 后，请下载适合当前版本的安装包或便携版文件并手动替换。',
+                ]
+                : [
+                    '便携版不会在应用内自动下载或安装更新。',
+                    '可以打开 GitHub Releases 查看最新发布版本。',
+                ],
+            actionText: '打开发布页',
+            actionDisabled: false,
+            skipVisible: available && !!latestVersion,
+            skipDisabled: !latestVersion,
+            progressHidden: true,
+            progressText: '',
+            progressWidth: '0%',
+        };
+    }
 
     if (!enabled) {
         return {
@@ -233,7 +267,35 @@ export function renderUpdateModalContent(state, elements) {
     btnAction.disabled = view.actionDisabled;
 }
 
-export function buildDisconnectedStatus(previousStatus = null, idleState = {}, nowMs = Date.now()) {
+export function buildBackendProcessIssueDiagnostics(issue = {}) {
+    const type = String(issue?.type || 'backend_process_issue').trim() || 'backend_process_issue';
+    const reason = String(issue?.reason || '').trim();
+    const code = Number.isFinite(Number(issue?.code)) ? Number(issue.code) : null;
+    const signal = String(issue?.signal || '').trim();
+    const suffixParts = [
+        reason ? `原因：${reason}` : '',
+        code !== null ? `退出码：${code}` : '',
+        signal ? `信号：${signal}` : '',
+    ].filter(Boolean);
+
+    return {
+        level: type === 'spawn_error' ? 'error' : 'warning',
+        code: `backend_process_${type}`,
+        title: type === 'spawn_error' ? '后端服务启动失败' : '后端服务已停止',
+        detail: suffixParts.length
+            ? `检测到 Python 后端进程异常。${suffixParts.join('，')}。`
+            : '检测到 Python 后端进程异常停止。',
+        recoverable: false,
+        action_label: '重新启动服务',
+        suggestions: [
+            '点击左上角状态重新启动后端服务。',
+            '如果问题重复出现，请导出诊断快照并查看最近一次后端进程异常。',
+            '确认没有被安全软件、权限或端口占用阻止 Python 后端运行。',
+        ],
+    };
+}
+
+export function buildDisconnectedStatus(previousStatus = null, idleState = {}, nowMs = Date.now(), options = {}) {
     const baseStatus = previousStatus && typeof previousStatus === 'object'
         ? previousStatus
         : {};
@@ -253,7 +315,7 @@ export function buildDisconnectedStatus(previousStatus = null, idleState = {}, n
         is_paused: false,
         background_backlog_count: 0,
         last_background_batch: null,
-        diagnostics: null,
+        diagnostics: options.diagnostics || null,
         startup: {
             ...previousStartup,
             stage: 'stopped',

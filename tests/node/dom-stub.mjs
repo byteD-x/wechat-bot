@@ -227,6 +227,15 @@ class FakeNode {
         this._listeners.get(key).push(handler);
     }
 
+    removeEventListener(type, handler) {
+        const key = String(type || '');
+        const listeners = this._listeners.get(key) || [];
+        this._listeners.set(
+            key,
+            listeners.filter((item) => item !== handler),
+        );
+    }
+
     click() {
         for (const handler of this._listeners.get('click') || []) {
             handler({ target: this });
@@ -239,6 +248,7 @@ class FakeNode {
 class FakeDocument {
     constructor() {
         this._elementsById = new Map();
+        this._listeners = new Map();
         this.body = new FakeNode('body', this);
     }
 
@@ -262,6 +272,23 @@ class FakeDocument {
 
     getElementById(id) {
         return this._elementsById.get(String(id || '')) || null;
+    }
+
+    addEventListener(type, handler) {
+        const key = String(type || '');
+        if (!this._listeners.has(key)) {
+            this._listeners.set(key, []);
+        }
+        this._listeners.get(key).push(handler);
+    }
+
+    removeEventListener(type, handler) {
+        const key = String(type || '');
+        const listeners = this._listeners.get(key) || [];
+        this._listeners.set(
+            key,
+            listeners.filter((item) => item !== handler),
+        );
     }
 }
 

@@ -51,6 +51,7 @@ Generated: 2026-06-08
 - `backend/core/prompt_governance.py`：Prompt revision 审计账本与回滚服务。
 - `backend/core/tool_workflow.py`：受控 Agent Tool Workflow、白名单工具、Planner/Reflect/Repair 和逐步 trace。
 - `backend/core/mcp_adapter.py`：只读 MCP JSON-RPC adapter，复用模型侧安全工具白名单。
+- `backend/core/model_discovery.py`：OpenAI-compatible 中转站 `/models` 发现、base URL 规范化与脱敏错误码。
 - `backend/core/trace_logger.py` / `backend/core/response_cache.py`：内存级脱敏 trace 与默认关闭的语义响应缓存。
 - `backend/core/knowledge_base.py` / `backend/core/knowledge_base_cli.py`：知识库治理 API、粘贴式 UI 后端与显式文件 CLI。
 - `backend/core/wechat_export_service.py`：微信导出中心后端服务。
@@ -59,7 +60,7 @@ Generated: 2026-06-08
 - `src/main/ipc.js`：桌面端受控 IPC、后端请求 allowlist 与治理接口转发边界。
 - `src/preload/index.js`：受控 preload API。
 - `src/renderer/js/app.module.js`：渲染层应用装配。
-- `src/renderer/js/pages/ModelsPage.js`：模型与认证中心页面。
+- `src/renderer/js/pages/ModelsPage.js`：模型与认证中心页面，负责 Provider 工作台、`discover_models` 前端动作和候选模型缓存。
 - `src/renderer/js/pages/ExportCenterPage.js`：微信聊天记录导出中心页面。
 - `tools/chat_exporter/cli.py`：已解密微信数据库的 CSV 导出 CLI。
 - `Dockerfile` / `requirements-container.txt`：Web API、readiness 和离线 eval 容器化切片；不包含 wcferry 微信桌面能力。
@@ -70,7 +71,7 @@ Generated: 2026-06-08
 - `docs/USER_GUIDE.md`：详细使用、配置、运行、排障与 API 摘要。
 - `docs/SYSTEM_CHAINS.md`：启动、API、消息、配置、状态、更新等系统链路。
 - `docs/HIGHLIGHTS.md`：当前能力、架构亮点、Prompt 治理、诊断支持包与产品化闭环。
-- `docs/api.md`：Prompt 回滚、受控 Tool Workflow、Planner/Repair 和只读 MCP adapter 的请求、响应、错误码和安全边界。
+- `docs/api.md`：模型中心、Prompt 回滚、受控 Tool Workflow、Planner/Repair、知识库治理和只读 MCP adapter 的请求、响应、错误码和安全边界。
 - `docs/MODEL_AUTH_CENTER.md`：Provider/Auth 领域模型、认证矩阵、扩展方式与安全边界。
 - `docs/wechat-export-guide.md`：微信聊天记录探测、解密、导出与导出语料 RAG 流程。
 - `docs/interview-playbook.md`、`docs/STAR_REPO_STAR.md`、`docs/PROJECT_HIGHLIGHTS_SUMMARY.md`：面试讲法、STAR 项目经历和亮点拆解材料。
@@ -99,4 +100,4 @@ Generated: 2026-06-08
 
 - 代码主体已经从早期机器人脚本演进为“Python 后端 + Electron 前端 + 离线工具 + CI 门禁”的桌面产品结构。
 - 当前系统事实源应优先读取 `backend/`、`src/`、`tests/`、`.github/workflows/` 和 `docs/`，不要从 `release/`、`backend-dist/` 或运行时 `data/` 推断源码规模。
-- 与文档同步相关的高频事实包括：共享配置真源 `data/app_config.json`、默认传输后端 `wcferry`、官方支持微信 `3.9.12.51`、配置 CLI `python run.py config ...`、微信导出 API、知识库治理 API/UI/CLI、成本复盘导出 API、模型中心 API、Prompt 回滚 API、受控 Tool Workflow API、只读 MCP adapter、模型侧 Tool Calling、TraceLogger-lite、Semantic Cache、Docker Web API/readiness/eval 切片与本机诊断支持包。
+- 与文档同步相关的高频事实包括：共享配置真源 `data/app_config.json`、默认传输后端 `wcferry`、官方支持微信 `3.9.12.51`、配置 CLI `python run.py config ...`、微信导出 API、知识库治理 API/UI/CLI、成本复盘导出 API、模型中心 API、OpenAI-compatible 中转站模型发现、Prompt 回滚 API、受控 Tool Workflow API、只读 MCP adapter、模型侧 Tool Calling、TraceLogger-lite、Semantic Cache、Docker Web API/readiness/eval 切片与本机诊断支持包。

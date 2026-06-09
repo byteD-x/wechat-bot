@@ -13,7 +13,7 @@ const DEFAULT_HEADERS = {
     'x-github-api-version': '2022-11-28',
 };
 
-const SETUP_ASSET_PATTERN = /^wechat-ai-assistant-setup-.*\.exe$/i;
+const SETUP_ASSET_PATTERN = /^wechat-ai-assistant-setup-(\d+\.\d+\.\d+)\.exe$/i;
 const CHECKSUM_ASSET_PATTERN = /^sha256sums\.txt$/i;
 const UPDATE_METADATA_TIMEOUT_MS = 15000;
 const UPDATE_DOWNLOAD_TIMEOUT_MS = 3 * 60 * 1000;
@@ -93,8 +93,14 @@ function parseReleaseNotes(body) {
         .slice(0, 12);
 }
 
-function selectSetupAsset(assets) {
+function selectSetupAsset(assets, version = '') {
     const normalizedAssets = Array.isArray(assets) ? assets : [];
+    const targetName = normalizeVersion(version)
+        ? `wechat-ai-assistant-setup-${normalizeVersion(version)}.exe`.toLowerCase()
+        : '';
+    if (targetName) {
+        return normalizedAssets.find((asset) => String(asset?.name || '').trim().toLowerCase() === targetName) || null;
+    }
     return normalizedAssets.find((asset) => {
         const name = String(asset?.name || '').trim();
         return SETUP_ASSET_PATTERN.test(name);
@@ -410,6 +416,7 @@ class UpdateManager {
         requestJsonImpl = requestJson,
         requestTextImpl = requestText,
         downloadToFileImpl = downloadToFile,
+        spawnImpl = spawn,
     }) {
         this.app = app;
         this.shell = shell;
@@ -419,6 +426,7 @@ class UpdateManager {
         this._requestJson = requestJsonImpl;
         this._requestText = requestTextImpl;
         this._downloadToFile = downloadToFileImpl;
+        this._spawn = spawnImpl;
         this._packageMetadata = null;
         this._autoCheckTimer = null;
         this._currentDownloadPromise = null;
@@ -454,10 +462,11 @@ class UpdateManager {
     }
 
     async checkForUpdates(options = {}) {
-        if (!this._isUpdateSupported()) {
+        if (!this._canCheckForUpdates()) {
             const error = this._getUnsupportedMessage();
             this._setState({
                 enabled: false,
+                manualUpdate: this._isManualUpdateEnvironment(),
                 checking: false,
                 error,
             });
@@ -479,23 +488,27 @@ class UpdateManager {
         const checkedAt = new Date().toISOString();
         this._storeSet('update.lastCheckedAt', checkedAt);
         this._setState({
+            enabled: this._isUpdateSupported(),
+            manualUpdate: this._isManualUpdateEnvironment(),
             checking: true,
             error: '',
             lastCheckedAt: checkedAt,
         });
 
         try {
+            const manualUpdate = this._isManualUpdateEnvironment();
+            const updateSupported = this._isUpdateSupported();
             const release = await this._requestJson(this._getLatestReleaseApiUrl(), {
                 timeoutMs: UPDATE_METADATA_TIMEOUT_MS,
             });
             const latestVersion = normalizeVersion(release?.tag_name || release?.name || '');
             if (!latestVersion) {
-                throw new Error('checksum manifest is required before download');
+                throw new Error('Latest release version was not found');
             }
 
             this.clearSkippedVersionIfOutdated(latestVersion);
 
-            const asset = selectSetupAsset(release?.assets);
+            const asset = selectSetupAsset(release?.assets, latestVersion);
             const assetName = String(asset?.name || '').trim();
             const downloadUrl = String(asset?.browser_download_url || '').trim();
             const checksumAsset = selectChecksumAsset(release?.assets);
@@ -504,10 +517,10 @@ class UpdateManager {
             const releasePageUrl = String(release?.html_url || this._getReleasePageUrl()).trim();
             const notes = parseReleaseNotes(release?.body);
             const updateAvailable = compareVersions(latestVersion, this.app.getVersion()) > 0;
-            const readyToInstall = this._hasDownloadedInstallerForVersion(latestVersion);
+            const readyToInstall = updateSupported ? this._hasDownloadedInstallerForVersion(latestVersion) : false;
             const downloadedChecksum = String(this.state.downloadedInstallerSha256 || '').trim().toLowerCase();
             let checksumError = '';
-            if (updateAvailable && !readyToInstall && downloadUrl && assetName) {
+            if (updateAvailable && !readyToInstall && !manualUpdate && downloadUrl && assetName) {
                 if (!checksumAssetUrl) {
                     checksumError = 'Release is missing SHA256SUMS.txt, in-app install is blocked';
                 } else {
@@ -530,24 +543,25 @@ class UpdateManager {
             }
             const statePatch = {
                 checking: false,
-                enabled: true,
+                enabled: updateSupported,
+                manualUpdate,
                 available: updateAvailable || readyToInstall,
                 latestVersion: updateAvailable || readyToInstall ? latestVersion : '',
                 releaseDate: release?.published_at || '',
-                downloadUrl,
+                downloadUrl: manualUpdate ? '' : downloadUrl,
                 releasePageUrl,
                 notes,
                 error: '',
                 readyToInstall,
                 downloadedVersion: readyToInstall ? latestVersion : this.state.downloadedVersion,
                 downloadedInstallerPath: readyToInstall ? this.state.downloadedInstallerPath : this.state.downloadedInstallerPath,
-                checksumAssetUrl: updateAvailable ? checksumAssetUrl : '',
+                checksumAssetUrl: updateAvailable && !manualUpdate ? checksumAssetUrl : '',
                 checksumExpected: checksumExpected || (readyToInstall ? downloadedChecksum : ''),
                 checksumActual: readyToInstall ? downloadedChecksum : '',
                 checksumVerified: readyToInstall,
             };
 
-            if (updateAvailable && !readyToInstall && !downloadUrl) {
+            if (updateAvailable && !readyToInstall && !manualUpdate && !downloadUrl) {
                 statePatch.error = 'Update found but no downloadable installer asset was detected.';
             }
 
@@ -578,6 +592,7 @@ class UpdateManager {
             this._setState({
                 checking: false,
                 enabled: this._isUpdateSupported(),
+                manualUpdate: this._isManualUpdateEnvironment(),
                 error: message,
             });
             return {
@@ -648,6 +663,14 @@ class UpdateManager {
     }
 
     async downloadUpdate() {
+        if (this.state.manualUpdate) {
+            return {
+                success: false,
+                error: 'Manual update is required in this environment. Please open GitHub Releases.',
+                state: this.getState(),
+            };
+        }
+
         if (!this.state.available || !this.state.latestVersion) {
             return { success: false, error: 'Installer package is not ready yet', state: this.getState() };
         }
@@ -712,8 +735,8 @@ class UpdateManager {
         this._pendingInstallerPath = '';
         this._pendingInstallerSha256 = '';
 
-        const command = `Start-Sleep -Seconds 2; Start-Process -FilePath '${powershellSingleQuote(installerPath)}'`;
-        const child = spawn('powershell.exe', [
+        const command = `Start-Sleep -Seconds 6; Start-Process -FilePath '${powershellSingleQuote(installerPath)}'`;
+        const child = this._spawn('powershell.exe', [
             '-NoProfile',
             '-ExecutionPolicy', 'Bypass',
             '-WindowStyle', 'Hidden',
@@ -730,6 +753,8 @@ class UpdateManager {
 
     _buildInitialState() {
         const currentVersion = normalizeVersion(this.app.getVersion());
+        const updateSupported = this._isUpdateSupported();
+        const manualUpdate = this._isManualUpdateEnvironment();
         const storedPath = String(this._storeGet('update.downloadedInstallerPath', '') || '').trim();
         const storedVersion = normalizeVersion(this._storeGet('update.downloadedVersion', ''));
         const storedChecksum = String(this._storeGet('update.downloadedInstallerSha256', '') || '').trim().toLowerCase();
@@ -749,29 +774,31 @@ class UpdateManager {
         const verifiedChecksum = hasDownloaded
             ? (storedIntegrity.actualChecksum || storedChecksum)
             : '';
+        const canUseDownloadedInstaller = updateSupported && hasDownloaded;
         return {
-            enabled: this._isUpdateSupported(),
+            enabled: updateSupported,
+            manualUpdate,
             checking: false,
-            available: hasDownloaded,
+            available: canUseDownloadedInstaller,
             currentVersion,
-            latestVersion: hasDownloaded ? storedVersion : '',
+            latestVersion: canUseDownloadedInstaller ? storedVersion : '',
             lastCheckedAt: String(this._storeGet('update.lastCheckedAt', '') || ''),
             releaseDate: '',
             downloadUrl: '',
             releasePageUrl: this._getReleasePageUrl(),
             notes: [],
-            error: this._isUpdateSupported() ? '' : this._getUnsupportedMessage(),
+            error: updateSupported || manualUpdate ? '' : this._getUnsupportedMessage(),
             skippedVersion: normalizeVersion(this._storeGet('update.skippedVersion', '')),
             downloading: false,
             downloadProgress: 0,
-            readyToInstall: hasDownloaded,
-            downloadedVersion: hasDownloaded ? storedVersion : '',
-            downloadedInstallerPath: hasDownloaded ? storedPath : '',
-            downloadedInstallerSha256: verifiedChecksum,
+            readyToInstall: canUseDownloadedInstaller,
+            downloadedVersion: canUseDownloadedInstaller ? storedVersion : '',
+            downloadedInstallerPath: canUseDownloadedInstaller ? storedPath : '',
+            downloadedInstallerSha256: canUseDownloadedInstaller ? verifiedChecksum : '',
             checksumAssetUrl: '',
-            checksumExpected: verifiedChecksum,
-            checksumActual: verifiedChecksum,
-            checksumVerified: hasDownloaded,
+            checksumExpected: canUseDownloadedInstaller ? verifiedChecksum : '',
+            checksumActual: canUseDownloadedInstaller ? verifiedChecksum : '',
+            checksumVerified: canUseDownloadedInstaller,
         };
     }
 
@@ -902,8 +929,16 @@ class UpdateManager {
         return !!String(process.env.PORTABLE_EXECUTABLE_FILE || '').trim();
     }
 
+    _canCheckForUpdates() {
+        return !!this._getRepositoryInfo();
+    }
+
+    _isManualUpdateEnvironment() {
+        return !!(this._canCheckForUpdates() && this._isPortableEnvironment());
+    }
+
     _isUpdateSupported() {
-        return !!(this._getRepositoryInfo() && !this._isPortableEnvironment());
+        return !!(this._canCheckForUpdates() && !this._isPortableEnvironment());
     }
 
     _shouldAutoCheckOnLaunch() {

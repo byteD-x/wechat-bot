@@ -1,0 +1,75 @@
+{
+  "diagnostic_id": "diag-local-minimal",
+  "generated_at": "2026-06-06T10:20:30.000Z",
+  "manifest": {
+    "schema_version": 1,
+    "package_type": "diagnostics_support_package",
+    "diagnostic_id": "diag-local-minimal",
+    "generated_at": "2026-06-06T10:20:30.000Z",
+    "automatic_upload": false,
+    "full_logs_included": false
+  },
+  "snapshot": {
+    "runtime": {
+      "status": {
+        "running": false,
+        "diagnostics": {
+          "code": "wechat_disconnected",
+          "title": "Backend transport unavailable",
+          "detail": "Transport is not connected.",
+          "suggestions": [
+            "Open WeChat and retry the readiness action."
+          ]
+        }
+      },
+      "readiness": {
+        "ready": false,
+        "blocking_count": 1,
+        "checks": [
+          {
+            "key": "admin_permission",
+            "label": "Administrator permission",
+            "status": "failed",
+            "blocking": true,
+            "message": "The desktop app is not running as administrator.",
+            "hint": "Restart the app with elevated permission.",
+            "action": "restart_as_admin"
+          },
+          {
+            "key": "python_version",
+            "label": "Python version",
+            "status": "passed",
+            "blocking": false,
+            "message": "Python version is supported."
+          }
+        ],
+        "suggested_actions": [
+          {
+            "action": "restart_as_admin",
+            "label": "Restart as administrator"
+          }
+        ]
+      }
+    },
+    "update": {
+      "enabled": true,
+      "checking": false,
+      "available": true,
+      "currentVersion": "1.0.0",
+      "latestVersion": "1.1.0",
+      "downloading": false,
+      "downloadProgress": 0,
+      "readyToInstall": false,
+      "error": "",
+      "integrity": {
+        "checksum_verified": false,
+        "downloaded_version": ""
+      }
+    },
+    "logs": [
+      "INFO backend started",
+      "ERROR backend failed to connect transport"
+    ],
+    "collection_errors": []
+  }
+}

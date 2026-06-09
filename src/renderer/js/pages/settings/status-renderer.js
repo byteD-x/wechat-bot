@@ -16,6 +16,7 @@ export function renderUpdatePanel(page) {
         return;
     }
     const enabled = !!page.getState('updater.enabled');
+    const manualUpdate = !!page.getState('updater.manualUpdate');
     const checking = !!page.getState('updater.checking');
     const available = !!page.getState('updater.available');
     const currentVersion = page.getState('updater.currentVersion') || '--';
@@ -30,6 +31,7 @@ export function renderUpdatePanel(page) {
     const notes = page.getState('updater.notes') || [];
     const view = buildUpdateExperience({
         enabled,
+        manualUpdate,
         checking,
         available,
         currentVersion,

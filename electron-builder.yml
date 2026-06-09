@@ -4,6 +4,13 @@ productName: 微信AI助手
 directories:
   output: release
 
+publish:
+  provider: github
+  owner: byteD-x
+  repo: wechat-bot
+  channel: latest
+  publishAutoUpdate: true
+
 files:
   - src/**/*
   - package.json
@@ -37,7 +44,7 @@ nsis:
   perMachine: false
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  differentialPackage: false
+  differentialPackage: true
   shortcutName: 微信AI助手
   installerLanguages:
     - zh_CN

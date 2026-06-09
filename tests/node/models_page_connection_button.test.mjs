@@ -2,9 +2,44 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { renderModelsPageShell } from '../../src/renderer/js/app-shell/pages/models.js';
-import ModelsPage, { summarizeCards } from '../../src/renderer/js/pages/ModelsPage.js';
+import ModelsPage, {
+    MODEL_AUTH_BACKEND_ACTIONS,
+    summarizeCards,
+} from '../../src/renderer/js/pages/ModelsPage.js';
 import { apiService } from '../../src/renderer/js/services/ApiService.js';
 import { toast } from '../../src/renderer/js/services/NotificationService.js';
+
+test('models page keeps backend model auth actions separate from UI-only actions', () => {
+    const expectedBackendActions = [
+        'scan',
+        'update_provider_defaults',
+        'save_api_key',
+        'discover_models',
+        'bind_local_auth',
+        'import_local_auth_copy',
+        'import_session',
+        'start_browser_auth',
+        'complete_browser_auth',
+        'set_default_profile',
+        'set_active_provider',
+        'test_profile',
+        'disconnect_profile',
+        'logout_source',
+    ];
+    const uiOnlyActions = [
+        'show_api_key_form',
+        'show_session_form',
+        'refresh_status',
+        'reopen_browser_auth',
+        'save_and_activate',
+    ];
+
+    assert.deepEqual([...MODEL_AUTH_BACKEND_ACTIONS].sort(), expectedBackendActions.sort());
+    assert.equal(new Set(MODEL_AUTH_BACKEND_ACTIONS).size, MODEL_AUTH_BACKEND_ACTIONS.length);
+    for (const action of uiOnlyActions) {
+        assert.equal(MODEL_AUTH_BACKEND_ACTIONS.includes(action), false);
+    }
+});
 
 test('models page shell frames the beginner path before provider details load', () => {
     const markup = renderModelsPageShell();
@@ -316,6 +351,103 @@ test('models page reports profile connection test failures from model auth overv
         'feedback:error:连接检查未通过：401 invalid API key。请检查默认认证、模型和接口地址后重试。',
         'error:连接检查未通过：401 invalid API key。请检查默认认证、模型和接口地址后重试。',
     ]);
+});
+
+test('models page discovers remote compatible models without saving config', async () => {
+    const originalRunModelAuthAction = apiService.runModelAuthAction;
+    const originalToastSuccess = toast.success;
+    const originalToastError = toast.error;
+    const calls = [];
+
+    apiService.runModelAuthAction = async (action, payload) => {
+        calls.push({ action, payload });
+        return {
+            success: true,
+            message: '已获取 2 个模型。',
+            models: ['proxy/gpt-4.1', 'proxy/qwen-plus'],
+            base_url: 'https://proxy.example/v1',
+        };
+    };
+    toast.success = (message) => {
+        calls.push(`success:${message}`);
+    };
+    toast.error = (message) => {
+        calls.push(`error:${message}`);
+    };
+
+    try {
+        const page = new ModelsPage();
+        page._isActive = true;
+        page.applyModelCatalog({
+            providers: [
+                {
+                    id: 'openai',
+                    label: 'OpenAI',
+                    default_model: 'gpt-4.1',
+                    models: ['gpt-4.1'],
+                },
+            ],
+        });
+        page.applyOverview({
+            active_provider_id: 'openai',
+            cards: [
+                {
+                    provider: { id: 'openai', label: 'OpenAI' },
+                    selected_profile_id: ['openai', 'api_key', 'work'].join(':'),
+                    auth_states: [
+                        {
+                            method_id: 'api_key',
+                            status: 'connected',
+                            default_selected: true,
+                            metadata: {
+                                profile_id: ['openai', 'api_key', 'work'].join(':'),
+                                base_url: 'https://proxy.example/v1',
+                                model: 'gpt-4.1',
+                            },
+                        },
+                    ],
+                    metadata: {
+                        default_model: 'gpt-4.1',
+                        default_base_url: 'https://proxy.example/v1',
+                        provider_health: { code: 'healthy', message: '' },
+                    },
+                },
+            ],
+        });
+        page.render = () => {
+            calls.push('render');
+        };
+        page.renderFeedback = (message, type = 'success') => {
+            calls.push(`feedback:${type}:${message}`);
+        };
+
+        await page.handleButtonAction({
+            dataset: {
+                modelAuthUi: 'discover_provider_models',
+                providerId: 'openai',
+            },
+        });
+
+        assert.equal(calls[0].action, 'discover_models');
+        assert.deepEqual(calls[0].payload, {
+            provider_id: 'openai',
+            base_url: 'https://proxy.example/v1',
+            profile_id: ['openai', 'api_key', 'work'].join(':'),
+        });
+        const options = page.getProviderModelOptions('openai', 'gpt-4.1');
+        assert.ok(options.includes('proxy/gpt-4.1'));
+        assert.ok(options.includes('proxy/qwen-plus'));
+        assert.ok(options.includes('gpt-4.1'));
+        assert.deepEqual(calls.slice(1), [
+            'render',
+            'feedback:success:已获取 2 个模型。',
+            'success:已获取 2 个模型。',
+        ]);
+    } finally {
+        apiService.runModelAuthAction = originalRunModelAuthAction;
+        toast.success = originalToastSuccess;
+        toast.error = originalToastError;
+    }
 });
 
 test('models page keeps the user selected provider when a slow save resolves late', async () => {

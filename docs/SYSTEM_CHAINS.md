@@ -631,15 +631,15 @@
 
 1. `src/main/update-manager.js`
    - 功能：桌面端更新管理。
-   - 实现：调用 GitHub Releases API 获取最新版本、Release 正文和 `setup.exe` 下载地址；维护跳过版本、下载进度、已下载待安装状态，并在退出前延迟启动安装包。
+   - 实现：调用 GitHub Releases API 获取最新版本、Release 正文和 `setup.exe` 下载地址；维护跳过版本、下载进度、已下载待安装状态，并在退出前延迟启动安装包。便携版环境会保留版本检查和 Release 入口，但通过 `manualUpdate` 状态阻断应用内下载与安装。
 
 2. `src/renderer/js/app.module.js`
    - 功能：前端更新状态展示。
-   - 实现：订阅更新状态，更新侧边栏提示与全局更新弹窗；弹窗支持跳过版本、开始下载和安装重启。
+   - 实现：订阅更新状态，更新侧边栏提示与全局更新弹窗；弹窗支持跳过版本、开始下载和安装重启；当 `manualUpdate` 为 true 时，主操作改为打开 GitHub Releases。
 
 3. `src/renderer/js/pages/AboutPage.js`
    - 功能：关于页更新入口。
-   - 实现：在关于页 Hero 展示当前版本、最新版本、检查时间、下载进度与安装入口；在安装版环境中触发真实下载，在便携版环境中回退到 GitHub Releases 页面。
+   - 实现：在关于页 Hero 展示当前版本、最新版本、检查时间、下载进度与安装入口；在安装版环境中触发真实下载，在便携版环境中展示手动更新提示并回退到 GitHub Releases 页面。
 
 ## 16. 当前文档边界
 

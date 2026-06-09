@@ -7,7 +7,11 @@ const {
     buildSafeDesktopNotificationOptions,
     registerIpcHandlers,
 } = require('../src/main/ipc');
-const { stopBackendAndQuit } = require('../src/main/app-lifecycle');
+const {
+    createRendererCrashRecovery,
+    installPreparedUpdateAndQuit,
+    stopBackendAndQuit,
+} = require('../src/main/app-lifecycle');
 
 function createHarness(options = {}) {
     const handlers = new Map();
@@ -40,10 +44,14 @@ function createHarness(options = {}) {
             isQuitting: false,
             tray: null,
             mainWindow: null,
+            lastBackendProcessIssue: options.lastBackendProcessIssue || null,
         },
         BackendManager: {
             requestJson: async (method, endpoint, payload) => {
                 backendCalls.push({ method, endpoint, payload });
+                if (typeof options.backendRequestImpl === 'function') {
+                    return options.backendRequestImpl(method, endpoint, payload);
+                }
                 return { success: true, method, endpoint };
             },
             checkServer: () => ({ running: true }),
@@ -126,7 +134,12 @@ function createHarness(options = {}) {
             },
         },
         dialog: {
-            showSaveDialog: async () => ({ canceled: true }),
+            showSaveDialog: async () => {
+                if (typeof options.showSaveDialogImpl === 'function') {
+                    return options.showSaveDialogImpl();
+                }
+                return { canceled: true };
+            },
             showOpenDialog: async (win, config) => {
                 openDialogCalls.push({ win, config });
                 if (typeof options.showOpenDialogImpl === 'function') {
@@ -147,6 +160,7 @@ function createHarness(options = {}) {
         windowMaximizeHandler: handlers.get('window-maximize'),
         windowShowSystemMenuHandler: handlers.get('window:show-system-menu'),
         knowledgeBaseSelectFileHandler: handlers.get('knowledge-base:select-file'),
+        exportDiagnosticsSnapshotHandler: handlers.get('export-diagnostics-snapshot'),
         backendCalls,
         hideToTrayCalls,
         openedExternal,
@@ -692,6 +706,52 @@ test('window control ipc returns state and close actions stay explicit', async (
     assert.deepEqual(harness.storeWrites, [{ key: 'closeBehavior', value: 'minimize' }]);
 });
 
+test('diagnostics export includes last backend process issue without raw error text', async () => {
+    const fs = require('fs');
+    const os = require('os');
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wechat-diagnostics-'));
+    const filePath = path.join(tempDir, 'support.json');
+    try {
+        const harness = createHarness({
+            lastBackendProcessIssue: {
+                type: 'spawn_error',
+                reason: 'spawn_error',
+                code: null,
+                signal: null,
+                happenedAt: '2026-06-09T10:20:30.000Z',
+                error: 'secret backend path C:\\Users\\Alice\\bot.py',
+            },
+            backendRequestImpl: async (_method, endpoint) => {
+                if (endpoint === '/api/logs?lines=120') {
+                    return { logs: [] };
+                }
+                if (endpoint === '/api/backups?limit=1') {
+                    return { summary: null };
+                }
+                return { success: true };
+            },
+            showSaveDialogImpl: async () => ({ canceled: false, filePath }),
+        });
+        const event = createTrustedEvent();
+
+        const result = await harness.exportDiagnosticsSnapshotHandler(event);
+        const exported = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+
+        assert.equal(result.success, true);
+        assert.deepEqual(exported.snapshot.runtime.backend_process_issue, {
+            type: 'spawn_error',
+            reason: 'spawn_error',
+            code: null,
+            signal: null,
+            happened_at: '2026-06-09T10:20:30.000Z',
+        });
+        assert.equal(JSON.stringify(exported).includes('secret backend path'), false);
+        assert.equal(JSON.stringify(exported).includes('Alice'), false);
+    } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+});
+
 test('stopBackendAndQuit always quits even when backend stop fails', async () => {
     const calls = [];
     const GLOBAL_STATE = {
@@ -731,6 +791,164 @@ test('stopBackendAndQuit always quits even when backend stop fails', async () =>
         ['warn', '[Lifecycle] backend stop before quit failed:'],
         'app.quit',
     ]);
+});
+
+test('installPreparedUpdateAndQuit stops backend before launching installer', async () => {
+    const calls = [];
+    const GLOBAL_STATE = {
+        installingUpdate: false,
+        isQuitting: false,
+        tray: {
+            destroy: () => calls.push('tray.destroy'),
+        },
+    };
+
+    const result = await installPreparedUpdateAndQuit({
+        GLOBAL_STATE,
+        BackendManager: {
+            stop: async (reason) => calls.push(['stop', reason]),
+        },
+        app: {
+            quit: () => calls.push('quit'),
+        },
+        updateManager: {
+            prepareInstall: () => {
+                calls.push('prepare');
+                return { success: true };
+            },
+            launchPreparedInstaller: () => {
+                calls.push('launch');
+                return { success: true };
+            },
+        },
+    });
+
+    assert.deepEqual(result, { success: true, action: 'install-update' });
+    assert.equal(GLOBAL_STATE.installingUpdate, true);
+    assert.equal(GLOBAL_STATE.isQuitting, true);
+    assert.equal(GLOBAL_STATE.tray, null);
+    assert.deepEqual(calls, [
+        'prepare',
+        ['stop', 'install-update'],
+        'launch',
+        'tray.destroy',
+        'quit',
+    ]);
+});
+
+test('installPreparedUpdateAndQuit does not launch installer when backend stop fails', async () => {
+    const calls = [];
+    const GLOBAL_STATE = {
+        installingUpdate: false,
+        isQuitting: false,
+        tray: {
+            destroy: () => calls.push('tray.destroy'),
+        },
+    };
+
+    const result = await installPreparedUpdateAndQuit({
+        GLOBAL_STATE,
+        BackendManager: {
+            stop: async (reason) => {
+                calls.push(['stop', reason]);
+                throw new Error('stop failed');
+            },
+        },
+        app: {
+            quit: () => calls.push('quit'),
+        },
+        updateManager: {
+            prepareInstall: () => {
+                calls.push('prepare');
+                return { success: true };
+            },
+            launchPreparedInstaller: () => {
+                calls.push('launch');
+                return { success: true };
+            },
+        },
+        logger: {
+            warn: (...args) => calls.push(['warn', args[0]]),
+        },
+    });
+
+    assert.deepEqual(result, {
+        success: false,
+        error: 'backend_stop_failed',
+    });
+    assert.equal(GLOBAL_STATE.installingUpdate, false);
+    assert.equal(GLOBAL_STATE.isQuitting, false);
+    assert.notEqual(GLOBAL_STATE.tray, null);
+    assert.deepEqual(calls, [
+        'prepare',
+        ['stop', 'install-update'],
+        ['warn', '[Lifecycle] backend stop before update install failed:'],
+    ]);
+});
+
+test('renderer crash recovery suppresses repeated reload loops', () => {
+    let currentTime = 0;
+    const timers = [];
+    const warnings = [];
+    const reloads = [];
+    const win = {
+        isDestroyed: () => false,
+        reload: () => reloads.push('reload'),
+    };
+    const recovery = createRendererCrashRecovery({
+        maxReloads: 3,
+        windowMs: 60000,
+        reloadDelayMs: 800,
+        now: () => currentTime,
+        setTimer: (fn, delay) => {
+            timers.push({ fn, delay });
+            return timers.length;
+        },
+        logger: {
+            warn: (...args) => warnings.push(args),
+        },
+    });
+
+    assert.equal(recovery.handleGone(win, { reason: 'crashed' }).action, 'reload_scheduled');
+    currentTime += 1000;
+    assert.equal(recovery.handleGone(win, { reason: 'crashed' }).action, 'reload_scheduled');
+    currentTime += 1000;
+    assert.equal(recovery.handleGone(win, { reason: 'crashed' }).action, 'reload_scheduled');
+    currentTime += 1000;
+    const suppressed = recovery.handleGone(win, { reason: 'crashed' });
+
+    assert.equal(suppressed.action, 'reload_suppressed');
+    assert.equal(suppressed.crashCount, 4);
+    assert.equal(timers.length, 3);
+    assert.equal(warnings.length, 1);
+
+    timers.forEach((timer) => timer.fn());
+    assert.deepEqual(reloads, ['reload', 'reload', 'reload']);
+
+    currentTime += 61000;
+    assert.equal(recovery.handleGone(win, { reason: 'crashed' }).action, 'reload_scheduled');
+    assert.equal(timers.length, 4);
+});
+
+test('renderer crash recovery skips reload when window is already destroyed', () => {
+    const reloads = [];
+    const timers = [];
+    const recovery = createRendererCrashRecovery({
+        setTimer: (fn, delay) => {
+            timers.push({ fn, delay });
+            return timers.length;
+        },
+    });
+
+    const result = recovery.handleGone({
+        isDestroyed: () => true,
+        reload: () => reloads.push('reload'),
+    });
+
+    assert.equal(result.action, 'reload_scheduled');
+    assert.equal(timers.length, 1);
+    timers[0].fn();
+    assert.deepEqual(reloads, []);
 });
 
 test('safe desktop notification options never echo arbitrary message content', () => {

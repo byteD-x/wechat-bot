@@ -177,11 +177,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     onRuntimeIdleStateChanged: (callback) => onChannel('runtime:idle-state-changed', callback, (_event, payload) => payload),
 
+    onBackendProcessIssue: (callback) => onChannel('backend-process-issue', callback, (_event, payload) => payload),
+
     onWindowStateChanged: (callback) => onChannel('window-state-changed', callback, (_event, payload) => payload),
 
     removeConfigChangedListener: (callback) => removeRegisteredListeners('config:changed', callback),
 
     removeRuntimeIdleStateListener: (callback) => removeRegisteredListeners('runtime:idle-state-changed', callback),
+
+    removeBackendProcessIssueListener: (callback) => removeRegisteredListeners('backend-process-issue', callback),
 
     removeWindowStateChangedListener: (callback) => removeRegisteredListeners('window-state-changed', callback),
 

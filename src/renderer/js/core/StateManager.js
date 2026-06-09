@@ -34,6 +34,7 @@ class StateManager {
             },
             updater: {
                 enabled: false,
+                manualUpdate: false,
                 checking: false,
                 available: false,
                 currentVersion: '',

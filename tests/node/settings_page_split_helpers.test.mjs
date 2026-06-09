@@ -212,6 +212,114 @@ test('runtime-sync loadSettings refreshes page state and schedules audit when ne
     }
 });
 
+test('runtime-sync loadSettings preserves file and live config source versions', async () => {
+    const originalGetConfig = apiService.getConfig;
+    try {
+        apiService.getConfig = async () => ({
+            success: true,
+            config_version: 7,
+            api: {
+                active_preset: 'default',
+                auth_mode: 'oauth',
+                oauth_provider: 'qwen_oauth',
+                presets: [
+                    {
+                        name: 'default',
+                        provider_id: 'qwen',
+                        model: 'qwen3-coder-next',
+                        auth_status_summary: '运行时已同步',
+                    },
+                ],
+            },
+            bot: { rag_enabled: true },
+            logging: {},
+            agent: {},
+            services: {},
+            modelCatalog: { providers: [] },
+        });
+
+        await withDom(async () => {
+            globalThis.window.electronAPI.configGet = async () => ({
+                success: true,
+                config_version: 2,
+                api: {
+                    active_preset: 'default',
+                    auth_mode: 'api_key',
+                    presets: [
+                        {
+                            name: 'default',
+                            provider_id: 'openai',
+                            model: 'gpt-4.1',
+                            [['api', 'key'].join('_')]: ['keep', 'local', 'credential'].join('-'),
+                        },
+                    ],
+                },
+                bot: { rag_enabled: false },
+                logging: {},
+                agent: {},
+                services: {},
+                modelCatalog: { providers: [] },
+            });
+
+            const page = {
+                _config: null,
+                _modelCatalog: null,
+                _providersById: new Map(),
+                _configAudit: null,
+                _loaded: false,
+                _loadingPromise: null,
+                _auditPromise: null,
+                _auditStatus: 'idle',
+                _auditMessage: '',
+                _lastConfigVersion: 0,
+                _auditRequestId: 0,
+                _shouldRefreshAudit() {
+                    return false;
+                },
+                getState(path) {
+                    if (path === 'bot.connected') {
+                        return true;
+                    }
+                    if (path === 'bot.status.config_snapshot.version') {
+                        return 9;
+                    }
+                    return undefined;
+                },
+                $(selector) {
+                    if (selector === '#current-config-hero') {
+                        return { innerHTML: '' };
+                    }
+                    return null;
+                },
+                _fillForm() {},
+                _renderHero() {},
+                _renderExportRagStatus() {},
+                _hideSaveFeedback() {},
+                _renderLoadError() {},
+                _loadConfigAudit() {},
+            };
+
+            await loadSettings(page, { silent: true }, {
+                loading: 'loading',
+                loadFailed: 'load failed',
+                noAudit: 'no audit',
+            });
+
+            assert.deepEqual(page._config.source_versions, {
+                file_config_version: 2,
+                live_config_version: 7,
+                live_status_merged: true,
+            });
+            assert.equal(page._config.api.auth_mode, 'oauth');
+            assert.equal(page._config.api.oauth_provider, 'qwen_oauth');
+            assert.equal(page._config.api.presets[0].auth_status_summary, '运行时已同步');
+            assert.equal(page._config.api.presets[0].api_key, ['keep', 'local', 'credential'].join('-'));
+        });
+    } finally {
+        apiService.getConfig = originalGetConfig;
+    }
+});
+
 test('runtime-sync loadSettings schedules a silent refresh while local auth sync is still running', async () => {
     const originalGetConfig = apiService.getConfig;
     const originalSetTimeout = globalThis.setTimeout;
@@ -1158,6 +1266,31 @@ test('settings action helpers handle preview and updater flows', async () => wit
             downloadUpdate: async () => ({ success: true, alreadyDownloaded: false }),
         },
     });
+
+    const manualUpdateCalls = [];
+    await openUpdateDownload({
+        getState(path) {
+            const mapping = {
+                'updater.readyToInstall': false,
+                'updater.enabled': true,
+                'updater.manualUpdate': true,
+            };
+            return mapping[path];
+        },
+    }, {
+        toast: toastRecorder,
+        windowApi: {
+            downloadUpdate: async () => {
+                manualUpdateCalls.push('download');
+                return { success: true };
+            },
+            openUpdateDownload: async () => {
+                manualUpdateCalls.push('open-release');
+                return { success: true };
+            },
+        },
+    });
+    assert.deepEqual(manualUpdateCalls, ['open-release']);
 
     await resetCloseBehavior({ resetCloseSuccess: 'reset ok' }, {
         toast: toastRecorder,

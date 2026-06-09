@@ -237,6 +237,24 @@ function pickSafeConfig(configPayload = {}) {
     };
 }
 
+function normalizeBackendProcessIssue(issue = null) {
+    if (!isPlainObject(issue)) {
+        return null;
+    }
+    const happenedAt = String(issue.happenedAt || issue.happened_at || '').trim();
+    const codeValue = issue.code;
+    const code = codeValue === null || codeValue === undefined || codeValue === ''
+        ? null
+        : Number(codeValue);
+    return {
+        type: String(issue.type || 'backend_process_issue').trim() || 'backend_process_issue',
+        reason: String(issue.reason || '').trim(),
+        code: Number.isFinite(code) ? code : null,
+        signal: issue.signal ? String(issue.signal).trim() : null,
+        happened_at: happenedAt || null,
+    };
+}
+
 function buildSnapshotFilename(now = new Date()) {
     const date = now instanceof Date ? now : new Date(now);
     const yyyy = String(date.getFullYear());
@@ -393,6 +411,7 @@ function buildDiagnosticsSnapshot({
     updateState = {},
     backupSummary = null,
     idleState = {},
+    backendProcessIssue = null,
     platform = {},
     collectionErrors = [],
 } = {}) {
@@ -408,6 +427,7 @@ function buildDiagnosticsSnapshot({
             status,
             readiness,
             idle_state: idleState,
+            backend_process_issue: normalizeBackendProcessIssue(backendProcessIssue),
         },
         update: {
             ...(updateState || {}),

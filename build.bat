@@ -76,12 +76,17 @@ if errorlevel 1 (
 
 if exist "%PROJECT_ROOT%release\win-unpacked" rmdir /s /q "%PROJECT_ROOT%release\win-unpacked"
 if exist "%PROJECT_ROOT%release\builder-debug.yml" del /f /q "%PROJECT_ROOT%release\builder-debug.yml"
-if exist "%PROJECT_ROOT%release\latest.yml" del /f /q "%PROJECT_ROOT%release\latest.yml"
 if exist "%PROJECT_ROOT%release\app-update.yml" del /f /q "%PROJECT_ROOT%release\app-update.yml"
-del /f /q "%PROJECT_ROOT%release\*.blockmap" >nul 2>&1
 del /f /q "%PROJECT_ROOT%release\*.msi" >nul 2>&1
 
-"!PYTHON_EXE!" "%PROJECT_ROOT%scripts\audit_release_artifacts.py" "%PROJECT_ROOT%release"
+echo     Generating SHA256SUMS.txt...
+powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$releaseDir = '%PROJECT_ROOT%release'; $files = Get-ChildItem -LiteralPath $releaseDir -Filter '*.exe' | Sort-Object Name; if (-not $files) { throw 'No release executables found.' }; $lines = foreach ($file in $files) { '{0}  {1}' -f (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLower(), $file.Name }; Set-Content -LiteralPath (Join-Path $releaseDir 'SHA256SUMS.txt') -Value $lines -Encoding utf8"
+if errorlevel 1 (
+    echo SHA256SUMS generation failed.
+    exit /b 1
+)
+
+"!PYTHON_EXE!" "%PROJECT_ROOT%scripts\audit_release_artifacts.py" --allow-release-update-metadata "%PROJECT_ROOT%release"
 if errorlevel 1 (
     echo Electron artifact audit failed.
     exit /b 1

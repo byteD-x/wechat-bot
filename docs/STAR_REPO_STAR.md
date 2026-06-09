@@ -127,7 +127,7 @@
 | Knowledge Base | `backend/core/knowledge_base.py` / `backend/core/knowledge_base_cli.py` | 知识库治理 API、粘贴式 UI 与显式文件 CLI，不开放任意路径扫描 |
 | Deploy | `Dockerfile` / `requirements-container.txt` / `backend/core/readiness.py` | Web API/readiness/eval 容器切片与 `web-api` readiness 目标 |
 | Transport | `backend/transports/base.py` / `backend/transports/wcferry_adapter.py` | 传输层抽象、微信版本门禁与状态暴露 |
-| Model Auth | `backend/model_auth/` / `src/renderer/js/pages/ModelsPage.js` | Provider/Auth 建模、模型目录、认证状态与动作生成 |
+| Model Auth | `backend/model_auth/` / `backend/core/model_discovery.py` / `src/renderer/js/pages/ModelsPage.js` | Provider/Auth 建模、OpenAI-compatible 中转站 `/models` 发现、模型目录、认证状态与动作生成 |
 | Export Center | `backend/core/wechat_export_service.py` / `src/renderer/js/pages/ExportCenterPage.js` | 微信探测、解密、联系人读取、CSV 导出与 RAG 应用 |
 | API | `backend/api.py` | `/api/status`、`/api/metrics`、`/api/wechat_export/*`、`/api/model_auth/*`、`/api/costs/*`、Prompt 回滚、Tool Workflow |
 | Diagnostics | `src/main/diagnostics-snapshot.js` / `src/main/ipc.js` | 诊断支持包导出、敏感字段脱敏和 IPC allowlist |

@@ -38,6 +38,7 @@
 - [系统链路说明](docs/SYSTEM_CHAINS.md)
 - [项目亮点与主链路](docs/HIGHLIGHTS.md)
 - [详细使用手册](docs/USER_GUIDE.md)
+- [文档索引](docs/README.md)
 - [模型与认证中心](docs/MODEL_AUTH_CENTER.md)
 - [微信聊天记录导出指南](docs/wechat-export-guide.md)
 - [配置说明](docs/USER_GUIDE.md#8-配置说明)
@@ -411,7 +412,7 @@ Windows 正式发布现在默认只生成两种产物：
 - `MSI` 不再参与日常发版，只保留 `npm run build:msi` 作为按需构建入口
 - `setup.exe` 安装版已启用应用内自动更新：每次启动会检查 GitHub 最新 Release，发现新版本时弹窗展示版本号与更新说明，并支持“跳过此版本”或“下载更新”
 - 下载完成后可在应用内直接执行“立即安装并重启”；安装流程会使用最新 `setup.exe` 覆盖升级现有安装目录
-- `portable.exe` 仍保留手动更新模式，需前往 GitHub Releases 下载新版安装包
+- `portable.exe` 仍保留手动更新模式：桌面端可检查 GitHub 最新 Release 并提示新版本，但不会自动下载或安装，需打开 GitHub Releases 手动下载并替换
 - 正式 Release 通过 GitHub Actions 构建并上传，不再建议在本地直接上传大文件
 - 每次 Release 都必须提供 `docs/release_notes/<tag>.md`，并按 `Features / Improvements / Fixes / Performance / Breaking Changes` 的固定顺序编写；无内容分类直接省略
 - Release 正文只写本次已发布且对外可感知的变化，默认面向普通用户描述，不再使用 commit/PR 风格流水账
@@ -537,9 +538,12 @@ POST /api/growth/tasks/<task_type>/clear
 - 模型卡片会按 `当前激活 -> 认证可用 -> 检测到本机登录但未绑定 -> 未配置` 排序，并通过不同状态样式区分 `当前生效 / OAuth 可用 / API Key 可用 / 待授权 / 实验能力`。
 - 每张 Provider 卡片现在还会展示后端聚合出来的 `本机同步摘要 / 健康检查摘要 / 认证计数`，前端不再自己拼装这些高层状态。
 - 已绑定的认证方法现在会显式标出 `运行时可用 / 运行时未就绪`；如果默认认证还不能进入运行时，请求摘要会直接展示阻塞原因，而不是只给一个模糊失败态。
+- newapi、sub2api 等中转站按 OpenAI-compatible Provider 接入：在模型页填写中转站 `base_url` 与 API Key 后，可点击“获取模型”调用 `<base_url>/models`，把返回模型列表加入当前 Provider 的可选项；该操作只更新前端候选列表，不会自动保存配置或写入密钥。
+- `agent.model_routing` 当前只记录 `model_route` / `model_route_stats` 这类可解释路由决策，不会自动切换用户选择的 Provider、认证方式或 fallback 路由；未在代码中实现的 `LLM_MODEL_ROUTING_JSON`、`AI_MODEL_ROUTING_JSON`、`fallback_route_key` 不应作为当前可用配置写入生产文档。
 - 新增模型与认证中心接口：
   - `GET /api/model_auth/overview`
   - `POST /api/model_auth/action`
+  - `overview.actions_schema` 会返回后端可执行动作的字段契约，`discover_models` 可从 OpenAI-compatible 中转站读取 `/models` 并供前端选择
   - 旧的 `/api/auth/providers/*` 只剩兼容壳层，不再由设置页、旧预设 modal 或模型页主流程直接调用；前端统一走模型中心接口
 - 当前 Provider 策略：
   - 已接入核心能力：`OpenAI / Codex / ChatGPT`、`Google / Gemini / Gemini CLI`、`Qwen / DashScope / Qwen Code`、`Claude / Claude Code`、`Kimi / Moonshot / Kimi Code`、`GLM / 智谱`、`MiniMax`、`Doubao / 火山方舟 / TRAE`、`Yuanbao / 元宝`

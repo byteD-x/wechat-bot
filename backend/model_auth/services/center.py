@@ -13,6 +13,7 @@ from backend.core.oauth_support import (
     submit_auth_callback,
 )
 from backend.core.config_service import get_config_service
+from backend.core.model_discovery import fetch_openai_compatible_models
 
 from ..domain.enums import AuthMethodType, CredentialSource, SyncPolicy
 from ..providers.registry import (
@@ -46,6 +47,237 @@ from .status import build_provider_overview_cards
 
 def _now() -> int:
     return int(time.time())
+
+
+ACTION_SCHEMAS: Dict[str, Dict[str, Any]] = {
+    "scan": {
+        "id": "scan",
+        "label": "重新检查本机登录源",
+        "requires_fields": [],
+        "payload_schema": {"type": "object", "properties": {}, "required": []},
+        "danger_level": "safe",
+        "confirmation_required": False,
+    },
+    "update_provider_defaults": {
+        "id": "update_provider_defaults",
+        "label": "更新服务方默认设置",
+        "requires_fields": ["provider_id"],
+        "payload_schema": {
+            "type": "object",
+            "properties": {
+                "provider_id": {"type": "string"},
+                "legacy_preset_name": {"type": "string"},
+                "alias": {"type": "string"},
+                "default_model": {"type": "string"},
+                "default_base_url": {"type": "string"},
+                "force_sync_selected_profile": {"type": ["boolean", "string"]},
+            },
+            "required": ["provider_id"],
+        },
+        "danger_level": "normal",
+        "confirmation_required": False,
+    },
+    "save_api_key": {
+        "id": "save_api_key",
+        "label": "保存 API Key",
+        "requires_fields": ["provider_id", "method_id", "api_key"],
+        "payload_schema": {
+            "type": "object",
+            "properties": {
+                "provider_id": {"type": "string"},
+                "method_id": {"type": "string"},
+                "label": {"type": "string"},
+                "api_key": {"type": "string", "sensitive": True},
+                "default_model": {"type": "string"},
+                "default_base_url": {"type": "string"},
+                "set_default": {"type": "boolean"},
+            },
+            "required": ["provider_id", "method_id", "api_key"],
+        },
+        "danger_level": "credential_write",
+        "confirmation_required": False,
+    },
+    "discover_models": {
+        "id": "discover_models",
+        "label": "获取服务方模型列表",
+        "requires_fields": ["provider_id"],
+        "payload_schema": {
+            "type": "object",
+            "properties": {
+                "provider_id": {"type": "string"},
+                "base_url": {"type": "string"},
+                "profile_id": {"type": "string"},
+                "api_key": {"type": "string", "sensitive": True},
+            },
+            "required": ["provider_id"],
+        },
+        "danger_level": "network",
+        "confirmation_required": False,
+    },
+    "bind_local_auth": {
+        "id": "bind_local_auth",
+        "label": "同步本机登录",
+        "requires_fields": ["provider_id", "method_id"],
+        "payload_schema": {
+            "type": "object",
+            "properties": {
+                "provider_id": {"type": "string"},
+                "method_id": {"type": "string"},
+                "set_default": {"type": "boolean"},
+            },
+            "required": ["provider_id", "method_id"],
+        },
+        "danger_level": "normal",
+        "confirmation_required": False,
+    },
+    "import_local_auth_copy": {
+        "id": "import_local_auth_copy",
+        "label": "导入本机登录副本",
+        "requires_fields": ["provider_id", "method_id"],
+        "payload_schema": {
+            "type": "object",
+            "properties": {
+                "provider_id": {"type": "string"},
+                "method_id": {"type": "string"},
+                "set_default": {"type": "boolean"},
+            },
+            "required": ["provider_id", "method_id"],
+        },
+        "danger_level": "credential_write",
+        "confirmation_required": False,
+    },
+    "import_session": {
+        "id": "import_session",
+        "label": "导入网页登录会话",
+        "requires_fields": ["provider_id", "method_id", "session_payload"],
+        "payload_schema": {
+            "type": "object",
+            "properties": {
+                "provider_id": {"type": "string"},
+                "method_id": {"type": "string"},
+                "label": {"type": "string"},
+                "session_payload": {"type": ["object", "string"], "sensitive": True},
+                "set_default": {"type": "boolean"},
+            },
+            "required": ["provider_id", "method_id", "session_payload"],
+        },
+        "danger_level": "credential_write",
+        "confirmation_required": False,
+    },
+    "start_browser_auth": {
+        "id": "start_browser_auth",
+        "label": "启动网页登录",
+        "requires_fields": ["provider_id", "method_id"],
+        "payload_schema": {
+            "type": "object",
+            "properties": {
+                "provider_id": {"type": "string"},
+                "method_id": {"type": "string"},
+            },
+            "required": ["provider_id", "method_id"],
+        },
+        "danger_level": "external_browser",
+        "confirmation_required": False,
+    },
+    "complete_browser_auth": {
+        "id": "complete_browser_auth",
+        "label": "完成网页登录",
+        "requires_fields": ["provider_id", "method_id"],
+        "payload_schema": {
+            "type": "object",
+            "properties": {
+                "provider_id": {"type": "string"},
+                "method_id": {"type": "string"},
+                "flow_id": {"type": "string"},
+                "label": {"type": "string"},
+                "callback_payload": {"type": ["object", "string"], "sensitive": True},
+                "set_default": {"type": "boolean"},
+            },
+            "required": ["provider_id", "method_id"],
+        },
+        "danger_level": "credential_write",
+        "confirmation_required": False,
+    },
+    "set_default_profile": {
+        "id": "set_default_profile",
+        "label": "设为默认认证",
+        "requires_fields": ["provider_id", "profile_id"],
+        "payload_schema": {
+            "type": "object",
+            "properties": {
+                "provider_id": {"type": "string"},
+                "profile_id": {"type": "string"},
+            },
+            "required": ["provider_id", "profile_id"],
+        },
+        "danger_level": "normal",
+        "confirmation_required": False,
+    },
+    "set_active_provider": {
+        "id": "set_active_provider",
+        "label": "设为当前回复模型",
+        "requires_fields": ["provider_id"],
+        "payload_schema": {
+            "type": "object",
+            "properties": {
+                "provider_id": {"type": "string"},
+            },
+            "required": ["provider_id"],
+        },
+        "danger_level": "runtime_switch",
+        "confirmation_required": False,
+    },
+    "test_profile": {
+        "id": "test_profile",
+        "label": "测试认证连接",
+        "requires_fields": ["provider_id", "profile_id"],
+        "payload_schema": {
+            "type": "object",
+            "properties": {
+                "provider_id": {"type": "string"},
+                "method_id": {"type": "string"},
+                "profile_id": {"type": "string"},
+            },
+            "required": ["provider_id", "profile_id"],
+        },
+        "danger_level": "network",
+        "confirmation_required": False,
+    },
+    "disconnect_profile": {
+        "id": "disconnect_profile",
+        "label": "移除认证配置",
+        "requires_fields": ["provider_id", "profile_id"],
+        "payload_schema": {
+            "type": "object",
+            "properties": {
+                "provider_id": {"type": "string"},
+                "profile_id": {"type": "string"},
+            },
+            "required": ["provider_id", "profile_id"],
+        },
+        "danger_level": "destructive",
+        "confirmation_required": True,
+    },
+    "logout_source": {
+        "id": "logout_source",
+        "label": "退出本机登录源",
+        "requires_fields": ["provider_id", "profile_id"],
+        "payload_schema": {
+            "type": "object",
+            "properties": {
+                "provider_id": {"type": "string"},
+                "profile_id": {"type": "string"},
+            },
+            "required": ["provider_id", "profile_id"],
+        },
+        "danger_level": "destructive",
+        "confirmation_required": True,
+    },
+}
+
+
+def get_model_auth_action_schemas() -> list[Dict[str, Any]]:
+    return [deepcopy(ACTION_SCHEMAS[action_id]) for action_id in sorted(ACTION_SCHEMAS)]
 
 
 def _resolve_local_credential_source(method_type: AuthMethodType, local_status: Dict[str, Any]) -> str:
@@ -94,6 +326,9 @@ class ModelAuthCenterService:
         self._credential_store = get_credential_store()
         self._sync_orchestrator = get_local_auth_sync_orchestrator()
 
+    def get_action_schemas(self) -> list[Dict[str, Any]]:
+        return get_model_auth_action_schemas()
+
     def _ensure_sync_started(self) -> None:
         self._sync_orchestrator.start()
 
@@ -120,6 +355,7 @@ class ModelAuthCenterService:
                 "updated_at": int(center.get("updated_at") or _now()),
                 "active_provider_id": str(center.get("active_provider_id") or "").strip(),
                 "cards": cards,
+                "actions_schema": self.get_action_schemas(),
                 "local_auth_sync": self._build_local_auth_sync_state(),
             },
         }
@@ -670,6 +906,70 @@ class ModelAuthCenterService:
             message=f"{method.label} 已安全保存。",
         )
 
+    def _resolve_discovery_profile(
+        self,
+        entry: Dict[str, Any],
+        profile_id: str = "",
+    ) -> Optional[Dict[str, Any]]:
+        wanted = str(profile_id or "").strip()
+        if wanted:
+            return self._get_profile(entry, wanted)
+        selected = self._get_profile(entry, entry.get("selected_profile_id"))
+        if selected is not None:
+            return selected
+        profile, _context = _select_runtime_profile(entry)
+        return profile
+
+    def _resolve_discovery_credentials(
+        self,
+        entry: Dict[str, Any],
+        profile: Optional[Dict[str, Any]],
+        payload: Dict[str, Any],
+    ) -> tuple[str, str]:
+        credential = str(payload.get("api_key") or "").strip()
+        base_url = _normalize_runtime_base_url(
+            payload.get("base_url") or payload.get("default_base_url")
+        )
+        if profile is None:
+            return base_url or _normalize_runtime_base_url(entry.get("default_base_url")), credential
+
+        method = get_provider_method(entry.get("provider_id"), profile.get("method_id"))
+        profile_metadata = dict(profile.get("metadata") or {})
+        if method is not None:
+            defaults = _resolve_method_runtime_defaults(entry, method, profile_metadata)
+            base_url = base_url or defaults["base_url"]
+        else:
+            base_url = base_url or _normalize_runtime_base_url(profile_metadata.get("base_url"))
+
+        ref = str(profile.get("credential_ref") or "").strip()
+        if not credential and ref:
+            record = self._credential_store.get(ref)
+            secret_payload = dict(record.payload or {}) if record else {}
+            credential = str(secret_payload.get("api_key") or "").strip()
+            base_url = base_url or _normalize_runtime_base_url(secret_payload.get("base_url"))
+        return base_url or _normalize_runtime_base_url(entry.get("default_base_url")), credential
+
+    async def discover_models(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        provider_id = _canonicalize_provider_id(payload.get("provider_id"))
+        if not provider_id:
+            inferred = infer_provider_id(base_url=str(payload.get("base_url") or "").strip())
+            provider_id = _canonicalize_provider_id(inferred)
+        if not provider_id:
+            raise ValueError("缺少 provider_id，无法获取模型列表。")
+
+        config = self._load_config()
+        entry = self._get_provider_entry(config, provider_id)
+        profile = self._resolve_discovery_profile(
+            entry,
+            str(payload.get("profile_id") or "").strip(),
+        )
+        base_url, credential = self._resolve_discovery_credentials(entry, profile, payload)
+        result = await fetch_openai_compatible_models(base_url, credential=credential)
+        response = result.to_dict()
+        response["provider_id"] = provider_id
+        response["source"] = "openai_compatible_models"
+        return response
+
     def _bind_local_auth_profile(self, payload: Dict[str, Any], *, follow_local_auth: bool) -> Dict[str, Any]:
         self._ensure_sync_started()
         provider_id = _canonicalize_provider_id(payload.get("provider_id"))
@@ -1080,34 +1380,32 @@ class ModelAuthCenterService:
             message=str(result.get("message") or "已退出本机登录。"),
         )
 
+    def _action_handlers(self) -> Dict[str, Any]:
+        return {
+            "scan": lambda _payload: self.scan(),
+            "update_provider_defaults": self.update_provider_defaults,
+            "save_api_key": self.save_api_key,
+            "discover_models": self.discover_models,
+            "bind_local_auth": self.bind_local_auth,
+            "import_local_auth_copy": self.import_local_auth_copy,
+            "import_session": self.import_session,
+            "start_browser_auth": self.start_browser_auth,
+            "complete_browser_auth": self.complete_browser_auth,
+            "set_default_profile": self.set_default_profile,
+            "set_active_provider": self.set_active_provider,
+            "test_profile": self.test_profile,
+            "disconnect_profile": self.disconnect_profile,
+            "logout_source": self.logout_source,
+        }
+
     async def perform_action(self, action: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         wanted = str(action or "").strip().lower()
-        if wanted == "scan":
-            return self.scan()
-        if wanted == "update_provider_defaults":
-            return self.update_provider_defaults(payload)
-        if wanted == "save_api_key":
-            return self.save_api_key(payload)
-        if wanted == "bind_local_auth":
-            return self.bind_local_auth(payload)
-        if wanted == "import_local_auth_copy":
-            return self.import_local_auth_copy(payload)
-        if wanted == "import_session":
-            return self.import_session(payload)
-        if wanted == "start_browser_auth":
-            return self.start_browser_auth(payload)
-        if wanted == "complete_browser_auth":
-            return self.complete_browser_auth(payload)
-        if wanted == "set_default_profile":
-            return self.set_default_profile(payload)
-        if wanted == "set_active_provider":
-            return self.set_active_provider(payload)
-        if wanted == "test_profile":
-            return await self.test_profile(payload)
-        if wanted == "disconnect_profile":
-            return self.disconnect_profile(payload)
-        if wanted == "logout_source":
-            return self.logout_source(payload)
+        handler = self._action_handlers().get(wanted)
+        if handler is not None:
+            result = handler(payload)
+            if hasattr(result, "__await__"):
+                return await result
+            return result
         raise ValueError(f"暂不支持的操作：{action}")
 
 

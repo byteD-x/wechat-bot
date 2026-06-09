@@ -136,6 +136,7 @@ export async function openUpdateDownload(page, deps = {}) {
     try {
         const windowApi = getWindowApi(deps);
         const readyToInstall = !!page.getState('updater.readyToInstall');
+        const manualUpdate = !!page.getState('updater.manualUpdate');
 
         if (readyToInstall && windowApi?.installDownloadedUpdate) {
             const result = await windowApi.installDownloadedUpdate();
@@ -147,7 +148,7 @@ export async function openUpdateDownload(page, deps = {}) {
             return;
         }
 
-        if (windowApi?.downloadUpdate && page.getState('updater.enabled')) {
+        if (windowApi?.downloadUpdate && page.getState('updater.enabled') && !manualUpdate) {
             const result = await windowApi.downloadUpdate();
             if (!result?.success) {
                 if (shouldFallbackToReleasePage(result?.error) && windowApi?.openUpdateDownload) {

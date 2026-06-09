@@ -62,3 +62,4 @@ data/provider_credentials.json
 data/.tmp-probe-creds-*.json
 temp_cli_verify_demo/
 temp_images/
+MagicMock/

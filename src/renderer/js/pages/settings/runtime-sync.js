@@ -5,6 +5,7 @@ import { formatEmailVisibilityText, loadEmailVisibilityPreference } from '../mod
 
 const UPDATER_STATE_PATHS = [
     'updater.enabled',
+    'updater.manualUpdate',
     'updater.checking',
     'updater.available',
     'updater.currentVersion',
@@ -32,6 +33,39 @@ function mergePresetLiveFields(localPreset = {}, livePreset = null) {
     };
 }
 
+function normalizeConfigVersion(value) {
+    const parsed = Number(value || 0);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function readConfigVersion(result = {}, sourceKey = '') {
+    if (!result || typeof result !== 'object') {
+        return 0;
+    }
+    if (sourceKey) {
+        const sourceVersion = normalizeConfigVersion(result.source_versions?.[sourceKey]);
+        if (sourceVersion) {
+            return sourceVersion;
+        }
+    }
+    return normalizeConfigVersion(
+        result.config_version
+        || result.version
+        || result.config_snapshot?.version,
+    );
+}
+
+function buildConfigSourceVersions(localConfigResult = {}, liveConfigResult = null) {
+    const liveStatusMerged = Boolean(liveConfigResult?.success);
+    return {
+        file_config_version: readConfigVersion(localConfigResult, 'file_config_version'),
+        live_config_version: liveStatusMerged
+            ? readConfigVersion(liveConfigResult, 'live_config_version')
+            : normalizeConfigVersion(localConfigResult?.source_versions?.live_config_version),
+        live_status_merged: liveStatusMerged || Boolean(localConfigResult?.source_versions?.live_status_merged),
+    };
+}
+
 function mergeConfigWithLiveStatus(localConfigResult = {}, liveConfigResult = {}) {
     const nextApi = deepClone(localConfigResult.api || {});
     const liveApi = deepClone(liveConfigResult.api || {});
@@ -51,6 +85,7 @@ function mergeConfigWithLiveStatus(localConfigResult = {}, liveConfigResult = {}
         },
         local_auth_sync: liveConfigResult.local_auth_sync || localConfigResult.local_auth_sync || null,
         oauth: liveConfigResult.oauth || localConfigResult.oauth || null,
+        source_versions: buildConfigSourceVersions(localConfigResult, liveConfigResult),
     };
 }
 
@@ -265,12 +300,19 @@ export async function loadSettings(page, options = {}, text = {}) {
                 throw new Error(mergedResult?.message || text.loadFailed);
             }
 
+            const runtimeVersion = normalizeConfigVersion(page.getState('bot.status.config_snapshot.version'));
+            const sourceVersions = buildConfigSourceVersions(mergedResult);
+            if (sourceVersions.live_status_merged && !sourceVersions.live_config_version && runtimeVersion) {
+                sourceVersions.live_config_version = runtimeVersion;
+            }
+
             page._config = {
                 api: deepClone(mergedResult.api || {}),
                 bot: deepClone(mergedResult.bot || {}),
                 logging: deepClone(mergedResult.logging || {}),
                 agent: deepClone(mergedResult.agent || {}),
                 services: deepClone(mergedResult.services || {}),
+                source_versions: sourceVersions,
             };
             page._localAuthSyncState = normalizeLocalAuthSyncState(mergedResult);
             const modelCatalog = deepClone(mergedResult.modelCatalog || page._modelCatalog || { providers: [] });
@@ -283,7 +325,6 @@ export async function loadSettings(page, options = {}, text = {}) {
                     .map((provider) => [String(provider?.id || '').trim(), provider])
                     .filter(([providerId]) => providerId),
             );
-            const runtimeVersion = Number(page.getState('bot.status.config_snapshot.version') || 0);
             if (!page.getState('bot.connected')) {
                 page._configAudit = null;
                 page._auditStatus = 'offline';

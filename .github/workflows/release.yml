@@ -10,6 +10,14 @@ on:
         description: "Existing git tag to release, e.g. v1.2.0"
         required: true
         type: string
+      release_channel:
+        description: "Release channel"
+        required: true
+        default: "official_signed"
+        type: choice
+        options:
+          - official_signed
+          - community_unsigned
 
 permissions:
   contents: write
@@ -32,16 +40,22 @@ jobs:
         run: |
           if ("${{ github.event_name }}" -eq "workflow_dispatch") {
             $tag = "${{ inputs.release_tag }}"
+            $channel = "${{ inputs.release_channel }}"
           } else {
             $tag = "${{ github.ref_name }}"
+            $channel = "official_signed"
           }
           if (-not $tag) {
             throw "Release tag is required."
+          }
+          if ($channel -notin @("official_signed", "community_unsigned")) {
+            throw "Unsupported release channel: $channel"
           }
           git fetch --tags --force
           git rev-parse "refs/tags/$tag" | Out-Null
           git checkout "refs/tags/$tag"
           "RELEASE_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "RELEASE_CHANNEL=$channel" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -70,13 +84,44 @@ jobs:
         shell: pwsh
         run: python -m py_compile backend\core\agent_runtime.py backend\bot.py backend\bot_manager.py backend\api.py
 
+      - name: Run Ruff
+        shell: pwsh
+        run: python -m ruff check backend\api.py backend\bot.py backend\bot_reply_flow.py backend\config_schemas.py backend\core\memory.py backend\core\reply_policy.py backend\core\workspace_backup.py backend\core\eval_runner.py run.py scripts\sync_github_release_assets.py tests\test_api.py tests\test_reply_policy.py tests\test_backup_service.py tests\test_eval_runner.py tests\test_github_release_assets.py
+
       - name: Run Node tests
         shell: pwsh
         run: npm test
 
       - name: Run Python regression tests
         shell: pwsh
-        run: python -m pytest tests\test_smoke.py tests\test_api.py tests\test_runtime_observability.py tests\test_agent_runtime.py tests\test_optimization_tasks.py -q
+        run: python -m pytest tests\test_smoke.py tests\test_api.py tests\test_runtime_observability.py tests\test_agent_runtime.py tests\test_optimization_tasks.py tests\test_reply_policy.py tests\test_backup_service.py tests\test_eval_runner.py tests\test_github_release_assets.py -q
+
+      - name: Run Offline Eval Smoke Gate
+        shell: pwsh
+        run: python run.py eval --dataset tests\fixtures\evals\smoke_cases.json --preset ci-smoke --report data\evals\ci-smoke-report.json
+
+      - name: Run Offline Eval RAG Gate
+        shell: pwsh
+        run: python run.py eval --dataset tests\fixtures\evals\rag_cases.json --preset ci-rag --report data\evals\ci-rag-report.json
+
+      - name: Prepare Windows code signing certificate
+        if: env.RELEASE_CHANNEL == 'official_signed'
+        shell: pwsh
+        env:
+          WINDOWS_SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
+          WINDOWS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
+        run: |
+          if (-not $env:WINDOWS_SIGNING_CERTIFICATE_BASE64) {
+            throw "Missing WINDOWS_SIGNING_CERTIFICATE_BASE64 secret. Upload a trusted code-signing .pfx before releasing."
+          }
+          if (-not $env:WINDOWS_SIGNING_CERTIFICATE_PASSWORD) {
+            throw "Missing WINDOWS_SIGNING_CERTIFICATE_PASSWORD secret."
+          }
+          $certPath = Join-Path $env:RUNNER_TEMP "wechat-ai-assistant-codesign.pfx"
+          [IO.File]::WriteAllBytes($certPath, [Convert]::FromBase64String($env:WINDOWS_SIGNING_CERTIFICATE_BASE64))
+          "CSC_LINK=$certPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CSC_KEY_PASSWORD=$env:WINDOWS_SIGNING_CERTIFICATE_PASSWORD" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CSC_FOR_PULL_REQUEST=false" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Build release artifacts
         shell: cmd
@@ -99,32 +144,36 @@ jobs:
           }
           Set-Content -Path release\SHA256SUMS.txt -Value $lines -Encoding utf8
 
+      - name: Run Windows release readiness gate
+        shell: pwsh
+        run: |
+          $version = $env:RELEASE_TAG.TrimStart('v')
+          $args = @("scripts/check_windows_release_readiness.py", "--release-dir", "release", "--version", $version)
+          if ($env:RELEASE_CHANNEL -eq "community_unsigned") {
+            $args += "--allow-unsigned-community"
+          }
+          python @args
+
+      - name: Remove signing certificate from runner temp
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:CSC_LINK -and (Test-Path -LiteralPath $env:CSC_LINK)) {
+            Remove-Item -LiteralPath $env:CSC_LINK -Force
+          }
+
       - name: Publish GitHub Release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = $env:RELEASE_TAG
-          $assetFiles = @(
-            Get-ChildItem release\wechat-ai-assistant-portable-*.exe -ErrorAction Stop
-            Get-ChildItem release\wechat-ai-assistant-setup-*.exe -ErrorAction Stop
-            Get-Item release\SHA256SUMS.txt -ErrorAction Stop
-          ) | ForEach-Object { $_.FullName }
-
-          gh release view $tag *> $null
-          if ($LASTEXITCODE -ne 0) {
-            gh release create $tag --verify-tag --notes-file release-notes.md
-            if ($LASTEXITCODE -ne 0) {
-              throw "Failed to create release for tag $tag."
-            }
-          } else {
-            gh release edit $tag --notes-file release-notes.md
-            if ($LASTEXITCODE -ne 0) {
-              throw "Failed to update release notes for tag $tag."
-            }
-          }
-
-          gh release upload $tag @assetFiles --clobber
-          if ($LASTEXITCODE -ne 0) {
-            throw "Failed to upload release assets for tag $tag."
-          }
+          python scripts/sync_github_release_assets.py `
+            --tag "$env:RELEASE_TAG" `
+            --repo "${{ github.repository }}" `
+            --release-dir release `
+            --notes-file release-notes.md `
+            --title "$env:RELEASE_TAG" `
+            --release-channel "$env:RELEASE_CHANNEL" `
+            --apply `
+            --publish `
+            --json

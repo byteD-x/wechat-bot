@@ -25,6 +25,7 @@ const ACTION_LABELS = {
     import_local_auth_copy: '导入认证副本',
     logout_source: '退出本机登录',
     refresh_status: '重新检查',
+    discover_models: '获取模型',
     set_active_provider: '设为当前回复模型',
     set_default_profile: '设为默认认证',
     show_api_key_form: '配置 API Key',
@@ -32,6 +33,23 @@ const ACTION_LABELS = {
     start_browser_auth: '前往登录页',
     test_profile: '测试连接',
 };
+
+export const MODEL_AUTH_BACKEND_ACTIONS = Object.freeze([
+    'scan',
+    'update_provider_defaults',
+    'save_api_key',
+    'discover_models',
+    'bind_local_auth',
+    'import_local_auth_copy',
+    'import_session',
+    'start_browser_auth',
+    'complete_browser_auth',
+    'set_default_profile',
+    'set_active_provider',
+    'test_profile',
+    'disconnect_profile',
+    'logout_source',
+]);
 
 const STATE_LABELS = {
     available_to_import: '可同步',
@@ -1763,6 +1781,23 @@ export class ModelsPage extends PageController {
         `;
     }
 
+    renderDiscoverModelsButton(providerId = '', card = {}, provider = {}) {
+        const baseUrl = getCurrentBaseUrl(card, provider);
+        const disabledAttr = baseUrl ? '' : ' disabled';
+        const title = baseUrl
+            ? '从当前接口地址读取 /models'
+            : '请先保存接口地址';
+        return `
+            <button
+                type="button"
+                class="btn btn-secondary btn-sm"
+                data-model-auth-ui="discover_provider_models"
+                data-provider-id="${escapeHtml(providerId)}"
+                title="${escapeHtml(title)}"${disabledAttr}
+            >获取模型</button>
+        `;
+    }
+
     renderQuickActionsSection(card, provider, currentModel, currentAuth) {
         const providerId = String(provider?.id || '');
         const options = this.getProviderModelOptions(providerId, currentModel);
@@ -1784,6 +1819,7 @@ export class ModelsPage extends PageController {
                 <form class="model-center-step-form" data-model-auth-form="provider_model" data-provider-id="${escapeHtml(providerId)}">
                     <div class="model-center-inline-row">
                         ${this.renderModelSelect(providerId, currentModel, options, isCustom)}
+                        ${this.renderDiscoverModelsButton(providerId, card, provider)}
                         <button type="submit" class="btn btn-secondary btn-sm">保存模型</button>
                         ${applyLabel
                             ? `<button type="submit" class="btn btn-primary btn-sm" data-model-auth-submit-action="save_and_activate">${escapeHtml(applyLabel)}</button>`
@@ -1898,6 +1934,7 @@ export class ModelsPage extends PageController {
                 <form class="model-center-step-form" data-model-auth-form="provider_model" data-provider-id="${escapeHtml(providerId)}">
                     <div class="model-center-inline-row">
                         ${this.renderModelSelect(providerId, currentModel, options, isCustom)}
+                        ${this.renderDiscoverModelsButton(providerId, card, provider)}
                         <button type="submit" class="btn btn-secondary btn-sm">保存模型</button>
                         ${applyLabel
                             ? `<button type="submit" class="btn btn-primary btn-sm" data-model-auth-submit-action="save_and_activate">${escapeHtml(applyLabel)}</button>`
@@ -2804,6 +2841,10 @@ export class ModelsPage extends PageController {
             await this.runCurrentConnectionTest(card);
             return;
         }
+        if (uiAction === 'discover_provider_models') {
+            await this.discoverProviderModels(providerId, card);
+            return;
+        }
         if (uiAction === 'set_filter') {
             this._listFilter = String(button?.dataset?.filterValue || 'all').trim() || 'all';
             this.render();
@@ -3098,6 +3139,55 @@ export class ModelsPage extends PageController {
             } else {
                 this.closeWorkflowModal();
             }
+        }
+    }
+
+    async discoverProviderModels(providerId, card = {}) {
+        const wanted = String(providerId || '').trim();
+        const provider = this.getProvider(wanted, card?.provider || {});
+        const baseUrl = getCurrentBaseUrl(card, provider);
+        const selectedState = this.getSelectedAuthState(card);
+        const profileId = String(
+            selectedState?.metadata?.profile_id
+            || card?.selected_profile_id
+            || '',
+        ).trim();
+        if (!wanted || !baseUrl) {
+            const message = '请先选择服务方并保存接口地址';
+            this.renderFeedback(message, 'error');
+            toast.error(message);
+            return null;
+        }
+        try {
+            const result = await apiService.runModelAuthAction('discover_models', {
+                provider_id: wanted,
+                base_url: baseUrl,
+                profile_id: profileId,
+            });
+            if (result?.success === false) {
+                throw new Error(String(result?.message || '获取模型列表失败'));
+            }
+            const discovered = Array.isArray(result?.models)
+                ? result.models.map((item) => String(item || '').trim()).filter(Boolean)
+                : [];
+            if (!discovered.length) {
+                throw new Error('没有获取到可选模型，仍可手动输入模型名');
+            }
+            const existing = this.getProviderModelOptions(wanted, getCurrentModel(card, provider));
+            this._providerModelOptions.set(wanted, Array.from(new Set([...discovered, ...existing])));
+            const message = String(result?.message || '').trim() || `已获取 ${discovered.length} 个模型`;
+            if (this.isActive()) {
+                this.render();
+                this.renderFeedback(message, 'success');
+            }
+            toast.success(message);
+            return result;
+        } catch (error) {
+            console.error('[ModelsPage] discover models failed:', error);
+            const message = error?.message || '获取模型列表失败';
+            this.renderFeedback(message, 'error');
+            toast.error(message);
+            throw error;
         }
     }
 

@@ -334,6 +334,196 @@ def test_bot_manager_get_status_includes_growth_runtime_fields(monkeypatch):
         manager._status_cache_time = original_status_cache_time
 
 
+def test_bot_manager_status_preserves_frontend_schema_fields(monkeypatch):
+    manager = BotManager.get_instance()
+    original_bot = manager.bot
+    original_memory = manager.memory_manager
+    original_running = manager.is_running
+    original_paused = manager.is_paused
+    original_start_time = manager.start_time
+    original_status_cache = manager._status_cache
+    original_status_cache_time = manager._status_cache_time
+    original_stats_cache = manager._stats_cache
+    original_stats_cache_time = manager._stats_cache_time
+    original_startup = manager._startup_state
+    original_config_service = manager.config_service
+
+    class _FakeConfigService:
+        def get_snapshot(self, *, config_path=None):
+            return SimpleNamespace(
+                version=42,
+                loaded_at=1718000000.0,
+                source="unit-test",
+                valid=True,
+                services={"growth_tasks_enabled": True},
+            )
+
+    def assert_path(container, path, expected_type):
+        current = container
+        for part in path.split("."):
+            assert isinstance(current, dict), f"{path} parent is not a dict"
+            assert part in current, f"missing status field: {path}"
+            current = current[part]
+        assert isinstance(current, expected_type), f"{path} has unexpected type"
+        return current
+
+    try:
+        monkeypatch.setattr(
+            "backend.bot_manager.get_growth_manager",
+            lambda: SimpleNamespace(
+                get_status=lambda: {
+                    "growth_running": True,
+                    "growth_mode": "background_only",
+                    "background_backlog_count": 1,
+                }
+            ),
+        )
+        monkeypatch.setattr(
+            "backend.bot_manager.get_governance_metrics",
+            lambda: SimpleNamespace(get_status=lambda: {"operation_count": 0, "operations": {}}),
+        )
+
+        manager.bot = SimpleNamespace(
+            ai_client=object(),
+            memory=SimpleNamespace(db_path="data/chat_memory.db", _conn=object()),
+            get_stats=lambda: {
+                "today_replies": 4,
+                "today_tokens": 256,
+                "total_replies": 40,
+                "total_tokens": 4096,
+            },
+            get_export_rag_status=lambda: {
+                "enabled": True,
+                "base_dir": "data/exports",
+                "auto_ingest": True,
+                "indexed_contacts": 2,
+                "indexed_chunks": 12,
+                "last_scan_at": None,
+                "last_scan_summary": {},
+            },
+            get_agent_status=lambda: {
+                "engine": "langgraph",
+                "model": "qwen-plus",
+                "runtime_preset": "Qwen3",
+                "ai_health": {"status": "healthy", "detail": "ok"},
+            },
+            get_transport_status=lambda: {
+                "transport_backend": "wcferry",
+                "wechat_version": "3.9.12.51",
+                "silent_mode": True,
+                "transport_status": "connected",
+                "transport_warning": "",
+            },
+            get_runtime_status=lambda: {
+                "pending_tasks": 2,
+                "merge_pending_chats": 1,
+                "merge_pending_messages": 3,
+                "reply_quality": {
+                    "attempted": 5,
+                    "successful": 4,
+                    "empty": 0,
+                    "failed": 1,
+                    "success_rate": 80.0,
+                    "status_text": "success",
+                    "history_24h": {"attempted": 10, "success_rate": 90.0},
+                    "history_7d": {"attempted": 70, "success_rate": 85.0},
+                },
+                "runtime_timings": {"invoke_sec": 0.25},
+            },
+        )
+        manager.memory_manager = manager.bot.memory
+        manager.config_service = _FakeConfigService()
+        manager.is_running = True
+        manager.is_paused = False
+        manager.start_time = time.time() - 90
+        manager._startup_state = manager._make_startup_state(
+            stage="ready",
+            message="ready",
+            progress=100,
+            active=False,
+        )
+        manager._status_cache = None
+        manager._status_cache_time = 0.0
+        manager._stats_cache = None
+        manager._stats_cache_time = 0.0
+
+        status = manager.get_status()
+
+        frontend_contract = {
+            "service_running": bool,
+            "running": bool,
+            "bot_running": bool,
+            "is_paused": bool,
+            "uptime": str,
+            "today_replies": int,
+            "today_tokens": int,
+            "total_replies": int,
+            "total_tokens": int,
+            "engine": str,
+            "growth_enabled": bool,
+            "export_rag": dict,
+            "governance_metrics": dict,
+            "system_metrics": dict,
+            "health_checks": dict,
+            "transport_status": str,
+            "transport_warning": str,
+            "runtime_preset": str,
+            "model": str,
+            "ai_health": dict,
+            "reply_quality": dict,
+            "pending_tasks": int,
+            "merge_pending_chats": int,
+            "merge_pending_messages": int,
+        }
+        for field, expected_type in frontend_contract.items():
+            assert_path(status, field, expected_type)
+        assert "startup" in status and isinstance(status["startup"], dict)
+        assert "config_snapshot" in status and isinstance(status["config_snapshot"], dict)
+        assert "diagnostics" in status
+
+        nested_contract = {
+            "startup.stage": str,
+            "startup.message": str,
+            "startup.progress": int,
+            "startup.active": bool,
+            "config_snapshot.version": int,
+            "config_snapshot.loaded_at": float,
+            "config_snapshot.source": str,
+            "config_snapshot.valid": bool,
+            "health_checks.ai.status": str,
+            "health_checks.ai.level": str,
+            "health_checks.ai.message": str,
+            "health_checks.wechat.status": str,
+            "health_checks.wechat.level": str,
+            "health_checks.wechat.message": str,
+            "health_checks.database.status": str,
+            "health_checks.database.level": str,
+            "health_checks.database.message": str,
+            "system_metrics.cpu_percent": (int, float),
+            "system_metrics.process_memory_mb": (int, float),
+            "system_metrics.system_memory_percent": (int, float),
+            "system_metrics.pending_tasks": int,
+            "reply_quality.success_rate": float,
+            "reply_quality.status_text": str,
+            "reply_quality.history_24h": dict,
+            "reply_quality.history_7d": dict,
+        }
+        for path, expected_type in nested_contract.items():
+            assert_path(status, path, expected_type)
+    finally:
+        manager.bot = original_bot
+        manager.memory_manager = original_memory
+        manager.is_running = original_running
+        manager.is_paused = original_paused
+        manager.start_time = original_start_time
+        manager._status_cache = original_status_cache
+        manager._status_cache_time = original_status_cache_time
+        manager._stats_cache = original_stats_cache
+        manager._stats_cache_time = original_stats_cache_time
+        manager._startup_state = original_startup
+        manager.config_service = original_config_service
+
+
 @pytest.mark.asyncio
 async def test_bot_manager_start_returns_before_growth_manager_finishes(monkeypatch):
     manager = BotManager.get_instance()

@@ -8,7 +8,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from backend.model_auth.services.center import ModelAuthCenterService
+from backend.model_auth.services.center import (
+    ACTION_SCHEMAS,
+    ModelAuthCenterService,
+    get_model_auth_action_schemas,
+)
 from backend.model_auth.services.health import run_profile_health_check
 from backend.model_auth.providers.registry import get_provider_definition
 from backend.model_auth.services.migration import (
@@ -90,6 +94,48 @@ def _write_google_gemini_auth_files(tmp_path, *, project_id: str | None) -> tupl
     creds_path.write_text(json.dumps(creds), encoding="utf-8")
     accounts_path.write_text(json.dumps(accounts), encoding="utf-8")
     return str(creds_path), str(accounts_path)
+
+
+def test_model_auth_action_schemas_match_service_handlers():
+    expected_actions = {
+        "scan",
+        "update_provider_defaults",
+        "save_api_key",
+        "discover_models",
+        "bind_local_auth",
+        "import_local_auth_copy",
+        "import_session",
+        "start_browser_auth",
+        "complete_browser_auth",
+        "set_default_profile",
+        "set_active_provider",
+        "test_profile",
+        "disconnect_profile",
+        "logout_source",
+    }
+    ui_only_actions = {
+        "show_api_key_form",
+        "show_session_form",
+        "refresh_status",
+        "save_and_activate",
+        "reopen_browser_auth",
+    }
+
+    service = ModelAuthCenterService()
+    schema_list = get_model_auth_action_schemas()
+    schema_ids = {schema["id"] for schema in schema_list}
+
+    assert schema_ids == expected_actions
+    assert set(ACTION_SCHEMAS) == expected_actions
+    assert set(service._action_handlers()) == expected_actions
+    assert not schema_ids.intersection(ui_only_actions)
+    for schema in schema_list:
+        payload_schema = schema.get("payload_schema") or {}
+        assert payload_schema.get("type") == "object"
+        assert isinstance(payload_schema.get("required"), list)
+        assert payload_schema["required"] == schema.get("requires_fields")
+        assert schema.get("danger_level")
+        assert isinstance(schema.get("confirmation_required"), bool)
 
 
 def test_migrate_legacy_api_key_into_provider_auth_center(tmp_path):
@@ -1595,6 +1641,7 @@ def test_model_auth_center_get_overview_exposes_local_auth_sync_progress(monkeyp
         "changed_provider_ids": ["openai_codex"],
         "message": "",
     }
+    assert {schema["id"] for schema in result["overview"]["actions_schema"]} == set(ACTION_SCHEMAS)
 
 
 def test_update_provider_defaults_keeps_unconfigured_provider_out_of_runtime_projection(monkeypatch, tmp_path):

@@ -12,6 +12,7 @@ import { DashboardPage, CostsPage, MessagesPage, ExportCenterPage, ModelsPage, S
 import { renderAppFrame } from './app-shell/frame.js';
 import {
     buildDisconnectedStatus,
+    buildBackendProcessIssueDiagnostics,
     buildUpdateBadgeState,
     buildVersionText,
     getConnectionStatusView,
@@ -63,6 +64,9 @@ class App {
         this._pageSwitchSeq = 0;
         this._statusTimer = null;
         this._statusRefreshing = false;
+        this._statusRefreshQueued = false;
+        this._statusRefreshQueuedOptions = null;
+        this._statusRefreshEpoch = 0;
         this._statusFailureCount = 0;
         this._statusBaseIntervalMs = 5000;
         this._statusMaxIntervalMs = 30000;
@@ -79,7 +83,9 @@ class App {
         this._confirmModalResolver = null;
         this._removeUpdateListener = null;
         this._removeRuntimeIdleListener = null;
+        this._removeBackendProcessIssueListener = null;
         this._removeWindowStateListener = null;
+        this._removeTrayActionListener = null;
         this._eventSource = null;
         this._sseReconnectTimer = null;
         this._sseReconnectAttempt = 0;
@@ -95,6 +101,7 @@ class App {
         this._restartInFlight = false;
         this._lastRestartAt = 0;
         this._restartFollowupTimers = new Set();
+        this._cleanupCallbacks = [];
     }
 
     async init() {
@@ -143,6 +150,70 @@ class App {
         }
     }
 
+    _addCleanup(cleanup) {
+        if (typeof cleanup === 'function') {
+            if (!Array.isArray(this._cleanupCallbacks)) {
+                this._cleanupCallbacks = [];
+            }
+            this._cleanupCallbacks.push(cleanup);
+        }
+    }
+
+    _bindDomEvent(target, eventName, handler) {
+        if (!target?.addEventListener || !target?.removeEventListener || typeof handler !== 'function') {
+            return;
+        }
+        target.addEventListener(eventName, handler);
+        this._addCleanup(() => target.removeEventListener(eventName, handler));
+    }
+
+    _bindWindowEvent(eventName, handler) {
+        if (typeof window === 'undefined') {
+            return;
+        }
+        this._bindDomEvent(window, eventName, handler);
+    }
+
+    async dispose() {
+        this._scheduleNextStatusRefresh(null);
+        this._clearSSEReconnectTimer();
+        this._closeSSE();
+
+        for (const timer of Array.from(this._restartFollowupTimers || [])) {
+            clearTimeout(timer);
+        }
+        this._restartFollowupTimers?.clear?.();
+
+        const listenerRemovers = [
+            '_removeUpdateListener',
+            '_removeRuntimeIdleListener',
+            '_removeBackendProcessIssueListener',
+            '_removeWindowStateListener',
+            '_removeTrayActionListener',
+        ];
+        for (const key of listenerRemovers) {
+            const remove = this[key];
+            this[key] = null;
+            if (typeof remove === 'function') {
+                remove();
+            }
+        }
+
+        for (const cleanup of this._cleanupCallbacks.splice(0)) {
+            cleanup();
+        }
+
+        if (window.appConfirm) {
+            window.appConfirm = null;
+        }
+
+        for (const page of Object.values(this.pages || {})) {
+            if (typeof page?.onDestroy === 'function') {
+                await page.onDestroy();
+            }
+        }
+    }
+
     async _setupVersion() {
         if (!window.electronAPI?.getAppVersion) {
             return;
@@ -181,6 +252,12 @@ class App {
         if (window.electronAPI?.onRuntimeIdleStateChanged) {
             this._removeRuntimeIdleListener = window.electronAPI.onRuntimeIdleStateChanged((nextState) => {
                 this._applyRuntimeIdleState(nextState);
+            }) || null;
+        }
+
+        if (window.electronAPI?.onBackendProcessIssue) {
+            this._removeBackendProcessIssueListener = window.electronAPI.onBackendProcessIssue((issue) => {
+                this._handleBackendProcessIssue(issue);
             }) || null;
         }
     }
@@ -238,6 +315,7 @@ class App {
 
         stateManager.batchUpdate({
             'updater.enabled': !!updateState.enabled,
+            'updater.manualUpdate': !!updateState.manualUpdate,
             'updater.checking': !!updateState.checking,
             'updater.available': !!updateState.available,
             'updater.currentVersion': updateState.currentVersion || stateManager.get('updater.currentVersion') || '',
@@ -290,6 +368,7 @@ class App {
             available: !!stateManager.get('updater.available'),
             latestVersion: stateManager.get('updater.latestVersion') || '',
             enabled: !!stateManager.get('updater.enabled'),
+            manualUpdate: !!stateManager.get('updater.manualUpdate'),
             downloading: !!stateManager.get('updater.downloading'),
             downloadProgress: Number(stateManager.get('updater.downloadProgress') || 0),
             readyToInstall: !!stateManager.get('updater.readyToInstall'),
@@ -307,6 +386,7 @@ class App {
             downloading: !!stateManager.get('updater.downloading'),
             downloadProgress: Number(stateManager.get('updater.downloadProgress') || 0),
             readyToInstall: !!stateManager.get('updater.readyToInstall'),
+            manualUpdate: !!stateManager.get('updater.manualUpdate'),
         });
         badge.hidden = nextState.hidden;
         badge.textContent = nextState.text;
@@ -425,7 +505,7 @@ class App {
 
     _bindGlobalEvents() {
         document.querySelectorAll('.nav-item').forEach(item => {
-            item.addEventListener('click', (event) => {
+            this._bindDomEvent(item, 'click', (event) => {
                 event.preventDefault();
                 this._switchPage(item.dataset.page, { source: 'nav' });
             });
@@ -433,7 +513,7 @@ class App {
 
         this._setupWindowChrome();
 
-        document.getElementById('status-badge')?.addEventListener('click', () => {
+        this._bindDomEvent(document.getElementById('status-badge'), 'click', () => {
             if (
                 !(window.electronAPI?.runtimeEnsureService || window.electronAPI?.startBackend)
                 || stateManager.get('bot.connected')
@@ -443,7 +523,7 @@ class App {
             this._startBackendWithFeedback();
         });
 
-        document.getElementById('update-badge')?.addEventListener('click', async () => {
+        this._bindDomEvent(document.getElementById('update-badge'), 'click', async () => {
             if (stateManager.get('updater.available') || stateManager.get('updater.readyToInstall')) {
                 this._openUpdateModal();
                 return;
@@ -452,7 +532,7 @@ class App {
         });
 
         if (window.electronAPI?.onTrayAction) {
-            window.electronAPI.onTrayAction((action) => {
+            this._removeTrayActionListener = window.electronAPI.onTrayAction((action) => {
                 if (action === 'start-bot' && !stateManager.get('bot.running')) {
                     eventBus.emit(Events.BOT_START, {});
                 } else if (action === 'stop-bot' && stateManager.get('bot.running')) {
@@ -461,15 +541,15 @@ class App {
             });
         }
 
-        eventBus.on(Events.PAGE_CHANGE, pageName => {
+        this._addCleanup(eventBus.on(Events.PAGE_CHANGE, pageName => {
             this._switchPage(pageName, { source: 'event' });
-        });
+        }));
 
-        eventBus.on(Events.BOT_STATUS_CHANGE, (options = {}) => {
+        this._addCleanup(eventBus.on(Events.BOT_STATUS_CHANGE, (options = {}) => {
             this._refreshStatus(options);
-        });
+        }));
 
-        document.addEventListener('visibilitychange', () => {
+        this._bindDomEvent(document, 'visibilitychange', () => {
             if (document.hidden) {
                 this._statusPausedByVisibility = true;
                 this._scheduleNextStatusRefresh(null);
@@ -491,30 +571,30 @@ class App {
         const btnMaximize = document.getElementById('btn-maximize');
         const btnClose = document.getElementById('btn-close');
 
-        btnMinimize?.addEventListener('click', () => {
+        this._bindDomEvent(btnMinimize, 'click', () => {
             void Promise.resolve(api.minimizeWindow?.()).then((state) => {
                 this._applyWindowState(state);
             });
         });
 
-        btnMaximize?.addEventListener('click', () => {
+        this._bindDomEvent(btnMaximize, 'click', () => {
             void Promise.resolve(api.maximizeWindow?.()).then((state) => {
                 this._applyWindowState(state);
             });
         });
 
-        btnClose?.addEventListener('click', () => {
+        this._bindDomEvent(btnClose, 'click', () => {
             void api.closeWindow?.();
         });
 
-        dragRegion?.addEventListener('dblclick', (event) => {
+        this._bindDomEvent(dragRegion, 'dblclick', (event) => {
             event.preventDefault();
             void Promise.resolve(api.maximizeWindow?.()).then((state) => {
                 this._applyWindowState(state);
             });
         });
 
-        dragRegion?.addEventListener('contextmenu', (event) => {
+        this._bindDomEvent(dragRegion, 'contextmenu', (event) => {
             event.preventDefault();
             const point = {
                 x: Number.isFinite(event.clientX) ? event.clientX : 12,
@@ -569,7 +649,7 @@ class App {
     }
 
     _bindKeyboardShortcuts() {
-        window.addEventListener('keydown', (event) => {
+        this._bindWindowEvent('keydown', (event) => {
             if (event.defaultPrevented || event.isComposing) {
                 return;
             }
@@ -740,31 +820,31 @@ class App {
             modal.classList.remove('active');
         };
 
-        window.electronAPI.onAppCloseDialog(() => {
+        this._addCleanup(window.electronAPI.onAppCloseDialog(() => {
             openModal();
-        });
+        }));
 
-        btnClose?.addEventListener('click', closeModal);
+        this._bindDomEvent(btnClose, 'click', closeModal);
 
-        modal.addEventListener('click', (event) => {
+        this._bindDomEvent(modal, 'click', (event) => {
             if (event.target === modal) {
                 closeModal();
             }
         });
 
-        window.addEventListener('keydown', (event) => {
+        this._bindWindowEvent('keydown', (event) => {
             if (event.key === 'Escape' && modal.classList.contains('active')) {
                 closeModal();
             }
         });
 
-        btnMinimize?.addEventListener('click', async () => {
+        this._bindDomEvent(btnMinimize, 'click', async () => {
             const keep = !!remember?.checked;
             closeModal();
             await window.electronAPI.confirmCloseAction('minimize', keep);
         });
 
-        btnQuit?.addEventListener('click', async () => {
+        this._bindDomEvent(btnQuit, 'click', async () => {
             const keep = !!remember?.checked;
             closeModal();
             await window.electronAPI.confirmCloseAction('quit', keep);
@@ -789,17 +869,17 @@ class App {
             }
         };
 
-        modal.addEventListener('click', (event) => {
+        this._bindDomEvent(modal, 'click', (event) => {
             if (event.target === modal) {
                 closeWith(false);
             }
         });
 
-        btnClose?.addEventListener('click', () => closeWith(false));
-        btnCancel.addEventListener('click', () => closeWith(false));
-        btnConfirm.addEventListener('click', () => closeWith(true));
+        this._bindDomEvent(btnClose, 'click', () => closeWith(false));
+        this._bindDomEvent(btnCancel, 'click', () => closeWith(false));
+        this._bindDomEvent(btnConfirm, 'click', () => closeWith(true));
 
-        window.addEventListener('keydown', (event) => {
+        this._bindWindowEvent('keydown', (event) => {
             if (event.key === 'Escape' && modal.classList.contains('active')) {
                 closeWith(false);
             }
@@ -858,21 +938,21 @@ class App {
             modal.classList.remove('active');
         };
 
-        modal.addEventListener('click', (event) => {
+        this._bindDomEvent(modal, 'click', (event) => {
             if (event.target === modal) {
                 closeModal();
             }
         });
 
-        btnClose?.addEventListener('click', closeModal);
+        this._bindDomEvent(btnClose, 'click', closeModal);
 
-        window.addEventListener('keydown', (event) => {
+        this._bindWindowEvent('keydown', (event) => {
             if (event.key === 'Escape' && modal.classList.contains('active')) {
                 closeModal();
             }
         });
 
-        btnSkip?.addEventListener('click', async () => {
+        this._bindDomEvent(btnSkip, 'click', async () => {
             if (!window.electronAPI?.skipUpdateVersion) {
                 return;
             }
@@ -902,11 +982,15 @@ class App {
             }
         });
 
-        btnAction?.addEventListener('click', async () => {
+        this._bindDomEvent(btnAction, 'click', async () => {
             btnAction.disabled = true;
             try {
                 if (stateManager.get('updater.readyToInstall')) {
                     await this._installDownloadedUpdate();
+                    return;
+                }
+                if (stateManager.get('updater.manualUpdate')) {
+                    await this._openUpdateDownload();
                     return;
                 }
                 await this._downloadUpdate();
@@ -969,6 +1053,8 @@ class App {
             downloadProgress: Number(stateManager.get('updater.downloadProgress') || 0),
             available: !!stateManager.get('updater.available'),
             notes: Array.isArray(stateManager.get('updater.notes')) ? stateManager.get('updater.notes') : [],
+            enabled: !!stateManager.get('updater.enabled'),
+            manualUpdate: !!stateManager.get('updater.manualUpdate'),
         }, {
             statusText: document.getElementById('update-modal-status'),
             meta: document.getElementById('update-modal-meta'),
@@ -1012,7 +1098,7 @@ class App {
             stateManager.set('readiness.firstRunGuideDismissed', true);
         };
 
-        modal.addEventListener('click', (event) => {
+        this._bindDomEvent(modal, 'click', (event) => {
             if (event.target === modal) {
                 closeModal();
                 return;
@@ -1049,16 +1135,16 @@ class App {
             void this._handleReadinessAction(button.dataset.readinessAction);
         });
 
-        btnClose?.addEventListener('click', closeModal);
-        btnLater?.addEventListener('click', closeModal);
-        btnRetry?.addEventListener('click', () => {
+        this._bindDomEvent(btnClose, 'click', closeModal);
+        this._bindDomEvent(btnLater, 'click', closeModal);
+        this._bindDomEvent(btnRetry, 'click', () => {
             void this._handleReadinessAction('retry');
         });
-        btnSettings?.addEventListener('click', () => {
+        this._bindDomEvent(btnSettings, 'click', () => {
             void this._handleReadinessAction('open_settings');
         });
 
-        window.addEventListener('keydown', (event) => {
+        this._bindWindowEvent('keydown', (event) => {
             if (event.key === 'Escape' && modal.classList.contains('active')) {
                 closeModal();
             }
@@ -1539,17 +1625,31 @@ class App {
         }
 
         if (this._statusRefreshing) {
+            if (options.force) {
+                this._statusRefreshQueued = true;
+                this._statusRefreshQueuedOptions = {
+                    force: true,
+                    refreshReadiness: options.refreshReadiness,
+                };
+            }
             return;
         }
 
+        const refreshEpoch = Number(this._statusRefreshEpoch || 0);
         this._statusRefreshing = true;
         try {
             const status = await apiService.getStatus();
+            if (refreshEpoch !== Number(this._statusRefreshEpoch || 0)) {
+                return;
+            }
             this._applyStatus(status, { connected: true });
             void this._reportRuntimeStatus(status);
             this._statusFailureCount = 0;
             this._lastStatusSuccessAt = Date.now();
         } catch (error) {
+            if (refreshEpoch !== Number(this._statusRefreshEpoch || 0)) {
+                return;
+            }
             if (!this._isIdleStopped()) {
                 console.error('[App] status refresh failed', error);
             }
@@ -1558,16 +1658,38 @@ class App {
             this._applyDisconnectedRuntimeState(previousStatus, { idleState: this._getRuntimeIdleState() });
             this._statusFailureCount += 1;
         } finally {
-            if (options.refreshReadiness !== false) {
+            const isCurrentRefresh = refreshEpoch === Number(this._statusRefreshEpoch || 0);
+            if (isCurrentRefresh && options.refreshReadiness !== false) {
                 await this._refreshReadiness({ force: !!options.force });
             }
             this._statusRefreshing = false;
-            this._scheduleNextStatusRefresh(this._getNextStatusIntervalMs());
+            if (!isCurrentRefresh) {
+                if (this._statusRefreshQueued) {
+                    const queuedOptions = this._statusRefreshQueuedOptions || {};
+                    this._statusRefreshQueued = false;
+                    this._statusRefreshQueuedOptions = null;
+                    this._scheduleNextStatusRefresh(0, queuedOptions);
+                }
+                return;
+            }
+            if (this._statusRefreshQueued) {
+                const queuedOptions = this._statusRefreshQueuedOptions || {};
+                this._statusRefreshQueued = false;
+                this._statusRefreshQueuedOptions = null;
+                this._scheduleNextStatusRefresh(0, queuedOptions);
+            } else {
+                this._scheduleNextStatusRefresh(this._getNextStatusIntervalMs());
+            }
         }
     }
 
     _buildDisconnectedStatus(previousStatus = null, options = {}) {
-        return buildDisconnectedStatus(previousStatus, options?.idleState || this._getRuntimeIdleState());
+        return buildDisconnectedStatus(
+            previousStatus,
+            options?.idleState || this._getRuntimeIdleState(),
+            Date.now(),
+            { diagnostics: options?.diagnostics || null },
+        );
     }
     _applyDisconnectedRuntimeState(previousStatus = null, options = {}) {
         stateManager.batchUpdate({
@@ -1578,6 +1700,24 @@ class App {
         });
         this._syncRuntimeReadonlyPages();
         this._updateConnectionStatus();
+    }
+
+    _handleBackendProcessIssue(issue = {}) {
+        const statusRefreshInFlight = !!this._statusRefreshing;
+        this._statusRefreshEpoch = Number(this._statusRefreshEpoch || 0) + 1;
+        this._statusRefreshQueued = statusRefreshInFlight;
+        this._statusRefreshQueuedOptions = statusRefreshInFlight
+            ? { force: true, refreshReadiness: true }
+            : null;
+        const previousStatus = stateManager.get('bot.status');
+        this._clearSSEReconnectTimer();
+        this._closeSSE();
+        this._applyDisconnectedRuntimeState(previousStatus, {
+            idleState: this._getRuntimeIdleState(),
+            diagnostics: buildBackendProcessIssueDiagnostics(issue),
+        });
+        notificationService.warning('后端服务已停止，可点击左上角状态重新启动。', 5000);
+        this._scheduleNextStatusRefresh(0, { force: true, refreshReadiness: true });
     }
 
     _applyStatus(status, options = {}) {
@@ -1858,7 +1998,7 @@ class App {
         this._scheduleNextStatusRefresh(0);
     }
 
-    _scheduleNextStatusRefresh(delayMs) {
+    _scheduleNextStatusRefresh(delayMs, options = {}) {
         if (this._statusTimer) {
             clearTimeout(this._statusTimer);
             this._statusTimer = null;
@@ -1868,7 +2008,7 @@ class App {
             return;
         }
 
-        this._statusTimer = setTimeout(() => this._refreshStatus(), delayMs);
+        this._statusTimer = setTimeout(() => this._refreshStatus(options), delayMs);
     }
 }
 

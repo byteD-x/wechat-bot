@@ -4,12 +4,46 @@ const { decodeBufferText } = require('./text-codec');
 function createBackendManager({
     http,
     spawn,
+    execFile,
     GLOBAL_STATE,
     getBackendCommand,
     getMainWindowVisible,
     updateSplashStatus,
     runtimeIdleController,
+    platform = process.platform,
+    setTimer = setTimeout,
+    clearTimer = clearTimeout,
+    onBackendProcessIssue = null,
 }) {
+    const notifyBackendIssue = (issue) => {
+        if (typeof onBackendProcessIssue !== 'function') {
+            return;
+        }
+        try {
+            onBackendProcessIssue(issue);
+        } catch (error) {
+            console.warn('[Backend] process issue callback failed:', error?.message || error);
+        }
+    };
+
+    const forceKillBackendProcess = (pid) => {
+        if (!pid) {
+            return;
+        }
+        if (platform === 'win32' && typeof execFile === 'function') {
+            execFile('taskkill.exe', ['/PID', String(pid), '/T', '/F'], (error) => {
+                if (error) {
+                    console.warn('[Backend] taskkill failed:', error?.message || error);
+                }
+            });
+            return;
+        }
+        try {
+            process.kill(pid, 0);
+            process.kill(pid, 'SIGKILL');
+        } catch (_) {}
+    };
+
     return {
         checkServer() {
             return new Promise((resolve) => {
@@ -78,9 +112,19 @@ function createBackendManager({
             if (!proc) return Promise.resolve();
             return new Promise((resolve) => {
                 let resolved = false;
+                let forceKillTimer = null;
+                let doneTimer = null;
                 const done = () => {
                     if (resolved) return;
                     resolved = true;
+                    if (forceKillTimer) {
+                        clearTimer(forceKillTimer);
+                        forceKillTimer = null;
+                    }
+                    if (doneTimer) {
+                        clearTimer(doneTimer);
+                        doneTimer = null;
+                    }
                     resolve();
                 };
                 console.log('[Backend] 正在停止...');
@@ -92,10 +136,14 @@ function createBackendManager({
                     done();
                 }
                 const pid = proc.pid;
-                setTimeout(() => {
-                    try { process.kill(pid, 0) && process.kill(pid, 'SIGKILL'); } catch (_) {}
+                forceKillTimer = setTimer(() => {
+                    forceKillTimer = null;
+                    forceKillBackendProcess(pid);
                 }, 3000);
-                setTimeout(done, 3500);
+                doneTimer = setTimer(() => {
+                    doneTimer = null;
+                    done();
+                }, 3500);
                 GLOBAL_STATE.pythonProcess = null;
             });
         },
@@ -104,10 +152,21 @@ function createBackendManager({
             if (!proc) {
                 return;
             }
+            const reportProcessIssueOnce = (issue) => {
+                if (proc.__backendIssueReported) {
+                    return;
+                }
+                proc.__backendIssueReported = true;
+                notifyBackendIssue(issue);
+            };
             proc.on('error', (err) => {
                 console.error(`[Backend Spawn Error] ${err.message}`);
                 GLOBAL_STATE.pythonProcess = null;
                 runtimeIdleController.setServiceStopped('spawn_error');
+                reportProcessIssueOnce({
+                    type: 'spawn_error',
+                    reason: 'spawn_error',
+                });
             });
 
             const stdoutDecoder = new StringDecoder('utf8');
@@ -174,10 +233,19 @@ function createBackendManager({
                 });
             }
 
-            proc.on('exit', (code) => {
+            proc.on('exit', (code, signal) => {
                 console.log(`[Backend] process exited with code ${code}`);
                 GLOBAL_STATE.pythonProcess = null;
-                runtimeIdleController.setServiceStopped(proc.__backendStopReason || 'process_exit');
+                const reason = proc.__backendStopReason || 'process_exit';
+                runtimeIdleController.setServiceStopped(reason);
+                if (!proc.__backendStopReason) {
+                    reportProcessIssueOnce({
+                        type: 'unexpected_exit',
+                        reason,
+                        code: Number.isFinite(Number(code)) ? Number(code) : null,
+                        signal: signal ? String(signal) : null,
+                    });
+                }
             });
         },
 
