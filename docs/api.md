@@ -546,12 +546,12 @@
 - `auto-index/preview` 固定读取 `data/knowledge_base/inbox` 一层目录中的 `.txt/.md/.markdown` 文本，返回 `auto_index=true`、`fixed_inbox=true`、脱敏 `inbox`、`exists`、`document_count`、`skipped_count`、聚合 `chunk_count/char_count`、逐文件 dry-run 摘要和 `skipped` 原因；该端点不写入、不入队、不递归、不展开 glob、不接受任意路径参数，也不返回正文、chunk text、embedding 或完整本机路径。
 - `auto-index/jobs` 不接收请求体路径参数，只重新读取固定 inbox 的当前预览并把可导入文档以 `rebuild` 模式提交到现有后台队列；入队成功返回 `202`、`fixed_inbox=true`、`auto_index=true`、`dry_run=false`、job 摘要和预览聚合计数，不返回正文、chunk text、embedding 或完整本机路径。
 - `batch-dry-run` 返回 `document_count`、聚合 `chunk_count/char_count` 和每份文档的 dry-run 摘要；它只做分块预览，不写入、重建或删除向量库内容。
-- `status` 返回 `vector_memory_available`、`source=knowledge_base`、当前知识库 chunk 数和 `queue` 摘要；`queue` 包含内存队列容量、总数、按状态计数和最近任务脱敏摘要。
+- `status` 返回 `vector_memory_available`、`source=knowledge_base`、当前知识库 chunk 数和 `queue` 摘要；`queue` 包含内存队列容量、总数、按状态计数和最近任务脱敏摘要，最近任务中包含短枚举 `events` 时间线。
 - `index` 只读返回已入库 `source=knowledge_base` chunk 的文档级 metadata 摘要，包括 `supports_index`、`chunk_count`、`indexed_chunk_count`、`document_count`、`documents` 和 `truncated`；`documents` 按 `doc_id` 聚合版本、脱敏来源、URL、页码和 chunk 数。
 - `ingest` 写入新 chunk；`rebuild` 会先完整准备新版本 chunk embedding，再删除同一 `doc_id` 的旧 chunk 并写入新 chunk。
 - `batch-ingest` 按请求体顺序写入多份文档，返回 `document_count`、`succeeded_documents`、`failed_documents`、聚合 `indexed_chunks/skipped_chunks` 和逐文档摘要；它不做批量重建，也不会删除旧 chunk。
 - `batch-rebuild` 按请求体顺序重建多份文档，返回 `mode=rebuild`、`deleted_previous_documents`、逐文档 `deleted_previous` 和索引摘要；同一请求内重复 `doc_id` 会在任何删除前被拒绝。
-- `jobs` 入队成功返回 `202`、`job_id`、`status`、`mode`、`document_count` 和逐文档脱敏摘要；`GET /api/knowledge_base/jobs/<job_id>` 返回 `queued/running/succeeded/failed`、阶段、聚合结果和短错误 reason，不返回正文、chunk text、embedding、完整异常文本或完整本机路径。
+- `jobs` 入队成功返回 `202`、`job_id`、`status`、`mode`、`document_count`、逐文档脱敏摘要和 `events`；`GET /api/knowledge_base/jobs/<job_id>` 返回 `queued/running/succeeded/failed`、阶段、`queued/started/completed/failed` 事件时间线、聚合结果和短错误 reason，不返回正文、chunk text、embedding、完整异常文本或完整本机路径。
 - `delete` 只按精确 `{"source": "knowledge_base", "doc_id": "<doc_id>"}` 删除，不影响聊天记忆或其他来源。
 
 错误响应：
@@ -572,7 +572,7 @@
 - `batch-dry-run` 仅预览请求体中的多份文档，不读取本机路径、不上传文件、不写入向量库。
 - `batch-ingest` 仅顺序写入请求体中的多份文档，不读取本机路径、不上传文件、不删除旧 chunk；它不是原子事务，若后续文档失败，响应会保留前序成功文档的逐项摘要。
 - `batch-rebuild` 仅顺序重建请求体中的多份文档，不读取本机路径、不上传文件、不扫描目录；它不是原子事务，若后续文档失败，前序成功重建可能已经生效。单个文档在新版本 embedding 准备失败时不会删除该文档旧 chunk；同一请求内重复 `doc_id` 会直接返回 `400`，不会进入删除流程。
-- `jobs` 是进程内内存级后台队列，只处理请求体文档；它不持久化、不跨进程恢复、不读取 `source_file` 指向的文件、不扫描目录、不展开 glob。`mode=rebuild` 入队前会拒绝重复 `doc_id`；任务执行串行化，文档级失败会将 job 标记为 `failed`。
+- `jobs` 是进程内内存级后台队列，只处理请求体文档；它不持久化、不跨进程恢复、不读取 `source_file` 指向的文件、不扫描目录、不展开 glob。`mode=rebuild` 入队前会拒绝重复 `doc_id`；任务执行串行化，文档级失败会将 job 标记为 `failed`，并在 `events` 中记录短错误原因。
 - `index` 仅聚合已入库 chunk metadata，不读取 `source_file` 指向的文件，不扫描目录，不返回正文、chunk text、embedding 或完整本机路径；当当前向量库实现不支持 metadata 枚举时返回 `supports_index=false` 和空 `documents`。
 - 设置页单文档入口只调用固定的 `status / dry-run / ingest / rebuild` 端点；可手动粘贴内容，或通过固定桌面 IPC 显式选择单个 `.txt/.md/.markdown` 文件填入表单，来源只保留 `.../<filename>`；写入或重建同文档前必须先对当前内容完成一次 dry-run，内容或元数据变化后需要重新预览。
 - 设置页批量入口只接收文本框中的 `{"documents":[...]}` JSON，并调用固定的 `batch-dry-run / batch-ingest / batch-rebuild` 端点；批量写入或重建前必须先对当前 JSON 完成一次批量 dry-run，JSON 变化后需要重新预览。

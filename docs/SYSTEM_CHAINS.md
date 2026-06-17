@@ -164,7 +164,7 @@
       - `backend/api.py::create_knowledge_base_auto_index_job` 复用固定 inbox 预览结果和 `KnowledgeBaseJobQueue`，只把固定 inbox 当前可导入文档以 `rebuild` 模式提交到进程内队列；它不接受路径参数、不读取固定 inbox 以外的文件，也不返回正文、chunk text、embedding 或完整本机路径。
       - `backend/api.py::ingest_knowledge_base_document`、`ingest_knowledge_base_documents`、`rebuild_knowledge_base_document` 与 `rebuild_knowledge_base_documents` 复用运行中 bot 的 `vector_memory` 和 `ai_client.get_embedding`；`batch-ingest` 只顺序写入请求体文档，不读取本机路径、不删除旧 chunk；`batch-rebuild` 只顺序重建请求体文档，重复 `doc_id` 会在删除前被拒绝，单文档 embedding 准备失败时保留该文档旧 chunk。
       - `backend/api.py::create_knowledge_base_job` 和 `get_knowledge_base_job` 复用 `KnowledgeBaseJobQueue`，只把请求体单文档或 `documents` 批量文档放入进程内内存级串行队列；支持 `mode=ingest|rebuild`，不读取 `source_file`、不扫描目录、不持久化任务，进程重启后不会恢复。
-      - `backend/api.py::get_knowledge_base_status` 会返回 `queue` 摘要，包含内存队列开关、容量、按状态计数和最近任务脱敏摘要；job 查询响应不返回正文、chunk text、embedding、完整异常文本或完整本机路径。
+      - `backend/api.py::get_knowledge_base_status` 会返回 `queue` 摘要，包含内存队列开关、容量、按状态计数和最近任务脱敏摘要；job 查询响应包含 `queued/started/completed/failed` 短事件时间线，不返回正文、chunk text、embedding、完整异常文本或完整本机路径。
       - `backend/api.py::get_knowledge_base_index` 只从已入库 `knowledge_base` chunk metadata 聚合文档索引摘要，返回 `doc_id`、版本、脱敏来源、URL、页码和 chunk 数；不读取文件系统、不返回正文、chunk text、embedding 或完整本机路径。
       - 设置页“数据与恢复 / 知识库治理”通过 `SettingsPage`、`backup-panel.js`、`page-shell.js` 和 `ApiService` 只调用固定的 `status / dry-run / batch-dry-run / ingest / batch-ingest / rebuild / batch-rebuild / auto-index/preview / auto-index/jobs` 端点；单文档、批量写入/重建和固定 inbox 入队都必须先完成对应 dry-run，内容、元数据或固定 inbox 预览状态变化后会清空签名或禁用入队。
       - 桌面端显式文件选择通过 `src/main/ipc.js` 的固定 `knowledge-base:select-file` IPC 进入主进程，只允许可信 renderer 打开单文件选择对话框，限制 `.txt/.md/.markdown`、普通文件和大小，返回内容与 `.../<filename>` 来源，不向 renderer 暴露完整本机路径。

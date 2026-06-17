@@ -87,6 +87,9 @@
 - 新增 `scripts/run_interview_demo.py`：
   - 串联 Web API readiness、RAG eval、badcase summary 和受控 Tool Workflow trace。
   - 默认报告写入 `data/runtime/demo/interview-rag-report.json`，不启动真实微信或 Web API。
+- 增强 `KnowledgeBaseJobQueue`：
+  - 为知识库后台任务返回 `queued / started / completed / failed` 脱敏事件时间线。
+  - 失败事件只记录短错误原因，不回显正文、chunk text、embedding、完整异常或完整本机路径。
 
 ## 4. 验证结果
 
@@ -95,6 +98,7 @@
 .\.venv\Scripts\python.exe scripts\run_rag_eval_demo.py
 .\.venv\Scripts\python.exe -m pytest tests\test_interview_demo.py tests\test_tool_workflow_demo.py tests\test_rag_badcase_summary.py -q
 .\.venv\Scripts\python.exe scripts\run_interview_demo.py
+.\.venv\Scripts\python.exe -m pytest tests\test_knowledge_base.py tests\test_api.py -q
 ```
 
 结果：
@@ -104,6 +108,7 @@
 - 一键演示相关测试：9 passed。
 - 一键演示脚本：readiness `target=web-api`、RAG 5 cases 全通过、`badcases=0`、Tool Workflow trace 5 步、`repair_attempted=True`。
 - 关键指标：`citation_accuracy=1.0`、`context_recall=1.0`、`faithfulness=1.0`、`answer_citation_binding=1.0`、`refusal_accuracy=1.0`。
+- 知识库后台任务：`tests/test_knowledge_base.py` 11 passed，`tests/test_api.py` 143 passed，覆盖成功与失败事件时间线。
 
 说明：
 
@@ -212,6 +217,7 @@
 
 - 基于 `LangGraph + Quart + ChromaDB` 构建微信 AI 助手运行时，支持分层记忆、RAG 检索和受控工具调用。
 - 建设 RAG 引用溯源与离线评测门禁，覆盖 citation accuracy、context recall、faithfulness 和 refusal accuracy。
+- 为知识库后台队列补齐脱敏事件时间线，将异步写入/重建任务从单一状态变为可追踪、可排查的多阶段流程。
 - 将高风险 Agent 操作收口为白名单 Tool Workflow 与只读 MCP adapter，补齐 trace、权限和失败可解释边界。
 - 建设模型与认证中心，统一多 Provider、OAuth / API Key / 本机同步和成本统计。
 - 通过 CI、pytest、Node tests、offline eval 和 Docker Web API 切片验证后端治理能力。

@@ -339,12 +339,17 @@ async def test_knowledge_base_job_queue_runs_documents_without_raw_content():
     )
 
     assert queued["status"] == "queued"
+    assert [event["event"] for event in queued["events"]] == ["queued"]
+    assert queued["events"][0]["stage"] == "queued"
     assert queued["documents"][0]["doc_id"] == "queued-runbook"
     assert queued["documents"][0]["source_file"] == ".../queued-runbook.md"
     assert queued["documents"][0]["url"] == ".../source-url.md"
 
     completed = await _wait_for_knowledge_job(queue, queued["job_id"])
     assert completed["status"] == "succeeded"
+    assert [event["event"] for event in completed["events"]] == ["queued", "started", "completed"]
+    assert completed["events"][-1]["stage"] == "completed"
+    assert completed["events"][-1]["status"] == "succeeded"
     assert completed["result"]["success"] is True
     assert completed["result"]["indexed_chunks"] == len(vector_memory.upserts)
     assert completed["result"]["documents"][0]["doc_id"] == "queued-runbook"
@@ -373,6 +378,9 @@ async def test_knowledge_base_job_queue_marks_document_failures():
     assert completed["status"] == "failed"
     assert completed["success"] is False
     assert completed["error"] == "no_chunks_indexed"
+    assert [event["event"] for event in completed["events"]] == ["queued", "started", "failed"]
+    assert completed["events"][-1]["error"] == "no_chunks_indexed"
+    assert completed["events"][-1]["status"] == "failed"
     assert completed["result"]["success"] is False
     assert completed["result"]["documents"][0]["reason"] == "no_chunks_indexed"
     assert vector_memory.upserts == []

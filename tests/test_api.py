@@ -3748,6 +3748,7 @@ async def test_api_knowledge_base_auto_index_job_queues_fixed_inbox_without_raw_
     assert queued["dry_run"] is False
     assert queued["mode"] == "rebuild"
     assert queued["document_count"] == 1
+    assert [event["event"] for event in queued["events"]] == ["queued"]
     assert queued["preview"]["document_count"] == 1
     assert queued["preview"]["skipped_count"] == 1
     assert queued["documents"][0]["doc_id"] == ".../runbook.md"
@@ -3755,6 +3756,8 @@ async def test_api_knowledge_base_auto_index_job_queues_fixed_inbox_without_raw_
 
     completed = await _wait_for_api_knowledge_job(client, queued["job_id"])
     assert completed["status"] == "succeeded"
+    assert [event["event"] for event in completed["events"]] == ["queued", "started", "completed"]
+    assert completed["events"][-1]["status"] == "succeeded"
     assert completed["result"]["success"] is True
     assert completed["result"]["mode"] == "rebuild"
     assert completed["result"]["indexed_chunks"] == len(vector_memory.upserts)
@@ -4322,6 +4325,7 @@ async def test_api_knowledge_base_job_queues_single_document_without_raw_content
     assert queued["status"] in {"queued", "running", "succeeded"}
     assert queued["mode"] == "ingest"
     assert queued["document_count"] == 1
+    assert [event["event"] for event in queued["events"]] == ["queued"]
     assert queued["documents"][0]["doc_id"] == "queued-api-runbook"
     assert queued["documents"][0]["source_file"] == ".../queued-api-runbook.md"
     assert queued["documents"][0]["url"] == ".../source-url.md"
@@ -4329,6 +4333,8 @@ async def test_api_knowledge_base_job_queues_single_document_without_raw_content
 
     completed = await _wait_for_api_knowledge_job(client, queued["job_id"])
     assert completed["status"] == "succeeded"
+    assert [event["event"] for event in completed["events"]] == ["queued", "started", "completed"]
+    assert completed["events"][-1]["stage"] == "completed"
     assert completed["result"]["success"] is True
     assert completed["result"]["indexed_chunks"] == len(vector_memory.upserts)
     assert completed["result"]["documents"][0]["doc_id"] == "queued-api-runbook"
@@ -4387,6 +4393,30 @@ async def test_api_knowledge_base_job_requires_runtime_dependencies(client, mock
     no_embedding_data = await no_embedding_response.get_json()
     assert no_embedding_data["success"] is False
     assert no_embedding_data["message"] == "embedding_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_api_knowledge_base_job_events_report_document_failure_without_raw_content(client, mock_manager):
+    raw_content = "Private failed queue document must stay out of job events."
+    mock_manager.bot.vector_memory = DummyKnowledgeVectorMemory()
+    mock_manager.bot.ai_client = SimpleNamespace(get_embedding=AsyncMock(return_value=[]))
+
+    response = await client.post(
+        "/api/knowledge_base/jobs",
+        json={"content": raw_content, "doc_id": "failed-queue-runbook"},
+    )
+
+    assert response.status_code == 202
+    queued = await response.get_json()
+    assert [event["event"] for event in queued["events"]] == ["queued"]
+
+    completed = await _wait_for_api_knowledge_job(client, queued["job_id"])
+    assert completed["status"] == "failed"
+    assert completed["error"] == "no_chunks_indexed"
+    assert [event["event"] for event in completed["events"]] == ["queued", "started", "failed"]
+    assert completed["events"][-1]["error"] == "no_chunks_indexed"
+
+    assert raw_content not in str(completed)
 
 
 @pytest.mark.asyncio

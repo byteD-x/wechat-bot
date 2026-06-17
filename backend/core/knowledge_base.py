@@ -553,6 +553,7 @@ class KnowledgeBaseJobQueue:
             "created_at": time.time(),
             "started_at": None,
             "finished_at": None,
+            "events": [],
             "result": None,
             "error": "",
             "error_type": "",
@@ -560,6 +561,13 @@ class KnowledgeBaseJobQueue:
             "_vector_memory": vector_memory,
             "_ai_client": ai_client,
         }
+        self._append_event(
+            job,
+            event="queued",
+            stage="queued",
+            status="queued",
+            message="knowledge base job queued",
+        )
 
         async with self._lock:
             self._jobs[job_id] = job
@@ -610,10 +618,19 @@ class KnowledgeBaseJobQueue:
                 job["stage"] = "indexing"
                 job["message"] = "indexing knowledge documents"
                 job["started_at"] = time.time()
+                self._append_event(
+                    job,
+                    event="started",
+                    stage="indexing",
+                    status="running",
+                    message="indexing knowledge documents",
+                )
 
             try:
                 result = await self._execute_job(job)
                 success = bool(result.get("success", False))
+                finished_at = time.time()
+                error = "" if success else self._first_failure_reason(result)
                 await self._update_job(
                     str(job["job_id"]),
                     success=success,
@@ -621,10 +638,19 @@ class KnowledgeBaseJobQueue:
                     stage="completed" if success else "failed",
                     message="knowledge base job completed" if success else "knowledge base job failed",
                     result=result,
-                    finished_at=time.time(),
-                    error="" if success else self._first_failure_reason(result),
+                    finished_at=finished_at,
+                    error=error,
+                    event={
+                        "event": "completed" if success else "failed",
+                        "stage": "completed" if success else "failed",
+                        "status": "succeeded" if success else "failed",
+                        "message": "knowledge base job completed" if success else "knowledge base job failed",
+                        "error": error,
+                        "ts": finished_at,
+                    },
                 )
             except Exception as exc:
+                finished_at = time.time()
                 await self._update_job(
                     str(job["job_id"]),
                     success=False,
@@ -633,7 +659,16 @@ class KnowledgeBaseJobQueue:
                     message="knowledge base job failed",
                     error="job_failed",
                     error_type=exc.__class__.__name__,
-                    finished_at=time.time(),
+                    finished_at=finished_at,
+                    event={
+                        "event": "failed",
+                        "stage": "failed",
+                        "status": "failed",
+                        "message": "knowledge base job failed",
+                        "error": "job_failed",
+                        "error_type": exc.__class__.__name__,
+                        "ts": finished_at,
+                    },
                 )
 
     async def _execute_job(self, job: Dict[str, Any]) -> Dict[str, Any]:
@@ -657,7 +692,19 @@ class KnowledgeBaseJobQueue:
             job = self._jobs.get(job_id)
             if not job:
                 return
+            event = changes.pop("event", None)
             job.update(changes)
+            if isinstance(event, dict):
+                self._append_event(
+                    job,
+                    event=str(event.get("event") or ""),
+                    stage=str(event.get("stage") or job.get("stage") or ""),
+                    status=str(event.get("status") or job.get("status") or ""),
+                    message=str(event.get("message") or job.get("message") or ""),
+                    error=str(event.get("error") or ""),
+                    error_type=str(event.get("error_type") or ""),
+                    ts=event.get("ts"),
+                )
 
     def _trim_locked(self) -> None:
         while len(self._jobs) > self.max_jobs:
@@ -707,6 +754,38 @@ class KnowledgeBaseJobQueue:
         return ""
 
     @staticmethod
+    def _append_event(
+        job: Dict[str, Any],
+        *,
+        event: str,
+        stage: str,
+        status: str,
+        message: str,
+        error: str = "",
+        error_type: str = "",
+        ts: Any = None,
+    ) -> None:
+        if not event:
+            return
+        events = job.setdefault("events", [])
+        if not isinstance(events, list):
+            events = []
+            job["events"] = events
+        item = {
+            "event": str(event or ""),
+            "stage": str(stage or ""),
+            "status": str(status or ""),
+            "message": str(message or ""),
+            "ts": float(ts if ts is not None else time.time()),
+        }
+        if error:
+            item["error"] = str(error)
+        if error_type:
+            item["error_type"] = str(error_type)
+        events.append(item)
+        del events[:-12]
+
+    @staticmethod
     def _public_job(job: Dict[str, Any]) -> Dict[str, Any]:
         payload = {
             "job_id": str(job.get("job_id") or ""),
@@ -721,6 +800,11 @@ class KnowledgeBaseJobQueue:
             "created_at": job.get("created_at"),
             "started_at": job.get("started_at"),
             "finished_at": job.get("finished_at"),
+            "events": [
+                dict(item)
+                for item in job.get("events") or []
+                if isinstance(item, dict)
+            ],
             "error": str(job.get("error") or ""),
             "error_type": str(job.get("error_type") or ""),
         }
