@@ -30,6 +30,14 @@
 8. [启用 LangChain Runtime / RAG](docs/USER_GUIDE.md#7-langchain--rag-配置)
 9. [排查常见问题](docs/USER_GUIDE.md#9-常见问题)
 
+面试或本地回归演示可以先跑离线闭环，不需要启动微信或 Web API：
+
+```bash
+python scripts/run_interview_demo.py
+```
+
+该脚本会串联 Web API readiness、RAG eval、badcase summary 和受控 Tool Workflow trace，报告默认写入 `data/runtime/demo/interview-rag-report.json`。它只验证后端治理、RAG 与 Agent 工程切片，不代表微信桌面收发已完成。
+
 ## Documentation
 
 - [API 契约与治理接口](docs/api.md)

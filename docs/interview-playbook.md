@@ -27,8 +27,9 @@
    - 现在还包括模型侧 Tool Calling 和只读 MCP adapter：模型只能看到更窄的安全工具子集，MCP 也只允许 `tools/list` 与 `tools/call`。
    - 代码证据：`backend/core/tool_workflow.py`、`POST /api/v1/agents/tool-workflow`。
    - 讲法重点：把 Agent 能力从“模型想调什么就调什么”收敛为“产品允许什么才执行什么”。
-   - 演示脚本：`python scripts/run_tool_workflow_demo.py`，会串联离线 RAG eval、`eval_latest`、`cost_summary` 和 `plan_reflect_repair` 的安全修复 trace。
-   - 讲法重点：先证明工具流可审计、可回放，再证明评测和坏例复盘能接上。
+   - 一键演示脚本：`python scripts/run_interview_demo.py`，会串联 Web API readiness、离线 RAG eval、badcase summary、`eval_latest`、`cost_summary` 和 `plan_reflect_repair` 的安全修复 trace。
+   - 单项演示脚本：`python scripts/run_tool_workflow_demo.py`，适合只讲受控工具流和 trace。
+   - 讲法重点：先说明这是不启动微信、不启动 Web API 的离线治理切片；再证明工具流可审计、可回放，评测和坏例复盘能接上。
 
 5. 回复策略与人工审批
    - 新联系人、群聊、静音时段、敏感词或手动模式可以进入待审批队列，避免自动回复直接造成社交风险。
@@ -55,6 +56,22 @@
    - Docker 只覆盖 Web API、`/api/readiness` 和离线 eval；不承诺 Linux 容器里运行微信桌面自动化或 wcferry 注入。
    - 代码证据：`Dockerfile`、`requirements-container.txt`、`backend/core/readiness.py`。
    - 讲法重点：这是把可验证的后端治理能力拆出来，而不是把微信机器人包装成跨平台服务。
+
+## 一键演示流程
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_interview_demo.py
+```
+
+输出要按这个顺序讲：
+
+1. `readiness`：`deployment_target=web-api` 表示脚本只验证 Web API / eval 治理切片，桌面微信传输检查会跳过。
+2. `rag_*` 指标：重点解释 citation accuracy、context recall、faithfulness、answer-citation binding 和 refusal accuracy。
+3. `badcases`：当前为 0 时，说明这组离线回归未发现失败样例；如果大于 0，就进入 [RAG badcase 复盘模板](RAG_BADCASE_REVIEW_TEMPLATE.md)。
+4. `workflow_trace_steps` 与 `repair_attempted`：用来讲白名单工具、逐步 trace、schema 校验失败和受控 repair。
+5. `rag_report`：默认落在 `data/runtime/demo/interview-rag-report.json`，属于本地运行时产物，不提交到仓库。
+
+这条演示链路的边界也要讲清楚：它不读取真实聊天、不访问真实微信、不执行任意 shell 或网络请求，也不替代 Windows + 微信 `3.9.12.51` 的人工收发验证。
 
 ## STAR 讲法示例
 

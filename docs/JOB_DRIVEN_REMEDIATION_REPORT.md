@@ -61,7 +61,7 @@
 主要缺口：
 
 - 中文 RAG/拒答/引用对齐样例偏少。
-- 缺少更直接的一键演示闭环。
+- 一键演示基础闭环已补齐，仍缺真实 Windows/微信收发手测记录。
 - 模型路由仍偏记录而非自动切换。
 - 缺少真实 Windows/微信手测记录。
 
@@ -84,18 +84,25 @@
 - 新增 `scripts/run_rag_eval_demo.py`：
   - 固化面试演示与本地回归用的 RAG 专项评测命令。
   - 运行后输出核心评测指标和报告路径。
+- 新增 `scripts/run_interview_demo.py`：
+  - 串联 Web API readiness、RAG eval、badcase summary 和受控 Tool Workflow trace。
+  - 默认报告写入 `data/runtime/demo/interview-rag-report.json`，不启动真实微信或 Web API。
 
 ## 4. 验证结果
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests\test_eval_runner.py -q
 .\.venv\Scripts\python.exe scripts\run_rag_eval_demo.py
+.\.venv\Scripts\python.exe -m pytest tests\test_interview_demo.py tests\test_tool_workflow_demo.py tests\test_rag_badcase_summary.py -q
+.\.venv\Scripts\python.exe scripts\run_interview_demo.py
 ```
 
 结果：
 
 - `tests/test_eval_runner.py`：4 passed。
 - RAG demo：5 cases 全通过。
+- 一键演示相关测试：9 passed。
+- 一键演示脚本：readiness `target=web-api`、RAG 5 cases 全通过、`badcases=0`、Tool Workflow trace 5 步、`repair_attempted=True`。
 - 关键指标：`citation_accuracy=1.0`、`context_recall=1.0`、`faithfulness=1.0`、`answer_citation_binding=1.0`、`refusal_accuracy=1.0`。
 
 说明：
