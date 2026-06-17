@@ -564,6 +564,7 @@
 - Web API 写入类端点只接收请求体中的纯文本或 Markdown；不会读取任意本机文件路径，也不提供文件上传。
 - `GET /api/knowledge_base/auto-index/preview` 是唯一文件系统预览入口，只读取固定 `data/knowledge_base/inbox` 一层目录；它跳过目录、符号链接、非文本文件、非法编码、空文件或超限文件，不递归扫描、不展开 glob、不接受任意路径、不自动写入向量库，也不把结果放入后台队列。
 - 本机 CLI `python run.py knowledge-base import-files` 是独立的显式文件列表入口：只读取用户逐个传入的 `.txt/.md` 文件，拒绝目录和 glob，默认 dry-run；`--apply` 才调用 loopback 本机 API 写入，不改变 Web API “不读取文件路径”的约束。
+- 本机 CLI `python run.py knowledge-base import-inbox` 复用固定 `data/knowledge_base/inbox` 的只读预览边界，默认 dry-run；`--apply` 才把固定 inbox 文档提交到本机受控队列，仍不接受任意路径参数。
 - `batch-dry-run` 仅预览请求体中的多份文档，不读取本机路径、不上传文件、不写入向量库。
 - `batch-ingest` 仅顺序写入请求体中的多份文档，不读取本机路径、不上传文件、不删除旧 chunk；它不是原子事务，若后续文档失败，响应会保留前序成功文档的逐项摘要。
 - `batch-rebuild` 仅顺序重建请求体中的多份文档，不读取本机路径、不上传文件、不扫描目录；它不是原子事务，若后续文档失败，前序成功重建可能已经生效。单个文档在新版本 embedding 准备失败时不会删除该文档旧 chunk；同一请求内重复 `doc_id` 会直接返回 `400`，不会进入删除流程。
@@ -574,7 +575,7 @@
 - `doc_id / source_file / url / source_url` 只用于引用元数据；如果看起来像完整本机路径或 `file://` 本机 URI，响应和删除匹配会收敛为 `.../<filename>`。
 - 预览和治理响应不返回完整正文、chunk text、embedding 或完整本机路径。
 - `ingest`、`batch-ingest`、`rebuild`、`batch-rebuild` 和 `jobs` 依赖运行中的向量库和 embedding 客户端；重建类接口会先完整准备新版本 chunk embedding，准备失败时返回 `no_chunks_indexed` 或 `incomplete_embeddings`，并保留旧 chunk。
-- 自动写入式文件索引属于后续任务；当前固定 inbox 只提供只读预览，后台队列只负责受控请求体文档。
+- 自动写入式文件索引仍不开放任意路径扫描；当前固定 inbox 在 Web API 侧只提供只读预览，在本机 CLI 侧可受控入队，后台队列仍只负责受控文档。
 
 ## 成熟产品化参考
 

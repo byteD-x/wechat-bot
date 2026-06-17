@@ -687,6 +687,10 @@ python run.py eval --dataset tests/fixtures/evals/smoke_cases.json --preset smok
   - `python run.py knowledge-base import-files docs/runbook.md docs/faq.txt --json`
   - `python run.py knowledge-base import-files --file docs/runbook.md --apply --json`
   - CLI 不展开 glob、不扫描目录、不自动发现文件；默认只 dry-run，`--apply` 才会调用 loopback 本机 API，`WECHAT_BOT_API_TOKEN` 仅从环境变量读取，不会打印到输出。
+- 本机 CLI 还提供固定 inbox 入口：`python run.py knowledge-base import-inbox --json`
+  - 只读取固定 `data/knowledge_base/inbox` 一层目录中的 `.txt/.md/.markdown` 文本文件；目录不存在时只返回空预览，不会自动创建目录。
+  - 默认只做只读 dry-run；`--apply` 才会把固定 inbox 的预览文档提交到本机 `POST /api/knowledge_base/jobs`，并以 `rebuild` 模式入队。
+  - 该入口不接受任意路径参数，不展开 glob，不递归，不读取正文以外的额外文件，也不返回完整本机路径。
 - 知识库固定 inbox 预览：`GET /api/knowledge_base/auto-index/preview`
   - 只读取固定 `data/knowledge_base/inbox` 一层目录中的 `.txt/.md/.markdown` 文本文件；如果目录不存在，会返回 `exists=false` 的空预览，不会自动创建目录。
   - 该端点只做 dry-run 摘要，不写入向量库、不入后台队列、不递归扫描、不展开 glob、不接受任意路径参数；目录、符号链接、非文本文件、非法编码、空文件或超限文件会进入 `skipped` 列表。
@@ -725,7 +729,7 @@ python run.py eval --dataset tests/fixtures/evals/smoke_cases.json --preset smok
   - 响应包含 `vector_memory_available`、`supports_index`、`chunk_count`、`indexed_chunk_count`、`document_count`、`documents` 和 `truncated`；如果当前向量库实现不支持 metadata 枚举，会返回 `supports_index=false` 和空文档列表。
 - 首版限制：
   - Web API 不提供文件上传、任意目录扫描、任意文件路径读取或自动写入式文件索引；`auto-index/preview` 仅允许固定 inbox 的只读 dry-run，`index` 是已入库 metadata 摘要，不是文件系统扫描器。
-  - 桌面设置页当前接入单文档粘贴 / 显式单文件选择后的 dry-run / ingest / rebuild，也接入受控 JSON 批量 dry-run / batch-ingest / batch-rebuild；两条路径都要求当前内容先完成匹配 dry-run。后台队列和固定 inbox 预览暂未接入桌面设置页，自动写入式文件索引仍未提供。
+  - 桌面设置页当前接入单文档粘贴 / 显式单文件选择后的 dry-run / ingest / rebuild，也接入受控 JSON 批量 dry-run / batch-ingest / batch-rebuild；两条路径都要求当前内容先完成匹配 dry-run。后台队列与固定 inbox 预览/入队暂未接入桌面设置页。
   - `ingest / batch-ingest / rebuild / batch-rebuild / jobs` 需要后端已经启动并具备可用 embedding 客户端；缺少运行时依赖时会返回 `409 vector_memory_unavailable` 或 `409 embedding_unavailable`。
   - 如果 `doc_id / source_file / url / source_url` 看起来像完整本机路径或 `file://` 本机 URI，接口响应会收敛为 `.../<filename>`，避免泄露本机目录结构。
 

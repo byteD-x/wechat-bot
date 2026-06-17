@@ -9,11 +9,14 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Union
 
 from backend.core.knowledge_base import (
+    KNOWLEDGE_AUTO_INDEX_INBOX_DIRNAME,
     MAX_KNOWLEDGE_CONTENT_CHARS,
+    build_knowledge_auto_index_preview_payload,
     build_knowledge_dry_run_payload,
     parse_knowledge_document_payload,
     redact_knowledge_local_path,
 )
+from backend.shared_config import ensure_data_root
 
 
 _GLOB_CHARS = set("*?[]")
@@ -144,6 +147,107 @@ def _build_import_preview(files: Iterable[Path], args: argparse.Namespace) -> Di
         "files": entries,
         "warning": "默认仅预览知识库分块；如需写入运行中的本机服务，请显式传入 --apply。",
     }
+
+
+def _build_inbox_preview(args: argparse.Namespace) -> Dict[str, Any]:
+    inbox_dir = ensure_data_root() / KNOWLEDGE_AUTO_INDEX_INBOX_DIRNAME
+    preview = build_knowledge_auto_index_preview_payload(
+        inbox_dir,
+        version=str(getattr(args, "version", "v1") or "v1").strip() or "v1",
+    )
+    preview["mode"] = "auto-index-preview"
+    preview["warning"] = "固定 inbox 仅做只读预览；如需写入请显式传入 --apply。"
+    return preview
+
+
+def _build_inbox_job_documents(preview: Dict[str, Any], args: argparse.Namespace) -> List[Dict[str, Any]]:
+    inbox_dir = ensure_data_root() / KNOWLEDGE_AUTO_INDEX_INBOX_DIRNAME
+    documents: List[Dict[str, Any]] = []
+    version = str(getattr(args, "version", "v1") or "v1").strip() or "v1"
+    for item in list(preview.get("documents") or []):
+        path = inbox_dir / str(item.get("name") or "")
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f"fixed inbox file is no longer a regular file: {_redacted_path(path)}")
+        if path.suffix.lower() not in _TEXT_EXTENSIONS:
+            raise ValueError(f"fixed inbox file type is no longer supported: {_redacted_path(path)}")
+        content = _read_explicit_text_file(path)
+        documents.append(
+            {
+                "content": content,
+                "content_type": str(item.get("content_type") or "text"),
+                "doc_id": str(item.get("doc_id") or ""),
+                "version": version,
+                "source_file": str(item.get("source_file") or ""),
+                "url": "",
+                "metadata": {
+                    "content_type": str(item.get("content_type") or "text"),
+                    "source_file": str(item.get("source_file") or ""),
+                },
+            }
+        )
+    return documents
+
+
+def _apply_inbox_import(preview: Dict[str, Any], args: argparse.Namespace) -> Dict[str, Any]:
+    documents = _build_inbox_job_documents(preview, args)
+    payload = {
+        "mode": "rebuild",
+        "documents": documents,
+    }
+    return _post_json_to_local_api(
+        host=str(getattr(args, "host", "127.0.0.1") or "127.0.0.1"),
+        port=int(getattr(args, "port", 5000) or 5000),
+        endpoint="/api/knowledge_base/jobs",
+        payload=payload,
+    )
+
+
+def cmd_import_inbox(args: argparse.Namespace) -> int:
+    try:
+        preview = _build_inbox_preview(args)
+        if bool(getattr(args, "apply", False)):
+            if int(preview.get("document_count") or 0) <= 0:
+                raise ValueError("fixed inbox does not contain any importable documents")
+            job = _apply_inbox_import(preview, args)
+            payload = {
+                "success": bool(job.get("success", False)),
+                "dry_run": False,
+                "mode": "rebuild",
+                "total_files": int(preview.get("document_count") or 0),
+                "total_chunks": int(preview.get("chunk_count") or 0),
+                "job": job,
+                "files": list(preview.get("documents") or []),
+            }
+        else:
+            payload = preview
+    except Exception as exc:
+        payload = {
+            "success": False,
+            "dry_run": not bool(getattr(args, "apply", False)),
+            "message": str(exc),
+        }
+        if bool(getattr(args, "json", False)):
+            _print_json(payload)
+        else:
+            print(f"知识库固定 inbox 导入失败: {exc}")
+        return 1
+
+    if bool(getattr(args, "json", False)):
+        _print_json(payload)
+    else:
+        print("Knowledge base inbox import")
+        print("-" * 50)
+        file_count = payload.get("document_count", payload.get("total_files", 0))
+        print(f"Mode: {payload.get('mode')} / files={file_count}")
+        if payload.get("dry_run"):
+            print(f"Chunks: {payload.get('chunk_count', 0)}")
+            print(str(payload.get("warning") or ""))
+        for item in list(payload.get("documents") or []):
+            print(
+                f"- {item.get('name')} / doc={item.get('doc_id')} / "
+                f"chunks={item.get('chunk_count', item.get('result', {}).get('indexed_chunks', '-'))}"
+            )
+    return 0 if payload.get("success") else 1
 
 
 def _post_json_to_local_api(
@@ -305,8 +409,28 @@ def build_knowledge_base_parser(subparsers: argparse._SubParsersAction) -> None:
     parser_import.add_argument("--json", action="store_true", help="Output JSON.")
     parser_import.set_defaults(func=cmd_import_files)
 
+    parser_inbox = knowledge_subparsers.add_parser(
+        "import-inbox",
+        help="preview or import the fixed knowledge-base inbox",
+        description=(
+            "Preview the fixed data/knowledge_base/inbox directory by default, "
+            "or submit its previewed documents to the running local Web API with --apply."
+        ),
+        )
+    parser_inbox.add_argument(
+        "--apply",
+        action="store_true",
+        help="Call the running local Web API to queue the previewed inbox documents.",
+    )
+    parser_inbox.add_argument("--version", default="v1", help="Document version metadata.")
+    parser_inbox.add_argument("--host", default="127.0.0.1", help="Local Web API host for --apply.")
+    parser_inbox.add_argument("--port", type=int, default=5000, help="Local Web API port for --apply.")
+    parser_inbox.add_argument("--json", action="store_true", help="Output JSON.")
+    parser_inbox.set_defaults(func=cmd_import_inbox)
+
 
 __all__ = [
     "build_knowledge_base_parser",
+    "cmd_import_inbox",
     "cmd_import_files",
 ]

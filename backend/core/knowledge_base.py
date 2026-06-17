@@ -219,6 +219,7 @@ def _build_auto_index_skipped_file(path: Path, reason: str) -> Dict[str, Any]:
 def build_knowledge_auto_index_preview_payload(
     inbox_dir: Union[Path, str],
     *,
+    version: str = "v1",
     max_files: int = KNOWLEDGE_AUTO_INDEX_MAX_FILES,
     max_file_chars: int = KNOWLEDGE_AUTO_INDEX_MAX_FILE_CHARS,
     max_total_chars: int = KNOWLEDGE_AUTO_INDEX_MAX_TOTAL_CHARS,
@@ -298,6 +299,7 @@ def build_knowledge_auto_index_preview_payload(
         document = KnowledgeDocument(
             content=content,
             doc_id=redacted_path,
+            version=str(version or "v1").strip() or "v1",
             source_file=redacted_path,
             metadata={"content_type": _infer_auto_index_content_type(path)},
         )

@@ -51,6 +51,13 @@ def test_build_parser_supports_check_json_and_backup_restore():
     assert knowledge_args.apply is False
     assert knowledge_args.json is True
 
+    inbox_args = parser.parse_args(["knowledge-base", "import-inbox", "--apply", "--version", "v2", "--json"])
+    assert inbox_args.command == "knowledge-base"
+    assert inbox_args.knowledge_base_command == "import-inbox"
+    assert inbox_args.apply is True
+    assert inbox_args.version == "v2"
+    assert inbox_args.json is True
+
 
 def test_cmd_check_forwards_json_and_cache_flags(monkeypatch):
     captured = {}
@@ -485,6 +492,119 @@ def test_cmd_knowledge_base_import_files_apply_calls_fixed_local_endpoint(monkey
         }
     ]
     assert "Operational checks" not in output
+
+
+def test_cmd_knowledge_base_import_inbox_defaults_to_dry_run_json(monkeypatch, capsys, tmp_path):
+    data_root = tmp_path / "data"
+    inbox = data_root / "knowledge_base" / "inbox"
+    inbox.mkdir(parents=True)
+    (inbox / "runbook.md").write_text("# Inbox Runbook\n\nSecret dry-run text stays local.", encoding="utf-8")
+
+    def fail_post(**_kwargs):
+        raise AssertionError("dry-run must not call the local API")
+
+    monkeypatch.setenv("WECHAT_BOT_DATA_DIR", str(data_root))
+    monkeypatch.setattr(knowledge_base_cli, "_post_json_to_local_api", fail_post)
+
+    result = knowledge_base_cli.cmd_import_inbox(
+        argparse.Namespace(apply=False, version="v2", host="127.0.0.1", port=5000, json=True)
+    )
+
+    output = capsys.readouterr().out
+    payload = json.loads(output)
+    assert result == 0
+    assert payload["success"] is True
+    assert payload["dry_run"] is True
+    assert payload["mode"] == "auto-index-preview"
+    assert payload["fixed_inbox"] is True
+    assert payload["document_count"] == 1
+    assert payload["documents"][0]["doc_id"] == ".../runbook.md"
+    assert payload["documents"][0]["version"] == "v2"
+    assert "# Inbox Runbook" not in output
+    assert str(tmp_path) not in output
+
+
+def test_cmd_knowledge_base_import_inbox_missing_dir_does_not_create_it(monkeypatch, capsys, tmp_path):
+    data_root = tmp_path / "data"
+    inbox = data_root / "knowledge_base" / "inbox"
+    monkeypatch.setenv("WECHAT_BOT_DATA_DIR", str(data_root))
+
+    result = knowledge_base_cli.cmd_import_inbox(
+        argparse.Namespace(apply=False, version="v1", host="127.0.0.1", port=5000, json=True)
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert result == 0
+    assert payload["success"] is True
+    assert payload["exists"] is False
+    assert payload["document_count"] == 0
+    assert not inbox.exists()
+
+
+def test_cmd_knowledge_base_import_inbox_apply_queues_fixed_job(monkeypatch, capsys, tmp_path):
+    data_root = tmp_path / "data"
+    inbox = data_root / "knowledge_base" / "inbox"
+    inbox.mkdir(parents=True)
+    (inbox / "runbook.md").write_text("# Inbox Runbook\n\nQueue this fixed document.", encoding="utf-8")
+    calls = []
+
+    def fake_post_json_to_local_api(**kwargs):
+        calls.append(kwargs)
+        return {
+            "success": True,
+            "job_id": "kbjob-1",
+            "status": "queued",
+            "document_count": len(kwargs["payload"]["documents"]),
+        }
+
+    monkeypatch.setenv("WECHAT_BOT_DATA_DIR", str(data_root))
+    monkeypatch.setattr(knowledge_base_cli, "_post_json_to_local_api", fake_post_json_to_local_api)
+
+    result = knowledge_base_cli.cmd_import_inbox(
+        argparse.Namespace(apply=True, version="v3", host="127.0.0.1", port=5000, json=True)
+    )
+
+    output = capsys.readouterr().out
+    payload = json.loads(output)
+    assert result == 0
+    assert payload["success"] is True
+    assert payload["dry_run"] is False
+    assert payload["mode"] == "rebuild"
+    assert payload["total_files"] == 1
+    assert payload["job"]["job_id"] == "kbjob-1"
+    assert calls[0]["endpoint"] == "/api/knowledge_base/jobs"
+    assert calls[0]["payload"]["mode"] == "rebuild"
+    assert calls[0]["payload"]["documents"] == [
+        {
+            "content": "# Inbox Runbook\n\nQueue this fixed document.",
+            "content_type": "markdown",
+            "doc_id": ".../runbook.md",
+            "version": "v3",
+            "source_file": ".../runbook.md",
+            "url": "",
+            "metadata": {
+                "content_type": "markdown",
+                "source_file": ".../runbook.md",
+            },
+        }
+    ]
+    assert "Queue this fixed document" not in output
+    assert str(tmp_path) not in output
+
+
+def test_cmd_knowledge_base_import_inbox_apply_rejects_empty_preview(monkeypatch, capsys, tmp_path):
+    data_root = tmp_path / "data"
+    monkeypatch.setenv("WECHAT_BOT_DATA_DIR", str(data_root))
+
+    result = knowledge_base_cli.cmd_import_inbox(
+        argparse.Namespace(apply=True, version="v1", host="127.0.0.1", port=5000, json=True)
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert result == 1
+    assert payload["success"] is False
+    assert payload["dry_run"] is False
+    assert "fixed inbox does not contain" in payload["message"]
 
 
 def test_knowledge_base_cli_rejects_non_loopback_api_host():
