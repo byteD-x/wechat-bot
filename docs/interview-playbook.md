@@ -61,7 +61,7 @@
 ## 一键演示流程
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\run_interview_demo.py
+npm run demo:interview
 ```
 
 输出要按这个顺序讲：

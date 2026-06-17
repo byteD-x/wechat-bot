@@ -33,10 +33,10 @@
 面试或本地回归演示可以先跑离线闭环，不需要启动微信或 Web API：
 
 ```bash
-python scripts/run_interview_demo.py
+npm run demo:interview
 ```
 
-如果要留存一份可分享的投递前证据包，可以加上 `--summary`：
+等价 Python 命令如下，适合没有安装 Node 依赖时直接运行：
 
 ```bash
 python scripts/run_interview_demo.py --summary
