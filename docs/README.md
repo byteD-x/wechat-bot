@@ -22,3 +22,7 @@
 - [Windows 安全模型](WINDOWS_SECURITY_MODEL.md)：管理员权限、IPC allowlist、外部链接和诊断脱敏边界。
 - [桌面端自动升级与发布策略](DESKTOP_UPDATE_STRATEGY.md)：electron-updater、MSIX 和当前自研更新链路的对比与迁移路线。
 - [发布与更新说明](RELEASE_UPDATES.md)：Release notes、构建产物和更新策略。
+
+## 简历与面试包装
+
+- [岗位驱动优化报告](JOB_DRIVEN_REMEDIATION_REPORT.md)：基于岗位数据源的方向画像、项目定位、增强记录、验证结果和简历表达。

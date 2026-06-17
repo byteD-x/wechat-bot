@@ -59,14 +59,15 @@ def test_eval_runner_reports_rag_quality_metrics():
     report = evaluate_dataset(dataset_path, preset="rag-smoke")
 
     assert report["summary"]["passed"] is True
+    assert report["summary"]["total_cases"] == 5
     assert report["summary"]["citation_accuracy"] == 1.0
-    assert report["summary"]["citation_eval_cases"] == 1
+    assert report["summary"]["citation_eval_cases"] == 3
     assert report["summary"]["context_recall"] == 1.0
     assert report["summary"]["faithfulness"] == 1.0
     assert report["summary"]["answer_citation_binding"] == 1.0
-    assert report["summary"]["answer_citation_binding_eval_cases"] == 1
+    assert report["summary"]["answer_citation_binding_eval_cases"] == 3
     assert report["summary"]["refusal_accuracy"] == 1.0
-    assert report["summary"]["refusal_eval_cases"] == 1
+    assert report["summary"]["refusal_eval_cases"] == 2
     assert report["regressions"] == []
     assert report["cases"][0]["rag_eval"]["matched_evidence"]
     assert report["cases"][0]["rag_eval"]["answer_citation_bound"] is True
