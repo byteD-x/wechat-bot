@@ -27,6 +27,8 @@
    - 现在还包括模型侧 Tool Calling 和只读 MCP adapter：模型只能看到更窄的安全工具子集，MCP 也只允许 `tools/list` 与 `tools/call`。
    - 代码证据：`backend/core/tool_workflow.py`、`POST /api/v1/agents/tool-workflow`。
    - 讲法重点：把 Agent 能力从“模型想调什么就调什么”收敛为“产品允许什么才执行什么”。
+   - 演示脚本：`python scripts/run_tool_workflow_demo.py`，会串联离线 RAG eval、`eval_latest`、`cost_summary` 和 `plan_reflect_repair` 的安全修复 trace。
+   - 讲法重点：先证明工具流可审计、可回放，再证明评测和坏例复盘能接上。
 
 5. 回复策略与人工审批
    - 新联系人、群聊、静音时段、敏感词或手动模式可以进入待审批队列，避免自动回复直接造成社交风险。

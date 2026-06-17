@@ -27,3 +27,4 @@
 
 - [岗位驱动优化报告](JOB_DRIVEN_REMEDIATION_REPORT.md)：基于岗位数据源的方向画像、项目定位、增强记录、验证结果和简历表达。
 - [RAG badcase 复盘模板](RAG_BADCASE_REVIEW_TEMPLATE.md)：面向 RAG eval、TraceLogger、成本复盘和 Tool Workflow 的失败样例分析模板。
+- [Tool Workflow 演示脚本说明](interview-playbook.md)：讲清受控工具流、RAG eval 和 plan_reflect_repair 的演示方式。
