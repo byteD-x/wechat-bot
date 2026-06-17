@@ -84,11 +84,13 @@ def test_interview_payload_summarizes_readiness_rag_and_workflow():
         readiness=_readiness(),
         report_path=Path(interview_demo.PROJECT_ROOT) / "data" / "runtime" / "demo" / "report.json",
         workflow_payload=_workflow_payload(),
+        eval_exit_code=0,
     )
 
     assert payload["success"] is True
     assert payload["artifacts"]["rag_report"].replace("\\", "/") == "data/runtime/demo/report.json"
     assert payload["readiness"]["ready"] is True
+    assert payload["rag"]["eval_exit_code"] == 0
     assert payload["rag"]["summary"]["total_cases"] == 5
     assert payload["rag"]["badcase_summary"]["badcase_count"] == 0
     assert payload["workflow"]["trace_steps"] == 4
@@ -99,6 +101,7 @@ def test_interview_payload_summarizes_readiness_rag_and_workflow():
     assert "Interview demo" in text
     assert "readiness: ready" in text
     assert "rag_cases: 5" in text
+    assert "rag_eval_exit_code: 0" in text
     assert "workflow_trace_steps: 4" in text
     assert "python scripts/run_interview_demo.py" in text
 
@@ -214,6 +217,43 @@ def test_interview_demo_json_includes_summary_artifact(monkeypatch, tmp_path, ca
     assert result == 0
     assert output["artifacts"]["summary"] == str(summary_path)
     assert summary_path.exists()
+
+
+def test_interview_demo_keeps_badcase_evidence_when_eval_fails_with_report(
+    monkeypatch, tmp_path, capsys
+):
+    report_path = tmp_path / "rag-report.json"
+    summary_path = tmp_path / "summary.md"
+
+    def fake_run_rag_eval(path):
+        path.write_text(json.dumps(_report(passed=False)), encoding="utf-8")
+        return 7
+
+    async def fake_build_demo_payload(_report_payload):
+        return _workflow_payload(passed=False)
+
+    monkeypatch.setattr(interview_demo, "run_rag_eval", fake_run_rag_eval)
+    monkeypatch.setattr(interview_demo, "build_demo_readiness_report", lambda: _readiness())
+    monkeypatch.setattr(interview_demo, "build_demo_payload", fake_build_demo_payload)
+
+    result = interview_demo.main(
+        [
+            "--report",
+            str(report_path),
+            "--summary",
+            str(summary_path),
+        ]
+    )
+
+    output = capsys.readouterr().out
+    summary_text = summary_path.read_text(encoding="utf-8")
+    assert result == 1
+    assert "rag_eval_exit_code: 7" in output
+    assert "rag_passed: False" in output
+    assert "badcases: 1" in output
+    assert "- eval_exit_code：`7`" in summary_text
+    assert "- passed：`False`" in summary_text
+    assert "- badcases：`1`" in summary_text
 
 
 def test_interview_demo_main_returns_eval_failure(monkeypatch, tmp_path):

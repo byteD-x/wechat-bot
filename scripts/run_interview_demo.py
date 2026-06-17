@@ -99,6 +99,7 @@ def build_interview_payload(
     readiness: Dict[str, Any],
     report_path: Path,
     workflow_payload: Dict[str, Any],
+    eval_exit_code: int = 0,
 ) -> Dict[str, Any]:
     rag = dict(workflow_payload.get("rag") or {})
     rag_summary = dict(rag.get("summary") or {})
@@ -119,6 +120,7 @@ def build_interview_payload(
         },
         "readiness": readiness_summary,
         "rag": {
+            "eval_exit_code": int(eval_exit_code),
             "summary": rag_summary,
             "badcase_summary": badcase_summary,
         },
@@ -165,6 +167,7 @@ def render_interview_demo(payload: Dict[str, Any]) -> str:
             f"blocking={readiness.get('blocking_count')})"
         ),
         f"rag_cases: {rag_summary.get('total_cases', 0)}",
+        f"rag_eval_exit_code: {rag.get('eval_exit_code', 0)}",
         f"rag_passed: {bool(rag_summary.get('passed'))}",
         f"citation_accuracy: {rag_summary.get('citation_accuracy')}",
         f"context_recall: {rag_summary.get('context_recall')}",
@@ -215,6 +218,7 @@ def render_markdown_summary(payload: Dict[str, Any]) -> str:
         "## RAG Eval",
         "",
         f"- cases：`{rag_summary.get('total_cases', 0)}`",
+        f"- eval_exit_code：`{rag.get('eval_exit_code', 0)}`",
         f"- passed：`{bool(rag_summary.get('passed'))}`",
         f"- citation_accuracy：`{rag_summary.get('citation_accuracy')}`",
         f"- context_recall：`{rag_summary.get('context_recall')}`",
@@ -281,10 +285,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: List[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     report_path = Path(args.report).expanduser().resolve()
+    eval_exit_code = 0
     if not bool(args.skip_eval) or not report_path.exists():
-        result = run_rag_eval(report_path)
-        if result != 0:
-            return result
+        eval_exit_code = run_rag_eval(report_path)
+        if eval_exit_code != 0 and not report_path.exists():
+            return eval_exit_code
     if not report_path.exists():
         print(f"RAG eval report not found: {report_path}", file=sys.stderr)
         return 1
@@ -295,6 +300,7 @@ def main(argv: List[str] | None = None) -> int:
         readiness=readiness,
         report_path=report_path,
         workflow_payload=workflow_payload,
+        eval_exit_code=eval_exit_code,
     )
     summary_path: Path | None = None
     if args.summary:
