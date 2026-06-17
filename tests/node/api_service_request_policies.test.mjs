@@ -179,6 +179,7 @@ test('api service knowledge base helpers use fixed governance endpoints', async 
     try {
         await apiService.getKnowledgeBaseStatus();
         await apiService.previewKnowledgeBaseInbox();
+        await apiService.queueKnowledgeBaseInbox();
         await apiService.dryRunKnowledgeDocument({
             content: 'release notes',
             content_type: 'markdown',
@@ -215,6 +216,15 @@ test('api service knowledge base helpers use fixed governance endpoints', async 
         {
             endpoint: '/api/knowledge_base/auto-index/preview',
             options: {},
+            retries: 0,
+        },
+        {
+            endpoint: '/api/knowledge_base/auto-index/jobs',
+            options: {
+                method: 'POST',
+                body: {},
+                timeoutMs: 60000,
+            },
             retries: 0,
         },
         {

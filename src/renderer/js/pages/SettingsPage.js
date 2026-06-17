@@ -166,6 +166,7 @@ export class SettingsPage extends PageController {
             knowledgeBaseDryRunSignature: '',
             knowledgeBaseInboxPreview: null,
             knowledgeBaseInboxFeedback: '',
+            knowledgeBaseInboxQueueFeedback: '',
             knowledgeBaseBatchPreview: null,
             knowledgeBaseBatchFeedback: '',
             knowledgeBaseBatchDryRunSignature: '',
@@ -451,6 +452,7 @@ export class SettingsPage extends PageController {
                     knowledgeBaseDryRunSignature: this._backupState.knowledgeBaseDryRunSignature || '',
                     knowledgeBaseInboxPreview: this._backupState.knowledgeBaseInboxPreview || null,
                     knowledgeBaseInboxFeedback: this._backupState.knowledgeBaseInboxFeedback || '',
+                    knowledgeBaseInboxQueueFeedback: this._backupState.knowledgeBaseInboxQueueFeedback || '',
                     knowledgeBaseBatchPreview: this._backupState.knowledgeBaseBatchPreview || null,
                     knowledgeBaseBatchFeedback: this._backupState.knowledgeBaseBatchFeedback || '',
                     knowledgeBaseBatchDryRunSignature: this._backupState.knowledgeBaseBatchDryRunSignature || '',
@@ -479,6 +481,7 @@ export class SettingsPage extends PageController {
                     knowledgeBaseDryRunSignature: this._backupState.knowledgeBaseDryRunSignature || '',
                     knowledgeBaseInboxPreview: this._backupState.knowledgeBaseInboxPreview || null,
                     knowledgeBaseInboxFeedback: this._backupState.knowledgeBaseInboxFeedback || '',
+                    knowledgeBaseInboxQueueFeedback: this._backupState.knowledgeBaseInboxQueueFeedback || '',
                     knowledgeBaseBatchPreview: this._backupState.knowledgeBaseBatchPreview || null,
                     knowledgeBaseBatchFeedback: this._backupState.knowledgeBaseBatchFeedback || '',
                     knowledgeBaseBatchDryRunSignature: this._backupState.knowledgeBaseBatchDryRunSignature || '',
@@ -940,6 +943,41 @@ export class SettingsPage extends PageController {
             const message = toast.getErrorMessage(error, '固定 inbox 预览失败');
             this._backupState.knowledgeBaseInboxFeedback = message;
             this._backupState.knowledgeBaseInboxPreview = null;
+            this._renderBackupPanel();
+            toast.error(message);
+        } finally {
+            this._backupState.knowledgeBaseBusy = false;
+            this._renderBackupPanel();
+        }
+    }
+
+    async _queueKnowledgeBaseInbox() {
+        if (this._backupState.knowledgeBaseBusy) {
+            return;
+        }
+        const inboxPreview = this._backupState.knowledgeBaseInboxPreview;
+        if (!inboxPreview?.success || Number(inboxPreview.document_count || 0) <= 0) {
+            const message = '请先预览固定 inbox 且确认存在可入队文档';
+            this._backupState.knowledgeBaseInboxQueueFeedback = message;
+            this._renderBackupPanel();
+            toast.info(message);
+            return;
+        }
+
+        this._backupState.knowledgeBaseBusy = true;
+        this._backupState.knowledgeBaseInboxQueueFeedback = '正在将固定 inbox 文档提交到受控队列...';
+        this._renderBackupPanel();
+        try {
+            const result = await apiService.queueKnowledgeBaseInbox();
+            if (!result?.success) {
+                throw new Error(result?.message || '固定 inbox 受控入队失败');
+            }
+            this._backupState.knowledgeBaseInboxQueueFeedback = `固定 inbox 已提交受控队列：${result.job_id || '--'}，当前状态 ${result.status || 'queued'}。`;
+            this._renderBackupPanel();
+            toast.success('固定 inbox 已提交受控队列');
+        } catch (error) {
+            const message = toast.getErrorMessage(error, '固定 inbox 受控入队失败');
+            this._backupState.knowledgeBaseInboxQueueFeedback = message;
             this._renderBackupPanel();
             toast.error(message);
         } finally {

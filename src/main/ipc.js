@@ -146,6 +146,7 @@ function registerIpcHandlers({
         '/api/evals/latest',
         '/api/knowledge_base/status',
         '/api/knowledge_base/auto-index/preview',
+        '/api/knowledge_base/auto-index/jobs',
         '/api/knowledge_base/dry-run',
         '/api/knowledge_base/batch-dry-run',
         '/api/knowledge_base/ingest',

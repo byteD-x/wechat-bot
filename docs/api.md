@@ -458,13 +458,14 @@
 
 ## 知识库治理 API
 
-用途：把现有 `KnowledgeBaseService` 暴露成受控的本机治理接口，用于单/批量预览、单/批量写入、单/批量重建、请求体文档后台队列、固定 inbox 只读预览、删除、查看知识库向量 chunk 状态，以及只读查看已入库文档索引摘要。
+用途：把现有 `KnowledgeBaseService` 暴露成受控的本机治理接口，用于单/批量预览、单/批量写入、单/批量重建、请求体文档后台队列、固定 inbox 只读预览与受控入队、删除、查看知识库向量 chunk 状态，以及只读查看已入库文档索引摘要。
 
 实现入口：
 
 - `backend/api.py::get_knowledge_base_status`
 - `backend/api.py::get_knowledge_base_index`
 - `backend/api.py::preview_knowledge_base_auto_index`
+- `backend/api.py::create_knowledge_base_auto_index_job`
 - `backend/api.py::preview_knowledge_base_document`
 - `backend/api.py::preview_knowledge_base_documents`
 - `backend/api.py::ingest_knowledge_base_document`
@@ -483,6 +484,7 @@
 - `GET /api/knowledge_base/status`
 - `GET /api/knowledge_base/index`
 - `GET /api/knowledge_base/auto-index/preview`
+- `POST /api/knowledge_base/auto-index/jobs`
 - `POST /api/knowledge_base/dry-run`
 - `POST /api/knowledge_base/batch-dry-run`
 - `POST /api/knowledge_base/ingest`
@@ -542,6 +544,7 @@
 
 - `dry-run` 只返回 `doc_id`、`version`、`chunk_count`、`chunk_ids`、`char_count` 和每个 chunk 的 `chunk_id/chunk_index/char_count/source_file/url/page` 摘要，不返回 chunk 正文。
 - `auto-index/preview` 固定读取 `data/knowledge_base/inbox` 一层目录中的 `.txt/.md/.markdown` 文本，返回 `auto_index=true`、`fixed_inbox=true`、脱敏 `inbox`、`exists`、`document_count`、`skipped_count`、聚合 `chunk_count/char_count`、逐文件 dry-run 摘要和 `skipped` 原因；该端点不写入、不入队、不递归、不展开 glob、不接受任意路径参数，也不返回正文、chunk text、embedding 或完整本机路径。
+- `auto-index/jobs` 不接收请求体路径参数，只重新读取固定 inbox 的当前预览并把可导入文档以 `rebuild` 模式提交到现有后台队列；入队成功返回 `202`、`fixed_inbox=true`、`auto_index=true`、`dry_run=false`、job 摘要和预览聚合计数，不返回正文、chunk text、embedding 或完整本机路径。
 - `batch-dry-run` 返回 `document_count`、聚合 `chunk_count/char_count` 和每份文档的 dry-run 摘要；它只做分块预览，不写入、重建或删除向量库内容。
 - `status` 返回 `vector_memory_available`、`source=knowledge_base`、当前知识库 chunk 数和 `queue` 摘要；`queue` 包含内存队列容量、总数、按状态计数和最近任务脱敏摘要。
 - `index` 只读返回已入库 `source=knowledge_base` chunk 的文档级 metadata 摘要，包括 `supports_index`、`chunk_count`、`indexed_chunk_count`、`document_count`、`documents` 和 `truncated`；`documents` 按 `doc_id` 聚合版本、脱敏来源、URL、页码和 chunk 数。
@@ -553,7 +556,7 @@
 
 错误响应：
 
-- `400`: 请求体不是 JSON object，`dry-run / ingest / rebuild / jobs` 单文档入队缺少 `content`，`batch-dry-run / batch-ingest / batch-rebuild / jobs` 批量入队缺少合法 `documents`，`delete` 缺少 `doc_id`，字段类型/长度不符合要求，`mode` 非 `ingest/rebuild`，`batch-rebuild` 或 `jobs mode=rebuild` 存在重复 `doc_id`，或批量写入/重建中存在文档级失败。
+- `400`: 请求体不是 JSON object，`dry-run / ingest / rebuild / jobs` 单文档入队缺少 `content`，`batch-dry-run / batch-ingest / batch-rebuild / jobs` 批量入队缺少合法 `documents`，`delete` 缺少 `doc_id`，固定 inbox 没有可导入文档，字段类型/长度不符合要求，`mode` 非 `ingest/rebuild`，`batch-rebuild` 或 `jobs mode=rebuild` 存在重复 `doc_id`，或批量写入/重建中存在文档级失败。
 - `404 knowledge base job not found`: 查询不存在的后台队列任务。
 - `409 vector_memory_unavailable`: 运行中的 bot 没有可用 `vector_memory`。
 - `409 embedding_unavailable`: `ingest`、`batch-ingest`、`rebuild`、`batch-rebuild` 或 `jobs` 时运行中的 bot 没有可用 `ai_client.get_embedding`。
@@ -563,8 +566,9 @@
 
 - Web API 写入类端点只接收请求体中的纯文本或 Markdown；不会读取任意本机文件路径，也不提供文件上传。
 - `GET /api/knowledge_base/auto-index/preview` 是唯一文件系统预览入口，只读取固定 `data/knowledge_base/inbox` 一层目录；它跳过目录、符号链接、非文本文件、非法编码、空文件或超限文件，不递归扫描、不展开 glob、不接受任意路径、不自动写入向量库，也不把结果放入后台队列。
+- `POST /api/knowledge_base/auto-index/jobs` 是固定 inbox 唯一受控入队入口；它不接受路径参数、不读取固定 inbox 以外的文件，入队前重新按预览规则校验当前文件，并固定使用 `rebuild` 模式替换同名文档旧 chunk。
 - 本机 CLI `python run.py knowledge-base import-files` 是独立的显式文件列表入口：只读取用户逐个传入的 `.txt/.md` 文件，拒绝目录和 glob，默认 dry-run；`--apply` 才调用 loopback 本机 API 写入，不改变 Web API “不读取文件路径”的约束。
-- 本机 CLI `python run.py knowledge-base import-inbox` 复用固定 `data/knowledge_base/inbox` 的只读预览边界，默认 dry-run；`--apply` 才把固定 inbox 文档提交到本机受控队列，仍不接受任意路径参数。
+- 本机 CLI `python run.py knowledge-base import-inbox` 复用固定 `data/knowledge_base/inbox` 的预览与受控入队边界，默认 dry-run；`--apply` 才把固定 inbox 文档提交到本机受控队列，仍不接受任意路径参数。
 - `batch-dry-run` 仅预览请求体中的多份文档，不读取本机路径、不上传文件、不写入向量库。
 - `batch-ingest` 仅顺序写入请求体中的多份文档，不读取本机路径、不上传文件、不删除旧 chunk；它不是原子事务，若后续文档失败，响应会保留前序成功文档的逐项摘要。
 - `batch-rebuild` 仅顺序重建请求体中的多份文档，不读取本机路径、不上传文件、不扫描目录；它不是原子事务，若后续文档失败，前序成功重建可能已经生效。单个文档在新版本 embedding 准备失败时不会删除该文档旧 chunk；同一请求内重复 `doc_id` 会直接返回 `400`，不会进入删除流程。
@@ -572,10 +576,11 @@
 - `index` 仅聚合已入库 chunk metadata，不读取 `source_file` 指向的文件，不扫描目录，不返回正文、chunk text、embedding 或完整本机路径；当当前向量库实现不支持 metadata 枚举时返回 `supports_index=false` 和空 `documents`。
 - 设置页单文档入口只调用固定的 `status / dry-run / ingest / rebuild` 端点；可手动粘贴内容，或通过固定桌面 IPC 显式选择单个 `.txt/.md/.markdown` 文件填入表单，来源只保留 `.../<filename>`；写入或重建同文档前必须先对当前内容完成一次 dry-run，内容或元数据变化后需要重新预览。
 - 设置页批量入口只接收文本框中的 `{"documents":[...]}` JSON，并调用固定的 `batch-dry-run / batch-ingest / batch-rebuild` 端点；批量写入或重建前必须先对当前 JSON 完成一次批量 dry-run，JSON 变化后需要重新预览。
+- 设置页固定 inbox 入口只调用 `auto-index/preview` 和 `auto-index/jobs`；只有预览成功且存在可导入文档时才允许受控入队，按钮不会接收或传递任意本机路径。
 - `doc_id / source_file / url / source_url` 只用于引用元数据；如果看起来像完整本机路径或 `file://` 本机 URI，响应和删除匹配会收敛为 `.../<filename>`。
 - 预览和治理响应不返回完整正文、chunk text、embedding 或完整本机路径。
 - `ingest`、`batch-ingest`、`rebuild`、`batch-rebuild` 和 `jobs` 依赖运行中的向量库和 embedding 客户端；重建类接口会先完整准备新版本 chunk embedding，准备失败时返回 `no_chunks_indexed` 或 `incomplete_embeddings`，并保留旧 chunk。
-- 自动写入式文件索引仍不开放任意路径扫描；当前固定 inbox 在 Web API 侧只提供只读预览，在本机 CLI 侧可受控入队，后台队列仍只负责受控文档。
+- 自动写入式文件索引仍不开放任意路径扫描；当前固定 inbox 只支持固定目录预览与受控入队，后台队列仍只负责受控文档。
 
 ## 成熟产品化参考
 

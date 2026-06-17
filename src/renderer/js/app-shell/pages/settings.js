@@ -201,6 +201,7 @@ export function renderSettingsPageShell() {
                                 <div class="detail-help" id="settings-knowledge-base-inbox-preview">尚未生成固定 inbox 预览。</div>
                                 <div class="backup-button-row backup-button-row-end">
                                     <button class="btn btn-secondary btn-sm" id="btn-knowledge-base-inbox-preview" type="button">预览固定 inbox</button>
+                                    <button class="btn btn-primary btn-sm" id="btn-knowledge-base-inbox-queue" type="button">受控入队</button>
                                 </div>
                                 <label class="detail-label" for="settings-knowledge-base-batch-json">批量文档 JSON</label>
                                 <textarea class="form-input" id="settings-knowledge-base-batch-json" rows="5" maxlength="300000" placeholder='{"documents":[{"content":"...","doc_id":"runbook","content_type":"markdown"}]}'></textarea>

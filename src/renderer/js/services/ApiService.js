@@ -33,6 +33,7 @@ class ApiService {
             '/api/backups',
             '/api/backups/restore',
             '/api/data_controls/clear',
+            '/api/knowledge_base/auto-index/jobs',
             '/api/restart',
         ]);
         this.idempotencyNonce = 0;
@@ -743,6 +744,14 @@ class ApiService {
 
     async previewKnowledgeBaseInbox() {
         return this.request('/api/knowledge_base/auto-index/preview', {}, 0);
+    }
+
+    async queueKnowledgeBaseInbox() {
+        return this.request('/api/knowledge_base/auto-index/jobs', {
+            method: 'POST',
+            body: {},
+            timeoutMs: 60000,
+        }, 0);
     }
 
     async dryRunKnowledgeDocument(payload = {}) {

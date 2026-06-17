@@ -46,6 +46,7 @@ from backend.core.knowledge_base import (
     MAX_KNOWLEDGE_CONTENT_CHARS as MAX_KNOWLEDGE_CONTENT_CHARS,
     KnowledgeBaseJobQueue,
     KnowledgeBaseService,
+    build_knowledge_auto_index_job_documents,
     build_knowledge_auto_index_preview_payload,
     build_knowledge_batch_dry_run_payload,
     build_knowledge_batch_write_payload,
@@ -140,6 +141,7 @@ _IDEMPOTENT_ENDPOINTS = {
     ("POST", "/api/backups"),
     ("POST", "/api/backups/restore"),
     ("POST", "/api/data_controls/clear"),
+    ("POST", "/api/knowledge_base/auto-index/jobs"),
 }
 
 _IDEMPOTENCY_CACHE: dict[str, dict[str, Any]] = {}
@@ -2221,6 +2223,57 @@ async def preview_knowledge_base_auto_index():
         return _json_internal_error(
             "knowledge_base_auto_index_preview_failed",
             code="knowledge_base_auto_index_preview_failed",
+        )
+
+
+@app.route("/api/knowledge_base/auto-index/jobs", methods=["POST"])
+async def create_knowledge_base_auto_index_job():
+    """Queue the fixed local knowledge-base inbox as a rebuild job."""
+    try:
+        inbox_dir = ensure_data_root() / KNOWLEDGE_AUTO_INDEX_INBOX_DIRNAME
+        preview = build_knowledge_auto_index_preview_payload(inbox_dir)
+        if int(preview.get("document_count") or 0) <= 0:
+            return jsonify({"success": False, "message": "fixed inbox does not contain any importable documents"}), 400
+
+        vector_memory = _get_knowledge_vector_memory()
+        if not _knowledge_vector_available(vector_memory):
+            return jsonify({"success": False, "message": "vector_memory_unavailable"}), 409
+        ai_client = _get_knowledge_ai_client()
+        if ai_client is None or not hasattr(ai_client, "get_embedding"):
+            return jsonify({"success": False, "message": "embedding_unavailable"}), 409
+
+        documents = build_knowledge_auto_index_job_documents(
+            inbox_dir,
+            preview,
+        )
+        payload = await knowledge_base_job_queue.enqueue(
+            mode=KNOWLEDGE_JOB_MODE_REBUILD,
+            documents=documents,
+            vector_memory=vector_memory,
+            ai_client=ai_client,
+        )
+        payload.update(
+            {
+                "fixed_inbox": True,
+                "auto_index": True,
+                "dry_run": False,
+                "mode": "rebuild",
+                "preview": {
+                    "document_count": int(preview.get("document_count") or 0),
+                    "chunk_count": int(preview.get("chunk_count") or 0),
+                    "skipped_count": int(preview.get("skipped_count") or 0),
+                    "exists": bool(preview.get("exists")),
+                },
+            }
+        )
+        return jsonify(payload), 202
+    except ValueError as e:
+        return jsonify({"success": False, "message": str(e)}), 400
+    except Exception as e:
+        logger.exception("knowledge base auto-index job enqueue failed: %s", e)
+        return _json_internal_error(
+            "knowledge_base_auto_index_job_enqueue_failed",
+            code="knowledge_base_auto_index_job_enqueue_failed",
         )
 
 

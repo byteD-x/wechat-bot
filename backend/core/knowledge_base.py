@@ -334,6 +334,57 @@ def build_knowledge_auto_index_preview_payload(
     return payload
 
 
+def build_knowledge_auto_index_job_documents(
+    inbox_dir: Union[Path, str],
+    preview: Dict[str, Any],
+    *,
+    version: str = "v1",
+) -> List[KnowledgeDocument]:
+    """Build queue documents from the fixed inbox preview without accepting arbitrary paths."""
+
+    inbox_path = Path(inbox_dir)
+    documents: List[KnowledgeDocument] = []
+    normalized_version = str(version or "v1").strip() or "v1"
+    for item in list(preview.get("documents") or []):
+        name = str(item.get("name") or "").strip()
+        path = inbox_path / name
+        if not name or path.name != name:
+            raise ValueError("fixed inbox document name is invalid")
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f"fixed inbox file is no longer a regular file: {redact_knowledge_local_path(str(path))}")
+        if path.suffix.lower() not in KNOWLEDGE_AUTO_INDEX_EXTENSIONS:
+            raise ValueError(f"fixed inbox file type is no longer supported: {redact_knowledge_local_path(str(path))}")
+        try:
+            content = path.read_text(encoding="utf-8-sig")
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"fixed inbox file is not valid UTF-8 text: {redact_knowledge_local_path(str(path))}") from exc
+        except OSError as exc:
+            raise ValueError(f"fixed inbox file read failed: {redact_knowledge_local_path(str(path))}") from exc
+        if not content.strip():
+            raise ValueError(f"fixed inbox file is empty: {redact_knowledge_local_path(str(path))}")
+        if len(content) > KNOWLEDGE_AUTO_INDEX_MAX_FILE_CHARS:
+            raise ValueError(
+                f"fixed inbox file is too large: {redact_knowledge_local_path(str(path))}"
+            )
+
+        content_type = str(item.get("content_type") or _infer_auto_index_content_type(path))
+        source_file = str(item.get("source_file") or redact_knowledge_local_path(str(path)))
+        documents.append(
+            KnowledgeDocument(
+                content=content,
+                doc_id=str(item.get("doc_id") or source_file),
+                version=normalized_version,
+                source_file=source_file,
+                url="",
+                metadata={
+                    "content_type": content_type,
+                    "source_file": source_file,
+                },
+            )
+        )
+    return documents
+
+
 def _append_unique(values: List[Any], value: Any) -> None:
     if value in ("", None):
         return
@@ -889,6 +940,7 @@ __all__ = [
     "KNOWLEDGE_JOB_MODE_INGEST",
     "KNOWLEDGE_JOB_MODE_REBUILD",
     "KnowledgeBaseJobQueue",
+    "build_knowledge_auto_index_job_documents",
     "build_knowledge_auto_index_preview_payload",
     "build_knowledge_batch_dry_run_payload",
     "build_knowledge_batch_write_payload",

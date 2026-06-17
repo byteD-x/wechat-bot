@@ -1461,6 +1461,7 @@ test('settings page shell binds events and auto save routing stably', async () =
         'btn-knowledge-base-ingest',
         'btn-knowledge-base-rebuild',
         'btn-knowledge-base-inbox-preview',
+        'btn-knowledge-base-inbox-queue',
         'btn-knowledge-base-batch-dry-run',
         'btn-knowledge-base-batch-ingest',
         'btn-knowledge-base-batch-rebuild',
@@ -1549,6 +1550,9 @@ test('settings page shell binds events and auto save routing stably', async () =
         _previewKnowledgeBaseInbox() {
             this.calls.push('kb-inbox-preview');
         },
+        _queueKnowledgeBaseInbox() {
+            this.calls.push('kb-inbox-queue');
+        },
         _previewKnowledgeBaseDocuments() {
             this.calls.push('kb-batch-preview');
         },
@@ -1589,7 +1593,7 @@ test('settings page shell binds events and auto save routing stably', async () =
         rootElement: root,
     });
 
-    assert.equal(page.bindings.length, 45);
+    assert.equal(page.bindings.length, 46);
     assert.equal(page._eventCleanups.length, 1);
 
     page.bindings.forEach(({ handler }) => handler());
@@ -1623,6 +1627,7 @@ test('settings page shell binds events and auto save routing stably', async () =
         'kb-ingest',
         'kb-rebuild',
         'kb-inbox-preview',
+        'kb-inbox-queue',
         'kb-batch-preview',
         'kb-batch-ingest',
         'kb-batch-rebuild',
@@ -2180,6 +2185,96 @@ test('settings page knowledge base inbox preview reports fixed inbox summary', a
         assert.ok(renderCount > 0);
     } finally {
         apiService.previewKnowledgeBaseInbox = originalPreviewInbox;
+        toast.success = originalToastSuccess;
+        toast.error = originalToastError;
+    }
+});
+
+test('settings page knowledge base inbox queue requires a successful preview first', async () => {
+    const originalQueueInbox = apiService.queueKnowledgeBaseInbox;
+    const originalToastInfo = toast.info;
+    const originalToastSuccess = toast.success;
+    const originalToastError = toast.error;
+    const page = new SettingsPage();
+    const toastCalls = [];
+    let queueCalls = 0;
+
+    page._renderBackupPanel = () => {};
+    apiService.queueKnowledgeBaseInbox = async () => {
+        queueCalls += 1;
+        return {
+            success: true,
+            job_id: 'kbjob-1',
+            status: 'queued',
+        };
+    };
+    toast.info = (message) => {
+        toastCalls.push({ type: 'info', message });
+    };
+    toast.success = (message) => {
+        toastCalls.push({ type: 'success', message });
+    };
+    toast.error = (message) => {
+        toastCalls.push({ type: 'error', message });
+    };
+
+    try {
+        await page._queueKnowledgeBaseInbox();
+        assert.equal(queueCalls, 0);
+        assert.match(page._backupState.knowledgeBaseInboxQueueFeedback, /请先预览固定 inbox/);
+        assert.equal(toastCalls.filter((item) => item.type === 'info').length, 1);
+
+        page._backupState.knowledgeBaseInboxPreview = {
+            success: true,
+            document_count: 2,
+        };
+        await page._queueKnowledgeBaseInbox();
+
+        assert.equal(queueCalls, 1);
+        assert.match(page._backupState.knowledgeBaseInboxQueueFeedback, /kbjob-1/);
+        assert.equal(page._backupState.knowledgeBaseBusy, false);
+        assert.equal(toastCalls.filter((item) => item.type === 'success').length, 1);
+        assert.equal(toastCalls.filter((item) => item.type === 'error').length, 0);
+    } finally {
+        apiService.queueKnowledgeBaseInbox = originalQueueInbox;
+        toast.info = originalToastInfo;
+        toast.success = originalToastSuccess;
+        toast.error = originalToastError;
+    }
+});
+
+test('settings page knowledge base inbox queue clears stale preview when queue fails', async () => {
+    const originalQueueInbox = apiService.queueKnowledgeBaseInbox;
+    const originalToastSuccess = toast.success;
+    const originalToastError = toast.error;
+    const page = new SettingsPage();
+    const toastCalls = [];
+
+    page._renderBackupPanel = () => {};
+    page._backupState.knowledgeBaseInboxPreview = {
+        success: true,
+        document_count: 1,
+    };
+    apiService.queueKnowledgeBaseInbox = async () => ({
+        success: false,
+        message: 'fixed inbox queue failed',
+    });
+    toast.success = (message) => {
+        toastCalls.push({ type: 'success', message });
+    };
+    toast.error = (message) => {
+        toastCalls.push({ type: 'error', message });
+    };
+
+    try {
+        await page._queueKnowledgeBaseInbox();
+
+        assert.equal(page._backupState.knowledgeBaseInboxQueueFeedback, 'fixed inbox queue failed');
+        assert.equal(page._backupState.knowledgeBaseBusy, false);
+        assert.equal(toastCalls.filter((item) => item.type === 'success').length, 0);
+        assert.equal(toastCalls.filter((item) => item.type === 'error').length, 1);
+    } finally {
+        apiService.queueKnowledgeBaseInbox = originalQueueInbox;
         toast.success = originalToastSuccess;
         toast.error = originalToastError;
     }

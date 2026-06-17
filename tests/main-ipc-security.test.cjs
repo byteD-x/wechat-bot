@@ -486,6 +486,11 @@ test('backend:request allows fixed knowledge base governance endpoints only', as
         method: 'GET',
         endpoint: '/api/knowledge_base/auto-index/preview',
     });
+    const inboxJobResult = await harness.backendRequestHandler(event, {
+        method: 'POST',
+        endpoint: '/api/knowledge_base/auto-index/jobs',
+        payload: {},
+    });
     const dryRunResult = await harness.backendRequestHandler(event, {
         method: 'POST',
         endpoint: '/api/knowledge_base/dry-run',
@@ -524,6 +529,7 @@ test('backend:request allows fixed knowledge base governance endpoints only', as
 
     assert.equal(statusResult.ok, true);
     assert.equal(inboxPreviewResult.ok, true);
+    assert.equal(inboxJobResult.ok, true);
     assert.equal(dryRunResult.ok, true);
     assert.equal(batchDryRunResult.ok, true);
     assert.equal(ingestResult.ok, true);
@@ -535,6 +541,7 @@ test('backend:request allows fixed knowledge base governance endpoints only', as
     assert.deepEqual(harness.backendCalls, [
         { method: 'GET', endpoint: '/api/knowledge_base/status', payload: null },
         { method: 'GET', endpoint: '/api/knowledge_base/auto-index/preview', payload: null },
+        { method: 'POST', endpoint: '/api/knowledge_base/auto-index/jobs', payload: {} },
         {
             method: 'POST',
             endpoint: '/api/knowledge_base/dry-run',

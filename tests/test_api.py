@@ -3720,6 +3720,75 @@ async def test_api_knowledge_base_auto_index_preview_uses_fixed_inbox_without_ra
 
 
 @pytest.mark.asyncio
+async def test_api_knowledge_base_auto_index_job_queues_fixed_inbox_without_raw_content(
+    client,
+    mock_manager,
+    tmp_path,
+    monkeypatch,
+):
+    data_root = tmp_path / "data"
+    inbox = data_root / "knowledge_base" / "inbox"
+    inbox.mkdir(parents=True)
+    raw_content = "Secret API inbox job text must stay out of enqueue responses."
+    (inbox / "runbook.md").write_text(raw_content, encoding="utf-8")
+    (inbox / "notes.pdf").write_text("Unsupported local PDF text.", encoding="utf-8")
+    monkeypatch.setenv("WECHAT_BOT_DATA_DIR", str(data_root))
+
+    vector_memory = DummyKnowledgeVectorMemory()
+    mock_manager.bot.vector_memory = vector_memory
+    mock_manager.bot.ai_client = SimpleNamespace(get_embedding=AsyncMock(return_value=[0.1, 0.2]))
+
+    response = await client.post("/api/knowledge_base/auto-index/jobs", json={})
+
+    assert response.status_code == 202
+    queued = await response.get_json()
+    assert queued["success"] is True
+    assert queued["fixed_inbox"] is True
+    assert queued["auto_index"] is True
+    assert queued["dry_run"] is False
+    assert queued["mode"] == "rebuild"
+    assert queued["document_count"] == 1
+    assert queued["preview"]["document_count"] == 1
+    assert queued["preview"]["skipped_count"] == 1
+    assert queued["documents"][0]["doc_id"] == ".../runbook.md"
+    assert queued["documents"][0]["source_file"] == ".../runbook.md"
+
+    completed = await _wait_for_api_knowledge_job(client, queued["job_id"])
+    assert completed["status"] == "succeeded"
+    assert completed["result"]["success"] is True
+    assert completed["result"]["mode"] == "rebuild"
+    assert completed["result"]["indexed_chunks"] == len(vector_memory.upserts)
+    assert vector_memory.deleted == [{"source": api_module.KNOWLEDGE_SOURCE, "doc_id": ".../runbook.md"}]
+    assert vector_memory.upserts[0]["metadata"]["source_file"] == ".../runbook.md"
+
+    response_text = (await response.get_data()).decode("utf-8") + str(completed)
+    for forbidden in (raw_content, "Secret API inbox job", "Unsupported local PDF", str(tmp_path)):
+        assert forbidden not in response_text
+
+
+@pytest.mark.asyncio
+async def test_api_knowledge_base_auto_index_job_rejects_empty_inbox_without_enqueue(
+    client,
+    mock_manager,
+    tmp_path,
+    monkeypatch,
+):
+    data_root = tmp_path / "data"
+    monkeypatch.setenv("WECHAT_BOT_DATA_DIR", str(data_root))
+    mock_manager.bot.vector_memory = DummyKnowledgeVectorMemory()
+    mock_manager.bot.ai_client = SimpleNamespace(get_embedding=AsyncMock(return_value=[0.1]))
+
+    response = await client.post("/api/knowledge_base/auto-index/jobs", json={})
+
+    assert response.status_code == 400
+    data = await response.get_json()
+    assert data["success"] is False
+    assert data["message"] == "fixed inbox does not contain any importable documents"
+    status = await api_module.knowledge_base_job_queue.get_status()
+    assert status["total"] == 0
+
+
+@pytest.mark.asyncio
 async def test_api_knowledge_base_dry_run_returns_chunk_metadata_without_raw_content(client, mock_manager):
     raw_content = (
         "Secret launch checklist says QA signoff and rollback drills are mandatory. "

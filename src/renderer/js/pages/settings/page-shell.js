@@ -78,6 +78,7 @@ export function bindSettingsEvents(page, deps = {}) {
     bindOptional('#btn-knowledge-base-ingest', 'click', () => void page._ingestKnowledgeBaseDocument?.());
     bindOptional('#btn-knowledge-base-rebuild', 'click', () => void page._rebuildKnowledgeBaseDocument?.());
     bindOptional('#btn-knowledge-base-inbox-preview', 'click', () => void page._previewKnowledgeBaseInbox?.());
+    bindOptional('#btn-knowledge-base-inbox-queue', 'click', () => void page._queueKnowledgeBaseInbox?.());
     bindOptional('#btn-knowledge-base-batch-dry-run', 'click', () => void page._previewKnowledgeBaseDocuments?.());
     bindOptional('#btn-knowledge-base-batch-ingest', 'click', () => void page._ingestKnowledgeBaseDocuments?.());
     bindOptional('#btn-knowledge-base-batch-rebuild', 'click', () => void page._rebuildKnowledgeBaseDocuments?.());

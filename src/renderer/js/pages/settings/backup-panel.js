@@ -186,6 +186,7 @@ export function renderBackupPanel(page) {
     const knowledgeBaseIngestBtn = page.$('#btn-knowledge-base-ingest');
     const knowledgeBaseRebuildBtn = page.$('#btn-knowledge-base-rebuild');
     const knowledgeBaseInboxPreviewBtn = page.$('#btn-knowledge-base-inbox-preview');
+    const knowledgeBaseInboxQueueBtn = page.$('#btn-knowledge-base-inbox-queue');
     const knowledgeBaseBatchDryRunBtn = page.$('#btn-knowledge-base-batch-dry-run');
     const knowledgeBaseBatchIngestBtn = page.$('#btn-knowledge-base-batch-ingest');
     const knowledgeBaseBatchRebuildBtn = page.$('#btn-knowledge-base-batch-rebuild');
@@ -229,7 +230,10 @@ export function renderBackupPanel(page) {
         knowledgeBasePreviewElem.textContent = formatKnowledgeBasePreview(state.knowledgeBasePreview || null);
     }
     if (knowledgeBaseInboxFeedbackElem) {
-        knowledgeBaseInboxFeedbackElem.textContent = state.knowledgeBaseInboxFeedback || '固定 inbox 尚未预览。';
+        knowledgeBaseInboxFeedbackElem.textContent = [
+            state.knowledgeBaseInboxFeedback || '固定 inbox 尚未预览。',
+            state.knowledgeBaseInboxQueueFeedback || '',
+        ].filter(Boolean).join(' / ');
     }
     if (knowledgeBaseInboxPreviewElem) {
         knowledgeBaseInboxPreviewElem.textContent = formatKnowledgeBaseInboxPreview(state.knowledgeBaseInboxPreview || null);
@@ -293,6 +297,14 @@ export function renderBackupPanel(page) {
     }
     if (knowledgeBaseInboxPreviewBtn) {
         knowledgeBaseInboxPreviewBtn.disabled = knowledgeBusy;
+    }
+    if (knowledgeBaseInboxQueueBtn) {
+        const canQueueInbox = (
+            !knowledgeBusy
+            && !!state.knowledgeBaseInboxPreview?.success
+            && Number(state.knowledgeBaseInboxPreview?.document_count || 0) > 0
+        );
+        knowledgeBaseInboxQueueBtn.disabled = !canQueueInbox;
     }
     if (knowledgeBaseBatchDryRunBtn) {
         knowledgeBaseBatchDryRunBtn.disabled = knowledgeBusy;

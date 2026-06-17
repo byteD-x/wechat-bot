@@ -11,6 +11,7 @@ from typing import Any, Dict, Iterable, List, Optional, Union
 from backend.core.knowledge_base import (
     KNOWLEDGE_AUTO_INDEX_INBOX_DIRNAME,
     MAX_KNOWLEDGE_CONTENT_CHARS,
+    build_knowledge_auto_index_job_documents,
     build_knowledge_auto_index_preview_payload,
     build_knowledge_dry_run_payload,
     parse_knowledge_document_payload,
@@ -162,30 +163,23 @@ def _build_inbox_preview(args: argparse.Namespace) -> Dict[str, Any]:
 
 def _build_inbox_job_documents(preview: Dict[str, Any], args: argparse.Namespace) -> List[Dict[str, Any]]:
     inbox_dir = ensure_data_root() / KNOWLEDGE_AUTO_INDEX_INBOX_DIRNAME
-    documents: List[Dict[str, Any]] = []
     version = str(getattr(args, "version", "v1") or "v1").strip() or "v1"
-    for item in list(preview.get("documents") or []):
-        path = inbox_dir / str(item.get("name") or "")
-        if path.is_symlink() or not path.is_file():
-            raise ValueError(f"fixed inbox file is no longer a regular file: {_redacted_path(path)}")
-        if path.suffix.lower() not in _TEXT_EXTENSIONS:
-            raise ValueError(f"fixed inbox file type is no longer supported: {_redacted_path(path)}")
-        content = _read_explicit_text_file(path)
-        documents.append(
-            {
-                "content": content,
-                "content_type": str(item.get("content_type") or "text"),
-                "doc_id": str(item.get("doc_id") or ""),
-                "version": version,
-                "source_file": str(item.get("source_file") or ""),
-                "url": "",
-                "metadata": {
-                    "content_type": str(item.get("content_type") or "text"),
-                    "source_file": str(item.get("source_file") or ""),
-                },
-            }
+    return [
+        {
+            "content": document.content,
+            "content_type": str((document.metadata or {}).get("content_type") or "text"),
+            "doc_id": str(document.doc_id or ""),
+            "version": str(document.version or version),
+            "source_file": str(document.source_file or ""),
+            "url": str(document.url or ""),
+            "metadata": dict(document.metadata or {}),
+        }
+        for document in build_knowledge_auto_index_job_documents(
+            inbox_dir,
+            preview,
+            version=version,
         )
-    return documents
+    ]
 
 
 def _apply_inbox_import(preview: Dict[str, Any], args: argparse.Namespace) -> Dict[str, Any]:

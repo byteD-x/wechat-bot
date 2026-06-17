@@ -319,16 +319,16 @@ Provider 分层策略也更清晰：
 
 ## 补充亮点：知识库治理 API 最小闭环
 
-- 知识库治理接口已提供 `status / index / auto-index preview / dry-run / batch-dry-run / ingest / batch-ingest / rebuild / batch-rebuild / jobs / delete` 本机 API，复用现有 `KnowledgeBaseService` 和运行时 `vector_memory`，不另起一套索引存储。
+- 知识库治理接口已提供 `status / index / auto-index preview / auto-index jobs / dry-run / batch-dry-run / ingest / batch-ingest / rebuild / batch-rebuild / jobs / delete` 本机 API，复用现有 `KnowledgeBaseService`、`KnowledgeBaseJobQueue` 和运行时 `vector_memory`，不另起一套索引存储。
 - 写入类端点只接收请求体中的纯文本或 Markdown，不读取任意文件路径、不开放上传管道；`dry-run` 和 `batch-dry-run` 只返回 chunk 数量、chunk id、字符数和脱敏来源摘要，不回显正文。
-- `auto-index/preview` 只扫描固定 `data/knowledge_base/inbox` 一层目录中的 `.txt/.md/.markdown` 文本，返回 dry-run 文件摘要和跳过原因；它不递归、不展开 glob、不接受任意路径、不写入向量库、不入后台队列，也不返回正文、chunk text、embedding 或完整本机路径。
+- `auto-index/preview` 只扫描固定 `data/knowledge_base/inbox` 一层目录中的 `.txt/.md/.markdown` 文本，返回 dry-run 文件摘要和跳过原因；`auto-index/jobs` 只把同一固定 inbox 当前可导入文档以 `rebuild` 模式提交到现有后台队列。两者都不递归、不展开 glob、不接受任意路径、不返回正文、chunk text、embedding 或完整本机路径。
 - `batch-dry-run` 支持最多 20 份请求体文档的无副作用分块预览，返回聚合 chunk/字符数和逐文档摘要，不写入向量库、不触发 embedding。
 - `batch-ingest` 支持最多 20 份请求体文档按顺序写入，返回成功/失败文档数、聚合索引 chunk 数和逐文档摘要；它不读取本机路径、不上传文件、不删除旧 chunk。
 - `batch-rebuild` 支持最多 20 份请求体文档按顺序重建，重复 `doc_id` 会在任何删除前被拒绝；单文档 embedding 准备失败时会保留该文档旧 chunk，批量本身不做全局事务回滚。
 - `jobs` 支持请求体单文档或 `{"documents":[...]}` 批量文档异步 `ingest/rebuild`，使用进程内内存级串行队列；`status.queue` 和 `GET /api/knowledge_base/jobs/{job_id}` 只返回状态、聚合结果与脱敏文档摘要，不持久化任务，不读取 `source_file`，不返回正文、chunk text、embedding 或完整本机路径。
 - `index` 只读聚合已入库 `knowledge_base` chunk metadata，返回文档级 `doc_id / version / source_file / url / page / chunk_count` 摘要；它不是文件系统扫描器，不读取来源文件，也不回显正文、chunk text、embedding 或完整本机路径。
-- 设置页已支持刷新状态、单文档预览/写入/重建，以及受控 `{"documents":[...]}` JSON 批量预览/写入/重建；单文档可手动粘贴纯文本 / Markdown，或通过固定桌面 IPC 显式选择单个 `.txt/.md/.markdown` 文件填入表单，来源只保留 `.../<filename>`；写入或重建前都必须先对当前内容完成对应 dry-run，内容或元数据变化后会强制重新预览。
-- 本机 CLI `python run.py knowledge-base import-files` 已提供显式 `.txt/.md` 文件列表入口，默认只预览分块；拒绝目录和 glob，`--apply` 才调用 loopback 本机 API 写入。`python run.py knowledge-base import-inbox` 复用固定 inbox 的只读预览边界，默认只 dry-run，`--apply` 才把固定 inbox 文档提交到本机受控队列。
+- 设置页已支持刷新状态、单文档预览/写入/重建、固定 inbox 预览后受控入队，以及受控 `{"documents":[...]}` JSON 批量预览/写入/重建；单文档可手动粘贴纯文本 / Markdown，或通过固定桌面 IPC 显式选择单个 `.txt/.md/.markdown` 文件填入表单，来源只保留 `.../<filename>`；写入、重建或固定 inbox 入队前都必须先完成对应 dry-run，内容或元数据变化后会强制重新预览。
+- 本机 CLI `python run.py knowledge-base import-files` 已提供显式 `.txt/.md` 文件列表入口，默认只预览分块；拒绝目录和 glob，`--apply` 才调用 loopback 本机 API 写入。`python run.py knowledge-base import-inbox` 复用固定 inbox 的预览与受控入队边界，默认只 dry-run，`--apply` 才把固定 inbox 文档提交到本机受控队列。
 - `ingest / rebuild` 依赖运行中 bot 的 embedding 客户端，写入 `source=knowledge_base`、`doc_id`、`doc_version`、`chunk_id`、`source_file`、`url`、`page` 等 citation metadata，让 RAG 引用能绑定到文档级来源。
 - `delete` 只按精确 `doc_id` 删除知识库来源 chunk，不影响聊天记忆、导出语料 RAG 或其他向量来源；路径形式的 `doc_id/source_file` 会收敛为 `.../<filename>`，避免治理响应泄露完整本机路径。
 
