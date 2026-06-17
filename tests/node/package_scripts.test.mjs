@@ -11,10 +11,11 @@ test('package exposes one-command interview demo entry', () => {
     );
 });
 
-test('interview demo npm launcher prefers project virtualenv and writes summary', () => {
+test('interview demo npm launcher prefers project virtualenv, writes summary, and forwards args', () => {
     const launcher = readFileSync('scripts/run-interview-demo.mjs', 'utf8');
 
     assert.match(launcher, /['"]\.venv['"]/);
     assert.match(launcher, /run_interview_demo\.py/);
     assert.match(launcher, /--summary/);
+    assert.match(launcher, /process\.argv\.slice\(2\)/);
 });

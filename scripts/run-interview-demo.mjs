@@ -27,7 +27,8 @@ async function resolvePython() {
 }
 
 const python = await resolvePython();
-const child = spawn(python, ['scripts/run_interview_demo.py', '--summary'], {
+const userArgs = process.argv.slice(2);
+const child = spawn(python, ['scripts/run_interview_demo.py', '--summary', ...userArgs], {
     cwd: projectRoot,
     stdio: 'inherit',
 });

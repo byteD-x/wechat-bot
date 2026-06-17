@@ -42,6 +42,12 @@ npm run demo:interview
 python scripts/run_interview_demo.py --summary
 ```
 
+如果要给自动化流程读取 JSON，可以直接调用 Node 启动器并透传参数：
+
+```bash
+node scripts/run-interview-demo.mjs --skip-eval --json
+```
+
 该脚本会串联 Web API readiness、RAG eval、badcase summary 和受控 Tool Workflow trace，默认把 RAG 报告写入 `data/runtime/demo/interview-rag-report.json`，把 Markdown 证据包写入 `data/runtime/demo/interview-demo-summary.md`。它只验证后端治理、RAG 与 Agent 工程切片，不代表微信桌面收发已完成。
 
 ## Documentation

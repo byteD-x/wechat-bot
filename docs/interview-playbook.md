@@ -73,6 +73,12 @@ npm run demo:interview
 5. `rag_report`：默认落在 `data/runtime/demo/interview-rag-report.json`，属于本地运行时产物，不提交到仓库。
 6. `--summary`：会额外生成一份 Markdown 证据包，适合投递前附带或面试时快速展开。
 
+自动化流程如果需要 JSON，直接调用 Node 启动器并透传参数，避免 `npm run` 的命令前缀干扰标准输出：
+
+```powershell
+node scripts/run-interview-demo.mjs --skip-eval --json
+```
+
 这条演示链路的边界也要讲清楚：它不读取真实聊天、不访问真实微信、不执行任意 shell 或网络请求，也不替代 Windows + 微信 `3.9.12.51` 的人工收发验证。
 
 ## STAR 讲法示例
