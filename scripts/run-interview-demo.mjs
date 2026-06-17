@@ -22,6 +22,20 @@ export function buildPythonArgs(userArgs = []) {
     return args;
 }
 
+export function buildPythonStartupHelp(python, error) {
+    const message = error && error.message ? ` (${error.message})` : '';
+    return [
+        `Failed to start Python for the interview demo: ${python}${message}`,
+        'Create the project virtualenv and install dependencies first:',
+        '  python -m venv .venv',
+        '  .\\.venv\\Scripts\\python.exe -m pip install -r requirements.txt',
+        'Then rerun:',
+        '  npm run demo:interview',
+        'Or run the Python demo directly:',
+        '  .\\.venv\\Scripts\\python.exe scripts\\run_interview_demo.py --summary',
+    ].join('\n');
+}
+
 async function resolvePython() {
     for (const candidate of candidates) {
         if (candidate.endsWith('.exe')) {
@@ -42,6 +56,11 @@ export async function main(argv = process.argv.slice(2)) {
     const child = spawn(python, buildPythonArgs(argv), {
         cwd: projectRoot,
         stdio: 'inherit',
+    });
+
+    child.on('error', (error) => {
+        console.error(buildPythonStartupHelp(python, error));
+        process.exitCode = 1;
     });
 
     child.on('exit', (code, signal) => {

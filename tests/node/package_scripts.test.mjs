@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { buildPythonArgs } from '../../scripts/run-interview-demo.mjs';
+import { buildPythonArgs, buildPythonStartupHelp } from '../../scripts/run-interview-demo.mjs';
 
 test('package exposes one-command interview demo entry', () => {
     const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
@@ -43,4 +43,14 @@ test('interview demo launcher injects summary only when needed', () => {
         'scripts/run_interview_demo.py',
         '--summary=custom.md',
     ]);
+});
+
+test('interview demo launcher explains how to recover when Python cannot start', () => {
+    const help = buildPythonStartupHelp('python', new Error('spawn python ENOENT'));
+
+    assert.match(help, /Failed to start Python for the interview demo: python/);
+    assert.match(help, /python -m venv \.venv/);
+    assert.match(help, /pip install -r requirements\.txt/);
+    assert.match(help, /npm run demo:interview/);
+    assert.match(help, /run_interview_demo\.py --summary/);
 });
