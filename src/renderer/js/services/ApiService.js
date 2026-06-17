@@ -741,6 +741,10 @@ class ApiService {
         return this.request('/api/knowledge_base/status', {}, 0);
     }
 
+    async previewKnowledgeBaseInbox() {
+        return this.request('/api/knowledge_base/auto-index/preview', {}, 0);
+    }
+
     async dryRunKnowledgeDocument(payload = {}) {
         return this.request('/api/knowledge_base/dry-run', {
             method: 'POST',

@@ -197,6 +197,11 @@ export function renderSettingsPageShell() {
                                     <button class="btn btn-primary btn-sm" id="btn-knowledge-base-ingest" type="button">写入知识库</button>
                                     <button class="btn btn-secondary btn-sm" id="btn-knowledge-base-rebuild" type="button">重建同文档</button>
                                 </div>
+                                <div class="detail-help" id="settings-knowledge-base-inbox-feedback">固定 inbox 尚未预览。</div>
+                                <div class="detail-help" id="settings-knowledge-base-inbox-preview">尚未生成固定 inbox 预览。</div>
+                                <div class="backup-button-row backup-button-row-end">
+                                    <button class="btn btn-secondary btn-sm" id="btn-knowledge-base-inbox-preview" type="button">预览固定 inbox</button>
+                                </div>
                                 <label class="detail-label" for="settings-knowledge-base-batch-json">批量文档 JSON</label>
                                 <textarea class="form-input" id="settings-knowledge-base-batch-json" rows="5" maxlength="300000" placeholder='{"documents":[{"content":"...","doc_id":"runbook","content_type":"markdown"}]}'></textarea>
                                 <div class="detail-help" id="settings-knowledge-base-batch-feedback">批量入口尚未预览。</div>

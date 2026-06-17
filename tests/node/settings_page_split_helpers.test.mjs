@@ -1460,6 +1460,7 @@ test('settings page shell binds events and auto save routing stably', async () =
         'btn-knowledge-base-dry-run',
         'btn-knowledge-base-ingest',
         'btn-knowledge-base-rebuild',
+        'btn-knowledge-base-inbox-preview',
         'btn-knowledge-base-batch-dry-run',
         'btn-knowledge-base-batch-ingest',
         'btn-knowledge-base-batch-rebuild',
@@ -1545,6 +1546,9 @@ test('settings page shell binds events and auto save routing stably', async () =
         _rebuildKnowledgeBaseDocument() {
             this.calls.push('kb-rebuild');
         },
+        _previewKnowledgeBaseInbox() {
+            this.calls.push('kb-inbox-preview');
+        },
         _previewKnowledgeBaseDocuments() {
             this.calls.push('kb-batch-preview');
         },
@@ -1585,7 +1589,7 @@ test('settings page shell binds events and auto save routing stably', async () =
         rootElement: root,
     });
 
-    assert.equal(page.bindings.length, 44);
+    assert.equal(page.bindings.length, 45);
     assert.equal(page._eventCleanups.length, 1);
 
     page.bindings.forEach(({ handler }) => handler());
@@ -1618,6 +1622,7 @@ test('settings page shell binds events and auto save routing stably', async () =
         'kb-preview',
         'kb-ingest',
         'kb-rebuild',
+        'kb-inbox-preview',
         'kb-batch-preview',
         'kb-batch-ingest',
         'kb-batch-rebuild',
@@ -2132,6 +2137,92 @@ test('settings page knowledge base ingest requires matching dry-run preview', as
     }
 });
 
+test('settings page knowledge base inbox preview reports fixed inbox summary', async () => {
+    const originalPreviewInbox = apiService.previewKnowledgeBaseInbox;
+    const originalToastSuccess = toast.success;
+    const originalToastError = toast.error;
+    const page = new SettingsPage();
+    const toastCalls = [];
+    let renderCount = 0;
+    let previewCalls = 0;
+
+    page._renderBackupPanel = () => {
+        renderCount += 1;
+    };
+    apiService.previewKnowledgeBaseInbox = async () => {
+        previewCalls += 1;
+        return {
+            success: true,
+            exists: true,
+            document_count: 3,
+            skipped_count: 1,
+            chunk_count: 8,
+            char_count: 1200,
+        };
+    };
+    toast.success = (message) => {
+        toastCalls.push({ type: 'success', message });
+    };
+    toast.error = (message) => {
+        toastCalls.push({ type: 'error', message });
+    };
+
+    try {
+        await page._previewKnowledgeBaseInbox();
+
+        assert.equal(previewCalls, 1);
+        assert.equal(page._backupState.knowledgeBaseInboxPreview?.document_count, 3);
+        assert.match(page._backupState.knowledgeBaseInboxFeedback, /固定 inbox 预览完成/);
+        assert.match(page._backupState.knowledgeBaseInboxFeedback, /跳过 1 项/);
+        assert.equal(page._backupState.knowledgeBaseBusy, false);
+        assert.equal(toastCalls.filter((item) => item.type === 'success').length, 1);
+        assert.equal(toastCalls.filter((item) => item.type === 'error').length, 0);
+        assert.ok(renderCount > 0);
+    } finally {
+        apiService.previewKnowledgeBaseInbox = originalPreviewInbox;
+        toast.success = originalToastSuccess;
+        toast.error = originalToastError;
+    }
+});
+
+test('settings page knowledge base inbox preview clears stale result on failure', async () => {
+    const originalPreviewInbox = apiService.previewKnowledgeBaseInbox;
+    const originalToastSuccess = toast.success;
+    const originalToastError = toast.error;
+    const page = new SettingsPage();
+    const toastCalls = [];
+
+    page._renderBackupPanel = () => {};
+    page._backupState.knowledgeBaseInboxPreview = {
+        success: true,
+        document_count: 2,
+    };
+    apiService.previewKnowledgeBaseInbox = async () => ({
+        success: false,
+        message: 'fixed inbox unavailable',
+    });
+    toast.success = (message) => {
+        toastCalls.push({ type: 'success', message });
+    };
+    toast.error = (message) => {
+        toastCalls.push({ type: 'error', message });
+    };
+
+    try {
+        await page._previewKnowledgeBaseInbox();
+
+        assert.equal(page._backupState.knowledgeBaseInboxPreview, null);
+        assert.equal(page._backupState.knowledgeBaseInboxFeedback, 'fixed inbox unavailable');
+        assert.equal(page._backupState.knowledgeBaseBusy, false);
+        assert.equal(toastCalls.filter((item) => item.type === 'success').length, 0);
+        assert.equal(toastCalls.filter((item) => item.type === 'error').length, 1);
+    } finally {
+        apiService.previewKnowledgeBaseInbox = originalPreviewInbox;
+        toast.success = originalToastSuccess;
+        toast.error = originalToastError;
+    }
+});
+
 test('settings page knowledge base file selector fills form and requires preview', async () => withDom(async () => {
     const originalDryRun = apiService.dryRunKnowledgeDocument;
     const originalIngest = apiService.ingestKnowledgeDocument;
@@ -2508,6 +2599,8 @@ test('settings shell keeps dangerous and disabled settings behind clear explanat
     assert.equal(markup.includes('<details class="backup-action-card settings-disclosure settings-disclosure-danger">'), true);
     assert.equal(markup.includes('按范围 dry-run 后再清理'), true);
     assert.equal(markup.includes('id="btn-knowledge-base-rebuild"'), true);
+    assert.equal(markup.includes('id="btn-knowledge-base-inbox-preview"'), true);
+    assert.equal(markup.includes('id="settings-knowledge-base-inbox-feedback"'), true);
     assert.equal(markup.includes('id="settings-knowledge-base-batch-json"'), true);
     assert.equal(markup.includes('id="btn-knowledge-base-batch-rebuild"'), true);
     assert.equal(markup.includes('settings-disabled-reason'), true);
