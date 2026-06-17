@@ -15,6 +15,7 @@ from typing import Any, Dict, Iterator, List
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_REPORT = PROJECT_ROOT / "data" / "runtime" / "demo" / "interview-rag-report.json"
+DEFAULT_SUMMARY = PROJECT_ROOT / "data" / "runtime" / "demo" / "interview-demo-summary.md"
 
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -188,6 +189,73 @@ def render_interview_demo(payload: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def render_markdown_summary(payload: Dict[str, Any]) -> str:
+    readiness = dict(payload.get("readiness") or {})
+    rag = dict(payload.get("rag") or {})
+    rag_summary = dict(rag.get("summary") or {})
+    badcase_summary = dict(rag.get("badcase_summary") or {})
+    workflow = dict(payload.get("workflow") or {})
+    artifacts = dict(payload.get("artifacts") or {})
+    talking_points = list(payload.get("interview_talking_points") or [])
+
+    status_text = "通过" if payload.get("success") else "未通过"
+    lines = [
+        "# 面试演示证据报告",
+        "",
+        f"- 总体状态：{status_text}",
+        f"- RAG 报告：`{artifacts.get('rag_report')}`",
+        "- 演示边界：仅验证 Web API/readiness、离线 RAG eval、badcase summary 与受控 Tool Workflow；不代表真实微信桌面收发已完成。",
+        "",
+        "## Readiness",
+        "",
+        f"- deployment_target：`{readiness.get('deployment_target')}`",
+        f"- ready：`{bool(readiness.get('ready'))}`",
+        f"- blocking_count：`{readiness.get('blocking_count')}`",
+        "",
+        "## RAG Eval",
+        "",
+        f"- cases：`{rag_summary.get('total_cases', 0)}`",
+        f"- passed：`{bool(rag_summary.get('passed'))}`",
+        f"- citation_accuracy：`{rag_summary.get('citation_accuracy')}`",
+        f"- context_recall：`{rag_summary.get('context_recall')}`",
+        f"- faithfulness：`{rag_summary.get('faithfulness')}`",
+        f"- answer_citation_binding：`{rag_summary.get('answer_citation_binding')}`",
+        f"- refusal_accuracy：`{rag_summary.get('refusal_accuracy')}`",
+        f"- badcases：`{badcase_summary.get('badcase_count', 0)}`",
+        "",
+        "## Tool Workflow",
+        "",
+        f"- success：`{bool(workflow.get('success'))}`",
+        f"- trace_steps：`{workflow.get('trace_steps', 0)}`",
+        f"- tools：`{', '.join(workflow.get('tools') or [])}`",
+        f"- repair_attempted：`{bool(workflow.get('repair_attempted'))}`",
+        "",
+        "## 面试讲法",
+        "",
+    ]
+    for item in talking_points:
+        lines.append(f"- {item}")
+
+    lines.extend(
+        [
+            "",
+            "## 可复现命令",
+            "",
+            "```powershell",
+            ".\\.venv\\Scripts\\python.exe scripts\\run_interview_demo.py --summary data\\runtime\\demo\\interview-demo-summary.md",
+            "```",
+            "",
+            "## 不夸大的边界",
+            "",
+            "- 不读取真实聊天内容。",
+            "- 不访问真实微信进程。",
+            "- 不执行任意 shell、任意 HTTP、文件写入或动态插件。",
+            "- 不替代 Windows + 微信 PC `3.9.12.51` 的人工收发验证。",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run the local interview demo.")
     parser.add_argument(
@@ -201,6 +269,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Reuse --report if it already exists instead of running RAG eval first.",
     )
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
+    parser.add_argument(
+        "--summary",
+        nargs="?",
+        const=str(DEFAULT_SUMMARY),
+        help="Write a Markdown evidence summary. Defaults to data/runtime/demo/interview-demo-summary.md when no path is provided.",
+    )
     return parser
 
 
@@ -222,10 +296,20 @@ def main(argv: List[str] | None = None) -> int:
         report_path=report_path,
         workflow_payload=workflow_payload,
     )
+    summary_path: Path | None = None
+    if args.summary:
+        summary_path = Path(str(args.summary)).expanduser().resolve()
+        payload.setdefault("artifacts", {})["summary"] = _relative_path(summary_path)
+
     if args.json:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
         print(render_interview_demo(payload))
+    if summary_path is not None:
+        summary_path.parent.mkdir(parents=True, exist_ok=True)
+        summary_path.write_text(render_markdown_summary(payload), encoding="utf-8")
+        if not args.json:
+            print(f"summary: {_relative_path(summary_path)}")
     return 0 if payload.get("success") else 1
 
 

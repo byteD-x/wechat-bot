@@ -36,7 +36,13 @@
 python scripts/run_interview_demo.py
 ```
 
-该脚本会串联 Web API readiness、RAG eval、badcase summary 和受控 Tool Workflow trace，报告默认写入 `data/runtime/demo/interview-rag-report.json`。它只验证后端治理、RAG 与 Agent 工程切片，不代表微信桌面收发已完成。
+如果要留存一份可分享的投递前证据包，可以加上 `--summary`：
+
+```bash
+python scripts/run_interview_demo.py --summary
+```
+
+该脚本会串联 Web API readiness、RAG eval、badcase summary 和受控 Tool Workflow trace，默认把 RAG 报告写入 `data/runtime/demo/interview-rag-report.json`，把 Markdown 证据包写入 `data/runtime/demo/interview-demo-summary.md`。它只验证后端治理、RAG 与 Agent 工程切片，不代表微信桌面收发已完成。
 
 ## Documentation
 

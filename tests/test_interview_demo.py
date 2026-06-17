@@ -148,6 +148,74 @@ def test_interview_demo_main_outputs_json(monkeypatch, tmp_path, capsys):
     ]
 
 
+def test_interview_demo_main_writes_markdown_summary(monkeypatch, tmp_path, capsys):
+    report_path = tmp_path / "rag-report.json"
+    summary_path = tmp_path / "summary.md"
+
+    def fake_run_rag_eval(path):
+        path.write_text(json.dumps(_report()), encoding="utf-8")
+        return 0
+
+    async def fake_build_demo_payload(report):
+        assert report["summary"]["total_cases"] == 5
+        return _workflow_payload()
+
+    monkeypatch.setattr(interview_demo, "run_rag_eval", fake_run_rag_eval)
+    monkeypatch.setattr(interview_demo, "build_demo_readiness_report", lambda: _readiness())
+    monkeypatch.setattr(interview_demo, "build_demo_payload", fake_build_demo_payload)
+
+    result = interview_demo.main(
+        [
+            "--report",
+            str(report_path),
+            "--summary",
+            str(summary_path),
+        ]
+    )
+
+    output = capsys.readouterr().out
+    summary_text = summary_path.read_text(encoding="utf-8")
+    assert result == 0
+    assert "summary:" in output
+    assert "# 面试演示证据报告" in summary_text
+    assert "- 总体状态：通过" in summary_text
+    assert "readiness: ready" not in summary_text
+    assert "Web API/readiness" in summary_text
+    assert "RAG 报告" in summary_text
+    assert "data_controls_dry_run" in summary_text
+
+
+def test_interview_demo_json_includes_summary_artifact(monkeypatch, tmp_path, capsys):
+    report_path = tmp_path / "rag-report.json"
+    summary_path = tmp_path / "summary.md"
+
+    def fake_run_rag_eval(path):
+        path.write_text(json.dumps(_report()), encoding="utf-8")
+        return 0
+
+    async def fake_build_demo_payload(_report_payload):
+        return _workflow_payload()
+
+    monkeypatch.setattr(interview_demo, "run_rag_eval", fake_run_rag_eval)
+    monkeypatch.setattr(interview_demo, "build_demo_readiness_report", lambda: _readiness())
+    monkeypatch.setattr(interview_demo, "build_demo_payload", fake_build_demo_payload)
+
+    result = interview_demo.main(
+        [
+            "--report",
+            str(report_path),
+            "--summary",
+            str(summary_path),
+            "--json",
+        ]
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert result == 0
+    assert output["artifacts"]["summary"] == str(summary_path)
+    assert summary_path.exists()
+
+
 def test_interview_demo_main_returns_eval_failure(monkeypatch, tmp_path):
     monkeypatch.setattr(interview_demo, "run_rag_eval", lambda _path: 7)
 
