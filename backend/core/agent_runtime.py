@@ -334,6 +334,10 @@ class AgentRuntime:
             "last_background_batch": {},
             "model_route_counts": {},
             "model_route_latency_priority": 0,
+            "model_route_governance_actions": {},
+            "model_route_degradation_recommended": 0,
+            "model_route_throttle_recommended": 0,
+            "model_route_manual_review_recommended": 0,
             "last_model_route": {},
             "safety_action_counts": {},
             "safety_reason_counts": {},
@@ -2529,6 +2533,18 @@ class AgentRuntime:
             "model_route_stats": {
                 "complexity_counts": dict(self._stats["model_route_counts"]),
                 "latency_priority_count": self._stats["model_route_latency_priority"],
+                "governance_action_counts": dict(
+                    self._stats["model_route_governance_actions"]
+                ),
+                "degradation_recommended_count": self._stats[
+                    "model_route_degradation_recommended"
+                ],
+                "throttle_recommended_count": self._stats[
+                    "model_route_throttle_recommended"
+                ],
+                "manual_review_recommended_count": self._stats[
+                    "model_route_manual_review_recommended"
+                ],
                 "last_route": dict(self._stats["last_model_route"]),
             },
             "runtime_timings": dict(self._stats["last_timings"]),
@@ -2542,6 +2558,22 @@ class AgentRuntime:
         if route.get("latency_priority"):
             self._stats["model_route_latency_priority"] = int(
                 self._stats.get("model_route_latency_priority", 0)
+            ) + 1
+        governance_action = str(route.get("governance_action") or "unknown").strip() or "unknown"
+        action_counts = dict(self._stats.get("model_route_governance_actions") or {})
+        action_counts[governance_action] = int(action_counts.get(governance_action, 0)) + 1
+        self._stats["model_route_governance_actions"] = action_counts
+        if route.get("degradation_recommended"):
+            self._stats["model_route_degradation_recommended"] = int(
+                self._stats.get("model_route_degradation_recommended", 0)
+            ) + 1
+        if route.get("throttle_recommended"):
+            self._stats["model_route_throttle_recommended"] = int(
+                self._stats.get("model_route_throttle_recommended", 0)
+            ) + 1
+        if route.get("manual_review_recommended"):
+            self._stats["model_route_manual_review_recommended"] = int(
+                self._stats.get("model_route_manual_review_recommended", 0)
             ) + 1
         self._stats["last_model_route"] = dict(route)
 

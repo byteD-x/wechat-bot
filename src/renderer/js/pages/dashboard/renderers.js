@@ -579,12 +579,15 @@ export function renderReadiness(page, readinessReport) {
 
     const report = normalizeReadinessReport(readinessReport);
     const flow = buildReadinessTaskFlow(report);
+    const readyNextStep = '下一步：启动机器人，向已登录微信发送一条测试消息，然后到消息页确认助手回复。';
 
     panel.hidden = false;
     panel.dataset.state = report.ready ? 'ready' : 'blocked';
     badge.textContent = report.ready ? '已就绪' : `阻塞 ${report.blockingCount}`;
-    title.textContent = report.ready ? '首启任务流已完成' : report.summary.title;
-    detail.textContent = flow.nextStep
+    title.textContent = report.ready ? '可以验证首条回复' : report.summary.title;
+    detail.textContent = report.ready
+        ? readyNextStep
+        : flow.nextStep
         ? `下一步：${flow.nextStep.title}。${flow.nextStep.message}`
         : report.summary.detail;
     list.textContent = '';

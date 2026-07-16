@@ -39,12 +39,12 @@ const FIRST_RUN_STEP_DEFINITIONS = Object.freeze([
     },
     {
         key: 'test_run',
-        title: '测试运行',
-        shortTitle: '测试',
+        title: '首条回复验证',
+        shortTitle: '首回',
         checkKeys: [],
-        detail: '前面步骤通过后，回到仪表盘启动机器人并观察一次真实运行状态。',
-        readyMessage: '准备度已通过，可以进行测试运行。',
-        pendingMessage: '完成前面步骤后再进行测试运行。',
+        detail: '前面步骤通过后，在仪表盘启动机器人，向已登录微信发送一条测试消息，再到消息页确认助手产生了可用回复。',
+        readyMessage: '准备度已通过，可以启动机器人并验证首条回复。',
+        pendingMessage: '先完成环境、模型和微信连接，再验证首条回复。',
     },
 ]);
 
@@ -64,7 +64,7 @@ function buildSummary(ready, blockingCount, summary = {}) {
     if (ready) {
         return {
             title: title || '运行准备已通过',
-            detail: detail || '环境与配置检查均已通过，可以直接启动机器人。',
+            detail: detail || '环境与配置检查均已通过。下一步启动机器人，发送一条测试消息并确认助手回复。',
         };
     }
 

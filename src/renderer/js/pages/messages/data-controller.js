@@ -36,6 +36,7 @@ function renderSummary(page) {
         searchKeyword: page._searchKeyword,
         messageCount: page._messages.length,
         total: page._total,
+        pendingReplyStats: page._pendingReplyStats,
         lastLoadedAt: page._lastLoadedAt,
     });
 }
@@ -192,7 +193,8 @@ export async function fetchMessages(page, { append, requestSeq }, deps = {}) {
     }
 
     try {
-        const result = await getApiService(deps).getMessages({
+        const currentApi = getApiService(deps);
+        const result = await currentApi.getMessages({
             limit: page._limit,
             offset: page._offset,
             chatId: page._selectedChatId,
@@ -213,6 +215,7 @@ export async function fetchMessages(page, { append, requestSeq }, deps = {}) {
         page._hasMore = Boolean(result.has_more);
         page._offset = page._messages.length;
         page._lastLoadedAt = Date.now();
+        page._pendingReplyStats = await loadPendingReplyStats(currentApi);
 
         renderChatFilter(page);
         renderMessagesPage(page, deps);
@@ -228,6 +231,24 @@ export async function fetchMessages(page, { append, requestSeq }, deps = {}) {
         console.error('[MessagesPage] load failed:', error);
         renderMessageFailureState(page, currentToast.getErrorMessage(error, MESSAGE_TEXT.loadFailed), deps);
         currentToast.error(currentToast.getErrorMessage(error, MESSAGE_TEXT.loadFailed));
+    }
+}
+
+async function loadPendingReplyStats(currentApi) {
+    if (typeof currentApi?.getReplyPolicies !== 'function') {
+        return null;
+    }
+    try {
+        const result = await currentApi.getReplyPolicies();
+        if (result?.success === false) {
+            return null;
+        }
+        return result?.pending_stats && typeof result.pending_stats === 'object'
+            ? result.pending_stats
+            : null;
+    } catch (error) {
+        console.debug('[MessagesPage] pending reply stats unavailable:', error);
+        return null;
     }
 }
 

@@ -16,6 +16,10 @@ class ModelRouteDecision:
     latency_priority: bool
     cost_priority: bool
     fallback_allowed: bool
+    degradation_recommended: bool = False
+    throttle_recommended: bool = False
+    manual_review_recommended: bool = False
+    governance_action: str = "continue_current_runtime"
     reasons: List[str] = field(default_factory=list)
     strategy: str = "current_runtime"
     timeout_sec: float = 0.0
@@ -32,6 +36,10 @@ class ModelRouteDecision:
             "latency_priority": self.latency_priority,
             "cost_priority": self.cost_priority,
             "fallback_allowed": self.fallback_allowed,
+            "degradation_recommended": self.degradation_recommended,
+            "throttle_recommended": self.throttle_recommended,
+            "manual_review_recommended": self.manual_review_recommended,
+            "governance_action": self.governance_action,
             "timeout_sec": self.timeout_sec,
             "deadline_sec": self.deadline_sec,
             "reasons": list(self.reasons),
@@ -67,6 +75,12 @@ class ModelRouter:
             min_value=0.0,
         )
         self.fallback_allowed = bool(cfg.get("fallback_allowed", True))
+        self.degrade_complex_requests = bool(cfg.get("degrade_complex_requests", True))
+        self.max_input_chars = as_int(
+            cfg.get("max_input_chars", 12000),
+            12000,
+            min_value=1,
+        )
 
     def route(
         self,
@@ -108,9 +122,33 @@ class ModelRouter:
         if cost_priority:
             reasons.append("cost_sensitive")
 
-        fallback_allowed = self.fallback_allowed and not latency_priority
+        input_limit_exceeded = input_chars > self.max_input_chars
+        if input_limit_exceeded:
+            reasons.append("input_limit_exceeded")
+
+        fallback_allowed = self.fallback_allowed and not latency_priority and not input_limit_exceeded
         if not fallback_allowed:
             reasons.append("fallback_limited")
+
+        manual_review_recommended = input_limit_exceeded
+        throttle_recommended = latency_priority and complexity != "simple"
+        degradation_recommended = (
+            self.degrade_complex_requests
+            and complexity == "complex"
+            and fallback_allowed
+        )
+        governance_action = self._resolve_governance_action(
+            manual_review_recommended=manual_review_recommended,
+            throttle_recommended=throttle_recommended,
+            degradation_recommended=degradation_recommended,
+            cost_priority=cost_priority,
+        )
+        if manual_review_recommended:
+            reasons.append("manual_review_recommended")
+        if throttle_recommended:
+            reasons.append("throttle_or_shorten_recommended")
+        if degradation_recommended:
+            reasons.append("degradation_recommended")
 
         return ModelRouteDecision(
             selected_provider=selected_provider,
@@ -121,6 +159,10 @@ class ModelRouter:
             latency_priority=latency_priority,
             cost_priority=cost_priority,
             fallback_allowed=fallback_allowed,
+            degradation_recommended=degradation_recommended,
+            throttle_recommended=throttle_recommended,
+            manual_review_recommended=manual_review_recommended,
+            governance_action=governance_action,
             reasons=reasons,
             timeout_sec=round(timeout_value, 4),
             deadline_sec=round(deadline_value, 4),
@@ -141,3 +183,21 @@ class ModelRouter:
         if deadline_sec > 0 and deadline_sec <= self.tight_deadline_sec:
             return True
         return timeout_sec > 0 and timeout_sec <= self.tight_timeout_sec
+
+    @staticmethod
+    def _resolve_governance_action(
+        *,
+        manual_review_recommended: bool,
+        throttle_recommended: bool,
+        degradation_recommended: bool,
+        cost_priority: bool,
+    ) -> str:
+        if manual_review_recommended:
+            return "manual_review_before_call"
+        if throttle_recommended:
+            return "queue_or_shorten_request"
+        if degradation_recommended:
+            return "fallback_recommended"
+        if cost_priority:
+            return "cost_optimized_current_runtime"
+        return "continue_current_runtime"

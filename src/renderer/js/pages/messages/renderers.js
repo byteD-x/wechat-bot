@@ -25,6 +25,39 @@ function buildInlineAction(documentObj, label, handler, tone = 'secondary') {
     return button;
 }
 
+export function buildFirstValueGuide(handlers = {}) {
+    const documentObj = getRenderDocument(handlers.documentObj);
+    const pendingCount = Number(handlers.pendingCount || 0);
+    const root = documentObj.createElement('div');
+    root.className = 'detail-group';
+
+    const title = documentObj.createElement('div');
+    title.className = 'detail-group-title';
+    title.textContent = MESSAGE_TEXT.firstValueTitle;
+    root.appendChild(title);
+
+    const summary = documentObj.createElement('div');
+    summary.className = 'detail-help';
+    summary.textContent = MESSAGE_TEXT.firstValueSummary;
+    root.appendChild(summary);
+
+    [
+        MESSAGE_TEXT.firstValueProfileStep,
+        MESSAGE_TEXT.firstValuePromptStep,
+        pendingCount > 0
+            ? `${MESSAGE_TEXT.firstValueApprovalStep}（当前 ${pendingCount} 条）`
+            : MESSAGE_TEXT.firstValueApprovalStep,
+        MESSAGE_TEXT.firstValueFeedbackStep,
+    ].forEach((text) => {
+        const line = documentObj.createElement('div');
+        line.className = 'detail-help';
+        line.textContent = text;
+        root.appendChild(line);
+    });
+
+    return root;
+}
+
 const QUALITY_REVIEW_TEXT = Object.freeze({
     title: '质量复盘入口',
     statusLabel: '反馈状态',
@@ -279,6 +312,10 @@ export function renderMessageSummary(page, summaryState) {
         }
         if (summaryState.searchKeyword) {
             parts.push(`${MESSAGE_TEXT.keywordLabel}: "${summaryState.searchKeyword}"`);
+        }
+        const pendingCount = Number(summaryState.pendingReplyStats?.pending || 0);
+        if (pendingCount > 0) {
+            parts.push(`待审批回复: ${pendingCount}`);
         }
         summary.textContent = parts.join(' / ');
     }
@@ -752,7 +789,7 @@ export function buildReplyApprovalDetail(message, context = {}, handlers = {}) {
     pendingWrap.appendChild(pendingLabel);
 
     if (pendingReplies.length === 0) {
-        pendingWrap.appendChild(createMessageStateBlock('当前没有待审批回复。', 'empty-state'));
+        pendingWrap.appendChild(createMessageStateBlock('当前没有待审批回复。把这个会话设为“始终进入审批”后，新回复会先停在这里。', 'empty-state'));
         root.appendChild(pendingWrap);
         return root;
     }
@@ -779,7 +816,7 @@ export function buildReplyApprovalDetail(message, context = {}, handlers = {}) {
 
         const meta = documentObj.createElement('div');
         meta.className = 'detail-help';
-        meta.textContent = `创建时间：${formatMessageTime(pendingReply.created_at) || '--'}`;
+        meta.textContent = `创建时间：${formatMessageTime(pendingReply.created_at) || '--'}。可先改写草稿，再批准发送；不合适就拒绝。`;
         item.appendChild(meta);
 
         const actions = documentObj.createElement('div');

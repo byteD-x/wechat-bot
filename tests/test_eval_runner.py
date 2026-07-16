@@ -59,18 +59,22 @@ def test_eval_runner_reports_rag_quality_metrics():
     report = evaluate_dataset(dataset_path, preset="rag-smoke")
 
     assert report["summary"]["passed"] is True
-    assert report["summary"]["total_cases"] == 5
+    assert report["summary"]["total_cases"] == 8
+    assert report["summary"]["retrieval_hit_rate"] == 0.875
     assert report["summary"]["citation_accuracy"] == 1.0
-    assert report["summary"]["citation_eval_cases"] == 3
+    assert report["summary"]["citation_eval_cases"] == 5
     assert report["summary"]["context_recall"] == 1.0
     assert report["summary"]["faithfulness"] == 1.0
     assert report["summary"]["answer_citation_binding"] == 1.0
-    assert report["summary"]["answer_citation_binding_eval_cases"] == 3
+    assert report["summary"]["answer_citation_binding_eval_cases"] == 5
     assert report["summary"]["refusal_accuracy"] == 1.0
-    assert report["summary"]["refusal_eval_cases"] == 2
+    assert report["summary"]["refusal_eval_cases"] == 3
     assert report["regressions"] == []
     assert report["cases"][0]["rag_eval"]["matched_evidence"]
     assert report["cases"][0]["rag_eval"]["answer_citation_bound"] is True
+    no_hit_case = next(item for item in report["cases"] if item["id"] == "zh-no-hit-refusal")
+    assert no_hit_case["flags"]["retrieval_hit"] is False
+    assert no_hit_case["rag_eval"]["refusal_match"] is True
 
 
 def test_eval_runner_fails_rag_metric_thresholds(tmp_path: Path):

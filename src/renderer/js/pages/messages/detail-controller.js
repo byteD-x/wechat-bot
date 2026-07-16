@@ -6,6 +6,7 @@ import {
 } from './formatters.js';
 import {
     buildContactProfileDetail,
+    buildFirstValueGuide,
     buildMessageDetail,
     buildReplyApprovalDetail,
 } from './renderers.js';
@@ -163,6 +164,10 @@ export async function openDetailModal(page, message, deps = {}) {
             onFeedback: saveFeedback,
             onCopy: copyText,
             pendingReplies,
+        }));
+        body.appendChild(buildFirstValueGuide({
+            documentObj,
+            pendingCount: pendingReplies.length,
         }));
 
         if (profileResult.status === 'fulfilled' && profileResult.value?.success) {

@@ -856,6 +856,8 @@ test('readiness task flow groups first-run steps and keeps skipped steps reviewa
         'wechat_connection',
         'test_run',
     ]);
+    assert.equal(flow.steps[3].title, '首条回复验证');
+    assert.match(flow.steps[3].message, /验证首条回复/);
     assert.equal(flow.activeStep.key, 'environment');
     assert.equal(flow.steps[0].status, 'skipped');
     assert.equal(flow.steps[0].primaryAction.action, 'restart_as_admin');

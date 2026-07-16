@@ -371,9 +371,11 @@ async def test_agent_runtime_prepare_request_aggregates_context(monkeypatch):
     assert model_route["selected_model"] == "test-model"
     assert model_route["rag_augmented"] is True
     assert model_route["task_complexity"] == "standard"
+    assert model_route["governance_action"] == "continue_current_runtime"
     assert prepared.trace["model_route"] == model_route
     route_status = runtime.get_status()["model_route_stats"]
     assert route_status["complexity_counts"]["standard"] == 1
+    assert route_status["governance_action_counts"]["continue_current_runtime"] == 1
     assert route_status["last_route"]["selected_model"] == "test-model"
     assert prepared.trace["context_summary"]["growth_mode"] == "deferred_until_batch"
     assert prepared.trace["context_summary"]["retrieval_augmented"] is True

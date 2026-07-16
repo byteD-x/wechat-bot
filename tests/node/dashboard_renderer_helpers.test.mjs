@@ -362,3 +362,50 @@ test('renderReadiness renders blocking checks and actions', () => withDom(({ doc
         'open_wechat'
     );
 }));
+
+test('renderReadiness prompts first reply verification when ready', () => withDom(({ document, createPage }) => {
+    const selectors = {
+        '#bot-readiness': document.createElement('div'),
+        '#bot-readiness-badge': document.createElement('div'),
+        '#bot-readiness-title': document.createElement('div'),
+        '#bot-readiness-detail': document.createElement('div'),
+        '#bot-readiness-list': document.createElement('ul'),
+    };
+    const page = createPage(selectors);
+
+    renderReadiness(page, {
+        success: true,
+        ready: true,
+        blocking_count: 0,
+        checks: [
+            {
+                key: 'admin_permission',
+                label: '管理员权限',
+                status: 'passed',
+                blocking: false,
+                message: '已具备管理员权限',
+            },
+            {
+                key: 'api_config',
+                label: 'API 配置',
+                status: 'passed',
+                blocking: false,
+                message: '检测到可用预设',
+            },
+            {
+                key: 'wechat_process',
+                label: '微信进程',
+                status: 'passed',
+                blocking: false,
+                message: '检测到微信客户端',
+            },
+        ],
+    });
+
+    assert.equal(selectors['#bot-readiness'].dataset.state, 'ready');
+    assert.equal(selectors['#bot-readiness-badge'].textContent, '已就绪');
+    assert.equal(selectors['#bot-readiness-title'].textContent, '可以验证首条回复');
+    assert.match(selectors['#bot-readiness-detail'].textContent, /发送一条测试消息/);
+    assert.equal(selectors['#bot-readiness-list'].children[3].dataset.step, 'test_run');
+    assert.match(selectors['#bot-readiness-list'].children[3].textContent, /首条回复验证/);
+}));

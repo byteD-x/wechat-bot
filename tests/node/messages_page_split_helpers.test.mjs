@@ -156,6 +156,10 @@ test('messages data helper resets offline state and renders loaded messages', as
                 total: 2,
                 has_more: true,
             }),
+            getReplyPolicies: async () => ({
+                success: true,
+                pending_stats: { pending: 2 },
+            }),
         },
         onOpenDetail: () => {},
     });
@@ -163,9 +167,47 @@ test('messages data helper resets offline state and renders loaded messages', as
     assert.equal(page._messages.length, 2);
     assert.equal(page._hasMore, true);
     assert.equal(selectors['#message-chat-filter'].children.length, 2);
+    assert.equal(selectors['#message-filter-summary'].textContent.includes('待审批回复: 2'), true);
     assert.equal(selectors['#message-total-count'].textContent.includes('2/2'), true);
     assert.equal(selectors['#btn-load-more-messages'].hidden, false);
     assert.equal(page.emitted.length, 1);
+}));
+
+test('messages data helper keeps messages visible when pending stats fail', async () => withDom(async ({ document }) => {
+    const selectors = {
+        '#all-messages': document.createElement('div'),
+        '#message-chat-filter': document.createElement('select'),
+        '#message-filter-summary': document.createElement('div'),
+        '#message-total-count': document.createElement('div'),
+        '#btn-load-more-messages': document.createElement('button'),
+    };
+    const page = createMessagesPage({
+        bot: { connected: true },
+    }, selectors);
+    const toast = createToastRecorder();
+
+    await fetchMessages(page, { append: false }, {
+        toast,
+        apiService: {
+            getMessages: async () => ({
+                success: true,
+                messages: [
+                    { wx_id: 'wx-1', sender: 'A', content: 'hello', timestamp: 1 },
+                ],
+                chats: [],
+                total: 1,
+                has_more: false,
+            }),
+            getReplyPolicies: async () => {
+                throw new Error('pending stats offline');
+            },
+        },
+    });
+
+    assert.equal(page._messages.length, 1);
+    assert.equal(selectors['#all-messages'].textContent.includes('hello'), true);
+    assert.equal(selectors['#message-filter-summary'].textContent.includes('待审批回复'), false);
+    assert.equal(toast.calls.length, 0);
 }));
 
 test('messages data helper applies realtime message filter and renders list', async () => withDom(async ({ document }) => {
@@ -419,6 +461,10 @@ test('messages detail helper handles offline and success profile flows', async (
     });
 
     assert.equal(body.textContent.includes('summary'), true);
+    assert.equal(body.textContent.includes('首个价值闭环'), true);
+    assert.equal(body.textContent.includes('先确认这个联系人是谁、怎么回，再审阅草稿'), true);
+    assert.equal(body.textContent.includes('1. 看画像和历史风格'), true);
+    assert.equal(body.textContent.includes('2. 补一句回复规则'), true);
     assert.equal(body.textContent.includes('固定注入块（只读）'), true);
     closeDetailModal(page, { documentObj: document });
     assert.equal(modal.classList.contains('active'), false);
@@ -502,7 +548,7 @@ test('messages detail helper strips fixed prompt block before editing contact pr
     assert.equal(fixed.value.includes('{history_context}'), true);
 
     editable.value = '保留熟悉感，但别太长。';
-    const saveButton = findFirstButtonByText(body, '保存 Prompt');
+    const saveButton = findFirstButtonByText(body, '保存风格规则');
     saveButton.click();
 
     await Promise.resolve();
@@ -759,6 +805,8 @@ test('messages detail helper renders pending approvals and saves per-chat overri
 
     assert.equal(body.textContent.includes('回复策略与审批'), true);
     assert.equal(body.textContent.includes('待审批 #9'), true);
+    assert.equal(body.textContent.includes('3. 审阅草稿后再发送（当前 1 条）'), true);
+    assert.equal(body.textContent.includes('可先改写草稿，再批准发送；不合适就拒绝。'), true);
 
     const selects = Array.from(body.querySelectorAll('select'));
     const overrideSelect = selects.find((item) => Array.from(item.children).some((child) => child.value === 'manual'));

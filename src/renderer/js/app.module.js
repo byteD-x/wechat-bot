@@ -161,6 +161,17 @@ class App {
         }
     }
 
+    async _runDisposeStep(stepName, fn) {
+        if (typeof fn !== 'function') {
+            return;
+        }
+        try {
+            await fn();
+        } catch (error) {
+            console.warn(`[App] dispose step failed: ${stepName}`, error);
+        }
+    }
+
     _bindDomEvent(target, eventName, handler) {
         if (!target?.addEventListener || !target?.removeEventListener || typeof handler !== 'function') {
             return;
@@ -201,21 +212,21 @@ class App {
             const remove = this[key];
             this[key] = null;
             if (typeof remove === 'function') {
-                remove();
+                await this._runDisposeStep(key, remove);
             }
         }
 
         for (const cleanup of this._cleanupCallbacks.splice(0)) {
-            cleanup();
+            await this._runDisposeStep('cleanup callback', cleanup);
         }
 
         if (typeof window !== 'undefined' && window.appConfirm) {
             window.appConfirm = null;
         }
 
-        for (const page of Object.values(this.pages || {})) {
+        for (const [pageName, page] of Object.entries(this.pages || {})) {
             if (typeof page?.onDestroy === 'function') {
-                await page.onDestroy();
+                await this._runDisposeStep(`${pageName}.onDestroy`, () => page.onDestroy());
             }
         }
     }
