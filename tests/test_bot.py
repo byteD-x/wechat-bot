@@ -563,11 +563,13 @@ async def test_evaluate_outgoing_reply_policy_uses_stable_chat_id_history():
         raw_item=SimpleNamespace(chat_id="wxid_alice", sender_id="wxid_alice"),
     )
 
-    result = await bot.evaluate_outgoing_reply_policy(
-        event=event,
-        user_text="hello",
-        reply_text="hi",
-    )
+    # 固定静默时段判定为 False，避免测试受运行时钟点影响（默认静默 00:00-07:30）。
+    with patch("backend.core.reply_policy.is_in_quiet_hours", return_value=False):
+        result = await bot.evaluate_outgoing_reply_policy(
+            event=event,
+            user_text="hello",
+            reply_text="hi",
+        )
 
     assert result["chat_id"] == "friend:wxid_alice"
     assert result["should_queue"] is False
