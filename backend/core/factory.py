@@ -388,7 +388,7 @@ def build_agent_runtime(
     bot_cfg: Dict[str, Any],
     agent_cfg: Optional[Dict[str, Any]] = None,
 ) -> AgentRuntime:
-    """根据配置构建 LangChain/LangGraph 运行时。"""
+    """根据配置构建直连 OpenAI-compatible / Anthropic 运行时。"""
     from ..core.agent_runtime import AgentRuntime
 
     return AgentRuntime(settings=settings, bot_cfg=bot_cfg, agent_cfg=agent_cfg)

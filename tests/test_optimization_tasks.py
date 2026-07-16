@@ -71,32 +71,6 @@ class _FakeOpenAIEmbeddings:
         return [float(len(query))]
 
 
-class _FakeCompiledGraph:
-    def __init__(self, nodes):
-        self.nodes = nodes
-
-    async def ainvoke(self, state):
-        current = dict(state)
-        for name in ("load_context", "build_prompt"):
-            updates = await self.nodes[name](current)
-            current.update(updates or {})
-        return current
-
-
-class _FakeStateGraph:
-    def __init__(self, _state_type):
-        self.nodes = {}
-
-    def add_node(self, name, fn):
-        self.nodes[name] = fn
-
-    def add_edge(self, _src, _dst):
-        return None
-
-    def compile(self):
-        return _FakeCompiledGraph(self.nodes)
-
-
 class _DummyVectorMemory:
     def search(self, query=None, n_results=5, filter_meta=None, query_embedding=None):
         return [
@@ -112,9 +86,6 @@ def _fake_integrations(self):
         "SystemMessage": _FakeMessage,
         "ChatOpenAI": _FakeChatOpenAI,
         "OpenAIEmbeddings": _FakeOpenAIEmbeddings,
-        "START": "__start__",
-        "END": "__end__",
-        "StateGraph": _FakeStateGraph,
     }
 
 

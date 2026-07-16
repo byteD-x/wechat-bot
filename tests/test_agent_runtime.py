@@ -66,32 +66,6 @@ class _FakeOpenAIEmbeddings:
         return [float(len(query))]
 
 
-class _FakeCompiledGraph:
-    def __init__(self, nodes):
-        self.nodes = nodes
-
-    async def ainvoke(self, state):
-        current = dict(state)
-        for name in ("load_context", "build_prompt"):
-            updates = await self.nodes[name](current)
-            current.update(updates or {})
-        return current
-
-
-class _FakeStateGraph:
-    def __init__(self, _state_type):
-        self.nodes = {}
-
-    def add_node(self, name, fn):
-        self.nodes[name] = fn
-
-    def add_edge(self, _src, _dst):
-        return None
-
-    def compile(self):
-        return _FakeCompiledGraph(self.nodes)
-
-
 class _DummyMemory:
     def __init__(self):
         self.saved_messages = []
@@ -307,9 +281,6 @@ def _fake_integrations(self):
         "SystemMessage": _FakeMessage,
         "ChatOpenAI": _FakeChatOpenAI,
         "OpenAIEmbeddings": _FakeOpenAIEmbeddings,
-        "START": "__start__",
-        "END": "__end__",
-        "StateGraph": _FakeStateGraph,
     }
 
 
@@ -1461,7 +1432,7 @@ async def test_agent_runtime_invoke_raises_when_fallback_is_still_empty(monkeypa
     runtime._chat_model.ainvoke = _ainvoke
     monkeypatch.setattr(runtime, "_invoke_openai_compatible_reply", _fallback)
 
-    with pytest.raises(RuntimeError, match="LangChain returned empty content"):
+    with pytest.raises(RuntimeError, match="Model returned empty content"):
         await runtime.invoke(prepared)
 
     assert "compat_fallback" not in prepared.response_metadata

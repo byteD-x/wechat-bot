@@ -93,6 +93,98 @@ class _AnthropicNativeChatModel:
         yield response
 
 
+class _RuntimeChatMessage:
+    """轻量消息对象，替代 LangChain 的 System/Human/AIMessage。
+
+    仅承载 ``content`` 与 ``type``，供 ``_detect_message_role`` 与
+    ``_serialize_prompt_messages_for_openai`` 消费。
+    """
+
+    __slots__ = ("content", "type")
+
+    def __init__(self, content: Any, *, type: str) -> None:  # noqa: A002 - 对齐既有接口
+        self.content = content
+        self.type = type
+
+
+def _system_message(content: Any) -> _RuntimeChatMessage:
+    return _RuntimeChatMessage(content, type="system")
+
+
+def _human_message(content: Any) -> _RuntimeChatMessage:
+    return _RuntimeChatMessage(content, type="human")
+
+
+def _ai_message(content: Any) -> _RuntimeChatMessage:
+    return _RuntimeChatMessage(content, type="ai")
+
+
+class _DirectOpenAIChatModel:
+    """OpenAI-compatible 直连聊天客户端，替代 LangChain ``ChatOpenAI``。
+
+    ``ainvoke`` 返回 provider 原始 JSON（与 ``_AnthropicNativeChatModel`` 一致），
+    由调用方统一走 ``normalize_chat_result`` 归一化。``kwargs`` 仅供测试与诊断内省。
+    """
+
+    def __init__(self, *, runtime: "AgentRuntime", streaming: bool = False, **kwargs: Any) -> None:
+        self._runtime = runtime
+        self._streaming = bool(streaming)
+        self.kwargs = dict(kwargs)
+
+    async def ainvoke(self, messages, config=None):
+        return await self._runtime._invoke_openai_chat_raw(messages)
+
+    async def astream(self, messages, config=None):
+        response = await self.ainvoke(messages, config=config)
+        yield response
+
+
+class _DirectOpenAIEmbeddings:
+    """OpenAI-compatible 直连 embedding 客户端，替代 LangChain ``OpenAIEmbeddings``。"""
+
+    def __init__(
+        self,
+        *,
+        model: str,
+        api_key: Optional[str],
+        base_url: Optional[str],
+        request_timeout: float,
+        max_retries: int,
+        default_headers: Optional[Dict[str, str]] = None,
+    ) -> None:
+        self.model = model
+        self.api_key = api_key
+        self.base_url = (base_url or "").strip().rstrip("/")
+        self.request_timeout = float(request_timeout)
+        self.max_retries = max(0, int(max_retries))
+        self.default_headers = dict(default_headers or {})
+
+    async def aembed_query(self, query: str) -> List[float]:
+        url = f"{self.base_url}/embeddings"
+        headers = {"Content-Type": "application/json", **self.default_headers}
+        if self.api_key:
+            headers.setdefault("Authorization", f"Bearer {self.api_key}")
+        payload = {"model": self.model, "input": query}
+        max_attempts = max(1, self.max_retries + 1)
+        last_error: Optional[Exception] = None
+        async with httpx.AsyncClient(timeout=self.request_timeout) as client:
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    response = await client.post(url, headers=headers, json=payload)
+                    response.raise_for_status()
+                    data = response.json()
+                    vector = (((data.get("data") or [{}])[0]) or {}).get("embedding")
+                    if not isinstance(vector, list):
+                        raise ValueError("embedding response missing data[0].embedding")
+                    return [float(x) for x in vector]
+                except Exception as exc:  # noqa: BLE001 - 归一化后按可重试性决定
+                    last_error = exc
+                    if attempt >= max_attempts:
+                        raise
+                    await asyncio.sleep(min(0.25 * (2 ** (attempt - 1)), 1.5))
+        raise last_error or RuntimeError("embedding request failed")
+
+
 @dataclass(slots=True)
 class AgentPreparedRequest:
     chat_id: str
@@ -176,7 +268,7 @@ def _detect_message_role(message: Any) -> str:
 
 
 class AgentRuntime:
-    """基于 LangChain/LangGraph 的统一编排运行时。"""
+    """直连 OpenAI-compatible / Anthropic 的统一编排运行时。"""
 
     def __init__(
         self,
@@ -349,16 +441,13 @@ class AgentRuntime:
         }
 
         self._imports = self._load_integrations()
-        self._configure_langsmith()
         self._cross_encoder_reranker = self._build_cross_encoder_reranker()
         self._rerank_backend = (
             "cross_encoder" if self._cross_encoder_reranker is not None else "lightweight"
         )
         self._refresh_runtime_auth_clients(force=True, rebuild=False)
         self._chat_model = self._build_chat_model(streaming=False)
-        self._stream_model = self._build_chat_model(streaming=True)
         self._embedding_client = self._build_embedding_client()
-        self._prepare_graph = self._compile_prepare_graph()
 
         if self.effective_timeout_sec != self.timeout_sec:
             logger.info(
@@ -369,38 +458,19 @@ class AgentRuntime:
             )
 
     def _load_integrations(self) -> Dict[str, Any]:
-        try:
-            from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-            from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-            from langgraph.graph import END, START, StateGraph
-        except ImportError as exc:
-            raise RuntimeError(
-                "LangChain/LangGraph 依赖未安装，请先安装 requirements.txt 中新增依赖。"
-            ) from exc
+        """提供消息构造器接缝。
 
+        运行时已改为直连 OpenAI-compatible / Anthropic API，不再依赖
+        LangChain / LangGraph / LangSmith。此处仅返回轻量消息构造器，供
+        ``build_prompt_messages`` 使用；测试可继续 monkeypatch 本方法注入桩。
+        """
         return {
-            "AIMessage": AIMessage,
-            "HumanMessage": HumanMessage,
-            "SystemMessage": SystemMessage,
-            "ChatOpenAI": ChatOpenAI,
-            "OpenAIEmbeddings": OpenAIEmbeddings,
-            "START": START,
-            "END": END,
-            "StateGraph": StateGraph,
+            "AIMessage": _ai_message,
+            "HumanMessage": _human_message,
+            "SystemMessage": _system_message,
+            "ChatOpenAI": _DirectOpenAIChatModel,
+            "OpenAIEmbeddings": _DirectOpenAIEmbeddings,
         }
-
-    def _configure_langsmith(self) -> None:
-        if not self.langsmith_enabled:
-            return
-
-        api_key = str(self.agent_cfg.get("langsmith_api_key") or "").strip()
-        endpoint = str(self.agent_cfg.get("langsmith_endpoint") or "").strip()
-        if api_key:
-            os.environ["LANGSMITH_API_KEY"] = api_key
-        os.environ["LANGSMITH_TRACING"] = "true"
-        os.environ["LANGSMITH_PROJECT"] = self.langsmith_project
-        if endpoint:
-            os.environ["LANGSMITH_ENDPOINT"] = endpoint
 
     def _build_model_kwargs(self) -> Dict[str, Any]:
         model_kwargs: Dict[str, Any] = {}
@@ -441,7 +511,7 @@ class AgentRuntime:
             kwargs["max_tokens"] = self.max_tokens
         if self.temperature is not None:
             kwargs["temperature"] = self.temperature
-        return self._imports["ChatOpenAI"](**kwargs)
+        return self._imports["ChatOpenAI"](runtime=self, **kwargs)
 
     def _build_embedding_client(self) -> Optional[Any]:
         if self.auth_transport in {"anthropic_native", "anthropic_vertex", "openai_codex_responses", "google_code_assist"}:
@@ -489,14 +559,16 @@ class AgentRuntime:
             logger.warning("Cross-Encoder 精排初始化失败: %s", exc)
             return None
 
-    def _compile_prepare_graph(self) -> Any:
-        graph = self._imports["StateGraph"](dict)
-        graph.add_node("load_context", self._load_context_node)
-        graph.add_node("build_prompt", self._build_prompt_node)
-        graph.add_edge(self._imports["START"], "load_context")
-        graph.add_edge("load_context", "build_prompt")
-        graph.add_edge("build_prompt", self._imports["END"])
-        return graph.compile()
+    async def _run_prepare_pipeline(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        """顺序执行上下文加载与 Prompt 构建。
+
+        原实现用 LangGraph ``StateGraph`` 编排一个无分支的两节点线性图，
+        等价于两次函数调用；此处直接顺序执行，去掉框架开销。
+        """
+        current = dict(state)
+        current.update(await self._load_context_node(current) or {})
+        current.update(await self._build_prompt_node(current) or {})
+        return current
 
     def _get_chat_lock(self, chat_id: str) -> asyncio.Lock:
         lock = self._chat_locks.get(chat_id)
@@ -912,7 +984,6 @@ class AgentRuntime:
         )
         if rebuild:
             self._chat_model = self._build_chat_model(streaming=False)
-            self._stream_model = self._build_chat_model(streaming=True)
             self._embedding_client = self._build_embedding_client()
 
     def _serialize_prompt_messages_for_openai(self, prompt_messages: Iterable[Any]) -> List[Dict[str, Any]]:
@@ -1261,23 +1332,19 @@ class AgentRuntime:
         )
         return normalize_chat_result(self._normalize_google_code_assist_events(events))
 
-    async def _invoke_openai_compatible_reply(
+    async def _post_chat_completions_raw(
         self,
-        prepared: AgentPreparedRequest,
+        payload: Dict[str, Any],
         *,
-        messages: Optional[Iterable[Dict[str, Any]]] = None,
-        tools: Optional[Iterable[Dict[str, Any]]] = None,
-        tool_choice: Optional[Any] = None,
-        refresh_reason: str = "compat_fallback_401",
+        refresh_reason: str,
+        chat_id: str = "",
     ) -> Any:
+        """向 ``/chat/completions`` 发起带重试与 401 重认证的请求，返回原始 JSON。
+
+        这是 OpenAI-compatible 直连的统一出口，被主聊天路径
+        ``_invoke_openai_chat_raw`` 与兼容层 ``_invoke_openai_compatible_reply`` 共用。
+        """
         url = f"{self.base_url}/chat/completions"
-        payload = self._build_openai_compatible_payload(
-            prepared,
-            stream=False,
-            messages=messages,
-            tools=tools,
-            tool_choice=tool_choice,
-        )
         headers = self._build_openai_compatible_headers()
         max_attempts = max(1, int(self.max_retries) + 1)
         last_error: Optional[RuntimeError] = None
@@ -1291,7 +1358,7 @@ class AgentRuntime:
                         headers = self._build_openai_compatible_headers()
                         response = await client.post(url, headers=headers, json=payload)
                     response.raise_for_status()
-                    return normalize_chat_result(response.json())
+                    return response.json()
                 except ValueError as exc:
                     normalized_error = normalize_provider_error(
                         exc=exc,
@@ -1304,10 +1371,10 @@ class AgentRuntime:
                 last_error = RuntimeError(normalized_error.message)
                 should_retry = normalized_error.retryable and attempt < max_attempts
                 logger.warning(
-                    "Compat fallback request failed (%s/%s) [%s]: %s",
+                    "Chat completions request failed (%s/%s) [%s]: %s",
                     attempt,
                     max_attempts,
-                    prepared.chat_id,
+                    chat_id,
                     normalized_error.message,
                 )
                 if not should_retry:
@@ -1315,6 +1382,42 @@ class AgentRuntime:
                 await asyncio.sleep(min(0.25 * (2 ** (attempt - 1)), 1.5))
 
         raise last_error or RuntimeError("provider request failed")
+
+    async def _invoke_openai_chat_raw(self, messages: Iterable[Any]) -> Any:
+        """主聊天路径：直连 ``/chat/completions``，返回 provider 原始 JSON。"""
+        payload = build_openai_chat_payload(
+            model=self.model,
+            messages=self._serialize_prompt_messages_for_openai(messages),
+            stream=False,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+            max_completion_tokens=self.max_completion_tokens,
+            reasoning_effort=self.reasoning_effort,
+        )
+        return await self._post_chat_completions_raw(payload, refresh_reason="invoke_401")
+
+    async def _invoke_openai_compatible_reply(
+        self,
+        prepared: AgentPreparedRequest,
+        *,
+        messages: Optional[Iterable[Dict[str, Any]]] = None,
+        tools: Optional[Iterable[Dict[str, Any]]] = None,
+        tool_choice: Optional[Any] = None,
+        refresh_reason: str = "compat_fallback_401",
+    ) -> Any:
+        payload = self._build_openai_compatible_payload(
+            prepared,
+            stream=False,
+            messages=messages,
+            tools=tools,
+            tool_choice=tool_choice,
+        )
+        raw = await self._post_chat_completions_raw(
+            payload,
+            refresh_reason=refresh_reason,
+            chat_id=str(getattr(prepared, "chat_id", "") or ""),
+        )
+        return normalize_chat_result(raw)
 
     def _supports_model_tool_call_execution(self) -> bool:
         return self._supports_chat_completions_fallback()
@@ -1595,7 +1698,7 @@ class AgentRuntime:
             await self._chat_model.ainvoke([human(content="ping")])
             return True
         except Exception as exc:
-            logger.warning("LangChain runtime 探测失败: %s", exc)
+            logger.warning("运行时探测失败: %s", exc)
             if not self._is_ollama_runtime():
                 return False
         try:
@@ -1636,7 +1739,7 @@ class AgentRuntime:
             "dependencies": dependencies,
             "image_path": image_path,
         }
-        final_state = await self._prepare_graph.ainvoke(state)
+        final_state = await self._run_prepare_pipeline(state)
         timings = dict(final_state.get("timings") or {})
         timings["prepare_total_sec"] = round(time.perf_counter() - start_ts, 4)
         prepared = AgentPreparedRequest(
@@ -1807,13 +1910,7 @@ class AgentRuntime:
                     else:
                         if self.model_tool_calls_enabled:
                             prepared.response_metadata["model_tool_calls_skipped"] = "unsupported_transport"
-                        response = await self._chat_model.ainvoke(
-                            prepared.prompt_messages,
-                            config={
-                                "tags": ["wechat-chat", "agent-runtime", "invoke"],
-                                "metadata": {"chat_id": prepared.chat_id, "engine": "langgraph"},
-                            },
-                        )
+                        response = await self._chat_model.ainvoke(prepared.prompt_messages)
                         normalized = normalize_chat_result(response)
                     final_normalized = normalized
                     reply_text, reasoning_text = self._consume_normalized_reply(
@@ -1827,7 +1924,7 @@ class AgentRuntime:
                 if not self._is_ollama_runtime():
                     raise
                 logger.warning(
-                    "LangChain invoke failed, fallback to direct compat call [%s][provider=%s]: %s",
+                    "Primary invoke failed, fallback to direct compat call [%s][provider=%s]: %s",
                     prepared.chat_id,
                     self.provider_id or "unknown",
                     exc,
@@ -1877,7 +1974,7 @@ class AgentRuntime:
                     if fallback_reply_text or fallback_reasoning_text:
                         prepared.response_metadata["compat_fallback"] = "openai_chat_completions"
                         logger.warning(
-                            "LangChain empty reply fallback hit [%s][provider=%s]",
+                            "Empty reply fallback hit [%s][provider=%s]",
                             prepared.chat_id,
                             self.provider_id or "unknown",
                         )
@@ -1888,7 +1985,7 @@ class AgentRuntime:
                     fallback_error = exc
                     prepared.response_metadata["compat_fallback_error"] = str(exc)
                     logger.warning(
-                        "LangChain empty reply fallback failed [%s][provider=%s]: %s",
+                        "Empty reply fallback failed [%s][provider=%s]: %s",
                         prepared.chat_id,
                         self.provider_id or "unknown",
                         exc,
@@ -1908,7 +2005,7 @@ class AgentRuntime:
                         error=fallback_error,
                     )
                     return ""
-                raise RuntimeError("LangChain returned empty content.")
+                raise RuntimeError("Model returned empty content.")
             prepared.timings["invoke_sec"] = round(time.perf_counter() - started, 4)
             prepared.timings["model_call_sec"] = round(time.perf_counter() - model_call_started, 4)
             reply_text = self._apply_safety_guard(prepared, reply_text)
@@ -2482,7 +2579,7 @@ class AgentRuntime:
 
     def get_status(self) -> Dict[str, Any]:
         return {
-            "engine": "langgraph",
+            "engine": "direct",
             "graph_mode": self.graph_mode,
             "langsmith_enabled": self.langsmith_enabled,
             "langsmith_project": self.langsmith_project,

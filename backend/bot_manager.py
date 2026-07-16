@@ -565,7 +565,7 @@ class BotManager:
             "today_tokens": stats.get("today_tokens", 0),
             "total_replies": stats.get("total_replies", 0),
             "total_tokens": stats.get("total_tokens", 0),
-            "engine": "langgraph",
+            "engine": "direct",
             "startup": dict(self._startup_state),
         }
         try:
