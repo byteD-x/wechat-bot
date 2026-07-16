@@ -8,7 +8,7 @@
 - Quart Web API
 - WeChatBot 主运行时
 - WCFerry 传输层
-- LangChain / LangGraph 运行时
+- 直连 OpenAI-compatible / Anthropic 运行时
 - 记忆、RAG、观测与配置热更新
 
 ## 1. 分层总览

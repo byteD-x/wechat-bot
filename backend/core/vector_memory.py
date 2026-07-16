@@ -1,23 +1,33 @@
 """
-向量记忆管理模块 - 基于 ChromaDB 实现 RAG
+向量记忆管理模块 - 基于 SQLite 实现轻量 RAG
 
-功能：
-- 存储和检索历史对话的向量表示
-- 支持基于语义的上下文检索
+设计:
+- 复用项目已有的 SQLite 依赖,不引入 ChromaDB / onnxruntime / 其它重型向量库。
+- embedding 以 JSON 数组存储,检索时在 Python 内做余弦相似度(暴力 KNN)。
+  个人助手规模(RAG 默认关闭,单会话至多数千条片段)下,暴力检索延迟在毫秒级,
+  无需 ANN 索引与编译扩展。
+- 距离语义与原实现保持一致:``distance = 1 - cosine_similarity``(取值 [0, 2]),
+  上层按 ``max(0, 1 - distance)`` 折算相似度。
 """
 
+import json
 import logging
 import math
 import os
 import re
+import sqlite3
+import threading
 from collections import Counter
 from typing import List, Dict, Optional, Any
+
 from backend.shared_config import ensure_data_root
-from ..utils.runtime_artifacts import chdir_temporarily, CHROMA_DIR, relocate_known_root_artifacts
 
 logger = logging.getLogger(__name__)
 
-_KEYWORD_TOKEN_RE = re.compile(r"[0-9a-zA-Z\u4e00-\u9fff]+")
+_KEYWORD_TOKEN_RE = re.compile(r"[0-9a-zA-Z一-鿿]+")
+
+# metadata 中用于快速过滤的热点键,单独抽列并建索引;其余键回退 json_extract。
+_INDEXED_META_KEYS = ("source", "chat_id", "doc_id")
 
 
 def _tokenize_keyword_text(text: str) -> List[str]:
@@ -79,107 +89,171 @@ def _rank_keyword_candidates(query: str, candidates: List[Dict[str, Any]]) -> Li
     ranked.sort(key=lambda item: (float(item.get("keyword_score") or 0.0), _keyword_identity(item)), reverse=True)
     return ranked
 
+
+def _cosine_distance(left: List[float], right: List[float]) -> float:
+    if not left or not right or len(left) != len(right):
+        return 1.0
+    dot = 0.0
+    norm_left = 0.0
+    norm_right = 0.0
+    for a, b in zip(left, right):
+        dot += a * b
+        norm_left += a * a
+        norm_right += b * b
+    if norm_left <= 0.0 or norm_right <= 0.0:
+        return 1.0
+    similarity = dot / (math.sqrt(norm_left) * math.sqrt(norm_right))
+    # 数值裁剪,避免浮点误差导致相似度略超 [-1, 1]
+    similarity = max(-1.0, min(1.0, similarity))
+    return 1.0 - similarity
+
+
 class VectorMemory:
+    """SQLite 后端的向量记忆。公开接口与旧 ChromaDB 实现保持一致。"""
+
     def __init__(self, db_path: Optional[str] = None):
+        # 兼容旧契约:db_path 是一个目录,库文件落在其中,便于沿用既有配置。
         if not db_path:
             db_path = str(ensure_data_root() / "vector_db")
         self.db_path = os.path.abspath(db_path)
         os.makedirs(self.db_path, exist_ok=True)
+        self._db_file = os.path.join(self.db_path, "vectors.sqlite3")
 
-        self.client = None
-        self.collection = None
-        
+        self._lock = threading.Lock()
+        self.conn: Optional[sqlite3.Connection] = None
         try:
-            # Lazy import: avoid slowing down bot startup when vector memory is not used.
-            import chromadb
+            self.conn = sqlite3.connect(self._db_file, check_same_thread=False)
+            self.conn.row_factory = sqlite3.Row
+            self._init_schema()
+            logger.info("VectorMemory (sqlite) initialized at %s", self._db_file)
+        except Exception as exc:
+            logger.error("Failed to initialize SQLite vector memory: %s", exc)
+            self.conn = None
 
-            with chdir_temporarily(CHROMA_DIR):
-                self.client = chromadb.PersistentClient(path=self.db_path)
-            self.collection = self.client.get_or_create_collection(
-                name="chat_history",
-                metadata={"hnsw:space": "cosine"}
+    def _init_schema(self) -> None:
+        assert self.conn is not None
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vectors (
+                id TEXT PRIMARY KEY,
+                text TEXT NOT NULL,
+                metadata TEXT NOT NULL,
+                embedding TEXT,
+                source TEXT,
+                chat_id TEXT,
+                doc_id TEXT
             )
-            relocate_known_root_artifacts()
-            logger.info(f"VectorMemory initialized at {self.db_path}")
-        except Exception as e:
-            logger.error(f"Failed to initialize ChromaDB: {e}")
-            self.client = None
-            self.collection = None
+            """
+        )
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_vectors_source_chat ON vectors(source, chat_id)"
+        )
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_vectors_source_doc ON vectors(source, doc_id)"
+        )
+        self.conn.commit()
 
     def __bool__(self) -> bool:
-        # Treat partially-initialized instances as unavailable so callers can
-        # correctly short-circuit (e.g. export_rag.sync).
-        return bool(self.collection)
+        return self.conn is not None
+
+    @staticmethod
+    def _build_where(filter_meta: Optional[Dict[str, Any]]) -> tuple[str, list]:
+        """把扁平等值过滤字典翻译为 SQL WHERE 子句(隐式 AND)。"""
+        if not filter_meta:
+            return "", []
+        clauses: List[str] = []
+        params: list = []
+        for key, value in filter_meta.items():
+            if key in _INDEXED_META_KEYS:
+                clauses.append(f"{key} = ?")
+                params.append(None if value is None else str(value))
+            else:
+                clauses.append("json_extract(metadata, '$.' || ?) = ?")
+                params.append(str(key))
+                params.append(value)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        return where, params
+
+    def _write(self, text: str, metadata: Dict[str, Any], id: str, embedding: Optional[List[float]]) -> None:
+        if self.conn is None:
+            return
+        meta = dict(metadata or {})
+        embedding_json = json.dumps([float(x) for x in embedding]) if embedding else None
+        row = (
+            str(id),
+            str(text or ""),
+            json.dumps(meta, ensure_ascii=False),
+            embedding_json,
+            None if meta.get("source") is None else str(meta.get("source")),
+            None if meta.get("chat_id") is None else str(meta.get("chat_id")),
+            None if meta.get("doc_id") is None else str(meta.get("doc_id")),
+        )
+        try:
+            with self._lock:
+                self.conn.execute(
+                    "INSERT OR REPLACE INTO vectors "
+                    "(id, text, metadata, embedding, source, chat_id, doc_id) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    row,
+                )
+                self.conn.commit()
+        except Exception as exc:
+            logger.error("Failed to write text to vector db: %s", exc)
 
     def add_text(self, text: str, metadata: Dict[str, Any], id: str, embedding: Optional[List[float]] = None) -> None:
-        if not self.collection:
-            return
-            
-        try:
-            if embedding:
-                self.collection.add(
-                    documents=[text],
-                    metadatas=[metadata],
-                    embeddings=[embedding],
-                    ids=[id]
-                )
-            else:
-                self.collection.add(
-                    documents=[text],
-                    metadatas=[metadata],
-                    ids=[id]
-                )
-        except Exception as e:
-            logger.error(f"Failed to add text to vector db: {e}")
+        self._write(text, metadata, id, embedding)
 
     def upsert_text(self, text: str, metadata: Dict[str, Any], id: str, embedding: Optional[List[float]] = None) -> None:
-        if not self.collection:
-            return
+        self._write(text, metadata, id, embedding)
+
+    def _fetch_rows(self, columns: str, filter_meta: Optional[Dict[str, Any]], limit: Optional[int]) -> List[sqlite3.Row]:
+        where, params = self._build_where(filter_meta)
+        sql = f"SELECT {columns} FROM vectors{where}"
+        if limit is not None:
+            sql += " LIMIT ?"
+            params = [*params, int(limit)]
+        with self._lock:
+            return list(self.conn.execute(sql, params).fetchall())
+
+    def search(
+        self,
+        query: Optional[str] = None,
+        n_results: int = 5,
+        filter_meta: Optional[Dict] = None,
+        query_embedding: Optional[List[float]] = None,
+    ) -> List[Dict[str, Any]]:
+        if self.conn is None:
+            return []
+        top_n = max(1, int(n_results or 1))
+        # 无 embedding 时回退关键词检索(不再依赖内置 ONNX 文本向量化)。
+        if not query_embedding:
+            return self.keyword_search(query or "", n_results=top_n, filter_meta=filter_meta)
 
         try:
-            payload = {
-                "documents": [text],
-                "metadatas": [metadata],
-                "ids": [id],
-            }
-            if embedding:
-                payload["embeddings"] = [embedding]
-            self.collection.upsert(**payload)
-        except Exception as e:
-            logger.error(f"Failed to upsert text to vector db: {e}")
+            rows = self._fetch_rows("id, text, metadata, embedding", filter_meta, limit=None)
+        except Exception as exc:
+            logger.error("Vector search failed: %s", exc)
+            return []
 
-    def search(self, query: Optional[str] = None, n_results: int = 5, filter_meta: Optional[Dict] = None, query_embedding: Optional[List[float]] = None) -> List[Dict[str, Any]]:
-        if not self.collection:
-            return []
-            
-        try:
-            if query_embedding:
-                results = self.collection.query(
-                    query_embeddings=[query_embedding],
-                    n_results=n_results,
-                    where=filter_meta
-                )
-            else:
-                results = self.collection.query(
-                    query_texts=[query or ""],
-                    n_results=n_results,
-                    where=filter_meta
-                )
-            
-            formatted = []
-            if results['documents']:
-                for i in range(len(results['documents'][0])):
-                    formatted.append({
-                        'id': results['ids'][0][i] if results.get('ids') else "",
-                        'text': results['documents'][0][i],
-                        'metadata': results['metadatas'][0][i] if results['metadatas'] else {},
-                        'distance': results['distances'][0][i] if results['distances'] else 0.0
-                    })
-            return formatted
-            
-        except Exception as e:
-            logger.error(f"Vector search failed: {e}")
-            return []
+        scored: List[Dict[str, Any]] = []
+        for row in rows:
+            if not row["embedding"]:
+                continue
+            try:
+                vector = json.loads(row["embedding"])
+            except (TypeError, ValueError):
+                continue
+            distance = _cosine_distance(query_embedding, vector)
+            scored.append(
+                {
+                    "id": row["id"],
+                    "text": row["text"],
+                    "metadata": json.loads(row["metadata"]) if row["metadata"] else {},
+                    "distance": distance,
+                }
+            )
+        scored.sort(key=lambda item: item["distance"])
+        return scored[:top_n]
 
     def keyword_search(
         self,
@@ -188,72 +262,63 @@ class VectorMemory:
         filter_meta: Optional[Dict] = None,
         candidate_limit: int = 200,
     ) -> List[Dict[str, Any]]:
-        if not self.collection:
+        if self.conn is None:
             return []
-
         try:
             limit = max(int(n_results or 1), min(max(int(candidate_limit or 1), int(n_results or 1)), 1000))
-            results = self.collection.get(
-                where=filter_meta,
-                include=["documents", "metadatas"],
-                limit=limit,
-            )
-            candidates = []
-            documents = list(results.get("documents") or [])
-            metadatas = list(results.get("metadatas") or [])
-            ids = list(results.get("ids") or [])
-            for index, text in enumerate(documents):
-                candidates.append({
-                    "id": ids[index] if index < len(ids) else "",
-                    "text": text,
-                    "metadata": metadatas[index] if index < len(metadatas) else {},
-                })
+            rows = self._fetch_rows("id, text, metadata", filter_meta, limit=limit)
+            candidates = [
+                {
+                    "id": row["id"],
+                    "text": row["text"],
+                    "metadata": json.loads(row["metadata"]) if row["metadata"] else {},
+                }
+                for row in rows
+            ]
             return _rank_keyword_candidates(query, candidates)[: max(1, int(n_results or 1))]
-        except Exception as e:
-            logger.error(f"Keyword search failed: {e}")
+        except Exception as exc:
+            logger.error("Keyword search failed: %s", exc)
             return []
 
     def list_metadata(self, where: Optional[Dict[str, Any]] = None, limit: int = 1000) -> List[Dict[str, Any]]:
-        if not self.collection:
+        if self.conn is None:
             return []
-
         try:
             safe_limit = max(1, min(int(limit or 1000), 5000))
-            results = self.collection.get(
-                where=where,
-                include=["metadatas"],
-                limit=safe_limit,
-            )
-            ids = list(results.get("ids") or [])
-            metadatas = list(results.get("metadatas") or [])
-            items = []
-            for index, item_id in enumerate(ids):
-                items.append({
-                    "id": item_id,
-                    "metadata": metadatas[index] if index < len(metadatas) else {},
-                })
-            return items
-        except Exception as e:
-            logger.error(f"Vector metadata listing failed: {e}")
+            rows = self._fetch_rows("id, metadata", where, limit=safe_limit)
+            return [
+                {
+                    "id": row["id"],
+                    "metadata": json.loads(row["metadata"]) if row["metadata"] else {},
+                }
+                for row in rows
+            ]
+        except Exception as exc:
+            logger.error("Vector metadata listing failed: %s", exc)
             return []
 
     def delete(self, where: Dict[str, Any]) -> None:
-        """删除记录"""
-        if not self.collection:
+        if self.conn is None:
             return
         try:
-            self.collection.delete(where=where)
-        except Exception as e:
-            logger.error(f"Vector delete failed: {e}")
+            clause, params = self._build_where(where)
+            with self._lock:
+                self.conn.execute(f"DELETE FROM vectors{clause}", params)
+                self.conn.commit()
+        except Exception as exc:
+            logger.error("Vector delete failed: %s", exc)
 
     def count(self, where: Optional[Dict[str, Any]] = None) -> int:
-        if not self.collection:
+        if self.conn is None:
             return 0
         try:
-            if where:
-                results = self.collection.get(where=where, include=[])
-                return len(results.get("ids") or [])
-            return int(self.collection.count())
-        except Exception as e:
-            logger.error(f"Vector count failed: {e}")
+            clause, params = self._build_where(where)
+            with self._lock:
+                cursor = self.conn.execute(f"SELECT COUNT(*) FROM vectors{clause}", params)
+                return int(cursor.fetchone()[0])
+        except Exception as exc:
+            logger.error("Vector count failed: %s", exc)
             return 0
+
+
+

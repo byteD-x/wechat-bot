@@ -12,7 +12,7 @@
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)
 ![WeChat](https://img.shields.io/badge/WeChat-PC%203.9.12.51-brightgreen.svg)
 
-⚡️ `WCFerry + Quart + Electron + LangChain/LangGraph` ⚡️ AI 助手
+⚡️ `WCFerry + Quart + Electron + 直连 OpenAI-compatible` ⚡️ AI 助手
 支持多 OpenAI-compatible 提供方、短期记忆、运行期 RAG、导出语料 RAG、情绪分析、Prompt 个性化、Prompt 治理、受控工具工作流和桌面/Web 控制台。
 </div>
 
@@ -27,7 +27,7 @@
 5. [执行环境自检](docs/USER_GUIDE.md#4-启动前检查)
 6. [选择启动方式](docs/USER_GUIDE.md#5-启动方式)
 7. [验证机器人是否工作](docs/USER_GUIDE.md#6-验证是否正常工作)
-8. [启用 LangChain Runtime / RAG](docs/USER_GUIDE.md#7-langchain--rag-配置)
+8. [启用运行时 / RAG](docs/USER_GUIDE.md#7-langchain--rag-配置)
 9. [排查常见问题](docs/USER_GUIDE.md#9-常见问题)
 
 面试或本地回归演示可以先跑离线闭环，不需要启动微信或 Web API：
@@ -71,7 +71,7 @@ node scripts/run-interview-demo.mjs --skip-eval --json
 - `Coding Plan Coverage`: 模型中心已补齐多条 Coding Plan 入口，当前可直接区分并配置 `Qwen / 百炼`、`Kimi Code`、`GLM Coding Plan`、`MiniMax Token Plan` 等订阅型 API Key，避免和同服务商的通用 API Key 混用。
 
 - `Multi-provider`: 支持 OpenAI、DeepSeek、Qwen、Doubao、Ollama、OpenRouter、Groq 等 OpenAI-compatible 接口。
-- `LangGraph Runtime`: 用 LangChain/LangGraph 编排对话快路径；同步链只保留短期上下文和轻量画像注入，RAG、情绪、事实等高级能力统一后移到后台成长流水线。
+- `Direct Runtime`: 直连 OpenAI-compatible `/chat/completions` 与 `/embeddings` 编排对话快路径（不再依赖 LangChain/LangGraph）；同步链只保留短期上下文和轻量画像注入，RAG、情绪、事实等高级能力统一后移到后台成长流水线。
 - `Memory`: SQLite 持久化短期记忆、用户画像、上下文事实和情绪历史。
 - `Contact Prompt Growth`: 每个联系人都可逐步沉淀一份专属 Prompt，支持后台生成、导出聊天增强和 UI 直接编辑。
 - `Prompt Governance`: 系统 Prompt 回滚通过 `POST /api/v1/admin/prompts/{revision}/rollback` 追加新的 active revision，并写入 `data/prompt_revisions.json` 审计账本，不覆盖历史记录。
@@ -100,9 +100,9 @@ flowchart TD
     B --> C[WeChatBot]
     B1 --> C[WeChatBot]
 
-    C --> D[LangGraph Runtime]
+    C --> D[Direct Runtime]
     D --> E[SQLite Memory]
-    D --> F[Chroma Vector Store]
+    D --> F[SQLite Vector Store]
     D --> G[Export Chat RAG]
     D --> H[Emotion / Fact Extraction]
     D --> I[OpenAI-compatible LLM]
@@ -118,9 +118,9 @@ flowchart TD
 
 - 完整链路说明见 [系统链路说明](docs/SYSTEM_CHAINS.md)
 - `backend/bot.py`: 机器人生命周期、消息入口和发送出口。
-- `backend/core/agent_runtime.py`: LangChain/LangGraph 主运行时、对话快路径与后台成长任务。
+- `backend/core/agent_runtime.py`: 直连 OpenAI-compatible / Anthropic 主运行时、对话快路径与后台成长任务。
 - `backend/core/memory.py`: SQLite 记忆层。
-- `backend/core/vector_memory.py`: Chroma 向量层。
+- `backend/core/vector_memory.py`: SQLite 向量层(余弦 KNN)。
 - `backend/transports/`: 传输层抽象与具体后端。
 - `backend/api.py`: Web API。
 - `src/renderer/`: Electron 前端。
@@ -246,7 +246,7 @@ docker run --rm -p 5000:5000 -e WECHAT_BOT_API_TOKEN=change-me wechat-ai-assista
 
 - `api`: 模型、Base URL、API Key、预设、超时、重试、embedding 模型。
 - `bot`: 回复策略、轮询、记忆、RAG、群聊规则、情绪识别、传输后端、配置热重载。
-- `agent`: LangChain / LangGraph 运行时、检索参数、精排策略与 LangSmith 配置。
+- `agent`: 直连运行时、检索参数与精排策略配置。
 - `logging`: 日志级别、文件、轮转和内容开关。
 
 配置运行机制：
