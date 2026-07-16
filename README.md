@@ -475,7 +475,7 @@ npm run build:release
 - `WECHAT_BOT_SSE_TICKET`（SSE 专用票据；`/api/events` 需携带 `?ticket=<ticket>`，可通过 `/api/events_ticket` 获取）
 - `WECHAT_BOT_DEPLOYMENT_TARGET`（仅支持默认 `desktop` 与容器镜像默认的 `web-api`；`web-api` 只调整 readiness 的桌面检查边界，不开启微信自动化）
 - `python run.py backup restore --apply` 默认会在检测到本地运行服务仍在运行时硬阻断；仅在明确知晓风险时使用 `--allow-running-service`
-- `/api/model_auth/*` 与 `/api/auth/providers*` 返回中的本地路径字段会自动脱敏（仅保留文件名，且不返回 `watch_paths`）
+- `/api/model_auth/*` 返回中的本地路径字段会自动脱敏（仅保留文件名，且不返回 `watch_paths`）
 - `/api/ollama/models` 仅允许本地回环地址（`localhost/127.0.0.1/::1`）作为 `base_url`，避免被误用为外部探测入口
 - `/api/logs` 与 `/api/logs/clear` 会校验日志路径必须位于 `data` 目录，且日志读取有最大行数上限
 - `data/` 下的密钥与覆盖配置
@@ -538,7 +538,7 @@ POST /api/growth/tasks/<task_type>/clear
   - `GET /api/model_auth/overview`
   - `POST /api/model_auth/action`
   - `overview.actions_schema` 会返回后端可执行动作的字段契约，`discover_models` 可从 OpenAI-compatible 中转站读取 `/models` 并供前端选择
-  - 旧的 `/api/auth/providers/*` 只剩兼容壳层，不再由设置页、旧预设 modal 或模型页主流程直接调用；前端统一走模型中心接口
+  - 认证统一由模型中心 `/api/model_auth/*` 承载；旧的 `/api/auth/providers/*` 兼容壳层路由已移除
 - 当前 Provider 策略：
   - 已接入核心能力：`OpenAI / Codex / ChatGPT`、`Google / Gemini / Gemini CLI`、`Qwen / DashScope / Qwen Code`、`Claude / Claude Code`、`Kimi / Moonshot / Kimi Code`、`GLM / 智谱`、`MiniMax`、`Doubao / 火山方舟 / TRAE`、`Yuanbao / 元宝`
   - 扩展预留：`DeepSeek`

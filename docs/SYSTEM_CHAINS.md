@@ -136,7 +136,7 @@
 - 回复策略与审批：`/api/reply_policies`、`/api/pending_replies`、`/api/pending_replies/<id>/approve|reject`
 - 备份与数据治理：`/api/backups`、`/api/backups/cleanup`、`/api/backups/restore`、`/api/data_controls`、`/api/data_controls/clear`
 - 成本：`/api/usage`、`/api/pricing`、`/api/pricing/refresh`、`/api/costs/summary`、`/api/costs/sessions`、`/api/costs/session_details`、`/api/costs/review_queue_export`
-- 模型与认证：`/api/model_catalog`、`/api/model_auth/overview`、`/api/model_auth/action`、兼容壳层 `/api/auth/providers*`、本地模型探测 `/api/ollama/models`
+- 模型与认证：`/api/model_catalog`、`/api/model_auth/overview`、`/api/model_auth/action`、本地模型探测 `/api/ollama/models`
 - 配置与诊断：`/api/config`、`/api/config/audit`、`/api/test_connection`、`/api/preview_prompt`、`/api/logs`、`/api/logs/clear`
 
 ## 4. 启动与生命周期链路

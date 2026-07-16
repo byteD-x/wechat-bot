@@ -37,15 +37,9 @@ from backend.core.config_service import get_config_service
 from backend.core.cost_analytics import CostAnalyticsService
 from backend.core.data_controls import DataControlService
 from backend.core.oauth_support import (
-    OAuthSupportError,
-    cancel_auth_flow,
     get_cached_oauth_provider_statuses,
-    get_oauth_provider_statuses,
     get_preset_auth_summary,
     infer_oauth_provider_id,
-    launch_oauth_login,
-    logout_oauth_provider,
-    submit_auth_callback,
 )
 from backend.core.readiness import readiness_service
 from backend.core.reply_quality_tracker import close_reply_quality_tracker
@@ -854,24 +848,6 @@ def _build_config_payload(snapshot=None) -> dict:
         "local_auth_sync": _build_local_auth_sync_state(oauth_status),
         "oauth": _sanitize_model_auth_overview_payload(oauth_status),
     }
-
-
-def _resolve_auth_request_settings(payload: dict | None) -> dict:
-    body = payload if isinstance(payload, dict) else {}
-    explicit_settings = body.get("settings")
-    if isinstance(explicit_settings, dict):
-        return dict(explicit_settings)
-
-    preset_name = str(body.get("preset_name") or "").strip()
-    snapshot = config_service.get_snapshot()
-    api_cfg = dict(snapshot.api)
-    if preset_name == "root_config":
-        return dict(api_cfg)
-    if preset_name:
-        for preset in api_cfg.get("presets", []) or []:
-            if isinstance(preset, dict) and str(preset.get("name") or "").strip() == preset_name:
-                return dict(preset)
-    return {}
 
 
 def _normalize_ollama_tags_url(base_url: str) -> str:
@@ -2233,76 +2209,6 @@ async def post_model_auth_action():
     except Exception as e:
         logger.error(f"model auth action failed: {e}")
         return _json_internal_error("model_auth_action_failed", code="model_auth_action_failed")
-
-
-@app.route("/api/auth/providers", methods=["GET"])
-async def get_auth_providers_api():
-    try:
-        return jsonify(_sanitize_model_auth_overview_payload(get_oauth_provider_statuses()))
-    except Exception as e:
-        logger.error(f"oauth provider listing failed: {e}")
-        return _json_internal_error("oauth_provider_list_failed", code="oauth_provider_list_failed")
-
-
-@app.route("/api/auth/providers/<provider_key>/start", methods=["POST"])
-async def start_auth_provider_flow(provider_key: str):
-    try:
-        data = await request.get_json(silent=True) or {}
-        settings = _resolve_auth_request_settings(data)
-        payload = launch_oauth_login(provider_key, settings=settings)
-        payload["oauth"] = get_oauth_provider_statuses()
-        return jsonify(_sanitize_model_auth_overview_payload(payload))
-    except OAuthSupportError as e:
-        return jsonify({"success": False, "message": str(e)}), 400
-    except Exception as e:
-        logger.error(f"oauth start failed [{provider_key}]: {e}")
-        return _json_internal_error("oauth_start_failed", code="oauth_start_failed")
-
-
-@app.route("/api/auth/providers/<provider_key>/cancel", methods=["POST"])
-async def cancel_auth_provider_flow(provider_key: str):
-    try:
-        data = await request.get_json(silent=True) or {}
-        flow_id = str(data.get("flow_id") or "").strip()
-        payload = cancel_auth_flow(provider_key, flow_id)
-        payload["oauth"] = get_oauth_provider_statuses()
-        return jsonify(_sanitize_model_auth_overview_payload(payload))
-    except OAuthSupportError as e:
-        return jsonify({"success": False, "message": str(e)}), 400
-    except Exception as e:
-        logger.error(f"oauth cancel failed [{provider_key}]: {e}")
-        return _json_internal_error("oauth_cancel_failed", code="oauth_cancel_failed")
-
-
-@app.route("/api/auth/providers/<provider_key>/submit_callback", methods=["POST"])
-async def submit_auth_provider_callback(provider_key: str):
-    try:
-        data = await request.get_json(silent=True) or {}
-        flow_id = str(data.get("flow_id") or "").strip()
-        callback_payload = data.get("payload") if isinstance(data.get("payload"), dict) else {}
-        payload = submit_auth_callback(provider_key, flow_id, callback_payload)
-        payload["oauth"] = get_oauth_provider_statuses()
-        return jsonify(_sanitize_model_auth_overview_payload(payload))
-    except OAuthSupportError as e:
-        return jsonify({"success": False, "message": str(e)}), 400
-    except Exception as e:
-        logger.error(f"oauth callback submit failed [{provider_key}]: {e}")
-        return _json_internal_error("oauth_callback_submit_failed", code="oauth_callback_submit_failed")
-
-
-@app.route("/api/auth/providers/<provider_key>/logout_source", methods=["POST"])
-async def logout_auth_provider_source(provider_key: str):
-    try:
-        data = await request.get_json(silent=True) or {}
-        settings = _resolve_auth_request_settings(data)
-        payload = logout_oauth_provider(provider_key, settings=settings)
-        payload["oauth"] = get_oauth_provider_statuses()
-        return jsonify(_sanitize_model_auth_overview_payload(payload))
-    except OAuthSupportError as e:
-        return jsonify({"success": False, "message": str(e)}), 400
-    except Exception as e:
-        logger.error(f"oauth logout source failed [{provider_key}]: {e}")
-        return _json_internal_error("oauth_logout_failed", code="oauth_logout_failed")
 
 
 @app.route("/api/ollama/models", methods=["GET"])

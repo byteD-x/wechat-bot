@@ -1168,78 +1168,6 @@ async def test_api_model_catalog(client):
 
 
 @pytest.mark.asyncio
-async def test_api_auth_providers_status(client):
-    payload = {
-        "success": True,
-        "providers": {
-            "openai_codex": {
-                "configured": True,
-                "detected": True,
-                "message": "local auth detected",
-            }
-        },
-        "supported_provider_ids": ["openai_codex"],
-    }
-
-    with patch.object(api_module, "get_oauth_provider_statuses", return_value=payload):
-        response = await client.get("/api/auth/providers")
-
-    assert response.status_code == 200
-    data = await response.get_json()
-    assert data["success"] is True
-    assert data["providers"]["openai_codex"]["configured"] is True
-
-
-@pytest.mark.asyncio
-async def test_api_auth_flow_routes(client):
-    oauth_payload = {
-        "success": True,
-        "providers": {
-            "openai_codex": {
-                "configured": True,
-                "detected": True,
-                "message": "ready",
-            }
-        },
-        "supported_provider_ids": ["openai_codex"],
-    }
-
-    with patch.object(api_module, "launch_oauth_login", return_value={"success": True, "flow_id": "flow-1"}) as start_mock, \
-        patch.object(api_module, "submit_auth_callback", return_value={"success": True, "completed": True}) as submit_mock, \
-        patch.object(api_module, "logout_oauth_provider", return_value={"success": True, "message": "logged out"}) as logout_mock, \
-        patch.object(api_module, "get_oauth_provider_statuses", return_value=oauth_payload):
-        start_response = await client.post(
-            "/api/auth/providers/openai_codex/start",
-            json={"settings": {"name": "OpenAI", "auth_mode": "oauth"}},
-        )
-        submit_response = await client.post(
-            "/api/auth/providers/openai_codex/submit_callback",
-            json={"flow_id": "flow-1", "payload": {"code": "abc"}},
-        )
-        logout_response = await client.post(
-            "/api/auth/providers/openai_codex/logout_source",
-            json={"settings": {"name": "OpenAI", "auth_mode": "oauth"}},
-        )
-
-    assert start_response.status_code == 200
-    assert submit_response.status_code == 200
-    assert logout_response.status_code == 200
-
-    start_data = await start_response.get_json()
-    submit_data = await submit_response.get_json()
-    logout_data = await logout_response.get_json()
-
-    assert start_data["flow_id"] == "flow-1"
-    assert start_data["oauth"]["providers"]["openai_codex"]["configured"] is True
-    assert submit_data["completed"] is True
-    assert logout_data["message"] == "logged out"
-
-    start_mock.assert_called_once()
-    submit_mock.assert_called_once_with("openai_codex", "flow-1", {"code": "abc"})
-    logout_mock.assert_called_once()
-
-
-@pytest.mark.asyncio
 async def test_api_config_masks_key_and_infers_provider(client):
     test_config = {
         "api": {
@@ -1397,11 +1325,6 @@ async def test_api_config_uses_cached_oauth_status_snapshot(client):
         patch.object(api_module.config_service, "get_snapshot", return_value=_build_snapshot(test_config)),
         patch.object(api_module, "get_cached_oauth_provider_statuses", return_value=oauth_payload) as cached_mock,
         patch.object(api_module, "get_preset_auth_summary", side_effect=_fake_auth_summary),
-        patch.object(
-            api_module,
-            "get_oauth_provider_statuses",
-            side_effect=AssertionError("live oauth scan should not run for /api/config"),
-        ),
     ):
         response = await client.get("/api/config")
 
