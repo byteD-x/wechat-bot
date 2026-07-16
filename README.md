@@ -74,7 +74,6 @@ node scripts/run-interview-demo.mjs --skip-eval --json
 - `Direct Runtime`: 直连 OpenAI-compatible `/chat/completions` 与 `/embeddings` 编排对话快路径（不再依赖 LangChain/LangGraph）；同步链只保留短期上下文和轻量画像注入，RAG、情绪、事实等高级能力统一后移到后台成长流水线。
 - `Memory`: SQLite 持久化短期记忆、用户画像、上下文事实和情绪历史。
 - `Contact Prompt Growth`: 每个联系人都可逐步沉淀一份专属 Prompt，支持后台生成、导出聊天增强和 UI 直接编辑。
-- `Prompt Governance`: 系统 Prompt 回滚通过 `POST /api/v1/admin/prompts/{revision}/rollback` 追加新的 active revision，并写入 `data/prompt_revisions.json` 审计账本，不覆盖历史记录。
 - `RAG`: 支持运行期对话向量记忆、导出聊天记录风格召回、可选 Hybrid Search + Query Rewrite，以及可选本地 `Cross-Encoder` 精排；未配置本地模型或缺依赖时自动回退轻量重排。
 - `Knowledge Base Governance`: 本地 Web API 已提供知识库文档 `dry-run / batch-dry-run / ingest / batch-ingest / rebuild / batch-rebuild / jobs / auto-index jobs / delete / status / index / auto-index preview` 最小闭环；写入、重建和通用队列仍只接收请求体中的纯文本或 Markdown，不读取任意本机路径；`GET /api/knowledge_base/auto-index/preview` 只扫描固定 `data/knowledge_base/inbox` 一层目录中的 `.txt/.md/.markdown` 文本并返回 dry-run 摘要，不写入、不入队、不递归、不展开 glob；`POST /api/knowledge_base/auto-index/jobs` 仅把同一固定 inbox 预览中的可导入文档以 `rebuild` 模式提交到现有后台队列，不接受路径参数、不返回正文或完整路径；预览、队列和索引响应只返回 chunk / 文档 metadata 摘要和脱敏来源；`batch-dry-run` 仅做最多 20 份请求体文档的无副作用预览，`batch-ingest` 仅顺序写入请求体文档，`batch-rebuild` 会按顺序重建请求体文档、拒绝重复 `doc_id`，并在单文档 embedding 准备失败时保留该文档旧 chunk；`jobs` 是进程内内存级串行后台队列，支持请求体单文档或 `documents` 批量文档异步 `ingest/rebuild`，可通过 `status.queue` 和 `GET /api/knowledge_base/jobs/{job_id}` 查询脱敏状态与 `queued/started/completed/failed` 事件时间线，进程重启不恢复；`index` 仅聚合已入库 `knowledge_base` chunk metadata，不扫描目录、不读取文件正文；桌面设置页支持单文档手动粘贴、固定 IPC 显式选择单个 `.txt/.md/.markdown` 文件填入表单、固定 inbox 预览后受控入队，以及受控 JSON 批量预览/写入/重建，来源只保留 `.../<filename>`，写入、重建或固定 inbox 入队前仍需完成对应 dry-run；`python run.py knowledge-base import-files` 提供显式文件列表 CLI，`python run.py knowledge-base import-inbox` 提供固定 inbox CLI，二者默认只预览，`--apply` 才调用运行中的本机 API 写入或入队。
 - `Transport Abstraction`: 传输层统一抽象为 `BaseTransport`，默认走 `wcferry`，并保证“接收消息 → 发送消息 → 完成落盘”的主闭环可独立演进。
@@ -325,21 +324,14 @@ This phase turns the project from a demo-style assistant into a safer personal p
   - Settings now include a dedicated "数据与恢复" card with recent backups, restore feedback, latest offline eval summary, and data-control cleanup (dry-run/apply with explicit scope and stopped runtime).
 - `Offline Eval + CI Gates`
   - `python run.py eval --dataset <path> --preset <name> --report <path>` generates a deterministic JSON report with `summary`, `cases`, `regressions`, `generated_at`, `preset`, and `app_version`.
-  - The smoke dataset lives at `tests/fixtures/evals/smoke_cases.json` and currently contains 27 curated cases, including Prompt rollback, controlled tool workflow, Windows first-run readiness, export-RAG style recall, no-hit fallback, and mismatch guard scenarios.
+  - The smoke dataset lives at `tests/fixtures/evals/smoke_cases.json` and covers Windows first-run readiness, export-RAG style recall, no-hit fallback, and mismatch guard scenarios.
   - The RAG dataset lives at `tests/fixtures/evals/rag_cases.json` and gates citation accuracy, context recall, faithfulness, answer-citation binding, and refusal accuracy.
   - CI now runs scoped `ruff`, targeted Python regressions, Node tests, plus offline eval smoke and RAG gates.
-- `Prompt Governance + Controlled Tools`
-  - Prompt rollback appends a new audited active revision instead of overwriting history.
-  - Agent Tool Workflow is deliberately limited to whitelisted local tools and bounded payloads; optional `workflow_mode="plan_reflect_repair"` adds one bounded schema-safe repair pass without changing the WeChat quick-reply path. See [API 契约与治理接口](docs/api.md) for request/response details.
-  - Read-only MCP adapter exposes only the model-visible safe tool subset over local JSON-RPC and rejects `prompt_preview`, `config_audit`, resources, prompts, shell, file writes, arbitrary HTTP, and dynamic plugins.
-  - Model Tool Calling remains opt-in and bounded to the model-visible safe subset; it records aggregate `model_tool_call_stats` without storing raw prompts, chat text, token strings, or full local paths.
+- `Observability`
   - TraceLogger-lite keeps only a small in-memory ring buffer under `/api/status.trace_logger`; entries use hash refs and aggregate flags instead of chat text, prompts, token strings, tool outputs, or full local paths.
 
 Key APIs introduced in this phase:
 
-- `POST /api/v1/admin/prompts/{revision}/rollback`
-- `POST /api/v1/agents/tool-workflow`
-- `POST /api/v1/mcp`
 - `GET/POST /api/reply_policies`
 - `GET /api/pending_replies`
 - `POST /api/pending_replies/<id>/approve`

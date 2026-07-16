@@ -597,65 +597,6 @@ test('backend:request allows wechat export endpoints and pattern-based job query
     ]);
 });
 
-test('backend:request only allows prompt governance paths', async () => {
-    const harness = createHarness();
-    const event = createTrustedEvent();
-
-    const rollbackAllowed = await harness.backendRequestHandler(event, {
-        method: 'POST',
-        endpoint: '/api/v1/admin/prompts/12/rollback',
-        payload: { reason: 'restore stable prompt' },
-    });
-    const revisionsAllowed = await harness.backendRequestHandler(event, {
-        method: 'GET',
-        endpoint: '/api/v1/admin/prompts/revisions',
-    });
-    const diffAllowed = await harness.backendRequestHandler(event, {
-        method: 'GET',
-        endpoint: '/api/v1/admin/prompts/12/diff',
-    });
-    const rollbackBlocked = await harness.backendRequestHandler(event, {
-        method: 'POST',
-        endpoint: '/api/v1/admin/prompts/abc/rollback',
-        payload: { reason: 'bad path' },
-    });
-    const diffBlocked = await harness.backendRequestHandler(event, {
-        method: 'GET',
-        endpoint: '/api/v1/admin/prompts/abc/diff',
-    });
-    const blockedList = await harness.backendRequestHandler(event, {
-        method: 'GET',
-        endpoint: '/api/v1/admin/prompts',
-    });
-
-    assert.equal(rollbackAllowed.ok, true);
-    assert.equal(revisionsAllowed.ok, true);
-    assert.equal(diffAllowed.ok, true);
-    assert.equal(rollbackBlocked.ok, false);
-    assert.equal(rollbackBlocked.error?.message, 'endpoint_not_allowed');
-    assert.equal(diffBlocked.ok, false);
-    assert.equal(diffBlocked.error?.message, 'endpoint_not_allowed');
-    assert.equal(blockedList.ok, false);
-    assert.equal(blockedList.error?.message, 'endpoint_not_allowed');
-    assert.deepEqual(harness.backendCalls, [
-        {
-            method: 'POST',
-            endpoint: '/api/v1/admin/prompts/12/rollback',
-            payload: { reason: 'restore stable prompt' },
-        },
-        {
-            method: 'GET',
-            endpoint: '/api/v1/admin/prompts/revisions',
-            payload: null,
-        },
-        {
-            method: 'GET',
-            endpoint: '/api/v1/admin/prompts/12/diff',
-            payload: null,
-        },
-    ]);
-});
-
 test('backend:request enforces payload policy for GET and oversized POST payloads', async () => {
     const harness = createHarness();
     const event = createTrustedEvent();

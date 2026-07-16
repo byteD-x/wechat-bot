@@ -91,7 +91,7 @@
 2. `/api/status`
    - 功能：返回结构化运行状态。
    - 实现：委托 `BotManager.get_status()` 组装启动状态、健康检查、诊断、系统指标、`response_cache_stats`、`safety_stats`、`model_route_stats`、`model_tool_call_stats`、`governance_metrics` 和 `trace_logger`。
-   - 约束：`response_cache_stats` 只暴露默认关闭的响应缓存统计；语义缓存 `semantic_enabled` 默认关闭，开启后也只在同一 provider、model、chat、system prompt、非当前用户 prompt context、RAG citation ids 与安全策略边界内相似命中，不跨会话、模型、引用策略或安全策略复用；缓存不包含原始 prompt、聊天正文、真实联系人标识或 token；`safety_stats` 只记录安全护栏 action/reason 聚合与最近一次脱敏结果，不记录原始请求或回复；`model_route_stats` 只记录当前请求的可解释模型路由决策，不自动切换用户选择的 provider、model 或认证方式；`model_tool_call_stats` 只记录模型侧工具调用开关、请求、成功、失败和阻断计数；`governance_metrics` 只记录 Prompt 回滚与 Tool Workflow 的聚合次数、成功率、失败原因短枚举和耗时；`trace_logger` 只保留进程内最近 trace 摘要，通过 hash 引用和聚合字段描述 cache、模型路由、安全护栏、模型工具调用与错误类型，不记录原始 Prompt、聊天正文、token、工具原始输出或完整本机路径。
+   - 约束：`response_cache_stats` 只暴露默认关闭的响应缓存统计；语义缓存 `semantic_enabled` 默认关闭，开启后也只在同一 provider、model、chat、system prompt、非当前用户 prompt context、RAG citation ids 与安全策略边界内相似命中，不跨会话、模型、引用策略或安全策略复用；缓存不包含原始 prompt、聊天正文、真实联系人标识或 token；`safety_stats` 只记录安全护栏 action/reason 聚合与最近一次脱敏结果，不记录原始请求或回复；`model_route_stats` 只记录当前请求的可解释模型路由决策，不自动切换用户选择的 provider、model 或认证方式；`trace_logger` 只保留进程内最近 trace 摘要，通过 hash 引用和聚合字段描述 cache、模型路由、安全护栏与错误类型，不记录原始 Prompt、聊天正文、token 或完整本机路径。
 
 3. `/api/config`
    - 功能：读取/保存有效配置。
@@ -123,15 +123,6 @@
    - 功能：预览系统提示词。
    - 实现：构造一个示例事件对象，调用 `resolve_system_prompt()` 生成预览。
 
-9. Prompt governance routes
-   - 功能：查看系统 Prompt revision 元数据、预览 active 到目标 revision 的差异，并把系统 Prompt 回滚到指定历史 revision。
-   - 实现：
-     - `backend/api.py::list_prompt_revisions` 调用 `PromptGovernanceService.list_revisions()`，返回 revision/status/source/created_at/rollback_from/reason 等元数据，不返回完整 `prompt` 或 `editable_prompt`。
-     - `backend/api.py::diff_prompt_revision` 调用 `PromptGovernanceService.diff_revision()`，返回 active revision 到目标 revision 的 unified diff，供回滚确认前预览。
-     - `backend/api.py::rollback_prompt_revision` 调用 `PromptGovernanceService.rollback()`。
-     - 回滚会复制目标 Prompt 并追加新的 active revision，默认写入 `data/prompt_revisions.json` 审计账本。
-     - 设置页系统提示区的“Prompt 版本治理”折叠面板通过 `SettingsPage`、`prompt-governance.js` 和 `ApiService` 调用这些接口；回滚按钮必须在当前 revision 生成 fresh diff 后才会启用，成功后刷新设置快照和版本历史。
-     - Electron 主进程只允许转发固定列表路径 `/api/v1/admin/prompts/revisions`，以及匹配 `^/api/v1/admin/prompts/\d+/(diff|rollback)$` 的数字 revision 路径，避免任意管理路径穿透。
 
 10. `/api/v1/agents/tool-workflow`
     - 功能：按顺序执行受控本机工具，并返回每一步 trace。
@@ -185,7 +176,6 @@
 - 模型与认证：`/api/model_catalog`、`/api/model_auth/overview`、`/api/model_auth/action`、兼容壳层 `/api/auth/providers*`、本地模型探测 `/api/ollama/models`
 - 配置与诊断：`/api/config`、`/api/config/audit`、`/api/test_connection`、`/api/preview_prompt`、`/api/logs`、`/api/logs/clear`
 - 知识库治理：`/api/knowledge_base/status`、`/api/knowledge_base/index`、`/api/knowledge_base/auto-index/preview`、`/api/knowledge_base/auto-index/jobs`、`/api/knowledge_base/dry-run`、`/api/knowledge_base/batch-dry-run`、`/api/knowledge_base/ingest`、`/api/knowledge_base/batch-ingest`、`/api/knowledge_base/rebuild`、`/api/knowledge_base/batch-rebuild`、`/api/knowledge_base/jobs`、`/api/knowledge_base/jobs/<job_id>`、`/api/knowledge_base/delete`
-- Prompt 与工具治理：`/api/v1/admin/prompts/revisions`、`/api/v1/admin/prompts/<revision>/diff`、`/api/v1/admin/prompts/<revision>/rollback`、`/api/v1/agents/tool-workflow`
 
 ## 4. 启动与生命周期链路
 
@@ -621,7 +611,7 @@
    - 功能：收口桌面端可调用的后端请求和诊断导出入口。
    - 实现：
      - 只允许主渲染入口页调用受控 IPC。
-     - 后端请求通过 allowlist 转发，Prompt 回滚和 Tool Workflow 只开放明确路径。
+     - 后端请求通过固定 allowlist 转发,只开放明确路径。
      - 诊断导出仍由主进程完成本地文件保存和敏感字段脱敏。
 
 ## 15. 更新链

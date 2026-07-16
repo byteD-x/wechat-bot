@@ -654,35 +654,6 @@ class ApiService {
         });
     }
 
-    _normalizePromptRevision(revision) {
-        const parsed = Number.parseInt(String(revision || ''), 10);
-        if (!Number.isFinite(parsed) || parsed <= 0) {
-            throw new Error('Prompt revision must be a positive integer');
-        }
-        return parsed;
-    }
-
-    async getPromptRevisions() {
-        return this.request('/api/v1/admin/prompts/revisions', {}, 0);
-    }
-
-    async getPromptRevisionDiff(revision) {
-        const revisionId = this._normalizePromptRevision(revision);
-        return this.request(`/api/v1/admin/prompts/${revisionId}/diff`, {}, 0);
-    }
-
-    async rollbackPromptRevision(revision, payload = {}) {
-        const revisionId = this._normalizePromptRevision(revision);
-        return this.request(`/api/v1/admin/prompts/${revisionId}/rollback`, {
-            method: 'POST',
-            body: {
-                reason: String(payload?.reason || '').trim(),
-                operator: String(payload?.operator || 'settings-ui').trim() || 'settings-ui',
-            },
-            timeoutMs: 20000,
-        }, 0);
-    }
-
     async getBackups(limit = 20) {
         return this.request(`/api/backups${this._buildQueryString({ limit })}`);
     }
