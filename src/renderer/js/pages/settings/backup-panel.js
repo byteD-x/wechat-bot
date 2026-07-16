@@ -51,19 +51,6 @@ export function getBackupModeMeta(mode, backupId = '') {
     };
 }
 
-function formatEvalSummary(latestEval) {
-    if (!latestEval?.summary) {
-        return '最近还没有质量检查记录';
-    }
-
-    const evalSummary = latestEval.summary || {};
-    return [
-        evalSummary.passed ? '最近一次质量检查已通过' : '最近一次质量检查需要关注',
-        `覆盖 ${evalSummary.total_cases || 0} 条用例`,
-        `检索命中率 ${(Number(evalSummary.retrieval_hit_rate || 0) * 100).toFixed(1)}%`,
-    ].join(' / ');
-}
-
 function formatKnowledgeBaseStatus(status) {
     if (!status) {
         return '尚未读取知识库状态';
@@ -161,7 +148,6 @@ function populateBackupSelect(select, backups = []) {
 
 export function renderBackupPanel(page) {
     const summaryElem = page.$('#settings-backup-summary');
-    const evalElem = page.$('#settings-eval-summary');
     const selectElem = page.$('#settings-backup-select');
     const feedbackElem = page.$('#settings-backup-restore-feedback');
     const dataControlElem = page.$('#settings-data-control-feedback');
@@ -191,22 +177,19 @@ export function renderBackupPanel(page) {
     const knowledgeBaseBatchIngestBtn = page.$('#btn-knowledge-base-batch-ingest');
     const knowledgeBaseBatchRebuildBtn = page.$('#btn-knowledge-base-batch-rebuild');
     const listElem = page.$('#settings-backup-list');
-    if (!summaryElem || !evalElem || !selectElem || !feedbackElem || !listElem) {
+    if (!summaryElem || !selectElem || !feedbackElem || !listElem) {
         return;
     }
 
     const state = page._backupState || {};
     const backups = Array.isArray(state.backups) ? state.backups : [];
     const summary = state.summary || {};
-    const latestEval = state.latestEval || null;
     const lastRestore = summary.last_restore_result || null;
 
     summaryElem.textContent = [
         `最近快速备份：${formatBackupTime(summary.latest_quick_backup_at)}`,
         `最近完整备份：${formatBackupTime(summary.latest_full_backup_at)}`,
     ].join(' / ');
-
-    evalElem.textContent = formatEvalSummary(latestEval);
 
     if (state.restoreFeedback) {
         feedbackElem.textContent = state.restoreFeedback;

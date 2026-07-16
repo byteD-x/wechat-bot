@@ -18,7 +18,6 @@ function createEmptyDashboardCost() {
 function createEmptyStabilityState() {
     return {
         backups: null,
-        latestEval: null,
     };
 }
 
@@ -131,14 +130,10 @@ export async function refreshDashboardStability(page, force = false, deps = {}) 
 
     try {
         const currentApiService = getApiService(deps);
-        const [backups, latestEval] = await Promise.all([
-            currentApiService.getBackups(10),
-            currentApiService.getLatestEvalReport(),
-        ]);
+        const backups = await currentApiService.getBackups(10);
 
         page._stability = {
             backups: backups?.success ? backups : null,
-            latestEval: latestEval?.success ? latestEval : null,
         };
         page._renderStability?.();
     } catch (error) {

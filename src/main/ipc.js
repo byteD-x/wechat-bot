@@ -141,7 +141,6 @@ function registerIpcHandlers({
         '/api/backups/restore',
         '/api/data_controls',
         '/api/data_controls/clear',
-        '/api/evals/latest',
         '/api/knowledge_base/status',
         '/api/knowledge_base/auto-index/preview',
         '/api/knowledge_base/auto-index/jobs',

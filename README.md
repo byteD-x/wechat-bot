@@ -321,7 +321,7 @@ This phase turns the project from a demo-style assistant into a safer personal p
   - `full` backup includes both `data/chat_exports/` and `data/vector_db/` to keep retrieval memory consistent after restore.
   - Legacy backups without `checksum_summary` are treated as unverified and require explicit `allow_legacy_unverified=true` opt-in before restore apply.
   - `POST /api/backups` now requires bot/growth runtime to be stopped before creating snapshots; `POST /api/backups/restore` defaults to `dry_run=true` unless explicitly set to `false`.
-  - Settings now include a dedicated "数据与恢复" card with recent backups, restore feedback, latest offline eval summary, and data-control cleanup (dry-run/apply with explicit scope and stopped runtime).
+  - Settings now include a dedicated "数据与恢复" card with recent backups, restore feedback, and data-control cleanup (dry-run/apply with explicit scope and stopped runtime).
 - `Offline Eval + CI Gates`
   - `python run.py eval --dataset <path> --preset <name> --report <path>` generates a deterministic JSON report with `summary`, `cases`, `regressions`, `generated_at`, `preset`, and `app_version`.
   - The smoke dataset lives at `tests/fixtures/evals/smoke_cases.json` and covers Windows first-run readiness, export-RAG style recall, no-hit fallback, and mismatch guard scenarios.

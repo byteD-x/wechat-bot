@@ -694,10 +694,6 @@ class ApiService {
         });
     }
 
-    async getLatestEvalReport() {
-        return this.request('/api/evals/latest', {}, 0);
-    }
-
     async getKnowledgeBaseStatus() {
         return this.request('/api/knowledge_base/status', {}, 0);
     }

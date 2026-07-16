@@ -418,23 +418,18 @@ export function renderDashboardCost(page, dashboardCost) {
 export function renderStabilitySummary(page, pendingReplies, stability = {}) {
     const pendingElem = page.$('#dashboard-pending-replies');
     const backupElem = page.$('#dashboard-backup-summary');
-    const evalElem = page.$('#dashboard-eval-status');
     const detailElem = page.$('#dashboard-restore-summary');
-    if (!pendingElem || !backupElem || !evalElem || !detailElem) {
+    if (!pendingElem || !backupElem || !detailElem) {
         return;
     }
 
     const pendingCount = Number(pendingReplies?.pending || 0);
     const backups = stability?.backups || null;
-    const latestEval = stability?.latestEval?.report || null;
     const latestBackupAt = backups?.summary?.latest_full_backup_at || backups?.summary?.latest_quick_backup_at || null;
     const lastRestore = backups?.summary?.last_restore_result || null;
 
     pendingElem.textContent = String(pendingCount);
     backupElem.textContent = latestBackupAt ? formatGrowthTimestamp(latestBackupAt) : '--';
-    evalElem.textContent = latestEval
-        ? (latestEval?.summary?.passed ? '已通过' : '需关注')
-        : '--';
 
     detailElem.textContent = '';
     const rows = [];
@@ -445,16 +440,9 @@ export function renderStabilitySummary(page, pendingReplies, stability = {}) {
             extra: lastRestore.message || '',
         });
     }
-    if (latestEval) {
-        rows.push({
-            title: latestEval.summary?.passed ? '最近一次质量检查已通过' : '最近一次质量检查需要关注',
-            meta: `覆盖 ${formatNumber(latestEval.summary?.total_cases || 0)} 条用例`,
-            extra: `空回复 ${formatPercent((latestEval.summary?.empty_reply_rate || 0) * 100)} / 检索命中 ${formatPercent((latestEval.summary?.retrieval_hit_rate || 0) * 100)}`,
-        });
-    }
 
     if (rows.length === 0) {
-        detailElem.appendChild(createCompactEmpty('暂无恢复或评测记录'));
+        detailElem.appendChild(createCompactEmpty('暂无恢复记录'));
         return;
     }
 

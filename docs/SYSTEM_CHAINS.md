@@ -171,7 +171,7 @@
 - 微信导出：`/api/wechat_export/probe`、`/api/wechat_export/decrypt/start`、`/api/wechat_export/decrypt/jobs/<job_id>`、`/api/wechat_export/contacts`、`/api/wechat_export/export`、`/api/wechat_export/apply/preview`、`/api/wechat_export/apply`
 - 消息与画像：`/api/messages`、`/api/send`、`/api/contact_profile`、`/api/contact_prompt`、`/api/message_feedback`
 - 回复策略与审批：`/api/reply_policies`、`/api/pending_replies`、`/api/pending_replies/<id>/approve|reject`
-- 备份与数据治理：`/api/backups`、`/api/backups/cleanup`、`/api/backups/restore`、`/api/data_controls`、`/api/data_controls/clear`、`/api/evals/latest`
+- 备份与数据治理：`/api/backups`、`/api/backups/cleanup`、`/api/backups/restore`、`/api/data_controls`、`/api/data_controls/clear`
 - 成本：`/api/usage`、`/api/pricing`、`/api/pricing/refresh`、`/api/costs/summary`、`/api/costs/sessions`、`/api/costs/session_details`、`/api/costs/review_queue_export`
 - 模型与认证：`/api/model_catalog`、`/api/model_auth/overview`、`/api/model_auth/action`、兼容壳层 `/api/auth/providers*`、本地模型探测 `/api/ollama/models`
 - 配置与诊断：`/api/config`、`/api/config/audit`、`/api/test_connection`、`/api/preview_prompt`、`/api/logs`、`/api/logs/clear`

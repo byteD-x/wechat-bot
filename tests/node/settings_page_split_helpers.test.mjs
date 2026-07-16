@@ -602,9 +602,8 @@ test('runtime-sync scheduleAutoSave debounces and preserves immediate path', () 
     }
 });
 
-test('backup panel renders backup summary, restore status and eval state', async () => withDom(async ({ document, registerElement }) => {
+test('backup panel renders backup summary and restore status', async () => withDom(async ({ document, registerElement }) => {
     const summary = registerElement('settings-backup-summary', document.createElement('div'));
-    const evalSummary = registerElement('settings-eval-summary', document.createElement('div'));
     const select = registerElement('settings-backup-select', document.createElement('select'));
     const feedback = registerElement('settings-backup-restore-feedback', document.createElement('div'));
     const list = registerElement('settings-backup-list', document.createElement('div'));
@@ -628,13 +627,6 @@ test('backup panel renders backup summary, restore status and eval state', async
                     pre_restore_backup: { id: 'pre-restore-1' },
                 },
             },
-            latestEval: {
-                summary: {
-                    passed: true,
-                    total_cases: 20,
-                    retrieval_hit_rate: 0.5,
-                },
-            },
             restoreFeedback: '',
         },
         $(selector) {
@@ -645,7 +637,6 @@ test('backup panel renders backup summary, restore status and eval state', async
     renderBackupPanel(page);
 
     assert.equal(summary.textContent.includes('最近快速备份'), true);
-    assert.equal(evalSummary.textContent.includes('20'), true);
     assert.equal(select.children.length, 1);
     assert.equal(feedback.textContent.includes('保险备份'), true);
     assert.equal(list.textContent.includes('快速备份'), true);

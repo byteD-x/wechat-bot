@@ -109,12 +109,6 @@ export function renderSettingsPageShell() {
                                 </summary>
                                 <h3 class="backup-action-title">不影响最近可用备份的前提下腾出空间</h3>
                                 <p class="backup-action-text">系统默认会保留最近 5 份快速备份、3 份完整备份，并额外保护最近一次恢复前自动保留的保险备份。</p>
-                                <div class="backup-detail-grid">
-                                    <div class="detail-item">
-                                        <span class="detail-label">最近质量检查</span>
-                                        <div class="detail-help" id="settings-eval-summary">尚未发现评测报告</div>
-                                    </div>
-                                </div>
                                 <div class="backup-button-row backup-button-row-end">
                                     <button class="btn btn-secondary btn-sm" id="btn-cleanup-backup-dry-run" type="button">先看看可清理什么</button>
                                     <button class="btn btn-secondary btn-sm" id="btn-cleanup-backup-apply" type="button">清理旧备份</button>

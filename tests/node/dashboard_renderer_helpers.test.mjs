@@ -270,11 +270,10 @@ test('renderRetrieval and renderDashboardCost render structured metrics', () => 
     assert.match(selectors['#dashboard-cost-top-models'].children[0].textContent, /1\.2K/);
 }));
 
-test('renderStabilitySummary renders pending approvals, backup summary and eval status', () => withDom(({ document, createPage }) => {
+test('renderStabilitySummary renders pending approvals, backup summary and restore status', () => withDom(({ document, createPage }) => {
     const selectors = {
         '#dashboard-pending-replies': document.createElement('div'),
         '#dashboard-backup-summary': document.createElement('div'),
-        '#dashboard-eval-status': document.createElement('div'),
         '#dashboard-restore-summary': document.createElement('div'),
     };
     const page = createPage(selectors);
@@ -291,22 +290,11 @@ test('renderStabilitySummary renders pending approvals, backup summary and eval 
                 },
             },
         },
-        latestEval: {
-            report: {
-                summary: {
-                    passed: true,
-                    total_cases: 20,
-                    empty_reply_rate: 0,
-                    retrieval_hit_rate: 0.5,
-                },
-            },
-        },
     });
 
     assert.equal(selectors['#dashboard-pending-replies'].textContent, '3');
     assert.equal(selectors['#dashboard-backup-summary'].textContent.includes('/'), true);
-    assert.equal(selectors['#dashboard-eval-status'].textContent, '已通过');
-    assert.equal(selectors['#dashboard-restore-summary'].textContent.includes('最近一次质量检查已通过'), true);
+    assert.equal(selectors['#dashboard-restore-summary'].textContent.includes('最近一次恢复已完成'), true);
     assert.equal(selectors['#dashboard-restore-summary'].textContent.includes('保险备份 pre-1'), true);
 }));
 

@@ -2531,38 +2531,6 @@ async def delete_knowledge_base_document():
         return _json_internal_error("knowledge_base_delete_failed", code="knowledge_base_delete_failed")
 
 
-@app.route("/api/evals/latest", methods=["GET"])
-async def get_latest_eval_report():
-    """Return the newest locally generated eval report if one exists."""
-    try:
-        return jsonify(_read_latest_eval_report_payload())
-    except Exception as e:
-        logger.error("Request handling failed: %s", e)
-        return jsonify({"success": False, "message": f"Request handling failed: {str(e)}"}), 500
-
-
-def _read_latest_eval_report_payload() -> dict[str, Any]:
-    eval_root = Path(get_app_config_path()).resolve().parent / "evals"
-    if not eval_root.exists():
-        return {"success": True, "report": None}
-
-    candidates = sorted(
-        (path for path in eval_root.glob("*.json") if path.is_file()),
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
-    )
-    if not candidates:
-        return {"success": True, "report": None}
-
-    report_path = candidates[0]
-    report = json.loads(report_path.read_text(encoding="utf-8"))
-    return {
-        "success": True,
-        "report": report,
-        "name": report_path.name,
-    }
-
-
 @app.route("/api/usage", methods=["GET"])
 async def get_usage():
     """Endpoint handler."""

@@ -317,7 +317,7 @@ export function renderDashboardPageShell() {
                                 <div class="card-header">
                                     <div>
                                         <h2 class="card-title">稳定性总览</h2>
-                                        <p class="card-subtitle">恢复记录、待审批回复和最近质量检查。</p>
+                                        <p class="card-subtitle">恢复记录与待审批回复。</p>
                                     </div>
                                 </div>
                                 <div class="card-body">
@@ -330,16 +330,12 @@ export function renderDashboardPageShell() {
                                             <span class="dashboard-cost-label">最近备份</span>
                                             <strong class="dashboard-cost-value" id="dashboard-backup-summary">--</strong>
                                         </div>
-                                        <div class="dashboard-cost-stat">
-                                            <span class="dashboard-cost-label">最近评测</span>
-                                            <strong class="dashboard-cost-value" id="dashboard-eval-status">--</strong>
-                                        </div>
                                     </div>
                                     <div class="dashboard-subsection">
-                                        <div class="dashboard-subsection-title">恢复与质量状态</div>
+                                        <div class="dashboard-subsection-title">恢复状态</div>
                                         <div class="dashboard-model-list" id="dashboard-restore-summary">
                                             <div class="empty-state compact-empty">
-                                                <span class="empty-state-text">暂无恢复或评测记录</span>
+                                                <span class="empty-state-text">暂无恢复记录</span>
                                             </div>
                                         </div>
                                     </div>

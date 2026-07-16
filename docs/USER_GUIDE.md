@@ -753,7 +753,6 @@ python run.py eval --dataset tests/fixtures/evals/smoke_cases.json --preset smok
 - `POST /api/backups/restore`
 - `GET /api/data_controls`
 - `POST /api/data_controls/clear`
-- `GET /api/evals/latest`
 - `GET /api/knowledge_base/status`
 - `GET /api/knowledge_base/index`
 - `POST /api/knowledge_base/auto-index/jobs`

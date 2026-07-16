@@ -144,7 +144,6 @@ export class SettingsPage extends PageController {
         this._backupState = {
             backups: [],
             summary: {},
-            latestEval: null,
             restoreFeedback: '',
             dataControlFeedback: '',
             supportedDataControlScopes: [],
@@ -395,9 +394,8 @@ export class SettingsPage extends PageController {
 
         this._backupPromise = (async () => {
             try {
-                const [backupsResult, evalResult, dataControlsResult, knowledgeBaseStatus] = await Promise.all([
+                const [backupsResult, dataControlsResult, knowledgeBaseStatus] = await Promise.all([
                     apiService.getBackups(10),
-                    apiService.getLatestEvalReport(),
                     apiService.getDataControls().catch(() => null),
                     apiService.getKnowledgeBaseStatus().catch(() => null),
                 ]);
@@ -407,7 +405,6 @@ export class SettingsPage extends PageController {
                 this._backupState = {
                     backups: Array.isArray(backupsResult?.backups) ? backupsResult.backups : [],
                     summary: backupsResult?.summary || {},
-                    latestEval: evalResult?.report || null,
                     restoreFeedback: this._backupState.restoreFeedback || '',
                     dataControlFeedback: this._backupState.dataControlFeedback || '',
                     supportedDataControlScopes,
@@ -436,7 +433,6 @@ export class SettingsPage extends PageController {
                 this._backupState = {
                     backups: [],
                     summary: {},
-                    latestEval: null,
                     restoreFeedback: '加载备份信息失败',
                     dataControlFeedback: this._backupState.dataControlFeedback || '',
                     supportedDataControlScopes: this._backupState.supportedDataControlScopes || [],
