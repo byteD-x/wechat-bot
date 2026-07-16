@@ -56,7 +56,6 @@ from backend.core.knowledge_base import (
     parse_knowledge_document_payload,
     redact_knowledge_local_path,
 )
-from backend.core.mcp_adapter import ReadOnlyMCPAdapter
 from backend.core.governance_metrics import get_governance_metrics
 from backend.core.oauth_support import (
     OAuthSupportError,
@@ -73,7 +72,6 @@ from backend.core.prompt_governance import get_prompt_governance_service
 from backend.core.readiness import readiness_service
 from backend.core.reply_quality_tracker import close_reply_quality_tracker
 from backend.core.reply_policy import normalize_reply_policy, update_per_chat_override
-from backend.core.tool_workflow import ControlledToolWorkflowService, ToolWorkflowError
 from backend.core.workspace_backup import (
     DEFAULT_KEEP_FULL_BACKUPS,
     DEFAULT_KEEP_QUICK_BACKUPS,
@@ -3027,132 +3025,6 @@ async def rollback_prompt_revision(revision: int):
         )
         logger.error("Prompt rollback failed: %s", e)
         return _json_internal_error("prompt_rollback_failed", code="prompt_rollback_failed")
-
-
-def _build_controlled_tool_workflow_service() -> ControlledToolWorkflowService:
-    async def _load_readiness_report() -> dict[str, Any]:
-        return await asyncio.to_thread(readiness_service.get_report, force_refresh=False)
-
-    async def _load_latest_eval_report() -> dict[str, Any]:
-        return await asyncio.to_thread(_read_latest_eval_report_payload)
-
-    async def _load_cost_summary(payload: dict[str, Any]) -> dict[str, Any]:
-        snapshot = config_service.get_snapshot()
-        return await cost_service.get_summary(
-            manager.get_memory_manager(),
-            snapshot.config,
-            period=str(payload.get("period") or "30d"),
-            include_estimated=bool(payload.get("include_estimated", True)),
-        )
-
-    async def _load_backup_cleanup_preview(payload: dict[str, Any]) -> dict[str, Any]:
-        snapshot = config_service.get_snapshot()
-        backup_service.update_config(snapshot.bot)
-        keep_quick = (
-            int(payload["keep_quick"])
-            if "keep_quick" in payload
-            else DEFAULT_KEEP_QUICK_BACKUPS
-        )
-        keep_full = (
-            int(payload["keep_full"])
-            if "keep_full" in payload
-            else DEFAULT_KEEP_FULL_BACKUPS
-        )
-        return await asyncio.to_thread(
-            backup_service.cleanup_backups,
-            keep_quick=keep_quick,
-            keep_full=keep_full,
-            protect_restore_anchor=bool(payload.get("protect_restore_anchor", True)),
-            apply=False,
-            list_limit=20,
-        )
-
-    async def _load_data_controls_preview(payload: dict[str, Any]) -> dict[str, Any]:
-        snapshot = config_service.get_snapshot()
-        data_control_service.update_config(snapshot.bot)
-        scopes = payload.get("scopes") if isinstance(payload.get("scopes"), list) else ["memory", "usage", "export_rag"]
-        return await asyncio.to_thread(
-            data_control_service.clear,
-            scopes,
-            apply=False,
-        )
-
-    return ControlledToolWorkflowService(
-        config_loader=config_service.get_snapshot,
-        readiness_loader=_load_readiness_report,
-        eval_report_loader=_load_latest_eval_report,
-        cost_summary_loader=_load_cost_summary,
-        backup_cleanup_loader=_load_backup_cleanup_preview,
-        data_controls_loader=_load_data_controls_preview,
-    )
-
-
-@app.route("/api/v1/agents/tool-workflow", methods=["POST"])
-async def run_agent_tool_workflow():
-    """Execute an explicit, whitelisted tool workflow and return per-step trace."""
-    started_at = time.perf_counter()
-    try:
-        data = await request.get_json(silent=True) or {}
-        if not isinstance(data, dict):
-            governance_metrics.record_tool_workflow(
-                success=False,
-                duration_ms=(time.perf_counter() - started_at) * 1000,
-                failure_reason="bad_request",
-            )
-            return jsonify({"success": False, "message": "request body must be a JSON object"}), 400
-        steps = data.get("steps")
-        dry_run = bool(data.get("dry_run", False))
-        workflow_mode = str(data.get("workflow_mode") or "direct").strip() or "direct"
-
-        service = _build_controlled_tool_workflow_service()
-        result = await service.run(steps, dry_run=dry_run, workflow_mode=workflow_mode)
-        if result.get("success"):
-            governance_metrics.record_tool_workflow(
-                success=True,
-                duration_ms=(time.perf_counter() - started_at) * 1000,
-            )
-            return jsonify(result), 200
-        first_error = next(
-            (item for item in result.get("trace", []) if isinstance(item, dict) and item.get("status") == "error"),
-            {},
-        )
-        result.setdefault("code", "bad_workflow")
-        result.setdefault("message", str(first_error.get("error") or "workflow failed"))
-        governance_metrics.record_tool_workflow(
-            success=False,
-            duration_ms=(time.perf_counter() - started_at) * 1000,
-            failure_reason=str(first_error.get("error_type") or result.get("code") or "bad_workflow"),
-        )
-        return jsonify(result), 400
-    except ToolWorkflowError as e:
-        governance_metrics.record_tool_workflow(
-            success=False,
-            duration_ms=(time.perf_counter() - started_at) * 1000,
-            failure_reason="bad_workflow",
-        )
-        return jsonify({"success": False, "message": str(e), "code": "bad_workflow"}), 400
-    except Exception as e:
-        governance_metrics.record_tool_workflow(
-            success=False,
-            duration_ms=(time.perf_counter() - started_at) * 1000,
-            failure_reason="tool_workflow_failed",
-        )
-        logger.error("Tool workflow failed: %s", e)
-        return _json_internal_error("tool_workflow_failed", code="tool_workflow_failed")
-
-
-@app.route("/api/v1/mcp", methods=["POST"])
-async def run_readonly_mcp_adapter():
-    """Handle a small read-only MCP JSON-RPC request for safe local tools."""
-    try:
-        data = await request.get_json(silent=True) or {}
-        service = _build_controlled_tool_workflow_service()
-        adapter = ReadOnlyMCPAdapter(service)
-        result = await adapter.handle(data)
-        return jsonify(result), 200
-    except Exception as e:
-        logger.error("MCP adapter failed: %s", e)
-        return _json_internal_error("mcp_adapter_failed", code="mcp_adapter_failed")
 
 
 @app.route("/api/test_connection", methods=["POST"])

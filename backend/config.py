@@ -400,7 +400,6 @@ CONFIG = {'api': {'base_url': 'https://api.openai.com/v1',
            'llm_foreground_max_concurrency': 1,
            'model_routing': {},
            'response_cache': {'semantic_enabled': False},
-           'model_tool_calls_enabled': False,
            'background_ai_batch_time': '04:00',
            'background_ai_missed_window_policy': 'wait_until_next_day',
            'background_ai_defer_mode': 'defer_all'}}

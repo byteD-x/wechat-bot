@@ -13,7 +13,7 @@
 ![WeChat](https://img.shields.io/badge/WeChat-PC%203.9.12.51-brightgreen.svg)
 
 ⚡️ `WCFerry + Quart + Electron + 直连 OpenAI-compatible` ⚡️ AI 助手
-支持多 OpenAI-compatible 提供方、短期记忆、运行期 RAG、导出语料 RAG、情绪分析、Prompt 个性化、Prompt 治理、受控工具工作流和桌面/Web 控制台。
+支持多 OpenAI-compatible 提供方、短期记忆、运行期 RAG、导出语料 RAG、情绪分析、Prompt 个性化和桌面/Web 控制台。
 </div>
 
 ## Quick Manual
@@ -85,9 +85,6 @@ node scripts/run-interview-demo.mjs --skip-eval --json
 - `Readiness & Recovery`: `run.py check`、`GET /api/readiness` 与桌面端首次运行引导共用同一套环境检查逻辑；仪表盘会常驻显示“运行准备度”，并支持导出自动脱敏的诊断支持包。
 - `Hot Reload`: 配置热重载优先使用 `watchdog` 事件监听，缺失依赖时自动回退轮询，并带防抖。
 - `Config Snapshot`: 后端已引入中心化配置快照服务，`/api/config/audit` 可返回当前生效配置、已知未消费字段和配置变更影响摘要。
-- `Controlled Agent Tools`: `POST /api/v1/agents/tool-workflow` 只执行白名单工具 `config_audit`、`readiness_check`、`prompt_preview`、`eval_latest`、`cost_summary`、`backup_cleanup_dry_run`、`data_controls_dry_run`，每步返回 trace；可通过 `workflow_mode="plan_reflect_repair"` 启用受控 Planner / Reflect / Repair，最多自动 repair 一次且仅限 schema-safe 默认值修复；维护 dry-run 工具只返回聚合摘要，不暴露备份候选列表、清理 targets 或完整本机路径，明确不支持任意命令、文件写入、网络请求或动态插件执行，也不接入微信消息快回复主链路。
-- `Read-only MCP Adapter`: `POST /api/v1/mcp` 提供本机 JSON-RPC adapter，仅支持 `initialize`、`tools/list`、`tools/call`，并且只暴露模型侧安全工具 `readiness_check`、`eval_latest`、`cost_summary`、`backup_cleanup_dry_run`、`data_controls_dry_run`。
-- `Model Tool Calling`: `agent.model_tool_calls_enabled` 默认关闭；开启后仅在 OpenAI-compatible 对话接口中向模型暴露 `readiness_check`、`eval_latest`、`cost_summary`、`backup_cleanup_dry_run`、`data_controls_dry_run` 五个只读/预览工具，并复用 `ControlledToolWorkflowService` 的 schema、权限、超时和 trace 边界，不向模型暴露 `prompt_preview` 或 `config_audit`。
 
 > 知识库 UI 说明：设置页已经提供单文档治理入口，支持手动粘贴纯文本 / Markdown，或显式选择单个 `.txt/.md/.markdown` 文件把内容填入表单；也提供 `{"documents":[...]}` 受控 JSON 批量入口和固定 `data/knowledge_base/inbox` 预览入口。选择文件不会上传、不会扫描目录、不会返回完整本机路径，也不会自动写入或重建；固定 inbox 必须先预览，确认存在可导入文档后才允许受控入队到现有后台队列；单文档、批量和固定 inbox 写入都必须先完成对应 dry-run；delete 仍未在桌面设置页开放。
 

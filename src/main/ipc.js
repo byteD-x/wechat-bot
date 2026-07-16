@@ -132,7 +132,6 @@ function registerIpcHandlers({
         '/api/pending_replies',
         '/api/config',
         '/api/config/audit',
-        '/api/v1/agents/tool-workflow',
         '/api/model_catalog',
         '/api/model_auth/overview',
         '/api/model_auth/action',

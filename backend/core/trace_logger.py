@@ -125,8 +125,6 @@ class TraceLoggerLite:
         names = (
             "compat_fallback_failed",
             "delayed_reply",
-            "model_tool_call_loop_blocked",
-            "model_tool_calls_enabled",
             "timeout_fallback_applied",
             "tool_call_only_response",
         )

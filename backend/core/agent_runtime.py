@@ -55,11 +55,6 @@ from .model_router import ModelRouter
 from .response_cache import ResponseCache, ResponseCacheKey
 from .safety import SafetyGuard
 from .trace_logger import TraceLoggerLite
-from .tool_workflow import (
-    ControlledToolWorkflowService,
-    ToolWorkflowError,
-    model_tool_calls_to_steps,
-)
 
 logger = logging.getLogger(__name__)
 _ALLOW_EMPTY_KEY_PLACEHOLDER = "wechat-chat-allow-empty-key"
@@ -385,7 +380,6 @@ class AgentRuntime:
         self.background_ai_defer_mode = str(
             self.agent_cfg.get("background_ai_defer_mode") or "defer_all"
         ).strip() or "defer_all"
-        self.model_tool_calls_enabled = bool(self.agent_cfg.get("model_tool_calls_enabled", False))
         self.model_router = ModelRouter(self.agent_cfg.get("model_routing"))
         self.response_cache = ResponseCache(self.agent_cfg.get("response_cache"))
         self.trace_logger = TraceLoggerLite()
@@ -434,10 +428,6 @@ class AgentRuntime:
             "safety_action_counts": {},
             "safety_reason_counts": {},
             "last_safety": {},
-            "model_tool_call_requests": 0,
-            "model_tool_call_successes": 0,
-            "model_tool_call_failures": 0,
-            "model_tool_call_blocked": 0,
         }
 
         self._imports = self._load_integrations()
@@ -1419,174 +1409,6 @@ class AgentRuntime:
         )
         return normalize_chat_result(raw)
 
-    def _supports_model_tool_call_execution(self) -> bool:
-        return self._supports_chat_completions_fallback()
-
-    async def _runtime_readiness_summary(self) -> dict[str, Any]:
-        loader = self._runtime_dependencies.get("readiness_loader")
-        if callable(loader):
-            result = loader()
-            if asyncio.iscoroutine(result):
-                result = await result
-            return result if isinstance(result, dict) else {"success": False, "ready": False}
-        return {
-            "success": True,
-            "ready": True,
-            "source": "agent_runtime",
-            "provider": self.provider_id or "unknown",
-        }
-
-    def _build_model_tool_workflow_service(self) -> ControlledToolWorkflowService:
-        snapshot = SimpleNamespace(
-            config={
-                "api": {},
-                "bot": dict(self.bot_cfg),
-                "agent": dict(self.agent_cfg),
-                "services": {},
-                "logging": {},
-            },
-            bot=dict(self.bot_cfg),
-        )
-        dependencies = self._runtime_dependencies
-        return ControlledToolWorkflowService(
-            config_loader=lambda: snapshot,
-            readiness_loader=self._runtime_readiness_summary,
-            eval_report_loader=(
-                dependencies.get("eval_report_loader")
-                if callable(dependencies.get("eval_report_loader"))
-                else None
-            ),
-            cost_summary_loader=(
-                dependencies.get("cost_summary_loader")
-                if callable(dependencies.get("cost_summary_loader"))
-                else None
-            ),
-            backup_cleanup_loader=(
-                dependencies.get("backup_cleanup_loader")
-                if callable(dependencies.get("backup_cleanup_loader"))
-                else None
-            ),
-            data_controls_loader=(
-                dependencies.get("data_controls_loader")
-                if callable(dependencies.get("data_controls_loader"))
-                else None
-            ),
-        )
-
-    @staticmethod
-    def _build_tool_result_messages(
-        base_messages: list[dict[str, Any]],
-        normalized: Any,
-        workflow_result: dict[str, Any],
-    ) -> list[dict[str, Any]]:
-        tool_calls = list(getattr(normalized, "tool_calls", []) or [])
-        assistant_tool_calls = [
-            {
-                "id": item.id,
-                "type": item.type or "function",
-                "function": {
-                    "name": item.name,
-                    "arguments": item.arguments or "{}",
-                },
-            }
-            for item in tool_calls
-        ]
-        messages = list(base_messages)
-        messages.append(
-            {
-                "role": "assistant",
-                "content": str(getattr(normalized, "text", "") or ""),
-                "tool_calls": assistant_tool_calls,
-            }
-        )
-        trace_items = list(workflow_result.get("trace") or [])
-        for index, trace_item in enumerate(trace_items):
-            fallback_id = tool_calls[index].id if index < len(tool_calls) else f"tool_call_{index + 1}"
-            content = {
-                "success": trace_item.get("status") == "ok",
-                "status": trace_item.get("status"),
-                "tool": trace_item.get("tool"),
-            }
-            if trace_item.get("error_type"):
-                content["error_type"] = trace_item.get("error_type")
-                content["error"] = trace_item.get("error")
-            if trace_item.get("output") is not None:
-                content["output"] = trace_item.get("output")
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": trace_item.get("tool_call_id") or fallback_id,
-                    "name": trace_item.get("tool"),
-                    "content": json.dumps(content, ensure_ascii=False),
-                }
-            )
-        return messages
-
-    async def _run_model_tool_calls(
-        self,
-        prepared: AgentPreparedRequest,
-        normalized: Any,
-        service: ControlledToolWorkflowService,
-    ) -> tuple[str, str, Any]:
-        self._stats["model_tool_call_requests"] += 1
-        tool_calls = list(getattr(normalized, "tool_calls", []) or [])
-        try:
-            steps = model_tool_calls_to_steps(tool_calls)
-        except ToolWorkflowError as exc:
-            self._stats["model_tool_call_blocked"] += 1
-            trace = [
-                {
-                    "index": index,
-                    "tool": str(getattr(item, "name", "") or "").strip(),
-                    "tool_call_id": str(getattr(item, "id", "") or "").strip(),
-                    "status": "error",
-                    "error_type": "tool_call_rejected",
-                    "error": str(exc),
-                }
-                for index, item in enumerate(tool_calls, start=1)
-            ]
-            prepared.response_metadata["model_tool_workflow"] = {
-                "success": False,
-                "error_type": "tool_call_rejected",
-                "error": str(exc),
-                "step_count": 0,
-                "trace": trace,
-            }
-            return "", "", normalized
-
-        workflow_result = await service.run(steps)
-        prepared.response_metadata["model_tool_workflow"] = {
-            "success": bool(workflow_result.get("success", False)),
-            "step_count": len(workflow_result.get("trace") or []),
-            "trace": list(workflow_result.get("trace") or []),
-        }
-        if workflow_result.get("success"):
-            self._stats["model_tool_call_successes"] += 1
-        else:
-            self._stats["model_tool_call_failures"] += 1
-
-        final_messages = self._build_tool_result_messages(
-            self._serialize_prompt_messages_for_openai(prepared.prompt_messages),
-            normalized,
-            workflow_result,
-        )
-        final_normalized = await self._invoke_openai_compatible_reply(
-            prepared,
-            messages=final_messages,
-            refresh_reason="model_tool_final_401",
-        )
-        reply_text, reasoning_text = self._consume_normalized_reply(
-            prepared,
-            final_normalized,
-            source="model_tool_final",
-        )
-        if reply_text:
-            prepared.response_metadata.pop("tool_call_only_response", None)
-        if getattr(final_normalized, "tool_calls", None):
-            prepared.response_metadata["model_tool_call_loop_blocked"] = True
-            self._stats["model_tool_call_blocked"] += 1
-        return reply_text, reasoning_text, final_normalized
-
     def _record_normalized_response_metadata(
         self,
         prepared: AgentPreparedRequest,
@@ -1877,7 +1699,6 @@ class AgentRuntime:
         try:
             final_normalized = None
             fallback_error: Optional[Exception] = None
-            model_tool_service: ControlledToolWorkflowService | None = None
             reply_text = ""
             reasoning_text = ""
             try:
@@ -1898,20 +1719,8 @@ class AgentRuntime:
                         source="google_code_assist",
                     )
                 else:
-                    if self.model_tool_calls_enabled and self._supports_model_tool_call_execution():
-                        model_tool_service = self._build_model_tool_workflow_service()
-                        normalized = await self._invoke_openai_compatible_reply(
-                            prepared,
-                            tools=model_tool_service.model_tool_schemas(),
-                            tool_choice="auto",
-                            refresh_reason="model_tool_initial_401",
-                        )
-                        prepared.response_metadata["model_tool_calls_enabled"] = True
-                    else:
-                        if self.model_tool_calls_enabled:
-                            prepared.response_metadata["model_tool_calls_skipped"] = "unsupported_transport"
-                        response = await self._chat_model.ainvoke(prepared.prompt_messages)
-                        normalized = normalize_chat_result(response)
+                    response = await self._chat_model.ainvoke(prepared.prompt_messages)
+                    normalized = normalize_chat_result(response)
                     final_normalized = normalized
                     reply_text, reasoning_text = self._consume_normalized_reply(
                         prepared,
@@ -1940,20 +1749,6 @@ class AgentRuntime:
                 final_normalized = fallback_normalized
                 reply_text = fallback_reply_text
                 reasoning_text = fallback_reasoning_text
-
-            if (
-                self.model_tool_calls_enabled
-                and self._supports_model_tool_call_execution()
-                and final_normalized is not None
-                and getattr(final_normalized, "tool_calls", None)
-            ):
-                if model_tool_service is None:
-                    model_tool_service = self._build_model_tool_workflow_service()
-                reply_text, reasoning_text, final_normalized = await self._run_model_tool_calls(
-                    prepared,
-                    final_normalized,
-                    model_tool_service,
-                )
 
             if (
                 self._supports_chat_completions_fallback()
@@ -2614,13 +2409,6 @@ class AgentRuntime:
                 "embedding_cache_misses": self._stats["embedding_cache_misses"],
             },
             "response_cache_stats": self.response_cache.get_status(),
-            "model_tool_call_stats": {
-                "enabled": self.model_tool_calls_enabled,
-                "requests": self._stats["model_tool_call_requests"],
-                "successes": self._stats["model_tool_call_successes"],
-                "failures": self._stats["model_tool_call_failures"],
-                "blocked": self._stats["model_tool_call_blocked"],
-            },
             "trace_logger": self.trace_logger.get_status(),
             "safety_stats": {
                 "action_counts": dict(self._stats["safety_action_counts"]),

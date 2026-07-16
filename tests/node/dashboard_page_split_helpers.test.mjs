@@ -40,11 +40,6 @@ import {
     handleRefreshStatus,
     openWeChatClient,
 } from '../../src/renderer/js/pages/dashboard/page-shell.js';
-import {
-    buildToolWorkflowSteps,
-    runToolWorkflow,
-    TOOL_WORKFLOW_TOOLS,
-} from '../../src/renderer/js/pages/dashboard/tool-workflow.js';
 import { installDomStub } from './dom-stub.mjs';
 
 async function withDom(run) {
@@ -142,33 +137,6 @@ function createToggleButton(document, id, label) {
     button.appendChild(svg);
     button.appendChild(span);
     return button;
-}
-
-function createToolWorkflowSelectors(document, options = {}) {
-    const selectors = {};
-    const register = (selector, element) => {
-        selectors[selector] = element;
-        return element;
-    };
-    const stepValues = options.stepValues || ['config_audit', 'prompt_preview', 'readiness_check'];
-    stepValues.forEach((value, index) => {
-        const select = document.createElement('select');
-        select.value = value;
-        register(`#dashboard-tool-workflow-step-${index + 1}`, select);
-    });
-    const sample = document.createElement('textarea');
-    sample.value = options.sample ?? '你好，帮我确认当前运行准备状态。';
-    register('#dashboard-tool-workflow-sample', sample);
-    const continueOnError = document.createElement('input');
-    continueOnError.checked = !!options.continueOnError;
-    register('#dashboard-tool-workflow-continue', continueOnError);
-    register('#dashboard-tool-workflow-meta', document.createElement('div'));
-    register('#dashboard-tool-workflow-feedback', document.createElement('div'));
-    register('#dashboard-tool-workflow-trace', document.createElement('div'));
-    register('#btn-tool-workflow-dry-run', createButton(document, 'btn-tool-workflow-dry-run', '先 dry-run'));
-    register('#btn-run-tool-workflow', createButton(document, 'btn-run-tool-workflow', '执行工具流'));
-    register('#btn-reset-tool-workflow', createButton(document, 'btn-reset-tool-workflow', '恢复默认'));
-    return selectors;
 }
 
 function createDashboardPage(initialState = {}, selectors = {}) {
@@ -335,12 +303,7 @@ test('dashboard action confirm helper falls back to injected confirm function', 
 });
 
 test('dashboard page shell binds events and watchers with stable side effects', async () => {
-    const toolCalls = [];
-    const page = createBindingPage({
-        _renderToolWorkflowPanel() {
-            toolCalls.push('watch-render');
-        },
-    });
+    const page = createBindingPage();
     bindDashboardEvents(page, {
         toast: createToastRecorder(),
         windowApi: {},
@@ -362,18 +325,9 @@ test('dashboard page shell binds events and watchers with stable side effects', 
             page.stabilityCalls = (page.stabilityCalls || []);
             page.stabilityCalls.push(force);
         },
-        renderToolWorkflowPanel: () => {
-            toolCalls.push('tool-render');
-        },
-        resetToolWorkflow: () => {
-            toolCalls.push('tool-reset');
-        },
-        runToolWorkflow: (_target, options) => {
-            toolCalls.push(`tool-run:${!!options?.dryRun}`);
-        },
     });
 
-    assert.equal(page.bindings.length, 24);
+    assert.equal(page.bindings.length, 16);
     assert.equal(page.watchers.length, 6);
 
     const refreshBinding = page.bindings.find((item) => item.selector === '#btn-refresh-status');
@@ -388,13 +342,11 @@ test('dashboard page shell binds events and watchers with stable side effects', 
     connectedWatcher.handler(false);
     assert.equal(page.updateUiCalls, 1);
     assert.equal(page.clearCalls, 1);
-    assert.equal(toolCalls.filter((item) => item === 'watch-render').length, 1);
 
     connectedWatcher.handler(true);
     assert.equal(page.messageLoads, 1);
     assert.deepEqual(page.refreshCalls, [true, true]);
     assert.deepEqual(page.stabilityCalls, [true, true]);
-    assert.equal(toolCalls.filter((item) => item === 'watch-render').length, 2);
 
     const readinessWatcher = page.watchers.find((item) => item.path === 'readiness.report');
     assert.ok(readinessWatcher);
@@ -416,334 +368,7 @@ test('dashboard page shell binds events and watchers with stable side effects', 
         },
     });
     assert.deepEqual(page.sectionCalls, ['messages']);
-
-    page.bindings.find((item) => item.selector === '#btn-tool-workflow-dry-run')?.handler();
-    page.bindings.find((item) => item.selector === '#btn-run-tool-workflow')?.handler();
-    page.bindings.find((item) => item.selector === '#btn-reset-tool-workflow')?.handler();
-    [
-        '#dashboard-tool-workflow-step-1',
-        '#dashboard-tool-workflow-step-2',
-        '#dashboard-tool-workflow-step-3',
-        '#dashboard-tool-workflow-continue',
-        '#dashboard-tool-workflow-sample',
-    ].forEach((selector) => {
-        page.bindings.find((item) => item.selector === selector)?.handler();
-    });
-    assert.equal(toolCalls.includes('tool-run:true'), true);
-    assert.equal(toolCalls.includes('tool-run:false'), true);
-    assert.equal(toolCalls.includes('tool-reset'), true);
-    assert.equal(toolCalls.filter((item) => item === 'tool-render').length, 5);
 });
-
-test('dashboard tool workflow helper builds whitelisted dry-run payload and renders trace', async () => withDom(async ({ document }) => {
-    const selectors = createToolWorkflowSelectors(document, {
-        stepValues: ['shell_exec', 'prompt_preview', ''],
-        sample: '请检查当前配置状态',
-        continueOnError: true,
-    });
-    const page = createDashboardPage({ bot: { connected: true } }, selectors);
-    const toast = createToastRecorder();
-    const calls = [];
-
-    assert.deepEqual(buildToolWorkflowSteps(page).map((item) => item.tool), ['prompt_preview']);
-
-    const result = await runToolWorkflow(page, { dryRun: true }, {
-        toast,
-        apiService: {
-            runToolWorkflow: async (payload) => {
-                calls.push(payload);
-                return {
-                    success: true,
-                    trace: [
-                        {
-                            index: 1,
-                            tool: 'prompt_preview',
-                            status: 'skipped',
-                            duration_ms: 0.2,
-                            attempts: 0,
-                            retry_count: 0,
-                            output: { dry_run: true },
-                        },
-                    ],
-                };
-            },
-        },
-    });
-
-    assert.equal(result.success, true);
-    assert.equal(calls[0].dry_run, true);
-    assert.equal(calls[0].steps.length, 1);
-    assert.equal(calls[0].steps[0].tool, 'prompt_preview');
-    assert.equal(calls[0].steps[0].continue_on_error, true);
-    assert.equal(calls[0].steps[0].payload.sample.message, '请检查当前配置状态');
-    assert.equal(JSON.stringify(calls[0]).includes('shell_exec'), false);
-    assert.equal(selectors['#dashboard-tool-workflow-feedback'].dataset.state, 'success');
-    assert.equal(selectors['#dashboard-tool-workflow-trace'].textContent.includes('dry-run 已跳过真实执行'), true);
-    assert.equal(toast.calls.at(-1)?.type, 'success');
-}));
-
-test('dashboard tool workflow helper supports readonly observability tools with summaries', async () => withDom(async ({ document }) => {
-    const selectors = createToolWorkflowSelectors(document, {
-        stepValues: ['eval_latest', 'cost_summary', 'shell_exec'],
-    });
-    const page = createDashboardPage({ bot: { connected: true } }, selectors);
-    const toast = createToastRecorder();
-    let captured = null;
-
-    assert.deepEqual(
-        TOOL_WORKFLOW_TOOLS.map((item) => item.value),
-        [
-            'config_audit',
-            'prompt_preview',
-            'readiness_check',
-            'eval_latest',
-            'cost_summary',
-            'backup_cleanup_dry_run',
-            'data_controls_dry_run',
-        ],
-    );
-    assert.deepEqual(buildToolWorkflowSteps(page), [
-        { tool: 'eval_latest', payload: {} },
-        { tool: 'cost_summary', payload: {} },
-    ]);
-
-    const result = await runToolWorkflow(page, {}, {
-        toast,
-        apiService: {
-            runToolWorkflow: async (payload) => {
-                captured = payload;
-                return {
-                    success: true,
-                    trace: [
-                        {
-                            index: 1,
-                            tool: 'eval_latest',
-                            status: 'ok',
-                            duration_ms: 1.2,
-                            attempts: 1,
-                            retry_count: 0,
-                            output: {
-                                has_report: true,
-                                summary: { total_cases: 12, passed: true },
-                                regression_count: 1,
-                                cases: [{ id: 'should-not-leak' }],
-                            },
-                        },
-                        {
-                            index: 2,
-                            tool: 'cost_summary',
-                            status: 'ok',
-                            duration_ms: 2.4,
-                            attempts: 1,
-                            retry_count: 0,
-                            output: {
-                                overview: {
-                                    reply_count: 3,
-                                    total_tokens: 420,
-                                    currency_groups: [{ currency: 'USD', total_cost: 0.18 }],
-                                },
-                                model_count: 2,
-                                review_queue_count: 1,
-                                review_queue: [{ reply_preview: 'should-not-leak' }],
-                            },
-                        },
-                    ],
-                };
-            },
-        },
-    });
-
-    const traceText = selectors['#dashboard-tool-workflow-trace'].textContent;
-    assert.equal(result.success, true);
-    assert.deepEqual(captured.steps.map((item) => item.tool), ['eval_latest', 'cost_summary']);
-    assert.equal(JSON.stringify(captured).includes('shell_exec'), false);
-    assert.equal(traceText.includes('最新评测：12 个用例，通过，回归 1 项'), true);
-    assert.equal(traceText.includes('成本摘要：回复 3 条，Token 420，模型 2 个，复核 1 条，USD 0.1800'), true);
-    assert.equal(traceText.includes('should-not-leak'), false);
-    assert.equal(toast.calls.at(-1)?.type, 'success');
-}));
-
-test('dashboard tool workflow helper supports maintenance dry-run tools with safe summaries', async () => withDom(async ({ document }) => {
-    const selectors = createToolWorkflowSelectors(document, {
-        stepValues: ['backup_cleanup_dry_run', 'data_controls_dry_run', 'shell_exec'],
-    });
-    const page = createDashboardPage({ bot: { connected: true } }, selectors);
-    const toast = createToastRecorder();
-    let captured = null;
-
-    assert.deepEqual(buildToolWorkflowSteps(page), [
-        {
-            tool: 'backup_cleanup_dry_run',
-            payload: {
-                keep_quick: 5,
-                keep_full: 3,
-                protect_restore_anchor: true,
-            },
-        },
-        {
-            tool: 'data_controls_dry_run',
-            payload: {
-                scopes: ['memory', 'usage', 'export_rag'],
-            },
-        },
-    ]);
-
-    const result = await runToolWorkflow(page, {}, {
-        toast,
-        apiService: {
-            runToolWorkflow: async (payload) => {
-                captured = payload;
-                return {
-                    success: true,
-                    trace: [
-                        {
-                            index: 1,
-                            tool: 'backup_cleanup_dry_run',
-                            status: 'ok',
-                            duration_ms: 3,
-                            attempts: 1,
-                            retry_count: 0,
-                            output: {
-                                dry_run: true,
-                                candidate_count: 2,
-                                preserved_count: 1,
-                                protected_count: 1,
-                                reclaimable_bytes: 8192,
-                                total_backups: 5,
-                                delete_candidates: [{ path: 'C:/secret/delete' }],
-                            },
-                        },
-                        {
-                            index: 2,
-                            tool: 'data_controls_dry_run',
-                            status: 'ok',
-                            duration_ms: 4,
-                            attempts: 1,
-                            retry_count: 0,
-                            output: {
-                                dry_run: true,
-                                scopes: ['memory', 'usage', 'export_rag'],
-                                target_count: 3,
-                                existing_target_count: 2,
-                                unsupported_target_count: 1,
-                                reclaimable_bytes: 4096,
-                                targets: [{ path: 'E:\\private\\vector_db' }],
-                            },
-                        },
-                    ],
-                };
-            },
-        },
-    });
-
-    const traceText = selectors['#dashboard-tool-workflow-trace'].textContent;
-    assert.equal(result.success, true);
-    assert.deepEqual(captured.steps.map((item) => item.tool), ['backup_cleanup_dry_run', 'data_controls_dry_run']);
-    assert.equal(JSON.stringify(captured).includes('shell_exec'), false);
-    assert.equal(traceText.includes('备份清理预览：候选 2 个，保留 1 个，保护 1 个，可回收 8192 bytes，总备份 5 个'), true);
-    assert.equal(traceText.includes('数据治理预览：范围 3 个，目标 3 个，现存 2 个，不支持 1 个，可回收 4096 bytes'), true);
-    assert.equal(traceText.includes('delete_candidates'), false);
-    assert.equal(traceText.includes('targets'), false);
-    assert.equal(traceText.includes('C:/secret'), false);
-    assert.equal(traceText.includes('E:\\private'), false);
-    assert.equal(toast.calls.at(-1)?.type, 'success');
-}));
-
-test('dashboard tool workflow helper preserves single-step failure trace and advice', async () => withDom(async ({ document }) => {
-    const selectors = createToolWorkflowSelectors(document, {
-        stepValues: ['prompt_preview', '', ''],
-        sample: '',
-    });
-    const page = createDashboardPage({ bot: { connected: true } }, selectors);
-    const toast = createToastRecorder();
-    const error = new Error('bad workflow');
-    error.code = 'bad_workflow';
-    error.data = {
-        code: 'bad_workflow',
-        message: '工具流未完成',
-        trace: [
-            {
-                index: 1,
-                tool: 'prompt_preview',
-                status: 'error',
-                duration_ms: 1.5,
-                attempts: 1,
-                retry_count: 0,
-                error_type: 'schema_validation',
-                error: 'payload.sample.message is required',
-            },
-        ],
-    };
-
-    const result = await runToolWorkflow(page, {}, {
-        toast,
-        apiService: {
-            runToolWorkflow: async () => {
-                throw error;
-            },
-        },
-    });
-
-    assert.equal(result.success, false);
-    assert.equal(result.trace[0].status, 'error');
-    assert.equal(selectors['#dashboard-tool-workflow-feedback'].dataset.state, 'warning');
-    assert.equal(selectors['#dashboard-tool-workflow-trace'].querySelector('.tool-workflow-trace-item')?.className.includes('is-error'), true);
-    assert.equal(selectors['#dashboard-tool-workflow-trace'].textContent.includes('schema_validation'), true);
-    assert.equal(selectors['#dashboard-tool-workflow-trace'].textContent.includes('检查示例消息'), true);
-    assert.equal(toast.calls.at(-1)?.message, '工具流未完成');
-}));
-
-test('dashboard tool workflow helper renders continue_on_error multi-step trace', async () => withDom(async ({ document }) => {
-    const selectors = createToolWorkflowSelectors(document, {
-        stepValues: ['config_audit', 'readiness_check', ''],
-        continueOnError: true,
-    });
-    const page = createDashboardPage({ bot: { connected: true } }, selectors);
-    const toast = createToastRecorder();
-    let captured = null;
-
-    const result = await runToolWorkflow(page, {}, {
-        toast,
-        apiService: {
-            runToolWorkflow: async (payload) => {
-                captured = payload;
-                return {
-                    success: false,
-                    message: '部分步骤失败',
-                    trace: [
-                        {
-                            index: 1,
-                            tool: 'config_audit',
-                            status: 'error',
-                            duration_ms: 3,
-                            attempts: 1,
-                            retry_count: 0,
-                            error_type: 'timeout',
-                            error: 'tool timed out after 5000 ms',
-                        },
-                        {
-                            index: 2,
-                            tool: 'readiness_check',
-                            status: 'ok',
-                            duration_ms: 4,
-                            attempts: 1,
-                            retry_count: 1,
-                            output: { ready: true, blockingCount: 0 },
-                        },
-                    ],
-                };
-            },
-        },
-    });
-
-    assert.equal(result.success, false);
-    assert.deepEqual(captured.steps.map((item) => item.continue_on_error), [true, true]);
-    assert.equal(selectors['#dashboard-tool-workflow-feedback'].dataset.state, 'warning');
-    assert.equal(selectors['#dashboard-tool-workflow-trace'].querySelectorAll('.tool-workflow-trace-item').length, 2);
-    assert.equal(selectors['#dashboard-tool-workflow-trace'].textContent.includes('timeout'), true);
-    assert.equal(selectors['#dashboard-tool-workflow-trace'].textContent.includes('已就绪'), true);
-    assert.equal(toast.calls.at(-1)?.message, '部分步骤失败');
-}));
 
 test('dashboard page shell handles refresh wake-up and wechat open feedback', async () => {
     const toast = createToastRecorder();
