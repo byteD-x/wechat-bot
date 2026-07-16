@@ -42,7 +42,6 @@ ELECTRON_SECURITY_BASELINE = (
         "markers": (
             "contextBridge.exposeInMainWorld('electronAPI'",
             "ipcRenderer.invoke('backend:request'",
-            "ipcRenderer.invoke('knowledge-base:select-file'",
             "ipcRenderer.invoke('export-diagnostics-snapshot'",
         ),
     },
@@ -57,8 +56,6 @@ ELECTRON_SECURITY_BASELINE = (
             "endpoint_not_allowed",
             "payload_too_large",
             "payload_not_allowed_for_get",
-            "knowledge-base:select-file",
-            "source_file: `.../${name}`",
         ),
     },
     {

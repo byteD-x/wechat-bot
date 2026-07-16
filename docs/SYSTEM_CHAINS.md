@@ -124,43 +124,6 @@
    - 实现：构造一个示例事件对象，调用 `resolve_system_prompt()` 生成预览。
 
 
-10. `/api/v1/agents/tool-workflow`
-    - 功能：按顺序执行受控本机工具，并返回每一步 trace。
-    - 实现：
-      - `backend/api.py::run_agent_tool_workflow` 调用 `ControlledToolWorkflowService`。
-      - 当前最多 `8` 步，单步 payload 字符串化后最多 `12000` 字符。
-      - 当前注册工具只包含 `config_audit`、`readiness_check`、`prompt_preview`、`eval_latest`、`cost_summary`、`backup_cleanup_dry_run`、`data_controls_dry_run`。
-      - 每个注册工具声明 payload schema、permission 和 timeout，执行前完成输入校验与权限检查。
-      - 请求体 `workflow_mode` 默认 `direct`；可选 `plan_reflect_repair` 会返回 `planning / reflection / repair` 摘要，`max_repair_attempts=1`，`repair_policy=schema_safe_defaults_only`。
-      - 未知工具、schema 不通过、权限不匹配或超时都会返回 `bad_workflow` 和失败 trace；即使启用 `plan_reflect_repair`，未知工具、权限失败、危险 payload、非白名单路径也只会 blocked，不会被 repair 成可执行动作。
-      - 工具流不会执行任意 shell、任意文件写入、任意网络请求或动态插件，也不进入微信消息快回复主链路。
-      - 仪表盘“风险与恢复 / 受控工具流”通过 `src/renderer/js/pages/dashboard/tool-workflow.js` 构造白名单步骤、dry-run 和 `continue_on_error`，再由 `ApiService.runToolWorkflow()` 调用该接口。
-      - 前端 trace 只展示工具名、状态、耗时、失败原因和结果摘要；`prompt_preview` 不在界面 trace 中展示完整 Prompt，`eval_latest` 不展示完整 `cases`，`cost_summary` 不展示完整 `review_queue`，维护 dry-run 工具不展示备份候选列表、清理 targets 或完整本机路径。
-
-11. `/api/v1/mcp`
-    - 功能：提供本机只读 MCP JSON-RPC adapter，让外部 MCP host 只能发现和调用安全摘要工具。
-    - 实现：
-      - `backend/api.py::run_readonly_mcp_adapter` 创建 `ReadOnlyMCPAdapter`，复用 `ControlledToolWorkflowService` 的工具注册、schema、permission、timeout 和 trace。
-      - 当前只支持 `initialize`、`tools/list`、`tools/call`，不实现 resources、prompts、shell、文件写入、任意 HTTP 或动态插件。
-      - `tools/list` 只返回模型侧安全工具 `readiness_check`、`eval_latest`、`cost_summary`、`backup_cleanup_dry_run`、`data_controls_dry_run`；`prompt_preview` 和 `config_audit` 不会出现在 MCP 工具列表中。
-      - `tools/call` 每次只调用一个安全工具，响应包含 MCP `content` 与 `structuredContent`，其中 output 继续沿用既有脱敏摘要，不返回完整 Prompt、评测用例、review_queue、targets 或完整本机路径。
-      - MCP adapter 是治理入口，不进入微信消息快回复主链路。
-
-12. `/api/knowledge_base/*`
-    - 功能：提供本机知识库治理闭环，支持查看状态、已入库索引摘要、固定 inbox 只读预览与受控入队、单文档/多文档预览分块、单文档/多文档写入、单文档/多文档重建、请求体文档后台队列和按 `doc_id` 删除。
-    - 实现：
-      - `backend/api.py::preview_knowledge_base_document` 和 `KnowledgeBaseService.build_chunks()` 复用同一套分块逻辑；`dry-run` 只返回 chunk id、字符数和脱敏来源摘要，不返回正文、chunk text 或 embedding。
-      - `backend/api.py::preview_knowledge_base_documents` 复用单文档 payload 解析和 dry-run 构造，`batch-dry-run` 只聚合请求体中的多份文档预览结果，不写入向量库、不触发 embedding、不读取本机路径。
-      - `backend/api.py::preview_knowledge_base_auto_index` 固定读取 `data/knowledge_base/inbox` 一层目录，调用 `build_knowledge_auto_index_preview_payload()` 生成只读 dry-run 摘要；它只接受 `.txt/.md/.markdown` 文本文件，不递归、不展开 glob、不接收任意路径参数、不写入向量库、不入后台队列，并跳过目录、符号链接、非文本、非法编码、空文件或超限文件。
-      - `backend/api.py::create_knowledge_base_auto_index_job` 复用固定 inbox 预览结果和 `KnowledgeBaseJobQueue`，只把固定 inbox 当前可导入文档以 `rebuild` 模式提交到进程内队列；它不接受路径参数、不读取固定 inbox 以外的文件，也不返回正文、chunk text、embedding 或完整本机路径。
-      - `backend/api.py::ingest_knowledge_base_document`、`ingest_knowledge_base_documents`、`rebuild_knowledge_base_document` 与 `rebuild_knowledge_base_documents` 复用运行中 bot 的 `vector_memory` 和 `ai_client.get_embedding`；`batch-ingest` 只顺序写入请求体文档，不读取本机路径、不删除旧 chunk；`batch-rebuild` 只顺序重建请求体文档，重复 `doc_id` 会在删除前被拒绝，单文档 embedding 准备失败时保留该文档旧 chunk。
-      - `backend/api.py::create_knowledge_base_job` 和 `get_knowledge_base_job` 复用 `KnowledgeBaseJobQueue`，只把请求体单文档或 `documents` 批量文档放入进程内内存级串行队列；支持 `mode=ingest|rebuild`，不读取 `source_file`、不扫描目录、不持久化任务，进程重启后不会恢复。
-      - `backend/api.py::get_knowledge_base_status` 会返回 `queue` 摘要，包含内存队列开关、容量、按状态计数和最近任务脱敏摘要；job 查询响应包含 `queued/started/completed/failed` 短事件时间线，不返回正文、chunk text、embedding、完整异常文本或完整本机路径。
-      - `backend/api.py::get_knowledge_base_index` 只从已入库 `knowledge_base` chunk metadata 聚合文档索引摘要，返回 `doc_id`、版本、脱敏来源、URL、页码和 chunk 数；不读取文件系统、不返回正文、chunk text、embedding 或完整本机路径。
-      - 设置页“数据与恢复 / 知识库治理”通过 `SettingsPage`、`backup-panel.js`、`page-shell.js` 和 `ApiService` 只调用固定的 `status / dry-run / batch-dry-run / ingest / batch-ingest / rebuild / batch-rebuild / auto-index/preview / auto-index/jobs` 端点；单文档、批量写入/重建和固定 inbox 入队都必须先完成对应 dry-run，内容、元数据或固定 inbox 预览状态变化后会清空签名或禁用入队。
-      - 桌面端显式文件选择通过 `src/main/ipc.js` 的固定 `knowledge-base:select-file` IPC 进入主进程，只允许可信 renderer 打开单文件选择对话框，限制 `.txt/.md/.markdown`、普通文件和大小，返回内容与 `.../<filename>` 来源，不向 renderer 暴露完整本机路径。
-      - 除固定单文件选择器、固定 inbox 预览后受控入队和受控 `{"documents":[...]}` 批量 JSON 文本框外，当前设置页不开放 `delete`、文件上传、目录扫描或任意本机路径读取；Web API 写入类端点只接收请求体中的纯文本或 Markdown，固定 inbox 入队也只读取固定目录当前预览内的可导入文件。
-
 ### 当前接口分组
 
 `backend/api.py` 当前按职责提供这些主要接口：
@@ -175,7 +138,6 @@
 - 成本：`/api/usage`、`/api/pricing`、`/api/pricing/refresh`、`/api/costs/summary`、`/api/costs/sessions`、`/api/costs/session_details`、`/api/costs/review_queue_export`
 - 模型与认证：`/api/model_catalog`、`/api/model_auth/overview`、`/api/model_auth/action`、兼容壳层 `/api/auth/providers*`、本地模型探测 `/api/ollama/models`
 - 配置与诊断：`/api/config`、`/api/config/audit`、`/api/test_connection`、`/api/preview_prompt`、`/api/logs`、`/api/logs/clear`
-- 知识库治理：`/api/knowledge_base/status`、`/api/knowledge_base/index`、`/api/knowledge_base/auto-index/preview`、`/api/knowledge_base/auto-index/jobs`、`/api/knowledge_base/dry-run`、`/api/knowledge_base/batch-dry-run`、`/api/knowledge_base/ingest`、`/api/knowledge_base/batch-ingest`、`/api/knowledge_base/rebuild`、`/api/knowledge_base/batch-rebuild`、`/api/knowledge_base/jobs`、`/api/knowledge_base/jobs/<job_id>`、`/api/knowledge_base/delete`
 
 ## 4. 启动与生命周期链路
 

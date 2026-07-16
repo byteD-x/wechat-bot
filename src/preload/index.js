@@ -155,7 +155,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     installDownloadedUpdate: () => ipcRenderer.invoke('install-downloaded-update'),
     openUpdateDownload: () => ipcRenderer.invoke('open-update-download'),
     exportDiagnosticsSnapshot: () => ipcRenderer.invoke('export-diagnostics-snapshot'),
-    selectKnowledgeBaseFile: () => ipcRenderer.invoke('knowledge-base:select-file'),
 
     // ═══════════════════════════════════════════════════════════════════════
     //                           事件监听

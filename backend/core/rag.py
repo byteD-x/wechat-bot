@@ -6,8 +6,11 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence
 
-from backend.core.knowledge_base import KNOWLEDGE_SOURCE
 from backend.core.query_rewrite import QueryRewriteResult, QueryRewriteService
+
+# 运行时 RAG 检索按此来源标签从向量库过滤知识库切片。
+# 知识库治理写入闭环已移除,但检索路径作为 RAG 引擎的一部分保留。
+KNOWLEDGE_SOURCE = "knowledge_base"
 
 
 def _clean_text(value: Any, *, limit: int = 600) -> str:

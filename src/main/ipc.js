@@ -16,9 +16,6 @@ const SAFE_DESKTOP_NOTIFICATIONS = Object.freeze({
         body: '后端服务已停止。打开主窗口后可重新启动助手或查看诊断。',
     }),
 });
-const KNOWLEDGE_BASE_FILE_EXTENSIONS = new Set(['.txt', '.md', '.markdown']);
-const KNOWLEDGE_BASE_FILE_MAX_BYTES = 256 * 1024;
-const KNOWLEDGE_BASE_CONTENT_MAX_CHARS = 50000;
 
 function buildSafeDesktopNotificationOptions(kind) {
     const key = String(kind || '').trim();
@@ -141,15 +138,6 @@ function registerIpcHandlers({
         '/api/backups/restore',
         '/api/data_controls',
         '/api/data_controls/clear',
-        '/api/knowledge_base/status',
-        '/api/knowledge_base/auto-index/preview',
-        '/api/knowledge_base/auto-index/jobs',
-        '/api/knowledge_base/dry-run',
-        '/api/knowledge_base/batch-dry-run',
-        '/api/knowledge_base/ingest',
-        '/api/knowledge_base/batch-ingest',
-        '/api/knowledge_base/rebuild',
-        '/api/knowledge_base/batch-rebuild',
         '/api/logs',
         '/api/logs/clear',
         '/api/usage',
@@ -218,66 +206,6 @@ function registerIpcHandlers({
             return { ok: false, error: 'invalid_payload' };
         }
         return { ok: true, value: payload };
-    };
-    const buildKnowledgeBaseFileFailure = (message) => ({
-        success: false,
-        canceled: false,
-        message,
-    });
-    const selectKnowledgeBaseFile = async () => {
-        try {
-            const win = getMainWindowSafe() || undefined;
-            const result = await dialog.showOpenDialog(win, {
-                title: '选择知识库文本文件',
-                properties: ['openFile'],
-                filters: [
-                    { name: 'Text or Markdown', extensions: ['txt', 'md', 'markdown'] },
-                ],
-            });
-            if (result?.canceled || !Array.isArray(result?.filePaths) || !result.filePaths[0]) {
-                return { success: false, canceled: true, message: 'file selection canceled' };
-            }
-
-            const filePath = path.resolve(String(result.filePaths[0] || ''));
-            const name = path.basename(filePath);
-            const extension = path.extname(name).toLowerCase();
-            if (!name || !KNOWLEDGE_BASE_FILE_EXTENSIONS.has(extension)) {
-                return buildKnowledgeBaseFileFailure('unsupported_file_type');
-            }
-
-            const stats = fs.statSync(filePath);
-            if (!stats?.isFile?.()) {
-                return buildKnowledgeBaseFileFailure('not_a_file');
-            }
-            if (Number(stats.size || 0) > KNOWLEDGE_BASE_FILE_MAX_BYTES) {
-                return buildKnowledgeBaseFileFailure('file_too_large');
-            }
-
-            const content = decodeBufferText(fs.readFileSync(filePath)).trim();
-            if (!content) {
-                return buildKnowledgeBaseFileFailure('empty_file');
-            }
-            if (content.length > KNOWLEDGE_BASE_CONTENT_MAX_CHARS) {
-                return buildKnowledgeBaseFileFailure('content_too_long');
-            }
-
-            return {
-                success: true,
-                canceled: false,
-                name,
-                extension: extension.slice(1),
-                content_type: extension === '.txt' ? 'text' : 'markdown',
-                size: Number(stats.size || 0),
-                content,
-                source_file: `.../${name}`,
-            };
-        } catch (error) {
-            const errorCode = error && typeof error === 'object' && 'code' in error
-                ? String(error.code || 'unknown')
-                : 'unknown';
-            console.warn('[IPC] Knowledge base file selection failed:', errorCode);
-            return buildKnowledgeBaseFileFailure('file_read_failed');
-        }
     };
 
     handleTrusted('get-flask-url', () => GLOBAL_STATE.flaskUrl);
@@ -359,7 +287,6 @@ function registerIpcHandlers({
         }
     });
     handleTrusted('check-backend', () => BackendManager.checkServer());
-    handleTrusted('knowledge-base:select-file', () => selectKnowledgeBaseFile());
     handleTrusted('start-backend', async () => {
         try {
             await BackendManager.ensureReady();

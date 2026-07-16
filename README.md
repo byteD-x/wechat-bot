@@ -75,7 +75,6 @@ node scripts/run-interview-demo.mjs --skip-eval --json
 - `Memory`: SQLite 持久化短期记忆、用户画像、上下文事实和情绪历史。
 - `Contact Prompt Growth`: 每个联系人都可逐步沉淀一份专属 Prompt，支持后台生成、导出聊天增强和 UI 直接编辑。
 - `RAG`: 支持运行期对话向量记忆、导出聊天记录风格召回、可选 Hybrid Search + Query Rewrite，以及可选本地 `Cross-Encoder` 精排；未配置本地模型或缺依赖时自动回退轻量重排。
-- `Knowledge Base Governance`: 本地 Web API 已提供知识库文档 `dry-run / batch-dry-run / ingest / batch-ingest / rebuild / batch-rebuild / jobs / auto-index jobs / delete / status / index / auto-index preview` 最小闭环；写入、重建和通用队列仍只接收请求体中的纯文本或 Markdown，不读取任意本机路径；`GET /api/knowledge_base/auto-index/preview` 只扫描固定 `data/knowledge_base/inbox` 一层目录中的 `.txt/.md/.markdown` 文本并返回 dry-run 摘要，不写入、不入队、不递归、不展开 glob；`POST /api/knowledge_base/auto-index/jobs` 仅把同一固定 inbox 预览中的可导入文档以 `rebuild` 模式提交到现有后台队列，不接受路径参数、不返回正文或完整路径；预览、队列和索引响应只返回 chunk / 文档 metadata 摘要和脱敏来源；`batch-dry-run` 仅做最多 20 份请求体文档的无副作用预览，`batch-ingest` 仅顺序写入请求体文档，`batch-rebuild` 会按顺序重建请求体文档、拒绝重复 `doc_id`，并在单文档 embedding 准备失败时保留该文档旧 chunk；`jobs` 是进程内内存级串行后台队列，支持请求体单文档或 `documents` 批量文档异步 `ingest/rebuild`，可通过 `status.queue` 和 `GET /api/knowledge_base/jobs/{job_id}` 查询脱敏状态与 `queued/started/completed/failed` 事件时间线，进程重启不恢复；`index` 仅聚合已入库 `knowledge_base` chunk metadata，不扫描目录、不读取文件正文；桌面设置页支持单文档手动粘贴、固定 IPC 显式选择单个 `.txt/.md/.markdown` 文件填入表单、固定 inbox 预览后受控入队，以及受控 JSON 批量预览/写入/重建，来源只保留 `.../<filename>`，写入、重建或固定 inbox 入队前仍需完成对应 dry-run；`python run.py knowledge-base import-files` 提供显式文件列表 CLI，`python run.py knowledge-base import-inbox` 提供固定 inbox CLI，二者默认只预览，`--apply` 才调用运行中的本机 API 写入或入队。
 - `Transport Abstraction`: 传输层统一抽象为 `BaseTransport`，默认走 `wcferry`，并保证“接收消息 → 发送消息 → 完成落盘”的主闭环可独立演进。
 - `Provider Compatibility`: 后端统一标准化请求字段、响应正文、工具调用、错误结构与落盘元数据，避免为单一提供方写定向分支。
 - `Desktop + Web`: Electron 桌面客户端与 Quart Web API 并存。
@@ -84,8 +83,6 @@ node scripts/run-interview-demo.mjs --skip-eval --json
 - `Readiness & Recovery`: `run.py check`、`GET /api/readiness` 与桌面端首次运行引导共用同一套环境检查逻辑；仪表盘会常驻显示“运行准备度”，并支持导出自动脱敏的诊断支持包。
 - `Hot Reload`: 配置热重载优先使用 `watchdog` 事件监听，缺失依赖时自动回退轮询，并带防抖。
 - `Config Snapshot`: 后端已引入中心化配置快照服务，`/api/config/audit` 可返回当前生效配置、已知未消费字段和配置变更影响摘要。
-
-> 知识库 UI 说明：设置页已经提供单文档治理入口，支持手动粘贴纯文本 / Markdown，或显式选择单个 `.txt/.md/.markdown` 文件把内容填入表单；也提供 `{"documents":[...]}` 受控 JSON 批量入口和固定 `data/knowledge_base/inbox` 预览入口。选择文件不会上传、不会扫描目录、不会返回完整本机路径，也不会自动写入或重建；固定 inbox 必须先预览，确认存在可导入文档后才允许受控入队到现有后台队列；单文档、批量和固定 inbox 写入都必须先完成对应 dry-run；delete 仍未在桌面设置页开放。
 
 ## Architecture
 
@@ -342,18 +339,6 @@ Key APIs introduced in this phase:
 - `POST /api/backups/restore`
 - `GET /api/data_controls`
 - `POST /api/data_controls/clear`
-- `GET /api/evals/latest`
-- `GET /api/knowledge_base/status`
-- `GET /api/knowledge_base/index`
-- `POST /api/knowledge_base/dry-run`
-- `POST /api/knowledge_base/batch-dry-run`
-- `POST /api/knowledge_base/ingest`
-- `POST /api/knowledge_base/batch-ingest`
-- `POST /api/knowledge_base/rebuild`
-- `POST /api/knowledge_base/batch-rebuild`
-- `POST /api/knowledge_base/jobs`
-- `GET /api/knowledge_base/jobs/<job_id>`
-- `POST /api/knowledge_base/delete`
 
 ## Development
 

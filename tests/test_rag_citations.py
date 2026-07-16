@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 from backend.core.rag import CitationService, RetrievalService
-from backend.core.knowledge_base import KNOWLEDGE_SOURCE
+from backend.core.rag import KNOWLEDGE_SOURCE
 from backend.core.query_rewrite import QueryRewriteService
 from backend.core.safety import SafetyGuard
 

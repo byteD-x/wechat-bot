@@ -51,55 +51,6 @@ export function getBackupModeMeta(mode, backupId = '') {
     };
 }
 
-function formatKnowledgeBaseStatus(status) {
-    if (!status) {
-        return '尚未读取知识库状态';
-    }
-    if (!status.success) {
-        return status.message || '知识库状态读取失败';
-    }
-    const available = status.vector_memory_available ? '向量库可用' : '向量库未就绪';
-    return `${available} / 当前 ${Number(status.chunk_count || 0)} 个知识库 chunk`;
-}
-
-function formatKnowledgeBasePreview(preview) {
-    if (!preview) {
-        return '尚未生成 chunk 预览。';
-    }
-    if (!preview.success) {
-        return preview.message || 'chunk 预览失败';
-    }
-    if (preview.batch) {
-        return [
-            `文档 ${Number(preview.document_count || 0)} 份`,
-            `预计 ${Number(preview.chunk_count || 0)} 个 chunk`,
-            `正文 ${Number(preview.char_count || 0)} 字符`,
-        ].join(' / ');
-    }
-    return [
-        `文档 ${preview.doc_id || '--'}`,
-        `版本 ${preview.version || '--'}`,
-        `预计 ${Number(preview.chunk_count || 0)} 个 chunk`,
-        `正文 ${Number(preview.char_count || 0)} 字符`,
-    ].join(' / ');
-}
-
-function formatKnowledgeBaseInboxPreview(preview) {
-    if (!preview) {
-        return '尚未生成固定 inbox 预览。';
-    }
-    if (!preview.success) {
-        return preview.message || '固定 inbox 预览失败';
-    }
-    return [
-        `文档 ${Number(preview.document_count || 0)} 份`,
-        `跳过 ${Number(preview.skipped_count || 0)} 项`,
-        `预计 ${Number(preview.chunk_count || 0)} 个 chunk`,
-        `正文 ${Number(preview.char_count || 0)} 字符`,
-        `存在 ${preview.exists ? '是' : '否'}`,
-    ].join(' / ');
-}
-
 function renderBackupList(container, backups = []) {
     container.textContent = '';
     if (!Array.isArray(backups) || backups.length === 0) {
@@ -159,23 +110,6 @@ export function renderBackupPanel(page) {
     const cleanupApplyBtn = page.$('#btn-cleanup-backup-apply');
     const dataControlDryRunBtn = page.$('#btn-data-control-dry-run');
     const dataControlApplyBtn = page.$('#btn-data-control-apply');
-    const knowledgeBaseStatusElem = page.$('#settings-knowledge-base-status');
-    const knowledgeBaseFeedbackElem = page.$('#settings-knowledge-base-feedback');
-    const knowledgeBasePreviewElem = page.$('#settings-knowledge-base-preview');
-    const knowledgeBaseInboxFeedbackElem = page.$('#settings-knowledge-base-inbox-feedback');
-    const knowledgeBaseInboxPreviewElem = page.$('#settings-knowledge-base-inbox-preview');
-    const knowledgeBaseBatchFeedbackElem = page.$('#settings-knowledge-base-batch-feedback');
-    const knowledgeBaseBatchPreviewElem = page.$('#settings-knowledge-base-batch-preview');
-    const knowledgeBaseSelectFileBtn = page.$('#btn-knowledge-base-select-file');
-    const knowledgeBaseRefreshBtn = page.$('#btn-knowledge-base-refresh');
-    const knowledgeBaseDryRunBtn = page.$('#btn-knowledge-base-dry-run');
-    const knowledgeBaseIngestBtn = page.$('#btn-knowledge-base-ingest');
-    const knowledgeBaseRebuildBtn = page.$('#btn-knowledge-base-rebuild');
-    const knowledgeBaseInboxPreviewBtn = page.$('#btn-knowledge-base-inbox-preview');
-    const knowledgeBaseInboxQueueBtn = page.$('#btn-knowledge-base-inbox-queue');
-    const knowledgeBaseBatchDryRunBtn = page.$('#btn-knowledge-base-batch-dry-run');
-    const knowledgeBaseBatchIngestBtn = page.$('#btn-knowledge-base-batch-ingest');
-    const knowledgeBaseBatchRebuildBtn = page.$('#btn-knowledge-base-batch-rebuild');
     const listElem = page.$('#settings-backup-list');
     if (!summaryElem || !selectElem || !feedbackElem || !listElem) {
         return;
@@ -203,33 +137,8 @@ export function renderBackupPanel(page) {
     if (dataControlElem) {
         dataControlElem.textContent = state.dataControlFeedback || '尚未执行数据清理';
     }
-    if (knowledgeBaseStatusElem) {
-        knowledgeBaseStatusElem.textContent = formatKnowledgeBaseStatus(state.knowledgeBaseStatus || null);
-    }
-    if (knowledgeBaseFeedbackElem) {
-        knowledgeBaseFeedbackElem.textContent = state.knowledgeBaseFeedback || '请先粘贴内容并执行预览。';
-    }
-    if (knowledgeBasePreviewElem) {
-        knowledgeBasePreviewElem.textContent = formatKnowledgeBasePreview(state.knowledgeBasePreview || null);
-    }
-    if (knowledgeBaseInboxFeedbackElem) {
-        knowledgeBaseInboxFeedbackElem.textContent = [
-            state.knowledgeBaseInboxFeedback || '固定 inbox 尚未预览。',
-            state.knowledgeBaseInboxQueueFeedback || '',
-        ].filter(Boolean).join(' / ');
-    }
-    if (knowledgeBaseInboxPreviewElem) {
-        knowledgeBaseInboxPreviewElem.textContent = formatKnowledgeBaseInboxPreview(state.knowledgeBaseInboxPreview || null);
-    }
-    if (knowledgeBaseBatchFeedbackElem) {
-        knowledgeBaseBatchFeedbackElem.textContent = state.knowledgeBaseBatchFeedback || '批量入口尚未预览。';
-    }
-    if (knowledgeBaseBatchPreviewElem) {
-        knowledgeBaseBatchPreviewElem.textContent = formatKnowledgeBasePreview(state.knowledgeBaseBatchPreview || null);
-    }
 
     const backupBusy = !!state.backupBusy;
-    const knowledgeBusy = !!state.knowledgeBaseBusy;
     if (createQuickBtn) {
         createQuickBtn.disabled = backupBusy;
     }
@@ -262,41 +171,6 @@ export function renderBackupPanel(page) {
             && String(state.dataControlDryRunScope || '').trim() === dataControlScope
         );
         dataControlApplyBtn.disabled = !canApply;
-    }
-    if (knowledgeBaseRefreshBtn) {
-        knowledgeBaseRefreshBtn.disabled = knowledgeBusy;
-    }
-    if (knowledgeBaseSelectFileBtn) {
-        knowledgeBaseSelectFileBtn.disabled = knowledgeBusy;
-    }
-    if (knowledgeBaseDryRunBtn) {
-        knowledgeBaseDryRunBtn.disabled = knowledgeBusy;
-    }
-    if (knowledgeBaseIngestBtn) {
-        knowledgeBaseIngestBtn.disabled = knowledgeBusy || !state.knowledgeBaseDryRunSignature;
-    }
-    if (knowledgeBaseRebuildBtn) {
-        knowledgeBaseRebuildBtn.disabled = knowledgeBusy || !state.knowledgeBaseDryRunSignature;
-    }
-    if (knowledgeBaseInboxPreviewBtn) {
-        knowledgeBaseInboxPreviewBtn.disabled = knowledgeBusy;
-    }
-    if (knowledgeBaseInboxQueueBtn) {
-        const canQueueInbox = (
-            !knowledgeBusy
-            && !!state.knowledgeBaseInboxPreview?.success
-            && Number(state.knowledgeBaseInboxPreview?.document_count || 0) > 0
-        );
-        knowledgeBaseInboxQueueBtn.disabled = !canQueueInbox;
-    }
-    if (knowledgeBaseBatchDryRunBtn) {
-        knowledgeBaseBatchDryRunBtn.disabled = knowledgeBusy;
-    }
-    if (knowledgeBaseBatchIngestBtn) {
-        knowledgeBaseBatchIngestBtn.disabled = knowledgeBusy || !state.knowledgeBaseBatchDryRunSignature;
-    }
-    if (knowledgeBaseBatchRebuildBtn) {
-        knowledgeBaseBatchRebuildBtn.disabled = knowledgeBusy || !state.knowledgeBaseBatchDryRunSignature;
     }
 
     populateBackupSelect(selectElem, backups);

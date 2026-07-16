@@ -279,7 +279,6 @@ Invoke-RestMethod -Headers @{ "Authorization" = "Bearer your_token" } http://127
 - 现在也会持久化近 `24h / 7d` 的回复质量汇总，仪表盘健康反馈区域会显示当前会话与近 `24h` 的简要摘要。
 - 消息页的“消息详情”弹窗现在支持给助手回复标记“有帮助 / 没帮助”，反馈会写入回复元数据，并计入 `reply_quality` 的会话内与近 `24h / 7d` 汇总。
 - 消息页的列表、筛选摘要和“消息详情”面板会优先显示好友备注名或昵称；系统内部仍使用 `chat_id` / 微信号检索消息与画像，但默认不再把这些内部标识直接展示到 UI。
-- `governance_metrics` 会展示 Prompt 回滚和受控 Tool Workflow 的聚合次数、成功率、失败原因和耗时；它只记录短枚举和数值，不保存完整 Prompt、聊天正文、token、工具输出或完整本机路径。
 
 如果没有回复，优先检查：
 
@@ -317,7 +316,6 @@ Invoke-RestMethod -Headers @{ "Authorization" = "Bearer your_token" } http://127
         "semantic_enabled": False,
         "semantic_similarity_threshold": 0.92,
     },
-    "model_tool_calls_enabled": False,
     "background_ai_batch_time": "04:00",
     "background_ai_missed_window_policy": "wait_until_next_day",
     "background_ai_defer_mode": "defer_all",
@@ -333,7 +331,6 @@ Invoke-RestMethod -Headers @{ "Authorization" = "Bearer your_token" } http://127
 - `retriever_keyword_weight`: Hybrid 融合时关键词召回的权重，默认 `0.35`，取值范围 `0.0` 到 `1.0`。
 - `model_routing`: 可解释模型路由决策配置。当前只记录 `model_route`/`model_route_stats`，不会自动切换用户选择的 provider 或认证方式。
 - `response_cache`: 响应缓存配置，默认关闭。`enabled=true` 时先使用精确缓存；`semantic_enabled=true` 时在精确未命中后才尝试语义相似命中，且只允许在同一 provider、model、chat、system prompt、非当前用户 prompt context、RAG citation ids 与安全策略边界内复用，不跨会话、模型、引用策略或安全策略命中。缓存只保存最终回复、hash key 和可选 query embedding，不保存原始 prompt、聊天正文、真实联系人标识或 token；命中后仍会重新执行安全护栏与引用校验。
-- `model_tool_calls_enabled`: 模型侧 Tool Calling 开关，默认关闭。开启后仅在 OpenAI-compatible 对话接口中向模型暴露安全白名单工具，执行仍复用受控工具工作流的 schema、权限、超时和 trace 边界。
 - `background_ai_batch_time`: 后台 AI 任务统一批处理时间，默认每天 `04:00`
 - `background_ai_missed_window_policy`: 错过当天批处理窗口后的策略，当前默认 `wait_until_next_day`
 - `background_ai_defer_mode`: 白天后台 AI 的处理模式，当前默认 `defer_all`
@@ -486,7 +483,6 @@ python -m tools.prompt_gen.generator
 - RAG 精排模式
 - Embedding 缓存
 - 精确响应缓存
-- 模型侧 Tool Calling 开关
 - 后台事实提取
 - LangSmith tracing
 
@@ -497,14 +493,9 @@ python -m tools.prompt_gen.generator
 - `retriever_keyword_weight`
 - `retriever_cross_encoder_model`
 - `retriever_cross_encoder_device`
-- `model_tool_calls_enabled`: 默认 `false`；开启后仅在 OpenAI-compatible 对话接口中暴露模型侧安全白名单工具，并仍复用受控工具工作流的 schema、权限、超时和 trace。
 
-模型侧 Tool Calling 边界：
+运行观测边界：
 
-- 模型可见工具只包含 `readiness_check`、`eval_latest`、`cost_summary`、`backup_cleanup_dry_run`、`data_controls_dry_run`。
-- 模型侧不暴露 `prompt_preview`、`config_audit`，也不开放 shell、文件写入、任意 HTTP 或动态插件。
-- 运行时最多执行一轮模型工具调用，再请求一轮 final 回复；如果 final 仍返回 `tool_calls`，只记录 `model_tool_call_loop_blocked`，不会继续循环。
-- `/api/status.model_tool_call_stats` 只记录 `enabled / requests / successes / failures / blocked` 聚合计数，不保存原始 Prompt、聊天正文、token、完整本机路径或工具原始敏感输出。
 - `/api/status.trace_logger` 只保留内存级最近 trace 摘要，使用 `chat_ref / model_ref / error_hash` 等 hash 引用和聚合字段，不保存聊天正文、原始 Prompt、token、工具输出或完整本机路径。
 
 ### 8.4 `logging`
@@ -632,117 +623,12 @@ python run.py eval --dataset tests/fixtures/evals/smoke_cases.json --preset smok
 - 评测报告 JSON 固定包含 `summary`、`cases`、`regressions`、`generated_at`、`preset`、`app_version`。
 - 当前确定性指标为 `empty_reply_rate`、`short_reply_rate`、`retrieval_hit_rate`、`manual_feedback_hit_rate`、`runtime_exception_count`，并包含 RAG 专项的 `citation_accuracy`、`context_recall`、`faithfulness`、`answer_citation_binding`、`refusal_accuracy`。
 - 当前失败阈值为 `runtime_exception_count > 0` 直接失败、`empty_reply_rate > 0` 直接失败、`short_reply_rate` 不得高于基线 `+15%`、`retrieval_hit_rate` 不得低于基线 `-10%`。
-- 固定烟雾集位于 `tests/fixtures/evals/smoke_cases.json`，当前共 `27` 条，覆盖基础回复、Prompt 回滚、受控工具工作流、Windows 首次运行提示、导出语料 RAG 风格召回、无命中回退和误命中防护。
+- 固定烟雾集位于 `tests/fixtures/evals/smoke_cases.json`，覆盖基础回复、Windows 首次运行提示、导出语料 RAG 风格召回、无命中回退和误命中防护。
 - RAG 专项集位于 `tests/fixtures/evals/rag_cases.json`，用于门禁引用准确率、上下文召回、忠实度、答案引用绑定和拒答准确率。
 - CI 现在会继续执行现有 pytest 和 Node 测试，并额外执行 `ruff check`、`python run.py eval` 烟雾门禁和 RAG 专项门禁。
 
-#### 8.7.4 Prompt 治理与受控工具工作流
-
-- Prompt 版本列表 API：`GET /api/v1/admin/prompts/revisions`
-  - 返回 revision、status、source、created_at、rollback_from、reason 等元数据，不返回完整 `prompt` 或 `editable_prompt`。
-  - 空账本或损坏账本不会直接写入修复，而是通过 `issues` 返回 `ledger_missing`、`ledger_parse_failed`、`invalid_active_revision_count` 等诊断信息。
-- Prompt 差异预览 API：`GET /api/v1/admin/prompts/{revision}/diff`
-  - 返回当前 active Prompt 到目标 revision 的 unified diff，供 UI 在回滚确认前展示影响范围。
-  - diff 可能包含 Prompt 片段，只应作为受信任本机治理预览使用，不写入日志、诊断支持包或公开文档。
-- Prompt 回滚 API：`POST /api/v1/admin/prompts/{revision}/rollback`
-  - 回滚目标是历史 revision，但执行结果会追加一条新的 active revision。
-  - 审计账本默认写入 `data/prompt_revisions.json`，记录 `rollback_from`、`reason`、`operator`、`created_at`。
-  - 回滚不会覆盖或删除历史记录。
-- 设置页“系统提示”卡片中的“Prompt 版本治理”折叠面板已经接入以上接口：
-  - 先刷新版本历史，选择一个历史 revision。
-  - 必须先预览 diff，确认影响范围后才会启用回滚按钮。
-  - 回滚前会弹出确认提示；成功后会刷新只读注入块、运行时状态和版本历史。
-  - 失败信息会显示在治理面板内；diff 仅用于本机受控预览，不会写入公开文档或诊断包。
-- 受控 Agent Tool Workflow API：`POST /api/v1/agents/tool-workflow`
-  - 当前最多 `8` 步，单步 payload 字符串化后最多 `12000` 字符。
-  - 当前白名单只包含 `config_audit`、`readiness_check`、`prompt_preview`、`eval_latest`、`cost_summary`、`backup_cleanup_dry_run`、`data_controls_dry_run`。
-  - 请求体可选 `workflow_mode: "plan_reflect_repair"` 启用受控 Planner / Reflect / Repair；默认 `direct` 保持旧行为，不返回规划、反思或修复元数据。
-  - `plan_reflect_repair` 最多自动 repair 一次，当前仅允许 `data_controls_dry_run` 的空 `scopes` 回落到默认治理范围；未知工具、权限失败、危险 payload、超时或非白名单路径只会返回 blocked reflection，不会被修复成可执行动作。
-  - `eval_latest`、`cost_summary`、`backup_cleanup_dry_run` 与 `data_controls_dry_run` 只读取本地评测、成本统计或维护 dry-run 结果，trace 仅返回摘要、计数和筛选条件，不展开完整评测用例、聊天正文、成本复核队列、备份候选列表、清理 targets 或完整本机路径。
-  - 未知工具会返回失败 trace 和 `bad_workflow`，不会降级为任意命令、任意文件写入、任意网络请求或动态插件执行。
-- 只读 MCP adapter：`POST /api/v1/mcp`
-  - 这是本机 JSON-RPC adapter，仅支持 `initialize`、`tools/list`、`tools/call`。
-  - `tools/list` 与 `tools/call` 只暴露模型侧安全白名单：`readiness_check`、`eval_latest`、`cost_summary`、`backup_cleanup_dry_run`、`data_controls_dry_run`。
-  - MCP adapter 不暴露 `prompt_preview`、`config_audit`、resources、prompts，也不开放 shell、文件写入、任意 HTTP 或动态插件；调用结果只返回工具摘要、结构化 trace 和已脱敏 output。
-- 模型侧 Tool Calling：
-  - 由 `agent.model_tool_calls_enabled` 显式开启，默认关闭。
-  - 只适用于 OpenAI-compatible 对话接口；Anthropic native、Vertex、OpenAI Responses、Google Code Assist 等专用传输会跳过模型侧工具执行。
-  - 模型可见白名单比 API 工具流更窄，只包含 `readiness_check`、`eval_latest`、`cost_summary`、`backup_cleanup_dry_run`、`data_controls_dry_run`。
-  - 模型侧不会看到 `prompt_preview` 或 `config_audit`；未知工具、非法 JSON、非对象参数或 schema 不通过都会记录拒绝 trace，并且不会进入任意命令、文件写入、网络请求或动态插件路径。
-- 仪表盘“风险与恢复 / 受控工具流”已经接入该接口：
-  - 只能从下拉框选择白名单工具，不能输入任意工具名或任意 JSON。
-  - 建议先执行 `dry-run`，确认步骤顺序后再执行真实工具流。
-  - 执行结果会在面板内显示逐步 trace；失败步骤会突出展示，并给出恢复建议。
-  - `Prompt 预览`只发送示例消息并展示摘要，不在 trace 面板暴露完整 Prompt；最新评测、成本摘要、备份清理预览和数据治理预览同样只展示聚合信息。
-  - 该治理路径不改变 `reply_deadline_sec` 快回复、延迟回复或微信发送链路。
-- Electron 主进程只允许转发受控路径：Prompt 列表走固定 endpoint，Prompt diff 与回滚必须匹配数字 revision，Tool Workflow 和 MCP adapter 只走固定 endpoint。
-- 完整请求体、响应字段和错误码见 [API 契约与治理接口](api.md)。
-
-#### 8.7.5 知识库治理 API
-
-- 设置页“数据与恢复 / 知识库治理”已经提供最小 UI 入口：可手动粘贴纯文本或 Markdown，也可显式选择单个 `.txt/.md/.markdown` 文件把内容填入表单；还可粘贴 `{"documents":[...]}` 受控 JSON 执行批量预览、批量写入或批量重建。无论单文档还是批量入口，都必须先执行对应“预览分块”，确认 chunk 摘要后才允许写入或重建；内容或元数据变更后，界面会清空上一次 dry-run 签名并要求重新预览。
-- 当前设置页入口不提供文件上传、目录扫描、任意路径读取或删除；文件选择只通过固定桌面 IPC 打开单文件选择对话框，读取前限制扩展名和大小，界面只接收内容与 `.../<filename>` 形式的脱敏来源。批量入口只接收文本框中的 `documents` JSON，并且只调用固定 `batch-dry-run / batch-ingest / batch-rebuild` 端点；`delete` 仍仅作为受控 API 能力存在，未接入桌面 UI。
-- 本机 CLI 提供显式文件列表入口，适合把已经确认可信的 `.txt/.md` 文档先预览再写入运行中的本机 Web API：
-  - `python run.py knowledge-base import-files --file docs/runbook.md --json`
-  - `python run.py knowledge-base import-files docs/runbook.md docs/faq.txt --json`
-  - `python run.py knowledge-base import-files --file docs/runbook.md --apply --json`
-  - CLI 不展开 glob、不扫描目录、不自动发现文件；默认只 dry-run，`--apply` 才会调用 loopback 本机 API，`WECHAT_BOT_API_TOKEN` 仅从环境变量读取，不会打印到输出。
-- 本机 CLI 还提供固定 inbox 入口：`python run.py knowledge-base import-inbox --json`
-  - 只读取固定 `data/knowledge_base/inbox` 一层目录中的 `.txt/.md/.markdown` 文本文件；目录不存在时只返回空预览，不会自动创建目录。
-  - 默认只做只读 dry-run；`--apply` 才会把固定 inbox 的预览文档提交到本机 `POST /api/knowledge_base/auto-index/jobs`，并以 `rebuild` 模式入队。
-  - 该入口不接受任意路径参数，不展开 glob，不递归，不读取正文以外的额外文件，也不返回完整本机路径。
-- 知识库固定 inbox 预览：`GET /api/knowledge_base/auto-index/preview`
-  - 只读取固定 `data/knowledge_base/inbox` 一层目录中的 `.txt/.md/.markdown` 文本文件；如果目录不存在，会返回 `exists=false` 的空预览，不会自动创建目录。
-  - 该端点只做 dry-run 摘要，不写入向量库、不入后台队列、不递归扫描、不展开 glob、不接受任意路径参数；目录、符号链接、非文本文件、非法编码、空文件或超限文件会进入 `skipped` 列表。
-  - 响应包含 `auto_index=true`、`fixed_inbox=true`、脱敏 `inbox`、`document_count / skipped_count / chunk_count / char_count`、逐文件 `doc_id / source_file / chunk_ids / chunks` 摘要和跳过原因，不返回正文、chunk text、embedding 或完整本机路径。
-- 知识库固定 inbox 受控入队：`POST /api/knowledge_base/auto-index/jobs`
-  - 不接收路径参数，只重新读取固定 `data/knowledge_base/inbox` 的当前预览，将可导入文档以 `rebuild` 模式提交到现有后台队列。
-  - 如果固定 inbox 不存在或没有可导入文档，会返回 `400`；如果运行中的向量库或 embedding 客户端不可用，会返回 `409`。
-  - 响应只包含 job 摘要和预览聚合计数，不返回正文、chunk text、embedding 或完整本机路径。
-- 知识库文档预览：`POST /api/knowledge_base/dry-run`
-  - 请求体只接收纯文本或 Markdown 的 `content`，不会读取任意本机文件路径，也不会扫描目录。
-  - 预览只返回 `doc_id`、`version`、chunk 数量、chunk id 和每个 chunk 的字符数、脱敏来源、URL、页码等摘要，不返回完整正文或 chunk text。
-- 知识库批量预览：`POST /api/knowledge_base/batch-dry-run`
-  - 请求体使用 `{"documents": [...]}`，最多 20 份文档，每份文档沿用单文档字段校验，批量正文总长度最多 300000 字符。
-  - 只返回聚合 chunk/字符数和每份文档的脱敏 dry-run 摘要，不写入向量库，不读取本机路径，也不提供批量重建。
-- 知识库写入：`POST /api/knowledge_base/ingest`
-  - 复用运行中 bot 的 `vector_memory` 和 `ai_client.get_embedding`，将文本切分后写入 `source=knowledge_base` 的 chunk。
-  - `source_file / url / page / metadata` 会进入 chunk metadata，供 RAG citation 绑定。
-- 知识库批量写入：`POST /api/knowledge_base/batch-ingest`
-  - 请求体同样使用 `{"documents": [...]}`，按顺序写入多份请求体文档；不读取本机路径、不上传文件、不做批量重建，也不会删除旧 chunk。
-  - 响应返回 `succeeded_documents / failed_documents`、聚合 `indexed_chunks/skipped_chunks` 和逐文档摘要；该接口不是原子事务，后续文档失败时前序成功文档可能已经写入。
-- 知识库重建：`POST /api/knowledge_base/rebuild`
-  - 先完整准备新版本 chunk embedding，再删除同一 `doc_id` 的旧 chunk 并写入新版本；如果新版本 embedding 准备失败，会保留旧 chunk。
-  - 设置页的“重建同文档”按钮复用该端点，但必须先对当前粘贴内容完成一次 dry-run；成功响应只展示 `doc_id`、版本、索引 chunk 数和是否删除旧 chunk 的摘要。
-- 知识库批量重建：`POST /api/knowledge_base/batch-rebuild`
-  - 请求体同样使用 `{"documents": [...]}`，按顺序重建多份请求体文档；不读取本机路径、不上传文件、不扫描目录。
-  - 同一请求内重复 `doc_id` 会在任何删除前返回 `400`；单个文档的新版本 embedding 准备失败时，会保留该文档旧 chunk。
-  - 响应返回 `mode=rebuild`、`deleted_previous_documents`、逐文档 `deleted_previous` 和索引摘要；该接口不是原子事务，后续文档失败时前序成功重建可能已经生效。
-- 知识库后台队列：`POST /api/knowledge_base/jobs` 与 `GET /api/knowledge_base/jobs/<job_id>`
-  - `POST` 只接收请求体中的单文档字段或 `{"documents": [...]}`，`mode` 可选 `ingest` 或 `rebuild`，默认 `ingest`；不读取 `source_file` 指向的文件，不扫描目录，不展开 glob。
-  - 队列是进程内内存级串行执行队列，复用运行中 bot 的 `vector_memory` 和 `ai_client.get_embedding`；进程重启后不会恢复未完成或历史任务。
-  - 入队成功返回 `202` 和脱敏 job 摘要；`GET` 返回 `queued/running/succeeded/failed` 状态、逐文档脱敏摘要和聚合结果，不返回正文、chunk text、embedding 或完整本机路径。
-  - `mode=rebuild` 会在入队前拒绝同一请求内重复 `doc_id`；文档级失败会把 job 标记为 `failed`，但响应只记录短 reason，不暴露原始异常正文。
-- 知识库删除：`POST /api/knowledge_base/delete`
-  - 只按精确 `doc_id` 删除 `source=knowledge_base` 的 chunk，不影响聊天记忆或导出语料 RAG。
-- 知识库状态：`GET /api/knowledge_base/status`
-  - 返回运行中向量库是否可用、当前知识库 chunk 数，以及 `queue` 摘要。
-  - `queue` 包含 `enabled`、`max_jobs`、`total`、按状态聚合计数和最近任务脱敏摘要；这是内存状态，不代表持久化任务历史。
-- 知识库索引摘要：`GET /api/knowledge_base/index`
-  - 只读取已入库 `source=knowledge_base` chunk 的 metadata，按 `doc_id` 聚合版本、脱敏来源、URL、页码和 chunk 数；不会读取 `source_file` 指向的本机文件，不返回正文、chunk text、embedding 或完整本机路径。
-  - 响应包含 `vector_memory_available`、`supports_index`、`chunk_count`、`indexed_chunk_count`、`document_count`、`documents` 和 `truncated`；如果当前向量库实现不支持 metadata 枚举，会返回 `supports_index=false` 和空文档列表。
-- 首版限制：
-  - Web API 不提供文件上传、任意目录扫描、任意文件路径读取或自动写入式文件索引；`auto-index/preview` 仅允许固定 inbox 的只读 dry-run，`auto-index/jobs` 仅允许固定 inbox 预览后的受控入队，`index` 是已入库 metadata 摘要，不是文件系统扫描器。
-  - 桌面设置页当前接入单文档粘贴 / 显式单文件选择后的 dry-run / ingest / rebuild，也接入受控 JSON 批量 dry-run / batch-ingest / batch-rebuild 和固定 inbox 预览后受控入队；这些路径都要求当前内容或固定 inbox 先完成匹配 dry-run。
-  - `ingest / batch-ingest / rebuild / batch-rebuild / jobs` 需要后端已经启动并具备可用 embedding 客户端；缺少运行时依赖时会返回 `409 vector_memory_unavailable` 或 `409 embedding_unavailable`。
-  - 如果 `doc_id / source_file / url / source_url` 看起来像完整本机路径或 `file://` 本机 URI，接口响应会收敛为 `.../<filename>`，避免泄露本机目录结构。
-
 #### 8.7.6 新增接口总览
 
-- `GET /api/v1/admin/prompts/revisions`
-- `GET /api/v1/admin/prompts/{revision}/diff`
-- `POST /api/v1/admin/prompts/{revision}/rollback`
-- `POST /api/v1/agents/tool-workflow`
 - `GET/POST /api/reply_policies`
 - `GET /api/pending_replies`
 - `POST /api/pending_replies/<id>/approve`
@@ -753,18 +639,6 @@ python run.py eval --dataset tests/fixtures/evals/smoke_cases.json --preset smok
 - `POST /api/backups/restore`
 - `GET /api/data_controls`
 - `POST /api/data_controls/clear`
-- `GET /api/knowledge_base/status`
-- `GET /api/knowledge_base/index`
-- `POST /api/knowledge_base/auto-index/jobs`
-- `POST /api/knowledge_base/dry-run`
-- `POST /api/knowledge_base/batch-dry-run`
-- `POST /api/knowledge_base/ingest`
-- `POST /api/knowledge_base/batch-ingest`
-- `POST /api/knowledge_base/rebuild`
-- `POST /api/knowledge_base/batch-rebuild`
-- `POST /api/knowledge_base/jobs`
-- `GET /api/knowledge_base/jobs/<job_id>`
-- `POST /api/knowledge_base/delete`
 - `POST /api/message_feedback`
 - `GET /api/usage`
 - `GET /api/costs/review_queue_export`

@@ -9,216 +9,305 @@
       "chat_id": "friend:alice",
       "user_text": "今晚有空一起吃饭吗",
       "assistant_reply": "今晚可以，七点后我比较方便。",
-      "retrieval": { "augmented": true },
-      "reply_quality": { "user_feedback": "helpful" }
+      "retrieval": {
+        "augmented": true
+      },
+      "reply_quality": {
+        "user_feedback": "helpful"
+      }
     },
     {
       "id": "work-followup",
       "chat_id": "friend:bob",
       "user_text": "客户那边的方案你看过了吗",
       "assistant_reply": "我看过了，建议先确认预算范围再发正式版。",
-      "retrieval": { "augmented": true },
-      "reply_quality": { "user_feedback": "helpful" }
+      "retrieval": {
+        "augmented": true
+      },
+      "reply_quality": {
+        "user_feedback": "helpful"
+      }
     },
     {
       "id": "family-checkin",
       "chat_id": "friend:mom",
       "user_text": "到家了吗",
       "assistant_reply": "刚到家，路上挺顺的。",
-      "retrieval": { "augmented": false },
-      "reply_quality": { "user_feedback": "helpful" }
+      "retrieval": {
+        "augmented": false
+      },
+      "reply_quality": {
+        "user_feedback": "helpful"
+      }
     },
     {
       "id": "project-status",
       "chat_id": "group:project-alpha",
       "user_text": "@bot 今天的进度怎么样",
       "assistant_reply": "今天已经完成接口联调，剩下回归测试和文档补充。",
-      "retrieval": { "augmented": true },
-      "reply_quality": { "user_feedback": "helpful" }
+      "retrieval": {
+        "augmented": true
+      },
+      "reply_quality": {
+        "user_feedback": "helpful"
+      }
     },
     {
       "id": "meeting-delay",
       "chat_id": "friend:carol",
       "user_text": "我可能晚到十分钟",
       "assistant_reply": "没问题，我先到的话帮你占座。",
-      "retrieval": { "augmented": false },
-      "reply_quality": { "user_feedback": "helpful" }
+      "retrieval": {
+        "augmented": false
+      },
+      "reply_quality": {
+        "user_feedback": "helpful"
+      }
     },
     {
       "id": "shopping-list",
       "chat_id": "friend:partner",
       "user_text": "回来的时候帮我带点水果",
       "assistant_reply": "好，我顺路买点香蕉和橙子。",
-      "retrieval": { "augmented": false },
-      "reply_quality": { "user_feedback": "helpful" }
+      "retrieval": {
+        "augmented": false
+      },
+      "reply_quality": {
+        "user_feedback": "helpful"
+      }
     },
     {
       "id": "travel-plan",
       "chat_id": "friend:david",
       "user_text": "周末去苏州你觉得怎么样",
       "assistant_reply": "可以，周末去苏州两天时间刚好，交通也方便。",
-      "retrieval": { "augmented": true },
-      "reply_quality": { "user_feedback": "helpful" }
+      "retrieval": {
+        "augmented": true
+      },
+      "reply_quality": {
+        "user_feedback": "helpful"
+      }
     },
     {
       "id": "friend-short-ack",
       "chat_id": "friend:erin",
       "user_text": "好的那就这么定",
       "assistant_reply": "收到",
-      "retrieval": { "augmented": false },
-      "reply_quality": { "user_feedback": "helpful" }
+      "retrieval": {
+        "augmented": false
+      },
+      "reply_quality": {
+        "user_feedback": "helpful"
+      }
     },
     {
       "id": "invoice-reminder",
       "chat_id": "friend:finance",
       "user_text": "发票明天之前能开出来吗",
       "assistant_reply": "可以，我明早整理好信息后给你确认。",
-      "retrieval": { "augmented": true },
-      "reply_quality": { "user_feedback": "helpful" }
+      "retrieval": {
+        "augmented": true
+      },
+      "reply_quality": {
+        "user_feedback": "helpful"
+      }
     },
     {
       "id": "new-feature",
       "chat_id": "group:frontend",
       "user_text": "@bot 新版卡片你觉得还要补什么",
       "assistant_reply": "建议再补空状态、加载态和异常态，交互会更完整。",
-      "retrieval": { "augmented": true },
-      "reply_quality": { "user_feedback": "helpful" }
+      "retrieval": {
+        "augmented": true
+      },
+      "reply_quality": {
+        "user_feedback": "helpful"
+      }
     },
     {
       "id": "weekend-weather",
       "chat_id": "friend:fiona",
       "user_text": "周六出去跑步吗",
       "assistant_reply": "可以，如果早上不下雨我们七点半出发。",
-      "retrieval": { "augmented": false },
-      "reply_quality": { "user_feedback": "unhelpful" }
+      "retrieval": {
+        "augmented": false
+      },
+      "reply_quality": {
+        "user_feedback": "unhelpful"
+      }
     },
     {
       "id": "ops-check",
       "chat_id": "group:ops",
       "user_text": "@bot 线上告警现在恢复了吗",
       "assistant_reply": "目前核心服务已经恢复，建议再观察十五分钟确认没有抖动。",
-      "retrieval": { "augmented": true },
-      "reply_quality": { "user_feedback": "helpful" }
+      "retrieval": {
+        "augmented": true
+      },
+      "reply_quality": {
+        "user_feedback": "helpful"
+      }
     },
     {
       "id": "book-return",
       "chat_id": "friend:george",
       "user_text": "上次借你的书我明天带给你",
       "assistant_reply": "好，明天见面的时候给我就行。",
-      "retrieval": { "augmented": false },
-      "reply_quality": { "user_feedback": "unhelpful" }
+      "retrieval": {
+        "augmented": false
+      },
+      "reply_quality": {
+        "user_feedback": "unhelpful"
+      }
     },
     {
       "id": "doctor-reminder",
       "chat_id": "friend:dad",
       "user_text": "记得下午去复查",
       "assistant_reply": "记得的，我两点前会出门。",
-      "retrieval": { "augmented": false },
-      "reply_quality": { "user_feedback": "helpful" }
+      "retrieval": {
+        "augmented": false
+      },
+      "reply_quality": {
+        "user_feedback": "helpful"
+      }
     },
     {
       "id": "budget-review",
       "chat_id": "group:pm",
       "user_text": "@bot 预算表要不要今天先发初版",
       "assistant_reply": "可以先发初版，备注清楚还在核对的项目即可。",
-      "retrieval": { "augmented": true },
-      "reply_quality": { "user_feedback": "unhelpful" }
+      "retrieval": {
+        "augmented": true
+      },
+      "reply_quality": {
+        "user_feedback": "unhelpful"
+      }
     },
     {
       "id": "friend-short-ok",
       "chat_id": "friend:helen",
       "user_text": "那我先去忙啦",
       "assistant_reply": "明白",
-      "retrieval": { "augmented": false },
-      "reply_quality": { "user_feedback": "unhelpful" }
+      "retrieval": {
+        "augmented": false
+      },
+      "reply_quality": {
+        "user_feedback": "unhelpful"
+      }
     },
     {
       "id": "support-handoff",
       "chat_id": "group:support",
       "user_text": "@bot 这个问题先转给谁跟进",
       "assistant_reply": "先转给值班同学处理，我同步补充上下文说明。",
-      "retrieval": { "augmented": true },
-      "reply_quality": { "user_feedback": "helpful" }
+      "retrieval": {
+        "augmented": true
+      },
+      "reply_quality": {
+        "user_feedback": "helpful"
+      }
     },
     {
       "id": "home-maintenance",
       "chat_id": "friend:landlord",
       "user_text": "热水器今天有人来修吗",
       "assistant_reply": "维修师傅下午会联系你，到时候确认上门时间。",
-      "retrieval": { "augmented": false },
-      "reply_quality": { "user_feedback": "unhelpful" }
+      "retrieval": {
+        "augmented": false
+      },
+      "reply_quality": {
+        "user_feedback": "unhelpful"
+      }
     },
     {
       "id": "design-review",
       "chat_id": "group:design",
       "user_text": "@bot 这个配色会不会有点太重",
       "assistant_reply": "有一点，建议把背景亮度提一些，主强调色保留就够了。",
-      "retrieval": { "augmented": true },
-      "reply_quality": { "user_feedback": "helpful" }
+      "retrieval": {
+        "augmented": true
+      },
+      "reply_quality": {
+        "user_feedback": "helpful"
+      }
     },
     {
       "id": "team-lunch",
       "chat_id": "group:team-lunch",
       "user_text": "@bot 中午吃什么",
       "assistant_reply": "如果想快一点，可以选楼下那家简餐。",
-      "retrieval": { "augmented": false },
-      "reply_quality": { "user_feedback": "unhelpful" }
-    },
-    {
-      "id": "prompt-rollback-ops",
-      "chat_id": "group:ops",
-      "user_text": "@bot 刚才系统提示词改坏了，能不能先恢复到上一版？",
-      "assistant_reply": "可以，先回滚到确认稳定的版本，并保留这次回滚原因，方便之后复盘。",
-      "retrieval": { "augmented": true, "runtime_hit_count": 2 },
-      "reply_quality": { "user_feedback": "helpful" }
-    },
-    {
-      "id": "tool-workflow-audit",
-      "chat_id": "group:agent-admin",
-      "user_text": "@bot 帮我跑一次配置审计和 readiness 检查，别执行危险命令。",
-      "assistant_reply": "我只会执行白名单里的配置审计和就绪检查，并返回每一步 trace 供你确认。",
-      "retrieval": { "augmented": true, "runtime_hit_count": 1 },
-      "reply_quality": { "user_feedback": "helpful" }
+      "retrieval": {
+        "augmented": false
+      },
+      "reply_quality": {
+        "user_feedback": "unhelpful"
+      }
     },
     {
       "id": "windows-first-run-help",
       "chat_id": "friend:new-user",
       "user_text": "第一次打开桌面端，提示需要管理员权限是什么意思？",
       "assistant_reply": "这是因为默认 wcferry 传输需要接入微信进程。请用管理员身份启动，并确认微信版本是 3.9.12.51。",
-      "retrieval": { "augmented": true, "runtime_hit_count": 1 },
-      "reply_quality": { "user_feedback": "helpful" }
+      "retrieval": {
+        "augmented": true,
+        "runtime_hit_count": 1
+      },
+      "reply_quality": {
+        "user_feedback": "helpful"
+      }
     },
     {
       "id": "rag-style-reference",
       "chat_id": "friend:mentor",
       "user_text": "这段回复能不能更像我平时说话？",
       "assistant_reply": "可以，我会优先参考已导出的历史聊天风格；如果没有命中，就保持简短自然，不硬套口吻。",
-      "retrieval": { "augmented": true, "runtime_hit_count": 3 },
-      "reply_quality": { "user_feedback": "helpful" }
+      "retrieval": {
+        "augmented": true,
+        "runtime_hit_count": 3
+      },
+      "reply_quality": {
+        "user_feedback": "helpful"
+      }
     },
     {
       "id": "export-rag-style-recall",
       "chat_id": "friend:zhou",
       "user_text": "帮我回小周，语气像我一点，别太正式。",
       "assistant_reply": "可以，我会参考导出语料里你常用的短句和轻松语气，保持自然但不照搬原话。",
-      "retrieval": { "augmented": true, "runtime_hit_count": 2 },
-      "reply_quality": { "user_feedback": "helpful" }
+      "retrieval": {
+        "augmented": true,
+        "runtime_hit_count": 2
+      },
+      "reply_quality": {
+        "user_feedback": "helpful"
+      }
     },
     {
       "id": "export-rag-no-hit-fallback",
       "chat_id": "friend:new-client",
       "user_text": "这个新客户没有历史聊天记录，怎么回比较稳？",
       "assistant_reply": "没有可用导出语料时，我会回退到简短、礼貌、明确下一步的默认风格，不强行模仿。",
-      "retrieval": { "augmented": false, "runtime_hit_count": 0 },
-      "reply_quality": { "user_feedback": "helpful" }
+      "retrieval": {
+        "augmented": false,
+        "runtime_hit_count": 0
+      },
+      "reply_quality": {
+        "user_feedback": "helpful"
+      }
     },
     {
       "id": "export-rag-mismatch-guard",
       "chat_id": "group:customer-success",
       "user_text": "@bot 导出语料里那句吐槽很像我，能不能直接发给客户？",
       "assistant_reply": "不建议直接照抄负面表达；我会只提炼你的简洁口吻，再改成适合客户沟通的版本。",
-      "retrieval": { "augmented": true, "runtime_hit_count": 1 },
-      "reply_quality": { "user_feedback": "helpful" }
+      "retrieval": {
+        "augmented": true,
+        "runtime_hit_count": 1
+      },
+      "reply_quality": {
+        "user_feedback": "helpful"
+      }
     }
   ]
 }

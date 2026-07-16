@@ -33,7 +33,6 @@ class ApiService {
             '/api/backups',
             '/api/backups/restore',
             '/api/data_controls/clear',
-            '/api/knowledge_base/auto-index/jobs',
             '/api/restart',
         ]);
         this.idempotencyNonce = 0;
@@ -692,70 +691,6 @@ class ApiService {
             body: payload,
             timeoutMs: 300000,
         });
-    }
-
-    async getKnowledgeBaseStatus() {
-        return this.request('/api/knowledge_base/status', {}, 0);
-    }
-
-    async previewKnowledgeBaseInbox() {
-        return this.request('/api/knowledge_base/auto-index/preview', {}, 0);
-    }
-
-    async queueKnowledgeBaseInbox() {
-        return this.request('/api/knowledge_base/auto-index/jobs', {
-            method: 'POST',
-            body: {},
-            timeoutMs: 60000,
-        }, 0);
-    }
-
-    async dryRunKnowledgeDocument(payload = {}) {
-        return this.request('/api/knowledge_base/dry-run', {
-            method: 'POST',
-            body: payload,
-            timeoutMs: 20000,
-        }, 0);
-    }
-
-    async dryRunKnowledgeDocuments(payload = {}) {
-        return this.request('/api/knowledge_base/batch-dry-run', {
-            method: 'POST',
-            body: payload,
-            timeoutMs: 20000,
-        }, 0);
-    }
-
-    async ingestKnowledgeDocument(payload = {}) {
-        return this.request('/api/knowledge_base/ingest', {
-            method: 'POST',
-            body: payload,
-            timeoutMs: 60000,
-        }, 0);
-    }
-
-    async ingestKnowledgeDocuments(payload = {}) {
-        return this.request('/api/knowledge_base/batch-ingest', {
-            method: 'POST',
-            body: payload,
-            timeoutMs: 60000,
-        }, 0);
-    }
-
-    async rebuildKnowledgeDocument(payload = {}) {
-        return this.request('/api/knowledge_base/rebuild', {
-            method: 'POST',
-            body: payload,
-            timeoutMs: 60000,
-        }, 0);
-    }
-
-    async rebuildKnowledgeDocuments(payload = {}) {
-        return this.request('/api/knowledge_base/batch-rebuild', {
-            method: 'POST',
-            body: payload,
-            timeoutMs: 60000,
-        }, 0);
     }
 
     async getLogs(lines = 200) {

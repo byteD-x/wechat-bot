@@ -68,35 +68,11 @@ export function bindSettingsEvents(page, deps = {}) {
     bindOptional('#btn-cleanup-backup-apply', 'click', () => void page._cleanupWorkspaceBackups(false));
     bindOptional('#btn-data-control-dry-run', 'click', () => void page._runDataControls(true));
     bindOptional('#btn-data-control-apply', 'click', () => void page._runDataControls(false));
-    bindOptional('#btn-knowledge-base-select-file', 'click', () => void page._selectKnowledgeBaseFile?.());
-    bindOptional('#btn-knowledge-base-refresh', 'click', () => void page._refreshKnowledgeBaseStatus?.({ silent: false }));
-    bindOptional('#btn-knowledge-base-dry-run', 'click', () => void page._previewKnowledgeBaseDocument?.());
-    bindOptional('#btn-knowledge-base-ingest', 'click', () => void page._ingestKnowledgeBaseDocument?.());
-    bindOptional('#btn-knowledge-base-rebuild', 'click', () => void page._rebuildKnowledgeBaseDocument?.());
-    bindOptional('#btn-knowledge-base-inbox-preview', 'click', () => void page._previewKnowledgeBaseInbox?.());
-    bindOptional('#btn-knowledge-base-inbox-queue', 'click', () => void page._queueKnowledgeBaseInbox?.());
-    bindOptional('#btn-knowledge-base-batch-dry-run', 'click', () => void page._previewKnowledgeBaseDocuments?.());
-    bindOptional('#btn-knowledge-base-batch-ingest', 'click', () => void page._ingestKnowledgeBaseDocuments?.());
-    bindOptional('#btn-knowledge-base-batch-rebuild', 'click', () => void page._rebuildKnowledgeBaseDocuments?.());
     bindOptional('#btn-check-updates', 'click', () => void page._checkUpdates?.());
     bindOptional('#btn-open-update-download', 'click', () => void page._openUpdateDownload?.());
     bindOptional('#btn-open-models', 'click', () => page.emit(Events.PAGE_CHANGE, 'models'));
     bindOptional('#btn-open-export-center', 'click', () => page.emit(Events.PAGE_CHANGE, 'exports'));
     bindOptional('#settings-data-control-scope', 'change', () => page._renderBackupPanel?.());
-    [
-        '#settings-knowledge-base-content',
-        '#settings-knowledge-base-content-type',
-        '#settings-knowledge-base-doc-id',
-        '#settings-knowledge-base-version',
-        '#settings-knowledge-base-source-file',
-        '#settings-knowledge-base-url',
-        '#settings-knowledge-base-page',
-    ].forEach((selector) => {
-        bindOptional(selector, 'input', () => page._resetKnowledgeBasePreview?.());
-        bindOptional(selector, 'change', () => page._resetKnowledgeBasePreview?.());
-    });
-    bindOptional('#settings-knowledge-base-batch-json', 'input', () => page._resetKnowledgeBaseBatchPreview?.());
-    bindOptional('#settings-knowledge-base-batch-json', 'change', () => page._resetKnowledgeBaseBatchPreview?.());
     bindOptional('#settings-section-nav', 'click', (event) => {
         const button = event?.target?.closest?.('[data-settings-section]');
         if (!button) {
